@@ -1,0 +1,6 @@
+{
+  "name": "COC Media Team - Task Tracker & Gamification",
+  "description": "Premium Apple-style task tracker, dynamic CMS integration, team leaderboard gamification, and AI production assistant for the COC Media Team.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
