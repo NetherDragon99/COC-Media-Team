@@ -1,5 +1,5 @@
 /**
- * COC Media Team - v1.0.0
+ * COC Media Team - v1.0.1
  * Production Task, Quota & Attendance Platform
  * Designed & Developed by Steven Mario
  * GitHub Pages Compatible (Vanilla JS + Firebase CDN)
@@ -91,7 +91,7 @@ const state = {
     announcementAr: '',
     logoUrl: './image_ad59c0.jpg',
     developerCredit: 'Steven Mario',
-    version: 'v1.0.0'
+    version: 'v1.0.1'
   }
 };
 
@@ -217,6 +217,11 @@ function applyLanguage(lang) {
   const langIndicator = document.getElementById('lang-indicator');
   if (langIndicator) {
     langIndicator.textContent = isArabic ? 'EN' : 'AR';
+  }
+
+  const drawerLangBadge = document.getElementById('drawer-lang-badge');
+  if (drawerLangBadge) {
+    drawerLangBadge.textContent = isArabic ? 'English' : 'العربية';
   }
 
   // Update text strings with data-i18n
@@ -355,6 +360,30 @@ function updateUserUI() {
       });
     }
 
+    // Update Drawer Profile Card
+    const drawerAvatar = document.getElementById('drawer-user-avatar');
+    const drawerName = document.getElementById('drawer-user-name');
+    const drawerEmail = document.getElementById('drawer-user-email');
+    const drawerPoints = document.getElementById('drawer-user-points');
+    const drawerRole = document.getElementById('drawer-user-role');
+    const drawerSignoutText = document.getElementById('drawer-signout-text');
+
+    if (drawerAvatar) drawerAvatar.src = state.user.photoURL || './image_ad59c0.jpg';
+    if (drawerName) drawerName.textContent = state.user.displayName || 'Team Member';
+    if (drawerEmail) drawerEmail.textContent = state.user.email || 'local-member';
+    if (drawerPoints) drawerPoints.textContent = `${state.user.points || 0} pts`;
+    if (drawerRole) {
+      drawerRole.textContent = state.user.role?.toUpperCase() || 'MEMBER';
+      if (state.user.role === 'admin') {
+        drawerRole.className = 'text-[10px] font-mono uppercase text-amber-400 font-bold';
+      } else {
+        drawerRole.className = 'text-[10px] font-mono uppercase text-neutral-400';
+      }
+    }
+    if (drawerSignoutText) {
+      drawerSignoutText.textContent = state.lang === 'ar' ? 'تسجيل الخروج / تبديل الحساب' : 'Sign Out / Switch Account';
+    }
+
     // Update Profile View Elements
     const profImg = document.getElementById('profile-user-img');
     const profName = document.getElementById('profile-user-name');
@@ -376,6 +405,10 @@ function updateUserUI() {
     if (profPts) profPts.textContent = `${state.user.points || 0}`;
     if (profStreak) profStreak.textContent = `${state.user.streakDays || 1} Days`;
     if (profPenalties) profPenalties.textContent = `-${state.user.totalPenalties || 0} pts`;
+
+    // Also update edit-profile modal preview
+    const editPreview = document.getElementById('edit-profile-preview');
+    if (editPreview) editPreview.src = state.user.photoURL || './image_ad59c0.jpg';
   }
 
   renderTasks();
@@ -421,7 +454,8 @@ async function handleGoogleSignIn() {
 function initDataSubscriptions() {
   if (!db) {
     hideLoader();
-    seedDefaultTasksFallback();
+    state.tasks = [];
+    renderTasks();
     return;
   }
 
@@ -434,25 +468,20 @@ function initDataSubscriptions() {
       }
     }, (err) => console.warn("Settings listener error:", err));
 
-    // 2. Tasks Listener
+    // 2. Tasks Listener (Strictly real Firestore tasks — 0 tasks renders clean empty state)
     onSnapshot(collection(db, 'tasks'), (snapshot) => {
       const loadedTasks = [];
       snapshot.forEach((doc) => {
         loadedTasks.push({ id: doc.id, ...doc.data() });
       });
       state.tasks = loadedTasks;
-      
-      // If Firestore tasks are completely empty, initialize default sample production tasks
-      if (state.tasks.length === 0) {
-        seedDefaultTasks();
-      } else {
-        renderTasks();
-        renderAdminTasks();
-      }
+      renderTasks();
+      renderAdminTasks();
       hideLoader();
     }, (err) => {
       console.warn("Tasks listener error:", err);
-      seedDefaultTasksFallback();
+      state.tasks = [];
+      renderTasks();
       hideLoader();
     });
 
@@ -531,10 +560,16 @@ function applyBrandingSettings() {
   const footerBrand = document.getElementById('footer-brand-name');
   const footerDev = document.getElementById('footer-dev-credit');
   const headerLogo = document.getElementById('header-logo-img');
+  const drawerBrand = document.getElementById('drawer-footer-brand');
+  const drawerDev = document.getElementById('drawer-footer-dev');
+  const drawerVer = document.getElementById('drawer-footer-version');
 
   if (brandTitle) brandTitle.textContent = state.settings.appName || 'COC Media Team';
   if (footerBrand) footerBrand.textContent = state.settings.appName || 'COC Media Team';
   if (footerDev) footerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
+  if (drawerBrand) drawerBrand.textContent = state.settings.appName || 'COC Media Team';
+  if (drawerDev) drawerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
+  if (drawerVer) drawerVer.textContent = 'Version 1.0.1';
   if (headerLogo && state.settings.logoUrl) {
     headerLogo.src = state.settings.logoUrl;
   }
@@ -542,104 +577,8 @@ function applyBrandingSettings() {
 }
 
 /* ==========================================================================
-   9. INITIAL SEEDS (FALLBACK & ZERO-STATE RECOVERY)
+   9. INITIAL SEEDS (ATTENDANCE SESSIONS ONLY)
    ========================================================================== */
-async function seedDefaultTasks() {
-  const defaultTasks = [
-    {
-      title: "Export Sunday Sermon YouTube Highlights",
-      description: "Trim 15-min highlight sermon video, export in 1080p60 Apple ProRes/H.264, and upload to shared team Google Drive.",
-      categoryId: "video",
-      points: 75,
-      quotaType: "daily",
-      deadlineType: "duration_hours",
-      deadlineValue: "6",
-      estimatedDuration: "45 mins",
-      taskLink: "https://drive.google.com",
-      enableComment: true,
-      enableQuestion: true,
-      questionPrompt: "Paste exported drive link or YouTube unlisted URL:",
-      isActive: true,
-      createdAt: new Date().toISOString()
-    },
-    {
-      title: "Create Instagram & Facebook Carousel Announcement",
-      description: "Design 4-slide Instagram square carousel (1080x1080) for upcoming youth conference using the official COC Media brand kit.",
-      categoryId: "design",
-      points: 50,
-      quotaType: "once",
-      deadlineType: "duration_days",
-      deadlineValue: "2",
-      estimatedDuration: "30 mins",
-      taskLink: "https://canva.com",
-      enableComment: true,
-      isActive: true,
-      createdAt: new Date().toISOString()
-    },
-    {
-      title: "Audio Mixer Equalization & Sound Check",
-      description: "Perform microphone gain calibration, monitor in-ear audio balances, and record high-res WAV stems during rehearsal.",
-      categoryId: "sound",
-      points: 60,
-      quotaType: "daily",
-      deadlineType: "none",
-      estimatedDuration: "40 mins",
-      enableComment: true,
-      isActive: true,
-      createdAt: new Date().toISOString()
-    },
-    {
-      title: "Photo Selection & Lightroom Color Grading",
-      description: "Select the top 20 candid worship photos from last night, color grade, and export WebP/JPEG format.",
-      categoryId: "photo",
-      points: 55,
-      quotaType: "unlimited",
-      deadlineType: "duration_hours",
-      deadlineValue: "12",
-      estimatedDuration: "35 mins",
-      enableComment: true,
-      isActive: true,
-      createdAt: new Date().toISOString()
-    }
-  ];
-
-  if (db) {
-    for (const t of defaultTasks) {
-      await addDoc(collection(db, 'tasks'), t);
-    }
-  } else {
-    state.tasks = defaultTasks.map((t, idx) => ({ id: `task_${idx}`, ...t }));
-    renderTasks();
-  }
-}
-
-function seedDefaultTasksFallback() {
-  state.tasks = [
-    {
-      id: "fallback_1",
-      title: "Export Sunday Sermon YouTube Highlights",
-      description: "Trim highlight sermon video, export in 1080p, and upload to shared Google Drive.",
-      categoryId: "video",
-      points: 75,
-      quotaType: "daily",
-      taskLink: "https://drive.google.com",
-      enableComment: true,
-      isActive: true
-    },
-    {
-      id: "fallback_2",
-      title: "Design Carousel Announcement",
-      description: "Design 4-slide Instagram square carousel for upcoming conference.",
-      categoryId: "design",
-      points: 50,
-      quotaType: "once",
-      enableComment: true,
-      isActive: true
-    }
-  ];
-  renderTasks();
-}
-
 async function seedDefaultAttendanceSessions() {
   const defaultSessions = [
     {
@@ -1439,12 +1378,182 @@ function switchTab(tabId) {
 }
 
 /* ==========================================================================
+   DRAWER & PROFILE MODAL CONTROLLERS
+   ========================================================================== */
+function openDrawer() {
+  const drawer = document.getElementById('side-drawer');
+  const backdrop = document.getElementById('side-drawer-backdrop');
+  if (drawer && backdrop) {
+    drawer.classList.remove('translate-x-full');
+    drawer.classList.add('translate-x-0');
+    backdrop.classList.remove('opacity-0', 'pointer-events-none');
+    backdrop.classList.add('opacity-100', 'pointer-events-auto');
+  }
+  refreshIcons();
+}
+
+function closeDrawer() {
+  const drawer = document.getElementById('side-drawer');
+  const backdrop = document.getElementById('side-drawer-backdrop');
+  if (drawer && backdrop) {
+    drawer.classList.add('translate-x-full');
+    drawer.classList.remove('translate-x-0');
+    backdrop.classList.add('opacity-0', 'pointer-events-none');
+    backdrop.classList.remove('opacity-100', 'pointer-events-auto');
+  }
+}
+
+function openEditProfileModal() {
+  const nameInput = document.getElementById('input-edit-profile-name');
+  const avatarInput = document.getElementById('input-edit-profile-avatar');
+  const previewImg = document.getElementById('edit-profile-preview');
+  if (nameInput) nameInput.value = state.user?.displayName || '';
+  if (avatarInput) avatarInput.value = state.user?.photoURL || '';
+  if (previewImg) previewImg.src = state.user?.photoURL || './image_ad59c0.jpg';
+  openModal('modal-edit-profile');
+}
+
+/* ==========================================================================
    12. EVENT LISTENERS SETUP
    ========================================================================== */
+let globalDeferredPrompt = null;
+
 function setupEventListeners() {
   // Navigation Tabs
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.getAttribute('data-tab')));
+  });
+
+  // Slide-Over Drawer Controls
+  document.getElementById('btn-open-drawer')?.addEventListener('click', openDrawer);
+  document.getElementById('btn-close-drawer')?.addEventListener('click', closeDrawer);
+  document.getElementById('side-drawer-backdrop')?.addEventListener('click', closeDrawer);
+
+  // Drawer Nav Links
+  document.getElementById('drawer-nav-tasks')?.addEventListener('click', () => {
+    switchTab('tasks');
+    closeDrawer();
+  });
+  document.getElementById('drawer-nav-attendance')?.addEventListener('click', () => {
+    switchTab('attendance');
+    closeDrawer();
+  });
+  document.getElementById('drawer-nav-leaderboard')?.addEventListener('click', () => {
+    switchTab('leaderboard');
+    closeDrawer();
+  });
+  document.getElementById('drawer-nav-notifications')?.addEventListener('click', () => {
+    switchTab('notifications');
+    closeDrawer();
+  });
+
+  // Drawer Language Switch
+  document.getElementById('drawer-btn-lang')?.addEventListener('click', () => {
+    applyLanguage(state.lang === 'en' ? 'ar' : 'en');
+  });
+
+  // Drawer Install App PWA
+  document.getElementById('drawer-btn-pwa')?.addEventListener('click', async () => {
+    if (globalDeferredPrompt) {
+      globalDeferredPrompt.prompt();
+      const choice = await globalDeferredPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        globalDeferredPrompt = null;
+      }
+    } else {
+      alert(state.lang === 'ar' ? 'التطبيق جاهز للتثبيت كـ PWA عبر قائمة المتصفح أو تثبيته مباشرة على الشاشة الرئيسية.' : 'PWA is ready. You can install it via your browser menu or "Add to Home Screen".');
+    }
+  });
+
+  // Drawer Admin Dashboard ($J@@s#COC1982 exclusively here)
+  document.getElementById('drawer-btn-admin')?.addEventListener('click', () => {
+    closeDrawer();
+    if (state.isAdminUnlocked) {
+      openModal('modal-admin-dashboard');
+    } else {
+      openModal('modal-admin-auth');
+    }
+  });
+
+  // Drawer Sign Out / Switch Account
+  document.getElementById('drawer-btn-signout')?.addEventListener('click', async () => {
+    closeDrawer();
+    if (confirm(state.lang === 'ar' ? 'هل تريد تسجيل الخروج / تبديل الحساب؟' : 'Sign out or switch your account?')) {
+      if (auth) await signOut(auth);
+      localStorage.removeItem('coc_guest_user');
+      window.location.reload();
+    }
+  });
+
+  // Drawer Interactive Profile Card -> Edit Profile Modal
+  document.getElementById('drawer-profile-card')?.addEventListener('click', () => {
+    closeDrawer();
+    openEditProfileModal();
+  });
+
+  // Edit Profile Modal handlers
+  document.getElementById('input-edit-profile-avatar')?.addEventListener('input', (e) => {
+    const preview = document.getElementById('edit-profile-preview');
+    if (preview) {
+      preview.src = e.target.value.trim() || './image_ad59c0.jpg';
+      preview.onerror = () => { preview.src = './image_ad59c0.jpg'; };
+    }
+  });
+
+  document.getElementById('btn-preset-default-avatar')?.addEventListener('click', () => {
+    const avatarInput = document.getElementById('input-edit-profile-avatar');
+    const preview = document.getElementById('edit-profile-preview');
+    if (avatarInput) avatarInput.value = './image_ad59c0.jpg';
+    if (preview) preview.src = './image_ad59c0.jpg';
+  });
+
+  document.getElementById('btn-view-full-profile')?.addEventListener('click', () => {
+    closeModal('modal-edit-profile');
+    switchTab('profile');
+  });
+
+  document.getElementById('form-edit-profile')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const newName = document.getElementById('input-edit-profile-name').value.trim();
+    const newAvatar = document.getElementById('input-edit-profile-avatar').value.trim() || './image_ad59c0.jpg';
+    if (!newName) return;
+
+    if (!state.user) {
+      state.user = {
+        uid: 'user_' + Math.random().toString(36).substring(2, 9),
+        displayName: newName,
+        email: `${newName.toLowerCase().replace(/\s+/g, '.')}@cocmedia.local`,
+        photoURL: newAvatar,
+        points: 0,
+        totalPenalties: 0,
+        role: 'member',
+        createdAt: new Date().toISOString(),
+        isActive: true,
+        streakDays: 1
+      };
+    } else {
+      state.user.displayName = newName;
+      state.user.photoURL = newAvatar;
+    }
+
+    try {
+      if (db && state.user.uid && !state.user.uid.startsWith('guest_')) {
+        await updateDoc(doc(db, 'users', state.user.uid), {
+          displayName: newName,
+          photoURL: newAvatar
+        });
+      } else {
+        localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
+      }
+      updateUserUI();
+      closeModal('modal-edit-profile');
+      triggerConfetti();
+    } catch (err) {
+      console.warn("Could not save to remote user doc, saved locally:", err);
+      localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
+      updateUserUI();
+      closeModal('modal-edit-profile');
+    }
   });
 
   // Language Switch
@@ -1743,18 +1852,20 @@ function setupEventListeners() {
   });
 
   // PWA Install prompt listener
-  let deferredPrompt;
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredPrompt = e;
+    globalDeferredPrompt = e;
     const installBtn = document.getElementById('btn-pwa-install');
     if (installBtn) {
       installBtn.classList.remove('hidden');
       installBtn.onclick = async () => {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
-        if (outcome === 'accepted') {
-          installBtn.classList.add('hidden');
+        if (globalDeferredPrompt) {
+          globalDeferredPrompt.prompt();
+          const { outcome } = await globalDeferredPrompt.userChoice;
+          if (outcome === 'accepted') {
+            installBtn.classList.add('hidden');
+            globalDeferredPrompt = null;
+          }
         }
       };
     }

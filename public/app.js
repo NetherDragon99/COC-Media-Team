@@ -1,5 +1,5 @@
 /**
- * COC Media Team - v1.0.0
+ * COC Media Team - v1.0.1
  * Production Task, Quota & Attendance Platform
  * Designed & Developed by Steven Mario
  * GitHub Pages Compatible (Vanilla JS + Firebase CDN)
@@ -62,7 +62,7 @@ const ADMIN_MASTER_PASSWORD = '$J@@s#COC1982';
    ========================================================================== */
 const state = {
   lang: localStorage.getItem('coc_lang') || 'en',
-  user: null,
+  user: null, // { uid, displayName, email, photoURL, points, totalPenalties, role, streakDays }
   isAdminUnlocked: false,
   activeTab: 'tasks',
   tasks: [],
@@ -91,7 +91,7 @@ const state = {
     announcementAr: '',
     logoUrl: './image_ad59c0.jpg',
     developerCredit: 'Steven Mario',
-    version: 'v1.0.0'
+    version: 'v1.0.1'
   }
 };
 
@@ -164,6 +164,7 @@ function hideLoader() {
     }, 420);
   }
 }
+// Guaranteed fallback so the screen NEVER gets stuck black under any circumstance
 setTimeout(hideLoader, 2500);
 
 /* ==========================================================================
@@ -218,6 +219,12 @@ function applyLanguage(lang) {
     langIndicator.textContent = isArabic ? 'EN' : 'AR';
   }
 
+  const drawerLangBadge = document.getElementById('drawer-lang-badge');
+  if (drawerLangBadge) {
+    drawerLangBadge.textContent = isArabic ? 'English' : 'العربية';
+  }
+
+  // Update text strings with data-i18n
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     const key = el.getAttribute('data-i18n');
     if (i18n[lang] && i18n[lang][key]) {
@@ -225,11 +232,13 @@ function applyLanguage(lang) {
     }
   });
 
+  // Dynamic Subtitle
   const subEl = document.getElementById('header-subtitle');
   if (subEl) {
     subEl.textContent = isArabic ? (state.settings.subtitleAr || i18n.ar.subtitle) : (state.settings.subtitleEn || i18n.en.subtitle);
   }
 
+  // Dynamic Announcement
   updateAnnouncementUI();
   renderTasks();
   renderAttendance();
@@ -254,6 +263,7 @@ function updateAnnouncementUI() {
    6. AUTHENTICATION & USER PROFILE MANAGEMENT
    ========================================================================== */
 function initAuth() {
+  // Check local guest fallback first
   const storedGuest = localStorage.getItem('coc_guest_user');
   if (storedGuest) {
     try {
@@ -272,12 +282,14 @@ function initAuth() {
   onAuthStateChanged(auth, async (firebaseUser) => {
     try {
       if (firebaseUser) {
+        // User logged in via Firebase
         const userRef = doc(db, 'users', firebaseUser.uid);
         const userSnap = await getDoc(userRef);
         
         let userData;
         if (userSnap.exists()) {
           userData = userSnap.data();
+          // Update last active
           await updateDoc(userRef, { lastActiveDate: getTodayKey() });
         } else {
           userData = {
@@ -299,6 +311,7 @@ function initAuth() {
         state.user = userData;
         localStorage.removeItem('coc_guest_user');
       } else if (!state.user) {
+        // Default guest member if none
         state.user = {
           uid: 'guest_' + Math.random().toString(36).substring(2, 9),
           displayName: 'Team Contributor',
@@ -347,6 +360,31 @@ function updateUserUI() {
       });
     }
 
+    // Update Drawer Profile Card
+    const drawerAvatar = document.getElementById('drawer-user-avatar');
+    const drawerName = document.getElementById('drawer-user-name');
+    const drawerEmail = document.getElementById('drawer-user-email');
+    const drawerPoints = document.getElementById('drawer-user-points');
+    const drawerRole = document.getElementById('drawer-user-role');
+    const drawerSignoutText = document.getElementById('drawer-signout-text');
+
+    if (drawerAvatar) drawerAvatar.src = state.user.photoURL || './image_ad59c0.jpg';
+    if (drawerName) drawerName.textContent = state.user.displayName || 'Team Member';
+    if (drawerEmail) drawerEmail.textContent = state.user.email || 'local-member';
+    if (drawerPoints) drawerPoints.textContent = `${state.user.points || 0} pts`;
+    if (drawerRole) {
+      drawerRole.textContent = state.user.role?.toUpperCase() || 'MEMBER';
+      if (state.user.role === 'admin') {
+        drawerRole.className = 'text-[10px] font-mono uppercase text-amber-400 font-bold';
+      } else {
+        drawerRole.className = 'text-[10px] font-mono uppercase text-neutral-400';
+      }
+    }
+    if (drawerSignoutText) {
+      drawerSignoutText.textContent = state.lang === 'ar' ? 'تسجيل الخروج / تبديل الحساب' : 'Sign Out / Switch Account';
+    }
+
+    // Update Profile View Elements
     const profImg = document.getElementById('profile-user-img');
     const profName = document.getElementById('profile-user-name');
     const profEmail = document.getElementById('profile-user-email');
@@ -367,6 +405,10 @@ function updateUserUI() {
     if (profPts) profPts.textContent = `${state.user.points || 0}`;
     if (profStreak) profStreak.textContent = `${state.user.streakDays || 1} Days`;
     if (profPenalties) profPenalties.textContent = `-${state.user.totalPenalties || 0} pts`;
+
+    // Also update edit-profile modal preview
+    const editPreview = document.getElementById('edit-profile-preview');
+    if (editPreview) editPreview.src = state.user.photoURL || './image_ad59c0.jpg';
   }
 
   renderTasks();
@@ -392,6 +434,7 @@ async function handleGoogleSignIn() {
   } catch (error) {
     console.error("Firebase Sign-In Error:", error);
     
+    // Check specifically for GitHub Pages unauthorized domain error
     if (error.code === 'auth/unauthorized-domain' || error.message?.includes('unauthorized-domain')) {
       const hostnameLabel = document.getElementById('current-hostname-label');
       if (hostnameLabel) {
@@ -411,11 +454,13 @@ async function handleGoogleSignIn() {
 function initDataSubscriptions() {
   if (!db) {
     hideLoader();
-    seedDefaultTasksFallback();
+    state.tasks = [];
+    renderTasks();
     return;
   }
 
   try {
+    // 1. Settings & Branding Listener
     onSnapshot(doc(db, 'settings', 'app_config'), (snapshot) => {
       if (snapshot.exists()) {
         state.settings = { ...state.settings, ...snapshot.data() };
@@ -423,26 +468,24 @@ function initDataSubscriptions() {
       }
     }, (err) => console.warn("Settings listener error:", err));
 
+    // 2. Tasks Listener (Strictly real Firestore tasks — 0 tasks renders clean empty state)
     onSnapshot(collection(db, 'tasks'), (snapshot) => {
       const loadedTasks = [];
       snapshot.forEach((doc) => {
         loadedTasks.push({ id: doc.id, ...doc.data() });
       });
       state.tasks = loadedTasks;
-      
-      if (state.tasks.length === 0) {
-        seedDefaultTasks();
-      } else {
-        renderTasks();
-        renderAdminTasks();
-      }
+      renderTasks();
+      renderAdminTasks();
       hideLoader();
     }, (err) => {
       console.warn("Tasks listener error:", err);
-      seedDefaultTasksFallback();
+      state.tasks = [];
+      renderTasks();
       hideLoader();
     });
 
+    // 3. Submissions Listener (For Leaderboard aggregation)
     onSnapshot(collection(db, 'submissions'), (snapshot) => {
       const loadedSubs = [];
       snapshot.forEach((doc) => {
@@ -450,10 +493,11 @@ function initDataSubscriptions() {
       });
       state.submissions = loadedSubs;
       renderLeaderboard();
-      renderTasks();
+      renderTasks(); // update completion status
       renderProfileHistory();
     }, (err) => console.warn("Submissions listener error:", err));
 
+    // 4. Attendance Sessions Listener
     onSnapshot(collection(db, 'attendance_sessions'), (snapshot) => {
       const loadedSessions = [];
       snapshot.forEach((doc) => {
@@ -471,16 +515,19 @@ function initDataSubscriptions() {
       seedDefaultAttendanceSessions();
     });
 
+    // 5. Attendance Logs Listener
     onSnapshot(collection(db, 'attendance_logs'), (snapshot) => {
       const loadedLogs = [];
       snapshot.forEach((doc) => {
         loadedLogs.push({ id: doc.id, ...doc.data() });
       });
+      // Sort newest first
       loadedLogs.sort((a, b) => new Date(b.checkInTimestamp) - new Date(a.checkInTimestamp));
       state.attendanceLogs = loadedLogs;
       renderAttendanceLogs();
     }, (err) => console.warn("Attendance logs listener error:", err));
 
+    // 6. Registered Members Listener
     onSnapshot(collection(db, 'users'), (snapshot) => {
       const loadedUsers = [];
       snapshot.forEach((doc) => {
@@ -491,6 +538,7 @@ function initDataSubscriptions() {
       renderAdminMembers();
     }, (err) => console.warn("Users listener error:", err));
 
+    // 7. Notifications Listener
     onSnapshot(collection(db, 'notifications'), (snapshot) => {
       const loadedNotifications = [];
       snapshot.forEach((doc) => {
@@ -512,117 +560,30 @@ function applyBrandingSettings() {
   const footerBrand = document.getElementById('footer-brand-name');
   const footerDev = document.getElementById('footer-dev-credit');
   const headerLogo = document.getElementById('header-logo-img');
+  const drawerBrand = document.getElementById('drawer-footer-brand');
+  const drawerDev = document.getElementById('drawer-footer-dev');
+  const drawerVer = document.getElementById('drawer-footer-version');
 
   if (brandTitle) brandTitle.textContent = state.settings.appName || 'COC Media Team';
   if (footerBrand) footerBrand.textContent = state.settings.appName || 'COC Media Team';
   if (footerDev) footerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
+  if (drawerBrand) drawerBrand.textContent = state.settings.appName || 'COC Media Team';
+  if (drawerDev) drawerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
+  if (drawerVer) drawerVer.textContent = 'Version 1.0.1';
   if (headerLogo && state.settings.logoUrl) {
     headerLogo.src = state.settings.logoUrl;
   }
   updateAnnouncementUI();
 }
 
-async function seedDefaultTasks() {
-  const defaultTasks = [
-    {
-      title: "Export Sunday Sermon YouTube Highlights",
-      description: "Trim 15-min highlight sermon video, export in 1080p60 Apple ProRes/H.264, and upload to shared team Google Drive.",
-      categoryId: "video",
-      points: 75,
-      quotaType: "daily",
-      deadlineType: "duration_hours",
-      deadlineValue: "6",
-      estimatedDuration: "45 mins",
-      taskLink: "https://drive.google.com",
-      enableComment: true,
-      enableQuestion: true,
-      questionPrompt: "Paste exported drive link or YouTube unlisted URL:",
-      isActive: true,
-      createdAt: new Date().toISOString()
-    },
-    {
-      title: "Create Instagram & Facebook Carousel Announcement",
-      description: "Design 4-slide Instagram square carousel (1080x1080) for upcoming youth conference using the official COC Media brand kit.",
-      categoryId: "design",
-      points: 50,
-      quotaType: "once",
-      deadlineType: "duration_days",
-      deadlineValue: "2",
-      estimatedDuration: "30 mins",
-      taskLink: "https://canva.com",
-      enableComment: true,
-      isActive: true,
-      createdAt: new Date().toISOString()
-    },
-    {
-      title: "Audio Mixer Equalization & Sound Check",
-      description: "Perform microphone gain calibration, monitor in-ear audio balances, and record high-res WAV stems during rehearsal.",
-      categoryId: "sound",
-      points: 60,
-      quotaType: "daily",
-      deadlineType: "none",
-      estimatedDuration: "40 mins",
-      enableComment: true,
-      isActive: true,
-      createdAt: new Date().toISOString()
-    },
-    {
-      title: "Photo Selection & Lightroom Color Grading",
-      description: "Select the top 20 candid worship photos from last night, color grade, and export WebP/JPEG format.",
-      categoryId: "photo",
-      points: 55,
-      quotaType: "unlimited",
-      deadlineType: "duration_hours",
-      deadlineValue: "12",
-      estimatedDuration: "35 mins",
-      enableComment: true,
-      isActive: true,
-      createdAt: new Date().toISOString()
-    }
-  ];
-
-  if (db) {
-    for (const t of defaultTasks) {
-      await addDoc(collection(db, 'tasks'), t);
-    }
-  } else {
-    state.tasks = defaultTasks.map((t, idx) => ({ id: `task_${idx}`, ...t }));
-    renderTasks();
-  }
-}
-
-function seedDefaultTasksFallback() {
-  state.tasks = [
-    {
-      id: "fallback_1",
-      title: "Export Sunday Sermon YouTube Highlights",
-      description: "Trim highlight sermon video, export in 1080p, and upload to shared Google Drive.",
-      categoryId: "video",
-      points: 75,
-      quotaType: "daily",
-      taskLink: "https://drive.google.com",
-      enableComment: true,
-      isActive: true
-    },
-    {
-      id: "fallback_2",
-      title: "Design Carousel Announcement",
-      description: "Design 4-slide Instagram square carousel for upcoming conference.",
-      categoryId: "design",
-      points: 50,
-      quotaType: "once",
-      enableComment: true,
-      isActive: true
-    }
-  ];
-  renderTasks();
-}
-
+/* ==========================================================================
+   9. INITIAL SEEDS (ATTENDANCE SESSIONS ONLY)
+   ========================================================================== */
 async function seedDefaultAttendanceSessions() {
   const defaultSessions = [
     {
       title: "Sunday Morning Liturgy & Media Setup",
-      scheduledDays: [0],
+      scheduledDays: [0], // Sunday
       exactStartTime: "08:30",
       checkInWindowEnd: "11:30",
       gracePeriodMinutes: 15,
@@ -633,7 +594,7 @@ async function seedDefaultAttendanceSessions() {
     },
     {
       title: "Friday Youth Meeting & Live Stream",
-      scheduledDays: [5],
+      scheduledDays: [5], // Friday
       exactStartTime: "18:45",
       checkInWindowEnd: "21:00",
       gracePeriodMinutes: 10,
@@ -654,6 +615,11 @@ async function seedDefaultAttendanceSessions() {
   }
 }
 
+/* ==========================================================================
+   10. RENDERING FUNCTIONS
+   ========================================================================== */
+
+// 1. Render Task Cards
 function renderTasks() {
   const container = document.getElementById('tasks-container');
   const emptyState = document.getElementById('tasks-empty-state');
@@ -668,6 +634,7 @@ function renderTasks() {
   
   if (completedTodayEl) completedTodayEl.textContent = completedTodayCount;
 
+  // Filter tasks
   const filtered = state.tasks.filter((task) => {
     if (state.selectedCategory !== 'all' && task.categoryId !== state.selectedCategory) {
       return false;
@@ -702,6 +669,7 @@ function renderTasks() {
     };
     const catName = state.lang === 'ar' ? category.nameAr : category.nameEn;
 
+    // Check completion status for current user
     const hasCompletedEver = userSubmissions.some(s => s.taskId === task.id);
     const hasCompletedToday = userSubmissions.some(s => s.taskId === task.id && s.dateKey === todayKey);
     
@@ -721,6 +689,7 @@ function renderTasks() {
     return `
       <div class="glass-card rounded-2xl p-5 flex flex-col justify-between hover:border-white/20 transition-all duration-300 relative group">
         <div>
+          <!-- Header Chip & Points -->
           <div class="flex items-center justify-between gap-2 mb-3">
             <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full" style="background-color: ${category.color}20; color: ${category.color}; border: 1px solid ${category.color}40;">
               ${catName}
@@ -730,6 +699,7 @@ function renderTasks() {
             </span>
           </div>
 
+          <!-- Title & Description -->
           <h3 class="text-sm sm:text-base font-bold text-white group-hover:text-[#0A84FF] transition leading-snug">
             ${task.title}
           </h3>
@@ -737,6 +707,7 @@ function renderTasks() {
             ${task.description}
           </p>
 
+          <!-- Badges & Quota Info -->
           <div class="flex flex-wrap items-center gap-2 mt-4 text-[10px] text-neutral-300">
             <span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 flex items-center gap-1">
               <i data-lucide="repeat" class="w-3 h-3 text-neutral-400"></i>
@@ -755,6 +726,7 @@ function renderTasks() {
           </div>
         </div>
 
+        <!-- Action Buttons -->
         <div class="mt-5 pt-3 border-t border-white/10 flex items-center gap-2">
           ${task.taskLink ? `
             <a href="${task.taskLink}" target="_blank" rel="noopener noreferrer" class="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-neutral-300 hover:text-white transition" title="Open Task Link">
@@ -779,6 +751,7 @@ function renderTasks() {
     `;
   }).join('');
 
+  // Attach complete button listeners
   container.querySelectorAll('.btn-complete-task').forEach((btn) => {
     btn.addEventListener('click', () => {
       const taskId = btn.getAttribute('data-taskid');
@@ -787,6 +760,7 @@ function renderTasks() {
     });
   });
 
+  // Attach view competition listeners
   container.querySelectorAll('.btn-view-task-comp').forEach((btn) => {
     btn.addEventListener('click', () => {
       const taskId = btn.getAttribute('data-taskid');
@@ -798,12 +772,15 @@ function renderTasks() {
   refreshIcons();
 }
 
+// 2. Render Attendance View & Active Sessions
 function renderAttendance() {
   const container = document.getElementById('attendance-sessions-container');
   if (!container) return;
 
   const now = new Date();
-  const currentDay = now.getDay();
+  const currentDay = now.getDay(); // 0 is Sunday
+  const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
   const userLogs = state.attendanceLogs.filter(l => l.userId === state.user?.uid && l.dateKey === getTodayKey());
   const todayBadge = document.getElementById('user-today-attendance-badge');
   
@@ -825,8 +802,10 @@ function renderAttendance() {
   }
 
   container.innerHTML = state.attendanceSessions.map((sess) => {
+    const isToday = sess.scheduledDays ? sess.scheduledDays.includes(currentDay) : true;
     const hasCheckedIn = userLogs.some(l => l.sessionId === sess.id);
 
+    // Calculate time status
     const [startH, startM] = (sess.exactStartTime || '09:00').split(':').map(Number);
     const [endH, endM] = (sess.checkInWindowEnd || '11:00').split(':').map(Number);
     
@@ -943,12 +922,16 @@ function renderAttendanceLogs() {
   }).join('');
 }
 
+// 3. Render Gamified Leaderboard
 function renderLeaderboard() {
   const fullList = document.getElementById('leaderboard-full-list');
   if (!fullList) return;
 
+  // Aggregate user points from members and submissions
   const memberPointsMap = new Map();
+  const memberTasksMap = new Map();
 
+  // Populate from known members
   state.members.forEach((m) => {
     memberPointsMap.set(m.uid, {
       uid: m.uid,
@@ -959,6 +942,7 @@ function renderLeaderboard() {
     });
   });
 
+  // Aggregate submissions
   state.submissions.forEach((sub) => {
     const existing = memberPointsMap.get(sub.userId) || {
       uid: sub.userId,
@@ -968,12 +952,14 @@ function renderLeaderboard() {
       completionsCount: 0
     };
     existing.completionsCount += 1;
+    // ensure points include pointsEarned if member record was not yet synchronized
     if (!memberPointsMap.has(sub.userId)) {
       existing.points += (sub.pointsEarned || 0);
     }
     memberPointsMap.set(sub.userId, existing);
   });
 
+  // Ensure current user is in map
   if (state.user && !memberPointsMap.has(state.user.uid)) {
     memberPointsMap.set(state.user.uid, {
       uid: state.user.uid,
@@ -984,10 +970,12 @@ function renderLeaderboard() {
     });
   }
 
+  // Sort by points descending
   const ranked = Array.from(memberPointsMap.values())
-    .filter(m => m.points > 0 || m.completionsCount > 0)
+    .filter(m => m.points > 0 || m.completionsCount > 0) // EXCLUDE ZERO POINT MEMBERS FROM TOP RANKINGS
     .sort((a, b) => b.points - a.points);
 
+  // Update Top 3 Podium
   const p1 = ranked[0];
   const p2 = ranked[1];
   const p3 = ranked[2];
@@ -1043,6 +1031,7 @@ function renderLeaderboard() {
   }).join('');
 }
 
+// 4. Render Notifications View
 function renderNotifications() {
   const container = document.getElementById('notifications-list');
   const badge = document.getElementById('header-unread-badge');
@@ -1088,6 +1077,7 @@ function renderNotifications() {
   refreshIcons();
 }
 
+// 5. Render Profile Submissions History
 function renderProfileHistory() {
   const container = document.getElementById('profile-history-list');
   if (!container) return;
@@ -1119,6 +1109,7 @@ function renderProfileHistory() {
   }).join('');
 }
 
+// 6. Admin Panel Renderers
 function renderAdminTasks() {
   const tbody = document.getElementById('admin-tasks-tbody');
   const catSelect = document.getElementById('select-task-category');
@@ -1234,6 +1225,9 @@ function renderAdminMembers() {
   });
 }
 
+/* ==========================================================================
+   11. ACTIONS & MODAL CONTROLLERS
+   ========================================================================== */
 function openModal(id) {
   const m = document.getElementById(id);
   if (m) {
@@ -1383,33 +1377,214 @@ function switchTab(tabId) {
   refreshIcons();
 }
 
+/* ==========================================================================
+   DRAWER & PROFILE MODAL CONTROLLERS
+   ========================================================================== */
+function openDrawer() {
+  const drawer = document.getElementById('side-drawer');
+  const backdrop = document.getElementById('side-drawer-backdrop');
+  if (drawer && backdrop) {
+    drawer.classList.remove('translate-x-full');
+    drawer.classList.add('translate-x-0');
+    backdrop.classList.remove('opacity-0', 'pointer-events-none');
+    backdrop.classList.add('opacity-100', 'pointer-events-auto');
+  }
+  refreshIcons();
+}
+
+function closeDrawer() {
+  const drawer = document.getElementById('side-drawer');
+  const backdrop = document.getElementById('side-drawer-backdrop');
+  if (drawer && backdrop) {
+    drawer.classList.add('translate-x-full');
+    drawer.classList.remove('translate-x-0');
+    backdrop.classList.add('opacity-0', 'pointer-events-none');
+    backdrop.classList.remove('opacity-100', 'pointer-events-auto');
+  }
+}
+
+function openEditProfileModal() {
+  const nameInput = document.getElementById('input-edit-profile-name');
+  const avatarInput = document.getElementById('input-edit-profile-avatar');
+  const previewImg = document.getElementById('edit-profile-preview');
+  if (nameInput) nameInput.value = state.user?.displayName || '';
+  if (avatarInput) avatarInput.value = state.user?.photoURL || '';
+  if (previewImg) previewImg.src = state.user?.photoURL || './image_ad59c0.jpg';
+  openModal('modal-edit-profile');
+}
+
+/* ==========================================================================
+   12. EVENT LISTENERS SETUP
+   ========================================================================== */
+let globalDeferredPrompt = null;
+
 function setupEventListeners() {
+  // Navigation Tabs
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.getAttribute('data-tab')));
   });
 
+  // Slide-Over Drawer Controls
+  document.getElementById('btn-open-drawer')?.addEventListener('click', openDrawer);
+  document.getElementById('btn-close-drawer')?.addEventListener('click', closeDrawer);
+  document.getElementById('side-drawer-backdrop')?.addEventListener('click', closeDrawer);
+
+  // Drawer Nav Links
+  document.getElementById('drawer-nav-tasks')?.addEventListener('click', () => {
+    switchTab('tasks');
+    closeDrawer();
+  });
+  document.getElementById('drawer-nav-attendance')?.addEventListener('click', () => {
+    switchTab('attendance');
+    closeDrawer();
+  });
+  document.getElementById('drawer-nav-leaderboard')?.addEventListener('click', () => {
+    switchTab('leaderboard');
+    closeDrawer();
+  });
+  document.getElementById('drawer-nav-notifications')?.addEventListener('click', () => {
+    switchTab('notifications');
+    closeDrawer();
+  });
+
+  // Drawer Language Switch
+  document.getElementById('drawer-btn-lang')?.addEventListener('click', () => {
+    applyLanguage(state.lang === 'en' ? 'ar' : 'en');
+  });
+
+  // Drawer Install App PWA
+  document.getElementById('drawer-btn-pwa')?.addEventListener('click', async () => {
+    if (globalDeferredPrompt) {
+      globalDeferredPrompt.prompt();
+      const choice = await globalDeferredPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        globalDeferredPrompt = null;
+      }
+    } else {
+      alert(state.lang === 'ar' ? 'التطبيق جاهز للتثبيت كـ PWA عبر قائمة المتصفح أو تثبيته مباشرة على الشاشة الرئيسية.' : 'PWA is ready. You can install it via your browser menu or "Add to Home Screen".');
+    }
+  });
+
+  // Drawer Admin Dashboard ($J@@s#COC1982 exclusively here)
+  document.getElementById('drawer-btn-admin')?.addEventListener('click', () => {
+    closeDrawer();
+    if (state.isAdminUnlocked) {
+      openModal('modal-admin-dashboard');
+    } else {
+      openModal('modal-admin-auth');
+    }
+  });
+
+  // Drawer Sign Out / Switch Account
+  document.getElementById('drawer-btn-signout')?.addEventListener('click', async () => {
+    closeDrawer();
+    if (confirm(state.lang === 'ar' ? 'هل تريد تسجيل الخروج / تبديل الحساب؟' : 'Sign out or switch your account?')) {
+      if (auth) await signOut(auth);
+      localStorage.removeItem('coc_guest_user');
+      window.location.reload();
+    }
+  });
+
+  // Drawer Interactive Profile Card -> Edit Profile Modal
+  document.getElementById('drawer-profile-card')?.addEventListener('click', () => {
+    closeDrawer();
+    openEditProfileModal();
+  });
+
+  // Edit Profile Modal handlers
+  document.getElementById('input-edit-profile-avatar')?.addEventListener('input', (e) => {
+    const preview = document.getElementById('edit-profile-preview');
+    if (preview) {
+      preview.src = e.target.value.trim() || './image_ad59c0.jpg';
+      preview.onerror = () => { preview.src = './image_ad59c0.jpg'; };
+    }
+  });
+
+  document.getElementById('btn-preset-default-avatar')?.addEventListener('click', () => {
+    const avatarInput = document.getElementById('input-edit-profile-avatar');
+    const preview = document.getElementById('edit-profile-preview');
+    if (avatarInput) avatarInput.value = './image_ad59c0.jpg';
+    if (preview) preview.src = './image_ad59c0.jpg';
+  });
+
+  document.getElementById('btn-view-full-profile')?.addEventListener('click', () => {
+    closeModal('modal-edit-profile');
+    switchTab('profile');
+  });
+
+  document.getElementById('form-edit-profile')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const newName = document.getElementById('input-edit-profile-name').value.trim();
+    const newAvatar = document.getElementById('input-edit-profile-avatar').value.trim() || './image_ad59c0.jpg';
+    if (!newName) return;
+
+    if (!state.user) {
+      state.user = {
+        uid: 'user_' + Math.random().toString(36).substring(2, 9),
+        displayName: newName,
+        email: `${newName.toLowerCase().replace(/\s+/g, '.')}@cocmedia.local`,
+        photoURL: newAvatar,
+        points: 0,
+        totalPenalties: 0,
+        role: 'member',
+        createdAt: new Date().toISOString(),
+        isActive: true,
+        streakDays: 1
+      };
+    } else {
+      state.user.displayName = newName;
+      state.user.photoURL = newAvatar;
+    }
+
+    try {
+      if (db && state.user.uid && !state.user.uid.startsWith('guest_')) {
+        await updateDoc(doc(db, 'users', state.user.uid), {
+          displayName: newName,
+          photoURL: newAvatar
+        });
+      } else {
+        localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
+      }
+      updateUserUI();
+      closeModal('modal-edit-profile');
+      triggerConfetti();
+    } catch (err) {
+      console.warn("Could not save to remote user doc, saved locally:", err);
+      localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
+      updateUserUI();
+      closeModal('modal-edit-profile');
+    }
+  });
+
+  // Language Switch
   document.getElementById('btn-toggle-lang')?.addEventListener('click', () => {
     applyLanguage(state.lang === 'en' ? 'ar' : 'en');
   });
 
+  // Notifications Bell
   document.getElementById('btn-open-notifications')?.addEventListener('click', () => {
     switchTab('notifications');
   });
 
+  // Announcement close
   document.getElementById('btn-close-announcement')?.addEventListener('click', () => {
     document.getElementById('announcement-bar')?.classList.add('hidden');
   });
 
+  // Modal Closers
   document.querySelectorAll('.modal-close-btn').forEach(btn => {
     btn.addEventListener('click', closeAllModals);
   });
 
+  // Auth Modal trigger
   document.getElementById('btn-open-auth-modal')?.addEventListener('click', () => {
     openModal('modal-auth');
   });
 
+  // Google Sign In trigger
   document.getElementById('btn-auth-google')?.addEventListener('click', handleGoogleSignIn);
 
+  // Local Name Sign In form
   document.getElementById('form-auth-local')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = document.getElementById('input-local-name').value.trim();
@@ -1433,6 +1608,7 @@ function setupEventListeners() {
     }
   });
 
+  // Copy hostname button in Unauthorized Domain Modal
   document.getElementById('btn-copy-hostname')?.addEventListener('click', () => {
     navigator.clipboard.writeText(window.location.hostname);
     const btn = document.getElementById('btn-copy-hostname');
@@ -1442,11 +1618,13 @@ function setupEventListeners() {
     }
   });
 
+  // Fallback guest button in Unauthorized Domain Modal
   document.getElementById('btn-fallback-guest')?.addEventListener('click', () => {
     closeModal('modal-unauthorized-domain');
     openModal('modal-auth');
   });
 
+  // Admin Portal Lock
   document.getElementById('btn-open-admin-lock')?.addEventListener('click', () => {
     if (state.isAdminUnlocked) {
       openModal('modal-admin-dashboard');
@@ -1455,6 +1633,7 @@ function setupEventListeners() {
     }
   });
 
+  // Admin Password submit
   document.getElementById('form-admin-auth')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const pass = document.getElementById('input-admin-password').value;
@@ -1469,6 +1648,7 @@ function setupEventListeners() {
     }
   });
 
+  // Admin Dashboard Tabs
   document.querySelectorAll('.admintab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const tab = btn.getAttribute('data-admintab');
@@ -1490,6 +1670,7 @@ function setupEventListeners() {
     });
   });
 
+  // Admin Task Form Toggle
   document.getElementById('btn-admin-add-task')?.addEventListener('click', () => {
     document.getElementById('admin-task-form-container')?.classList.toggle('hidden');
   });
@@ -1497,6 +1678,7 @@ function setupEventListeners() {
     document.getElementById('admin-task-form-container')?.classList.add('hidden');
   });
 
+  // Admin Task Form Submit
   document.getElementById('form-manage-task')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const newTask = {
@@ -1531,6 +1713,7 @@ function setupEventListeners() {
     }
   });
 
+  // Submit Task Form
   document.getElementById('form-submit-task')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const taskId = document.getElementById('submit-task-id').value;
@@ -1584,6 +1767,7 @@ function setupEventListeners() {
     }
   });
 
+  // Task Search & Filters
   document.getElementById('input-search-tasks')?.addEventListener('input', (e) => {
     state.searchQuery = e.target.value;
     renderTasks();
@@ -1594,6 +1778,7 @@ function setupEventListeners() {
     renderTasks();
   });
 
+  // Admin Announcement Publish
   document.getElementById('form-admin-announcement')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const en = document.getElementById('input-announcement-en').value.trim();
@@ -1608,6 +1793,7 @@ function setupEventListeners() {
     alert("Announcement published!");
   });
 
+  // Admin Settings Submit (Logo URL override & Branding)
   document.getElementById('form-admin-settings')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     state.settings.appName = document.getElementById('input-settings-appname').value.trim();
@@ -1623,10 +1809,12 @@ function setupEventListeners() {
     alert("Branding settings updated!");
   });
 
+  // Reset logo button
   document.getElementById('btn-reset-logo')?.addEventListener('click', () => {
     document.getElementById('input-settings-logourl').value = './image_ad59c0.jpg';
   });
 
+  // Sign out button
   document.getElementById('btn-user-signout')?.addEventListener('click', async () => {
     if (confirm("Sign out from your account?")) {
       if (auth) await signOut(auth);
@@ -1635,6 +1823,7 @@ function setupEventListeners() {
     }
   });
 
+  // Edit display name
   document.getElementById('btn-edit-display-name')?.addEventListener('click', async () => {
     const newName = prompt("Enter new display name:", state.user?.displayName || '');
     if (newName && newName.trim().length > 0) {
@@ -1648,6 +1837,7 @@ function setupEventListeners() {
     }
   });
 
+  // Push Notifications Permission Request
   document.getElementById('btn-request-push')?.addEventListener('click', async () => {
     if (!('Notification' in window)) {
       alert("Notifications are not supported in this browser.");
@@ -1661,24 +1851,30 @@ function setupEventListeners() {
     }
   });
 
-  let deferredPrompt;
+  // PWA Install prompt listener
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredPrompt = e;
+    globalDeferredPrompt = e;
     const installBtn = document.getElementById('btn-pwa-install');
     if (installBtn) {
       installBtn.classList.remove('hidden');
       installBtn.onclick = async () => {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
-        if (outcome === 'accepted') {
-          installBtn.classList.add('hidden');
+        if (globalDeferredPrompt) {
+          globalDeferredPrompt.prompt();
+          const { outcome } = await globalDeferredPrompt.userChoice;
+          if (outcome === 'accepted') {
+            installBtn.classList.add('hidden');
+            globalDeferredPrompt = null;
+          }
         }
       };
     }
   });
 }
 
+/* ==========================================================================
+   13. LIVE CLOCK TICKER
+   ========================================================================== */
 function startLiveClock() {
   function tick() {
     const now = new Date();
@@ -1700,6 +1896,9 @@ function startLiveClock() {
   setInterval(tick, 1000);
 }
 
+/* ==========================================================================
+   14. APPLICATION BOOTSTRAP
+   ========================================================================== */
 window.addEventListener('DOMContentLoaded', () => {
   try {
     startLiveClock();
@@ -1710,6 +1909,7 @@ window.addEventListener('DOMContentLoaded', () => {
   } catch (err) {
     console.error("Initialization error:", err);
   } finally {
+    // Failsafe loader dismissal
     setTimeout(hideLoader, 1500);
   }
 });
