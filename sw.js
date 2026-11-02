@@ -1,5 +1,5 @@
-// Service Worker for COC Media Team PWA (v1.0.1) - GitHub Pages Compatible
-const CACHE_NAME = 'coc-media-pwa-v1.0.1';
+// Service Worker for COC Media Team PWA (v1.0.3) - GitHub Pages Compatible
+const CACHE_NAME = 'coc-media-pwa-v1.0.3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

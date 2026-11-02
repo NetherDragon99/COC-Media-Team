@@ -1,5 +1,5 @@
 /* ===================================================================
-   COC Media Team - Production Apple Dark Mode Stylesheet (v1.0.1)
+   COC Media Team - Production Apple Dark Mode Stylesheet (v1.0.3)
    Designed & Developed by Steven Mario
    =================================================================== */
 
@@ -753,4 +753,11 @@ body {
 @keyframes slideUpToast {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Custom Apple Dialog Modals */
+#modal-custom-alert .glass-modal,
+#modal-custom-confirm .glass-modal,
+#modal-custom-prompt .glass-modal {
+  animation: scaleUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }

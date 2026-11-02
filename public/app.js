@@ -1,5 +1,5 @@
 /**
- * COC Media Team - v1.0.1
+ * COC Media Team - v1.0.3
  * Production Task, Quota & Attendance Platform
  * Designed & Developed by Steven Mario
  * GitHub Pages Compatible (Vanilla JS + Firebase CDN)
@@ -91,7 +91,7 @@ const state = {
     announcementAr: '',
     logoUrl: './image_ad59c0.jpg',
     developerCredit: 'Steven Mario',
-    version: 'v1.0.1'
+    version: 'v1.0.3'
   }
 };
 
@@ -260,21 +260,189 @@ function updateAnnouncementUI() {
 }
 
 /* ==========================================================================
-   6. AUTHENTICATION & USER PROFILE MANAGEMENT
+   CUSTOM APPLE-STYLE DIALOGS (ALERT, CONFIRM, PROMPT) - ZERO BROWSER POPUPS
+   ========================================================================== */
+function showCustomAlert(message, type = 'info', title = null, actionBtn = null) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('modal-custom-alert');
+    const titleEl = document.getElementById('custom-alert-title');
+    const msgEl = document.getElementById('custom-alert-message');
+    const iconBox = document.getElementById('custom-alert-icon-box');
+    const iconEl = document.getElementById('custom-alert-icon');
+    const okBtn = document.getElementById('btn-custom-alert-ok');
+    const actionBtnEl = document.getElementById('btn-custom-alert-action');
+    const actionLabel = document.getElementById('btn-custom-alert-action-label');
+
+    if (!modal) {
+      console.warn("Custom alert modal missing:", message);
+      resolve(true);
+      return;
+    }
+
+    const defaultTitles = {
+      info: state.lang === 'ar' ? 'تنبيه' : 'Notice',
+      success: state.lang === 'ar' ? 'تم بنجاح' : 'Success',
+      warning: state.lang === 'ar' ? 'تنبيه' : 'Attention',
+      error: state.lang === 'ar' ? 'خطأ' : 'Error'
+    };
+    if (titleEl) titleEl.textContent = title || defaultTitles[type] || 'Notice';
+    if (msgEl) msgEl.textContent = message;
+
+    if (iconBox && iconEl) {
+      if (type === 'success') {
+        iconBox.className = 'w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400';
+        iconEl.setAttribute('data-lucide', 'check-circle');
+      } else if (type === 'warning') {
+        iconBox.className = 'w-14 h-14 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400';
+        iconEl.setAttribute('data-lucide', 'alert-triangle');
+      } else if (type === 'error') {
+        iconBox.className = 'w-14 h-14 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400';
+        iconEl.setAttribute('data-lucide', 'x-circle');
+      } else {
+        iconBox.className = 'w-14 h-14 rounded-full bg-[#0A84FF]/15 border border-[#0A84FF]/30 flex items-center justify-center mx-auto text-[#0A84FF]';
+        iconEl.setAttribute('data-lucide', 'info');
+      }
+    }
+
+    if (actionBtn && actionBtnEl) {
+      actionBtnEl.classList.remove('hidden');
+      if (actionLabel && actionBtn.label) actionLabel.textContent = actionBtn.label;
+      actionBtnEl.onclick = () => {
+        modal.classList.add('hidden');
+        actionBtn.onClick?.();
+        resolve(true);
+      };
+    } else if (actionBtnEl) {
+      actionBtnEl.classList.add('hidden');
+    }
+
+    if (okBtn) {
+      okBtn.onclick = () => {
+        modal.classList.add('hidden');
+        resolve(true);
+      };
+    }
+
+    modal.classList.remove('hidden');
+    refreshIcons();
+  });
+}
+
+function showCustomConfirm(message, onConfirm = null, title = null) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('modal-custom-confirm');
+    const titleEl = document.getElementById('custom-confirm-title');
+    const msgEl = document.getElementById('custom-confirm-message');
+    const cancelBtn = document.getElementById('btn-custom-confirm-cancel');
+    const okBtn = document.getElementById('btn-custom-confirm-ok');
+
+    if (!modal) {
+      resolve(false);
+      return;
+    }
+
+    if (titleEl) titleEl.textContent = title || (state.lang === 'ar' ? 'تأكيد الإجراء' : 'Confirm Action');
+    if (msgEl) msgEl.textContent = message;
+
+    if (cancelBtn) {
+      cancelBtn.onclick = () => {
+        modal.classList.add('hidden');
+        resolve(false);
+      };
+    }
+
+    if (okBtn) {
+      okBtn.onclick = () => {
+        modal.classList.add('hidden');
+        if (typeof onConfirm === 'function') onConfirm();
+        resolve(true);
+      };
+    }
+
+    modal.classList.remove('hidden');
+    refreshIcons();
+  });
+}
+
+function showCustomPrompt({ title, message, placeholder = '', defaultValue = '', isPassword = false, onConfirm = null }) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('modal-custom-prompt');
+    const titleEl = document.getElementById('custom-prompt-title');
+    const msgEl = document.getElementById('custom-prompt-message');
+    const inputEl = document.getElementById('input-custom-prompt');
+    const errEl = document.getElementById('custom-prompt-error');
+    const form = document.getElementById('form-custom-prompt');
+    const cancelBtn = document.getElementById('btn-custom-prompt-cancel');
+
+    if (!modal || !inputEl || !form) {
+      resolve(null);
+      return;
+    }
+
+    if (titleEl) titleEl.textContent = title || (state.lang === 'ar' ? 'إدخال بيانات' : 'Enter Value');
+    if (msgEl) msgEl.textContent = message || '';
+    inputEl.type = isPassword ? 'password' : 'text';
+    inputEl.placeholder = placeholder || '';
+    inputEl.value = defaultValue || '';
+    if (errEl) errEl.classList.add('hidden');
+
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      form.onsubmit = null;
+      if (cancelBtn) cancelBtn.onclick = null;
+    };
+
+    if (cancelBtn) {
+      cancelBtn.onclick = () => {
+        cleanup();
+        resolve(null);
+      };
+    }
+
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const val = inputEl.value;
+      cleanup();
+      if (typeof onConfirm === 'function') onConfirm(val);
+      resolve(val);
+    };
+
+    modal.classList.remove('hidden');
+    setTimeout(() => inputEl.focus(), 50);
+    refreshIcons();
+  });
+}
+
+function showAuthRequiredAlert() {
+  const msg = state.lang === 'ar'
+    ? 'يجب تسجيل الدخول أولاً لتنفيذ هذا الإجراء.'
+    : 'You need to sign in first to perform this action.';
+  const title = state.lang === 'ar' ? 'تسجيل الدخول مطلوب' : 'Sign In Required';
+  
+  return showCustomAlert(msg, 'warning', title, {
+    label: state.lang === 'ar' ? 'تسجيل الدخول بحساب Google' : 'Sign in with Google',
+    onClick: () => handleGoogleSignIn()
+  });
+}
+
+function requireAuth(action) {
+  if (!state.user) {
+    showAuthRequiredAlert();
+    return false;
+  }
+  if (typeof action === 'function') {
+    action();
+  }
+  return true;
+}
+
+/* ==========================================================================
+   6. AUTHENTICATION & USER PROFILE MANAGEMENT (GUEST / READ-ONLY MODE)
    ========================================================================== */
 function initAuth() {
-  // Check local guest fallback first
-  const storedGuest = localStorage.getItem('coc_guest_user');
-  if (storedGuest) {
-    try {
-      state.user = JSON.parse(storedGuest);
-      updateUserUI();
-    } catch (e) {
-      console.warn("Invalid guest data:", e);
-    }
-  }
-
   if (!auth) {
+    state.user = null;
+    updateUserUI();
     hideLoader();
     return;
   }
@@ -282,16 +450,35 @@ function initAuth() {
   onAuthStateChanged(auth, async (firebaseUser) => {
     try {
       if (firebaseUser) {
-        // User logged in via Firebase
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const userSnap = await getDoc(userRef);
-        
-        let userData;
-        if (userSnap.exists()) {
-          userData = userSnap.data();
-          // Update last active
-          await updateDoc(userRef, { lastActiveDate: getTodayKey() });
-        } else {
+        let userData = null;
+        if (db) {
+          try {
+            const userRef = doc(db, 'users', firebaseUser.uid);
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists()) {
+              userData = userSnap.data();
+              updateDoc(userRef, { lastActiveDate: getTodayKey() }).catch(() => {});
+            } else {
+              userData = {
+                uid: firebaseUser.uid,
+                displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Team Member',
+                email: firebaseUser.email || '',
+                photoURL: firebaseUser.photoURL || './image_ad59c0.jpg',
+                points: 0,
+                totalPenalties: 0,
+                role: 'member',
+                createdAt: new Date().toISOString(),
+                lastActiveDate: getTodayKey(),
+                isActive: true,
+                streakDays: 1
+              };
+              setDoc(userRef, userData).catch(() => {});
+            }
+          } catch (dbErr) {
+            console.warn("User Firestore lookup fallback to auth profile:", dbErr.message);
+          }
+        }
+        if (!userData) {
           userData = {
             uid: firebaseUser.uid,
             displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Team Member',
@@ -305,29 +492,19 @@ function initAuth() {
             isActive: true,
             streakDays: 1
           };
-          await setDoc(userRef, userData);
         }
-
         state.user = userData;
         localStorage.removeItem('coc_guest_user');
-      } else if (!state.user) {
-        // Default guest member if none
-        state.user = {
-          uid: 'guest_' + Math.random().toString(36).substring(2, 9),
-          displayName: 'Team Contributor',
-          email: 'member@cocmedia.local',
-          photoURL: './image_ad59c0.jpg',
-          points: 0,
-          totalPenalties: 0,
-          role: 'member',
-          createdAt: new Date().toISOString(),
-          isActive: true,
-          streakDays: 1
-        };
+      } else {
+        // Read-only guest mode: strictly null, no dummy profile
+        state.user = null;
+        localStorage.removeItem('coc_guest_user');
       }
       updateUserUI();
     } catch (err) {
       console.warn("Auth state resolution warning:", err);
+      state.user = null;
+      updateUserUI();
     } finally {
       hideLoader();
     }
@@ -335,29 +512,23 @@ function initAuth() {
 }
 
 function updateUserUI() {
-  const authSection = document.getElementById('header-user-section');
+  const drawerGuestCard = document.getElementById('drawer-guest-card');
+  const drawerProfileCard = document.getElementById('drawer-profile-card');
+  const drawerSignoutBtn = document.getElementById('drawer-btn-signout');
   const greetingEl = document.getElementById('hero-greeting');
   const userPointsEl = document.getElementById('stat-user-points');
   
   if (state.user) {
+    // Authenticated User State
+    if (drawerGuestCard) drawerGuestCard.classList.add('hidden');
+    if (drawerProfileCard) drawerProfileCard.classList.remove('hidden');
+    if (drawerSignoutBtn) drawerSignoutBtn.classList.remove('hidden');
+
     if (greetingEl) {
       greetingEl.textContent = state.lang === 'ar' ? `أهلاً بك، ${state.user.displayName}` : `Welcome back, ${state.user.displayName}`;
     }
     if (userPointsEl) {
       userPointsEl.textContent = `${state.user.points || 0} pts`;
-    }
-
-    if (authSection) {
-      authSection.innerHTML = `
-        <div class="flex items-center gap-2 p-1 pl-2.5 rounded-full bg-white/[0.06] border border-white/10 hover:border-white/20 transition cursor-pointer" id="btn-profile-pill">
-          <span class="text-xs font-semibold text-white truncate max-w-[100px] sm:max-w-[130px]">${state.user.displayName}</span>
-          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-bold">${state.user.points || 0} pts</span>
-          <img src="${state.user.photoURL || './image_ad59c0.jpg'}" alt="${state.user.displayName}" class="w-7 h-7 rounded-full object-cover border border-white/20" onerror="this.src='./image_ad59c0.jpg'" />
-        </div>
-      `;
-      document.getElementById('btn-profile-pill')?.addEventListener('click', () => {
-        switchTab('profile');
-      });
     }
 
     // Update Drawer Profile Card
@@ -370,7 +541,7 @@ function updateUserUI() {
 
     if (drawerAvatar) drawerAvatar.src = state.user.photoURL || './image_ad59c0.jpg';
     if (drawerName) drawerName.textContent = state.user.displayName || 'Team Member';
-    if (drawerEmail) drawerEmail.textContent = state.user.email || 'local-member';
+    if (drawerEmail) drawerEmail.textContent = state.user.email || 'member@cocmedia.local';
     if (drawerPoints) drawerPoints.textContent = `${state.user.points || 0} pts`;
     if (drawerRole) {
       drawerRole.textContent = state.user.role?.toUpperCase() || 'MEMBER';
@@ -392,23 +563,73 @@ function updateUserUI() {
     const profPts = document.getElementById('prof-stat-points');
     const profStreak = document.getElementById('prof-stat-streak');
     const profPenalties = document.getElementById('prof-stat-penalties');
+    const userSignoutBtn = document.getElementById('btn-user-signout');
 
     if (profImg) profImg.src = state.user.photoURL || './image_ad59c0.jpg';
     if (profName) profName.textContent = state.user.displayName;
-    if (profEmail) profEmail.textContent = state.user.email || 'local-member';
+    if (profEmail) profEmail.textContent = state.user.email || 'member@cocmedia.local';
     if (profRole) {
       profRole.textContent = state.user.role?.toUpperCase() || 'MEMBER';
       if (state.user.role === 'admin') {
         profRole.className = 'text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-400 border border-amber-400/30 font-semibold';
+      } else {
+        profRole.className = 'text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold';
       }
     }
     if (profPts) profPts.textContent = `${state.user.points || 0}`;
     if (profStreak) profStreak.textContent = `${state.user.streakDays || 1} Days`;
     if (profPenalties) profPenalties.textContent = `-${state.user.totalPenalties || 0} pts`;
+    const profileGoogleBtn = document.getElementById('btn-profile-google-signin');
+    if (profileGoogleBtn) profileGoogleBtn.classList.add('hidden');
+    if (userSignoutBtn) userSignoutBtn.classList.remove('hidden');
 
-    // Also update edit-profile modal preview
     const editPreview = document.getElementById('edit-profile-preview');
     if (editPreview) editPreview.src = state.user.photoURL || './image_ad59c0.jpg';
+  } else {
+    // Read-Only Guest Mode UI
+    if (drawerGuestCard) drawerGuestCard.classList.remove('hidden');
+    if (drawerProfileCard) drawerProfileCard.classList.add('hidden');
+    if (drawerSignoutBtn) drawerSignoutBtn.classList.add('hidden');
+
+    const guestTitle = document.getElementById('drawer-guest-name');
+    const guestDesc = document.getElementById('drawer-guest-desc');
+    const guestBadge = document.getElementById('drawer-guest-badge');
+    const guestBtnLabel = document.getElementById('drawer-btn-signin-label');
+    if (guestTitle) guestTitle.textContent = state.lang === 'ar' ? 'زائر' : 'Guest User';
+    if (guestDesc) guestDesc.textContent = state.lang === 'ar' ? 'وضع القراءة فقط • Read-Only' : 'Read-Only Mode • زائر';
+    if (guestBadge) guestBadge.textContent = state.lang === 'ar' ? 'زائر' : 'GUEST';
+    if (guestBtnLabel) guestBtnLabel.textContent = state.lang === 'ar' ? 'تسجيل الدخول باستخدام Google' : 'Sign In with Google';
+
+    if (greetingEl) {
+      greetingEl.textContent = state.lang === 'ar' ? 'مرحباً بك في منصة ميديا COC' : 'Welcome to COC Media Hub';
+    }
+    if (userPointsEl) {
+      userPointsEl.textContent = '0 pts';
+    }
+
+    // Profile View Elements for Guest
+    const profImg = document.getElementById('profile-user-img');
+    const profName = document.getElementById('profile-user-name');
+    const profEmail = document.getElementById('profile-user-email');
+    const profRole = document.getElementById('profile-role-badge');
+    const profPts = document.getElementById('prof-stat-points');
+    const profStreak = document.getElementById('prof-stat-streak');
+    const profPenalties = document.getElementById('prof-stat-penalties');
+    const userSignoutBtn = document.getElementById('btn-user-signout');
+    const profileGoogleBtn = document.getElementById('btn-profile-google-signin');
+
+    if (profImg) profImg.src = './image_ad59c0.jpg';
+    if (profName) profName.textContent = state.lang === 'ar' ? 'زائر' : 'Guest User';
+    if (profEmail) profEmail.textContent = state.lang === 'ar' ? 'وضع القراءة فقط — سجل الدخول للمشاركة' : 'Read-Only Mode — Sign in to participate';
+    if (profRole) {
+      profRole.textContent = state.lang === 'ar' ? 'زائر' : 'GUEST';
+      profRole.className = 'text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 font-semibold';
+    }
+    if (profPts) profPts.textContent = '0';
+    if (profStreak) profStreak.textContent = '0 Days';
+    if (profPenalties) profPenalties.textContent = '0 pts';
+    if (userSignoutBtn) userSignoutBtn.classList.add('hidden');
+    if (profileGoogleBtn) profileGoogleBtn.classList.remove('hidden');
   }
 
   renderTasks();
@@ -422,7 +643,7 @@ function updateUserUI() {
    ========================================================================== */
 async function handleGoogleSignIn() {
   if (!auth) {
-    alert("Firebase Auth is not ready. Continuing with Local Mode.");
+    showCustomAlert("Firebase Auth is not ready. Continuing with Local Mode.", 'warning');
     openModal('modal-auth');
     return;
   }
@@ -443,18 +664,19 @@ async function handleGoogleSignIn() {
       closeModal('modal-auth');
       openModal('modal-unauthorized-domain');
     } else {
-      alert(`Sign in could not complete (${error.message}). You can log in directly with your name below.`);
+      showCustomAlert(`Sign in could not complete (${error.message}). You can log in directly with your name below.`, 'error', 'Sign In Notice');
     }
   }
 }
 
 /* ==========================================================================
-   8. REALTIME DATA LISTENERS (FIRESTORE)
+   8. REALTIME DATA LISTENERS (FIRESTORE RESILIENT & OFFLINE-READY)
    ========================================================================== */
 function initDataSubscriptions() {
   if (!db) {
     hideLoader();
     state.tasks = [];
+    seedDefaultAttendanceSessions();
     renderTasks();
     return;
   }
@@ -466,9 +688,12 @@ function initDataSubscriptions() {
         state.settings = { ...state.settings, ...snapshot.data() };
         applyBrandingSettings();
       }
-    }, (err) => console.warn("Settings listener error:", err));
+    }, (err) => {
+      console.warn("Settings listener fallback (operating offline):", err.message);
+      applyBrandingSettings();
+    });
 
-    // 2. Tasks Listener (Strictly real Firestore tasks — 0 tasks renders clean empty state)
+    // 2. Tasks Listener (Strictly real tasks — 0 tasks renders clean empty state)
     onSnapshot(collection(db, 'tasks'), (snapshot) => {
       const loadedTasks = [];
       snapshot.forEach((doc) => {
@@ -479,9 +704,10 @@ function initDataSubscriptions() {
       renderAdminTasks();
       hideLoader();
     }, (err) => {
-      console.warn("Tasks listener error:", err);
+      console.warn("Tasks listener fallback (operating offline):", err.message);
       state.tasks = [];
       renderTasks();
+      renderAdminTasks();
       hideLoader();
     });
 
@@ -495,7 +721,10 @@ function initDataSubscriptions() {
       renderLeaderboard();
       renderTasks(); // update completion status
       renderProfileHistory();
-    }, (err) => console.warn("Submissions listener error:", err));
+    }, (err) => {
+      console.warn("Submissions listener fallback (operating offline):", err.message);
+      renderLeaderboard();
+    });
 
     // 4. Attendance Sessions Listener
     onSnapshot(collection(db, 'attendance_sessions'), (snapshot) => {
@@ -503,16 +732,18 @@ function initDataSubscriptions() {
       snapshot.forEach((doc) => {
         loadedSessions.push({ id: doc.id, ...doc.data() });
       });
-      state.attendanceSessions = loadedSessions;
-      if (state.attendanceSessions.length === 0) {
-        seedDefaultAttendanceSessions();
-      } else {
+      if (loadedSessions.length > 0) {
+        state.attendanceSessions = loadedSessions;
         renderAttendance();
         renderAdminSessions();
+      } else {
+        seedDefaultAttendanceSessions();
       }
     }, (err) => {
-      console.warn("Attendance listener error:", err);
-      seedDefaultAttendanceSessions();
+      console.warn("Attendance listener fallback (operating offline):", err.message);
+      if (state.attendanceSessions.length === 0) {
+        seedDefaultAttendanceSessions();
+      }
     });
 
     // 5. Attendance Logs Listener
@@ -521,11 +752,12 @@ function initDataSubscriptions() {
       snapshot.forEach((doc) => {
         loadedLogs.push({ id: doc.id, ...doc.data() });
       });
-      // Sort newest first
       loadedLogs.sort((a, b) => new Date(b.checkInTimestamp) - new Date(a.checkInTimestamp));
       state.attendanceLogs = loadedLogs;
       renderAttendanceLogs();
-    }, (err) => console.warn("Attendance logs listener error:", err));
+    }, (err) => {
+      console.warn("Attendance logs listener fallback (operating offline):", err.message);
+    });
 
     // 6. Registered Members Listener
     onSnapshot(collection(db, 'users'), (snapshot) => {
@@ -536,7 +768,10 @@ function initDataSubscriptions() {
       state.members = loadedUsers;
       renderLeaderboard();
       renderAdminMembers();
-    }, (err) => console.warn("Users listener error:", err));
+    }, (err) => {
+      console.warn("Users listener fallback (operating offline):", err.message);
+      renderLeaderboard();
+    });
 
     // 7. Notifications Listener
     onSnapshot(collection(db, 'notifications'), (snapshot) => {
@@ -547,10 +782,12 @@ function initDataSubscriptions() {
       loadedNotifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       state.notifications = loadedNotifications;
       renderNotifications();
-    }, (err) => console.warn("Notifications listener error:", err));
+    }, (err) => {
+      console.warn("Notifications listener fallback (operating offline):", err.message);
+    });
 
   } catch (err) {
-    console.error("Data subscription error:", err);
+    console.warn("Data subscription handled:", err.message);
     hideLoader();
   }
 }
@@ -569,7 +806,7 @@ function applyBrandingSettings() {
   if (footerDev) footerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
   if (drawerBrand) drawerBrand.textContent = state.settings.appName || 'COC Media Team';
   if (drawerDev) drawerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
-  if (drawerVer) drawerVer.textContent = 'Version 1.0.1';
+  if (drawerVer) drawerVer.textContent = 'Version 1.0.3';
   if (headerLogo && state.settings.logoUrl) {
     headerLogo.src = state.settings.logoUrl;
   }
@@ -577,7 +814,7 @@ function applyBrandingSettings() {
 }
 
 /* ==========================================================================
-   9. INITIAL SEEDS (ATTENDANCE SESSIONS ONLY)
+   9. INITIAL SEEDS (ATTENDANCE SESSIONS ONLY - RESILIENT)
    ========================================================================== */
 async function seedDefaultAttendanceSessions() {
   const defaultSessions = [
@@ -605,13 +842,18 @@ async function seedDefaultAttendanceSessions() {
     }
   ];
 
+  state.attendanceSessions = defaultSessions.map((s, idx) => ({ id: `sess_${idx}`, ...s }));
+  renderAttendance();
+  renderAdminSessions();
+
   if (db) {
-    for (const s of defaultSessions) {
-      await addDoc(collection(db, 'attendance_sessions'), s);
+    try {
+      for (const s of defaultSessions) {
+        await addDoc(collection(db, 'attendance_sessions'), s);
+      }
+    } catch (err) {
+      console.info("Default sessions running locally (Firestore offline/permission):", err.message);
     }
-  } else {
-    state.attendanceSessions = defaultSessions.map((s, idx) => ({ id: `sess_${idx}`, ...s }));
-    renderAttendance();
   }
 }
 
@@ -754,6 +996,10 @@ function renderTasks() {
   // Attach complete button listeners
   container.querySelectorAll('.btn-complete-task').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (!state.user) {
+        showAuthRequiredAlert();
+        return;
+      }
       const taskId = btn.getAttribute('data-taskid');
       const task = state.tasks.find(t => t.id === taskId);
       if (task) openSubmitModal(task);
@@ -874,6 +1120,10 @@ function renderAttendance() {
 
   container.querySelectorAll('.btn-checkin-session').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (!state.user) {
+        showAuthRequiredAlert();
+        return;
+      }
       const sessId = btn.getAttribute('data-sessid');
       const sess = state.attendanceSessions.find(s => s.id === sessId);
       if (sess) performCheckIn(sess);
@@ -1137,15 +1387,23 @@ function renderAdminTasks() {
   tbody.querySelectorAll('.btn-admin-delete-task').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const taskId = btn.getAttribute('data-taskid');
-      if (confirm("Are you sure you want to permanently delete this task?")) {
+      showCustomConfirm("Are you sure you want to permanently delete this task?", async () => {
         if (db) {
-          await deleteDoc(doc(db, 'tasks', taskId));
+          try {
+            await deleteDoc(doc(db, 'tasks', taskId));
+          } catch (e) {
+            console.warn("Delete task local fallback:", e.message);
+            state.tasks = state.tasks.filter(t => t.id !== taskId);
+            renderTasks();
+            renderAdminTasks();
+          }
         } else {
           state.tasks = state.tasks.filter(t => t.id !== taskId);
           renderTasks();
           renderAdminTasks();
         }
-      }
+        showCustomAlert("Task deleted.", 'info');
+      });
     });
   });
 
@@ -1172,15 +1430,23 @@ function renderAdminSessions() {
   list.querySelectorAll('.btn-admin-delete-session').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const sessId = btn.getAttribute('data-sessid');
-      if (confirm("Delete this session?")) {
+      showCustomConfirm("Delete this attendance session?", async () => {
         if (db) {
-          await deleteDoc(doc(db, 'attendance_sessions', sessId));
+          try {
+            await deleteDoc(doc(db, 'attendance_sessions', sessId));
+          } catch (e) {
+            console.warn("Delete session local fallback:", e.message);
+            state.attendanceSessions = state.attendanceSessions.filter(s => s.id !== sessId);
+            renderAttendance();
+            renderAdminSessions();
+          }
         } else {
           state.attendanceSessions = state.attendanceSessions.filter(s => s.id !== sessId);
           renderAttendance();
           renderAdminSessions();
         }
-      }
+        showCustomAlert("Session deleted.", 'info');
+      });
     });
   });
   refreshIcons();
@@ -1293,7 +1559,7 @@ function openCompetitionModal(task) {
 
 async function performCheckIn(session) {
   if (!state.user) {
-    openModal('modal-auth');
+    showAuthRequiredAlert();
     return;
   }
 
@@ -1331,14 +1597,22 @@ async function performCheckIn(session) {
   };
 
   try {
+    let savedToDb = false;
     if (db) {
-      await addDoc(collection(db, 'attendance_logs'), logEntry);
-      const pointsDiff = bonusPoints - penaltyPoints;
-      await updateDoc(doc(db, 'users', state.user.uid), {
-        points: increment(pointsDiff),
-        totalPenalties: increment(penaltyPoints)
-      });
-    } else {
+      try {
+        await addDoc(collection(db, 'attendance_logs'), logEntry);
+        const pointsDiff = bonusPoints - penaltyPoints;
+        await updateDoc(doc(db, 'users', state.user.uid), {
+          points: increment(pointsDiff),
+          totalPenalties: increment(penaltyPoints)
+        });
+        savedToDb = true;
+      } catch (dbErr) {
+        console.warn("Attendance log fallback to local state:", dbErr.message);
+      }
+    }
+    
+    if (!savedToDb) {
       state.attendanceLogs.unshift({ id: `log_${Date.now()}`, ...logEntry });
       state.user.points = (state.user.points || 0) + bonusPoints - penaltyPoints;
       state.user.totalPenalties = (state.user.totalPenalties || 0) + penaltyPoints;
@@ -1347,9 +1621,13 @@ async function performCheckIn(session) {
 
     triggerConfetti();
     renderAttendance();
+    const alertMsg = status === 'on_time'
+      ? (state.lang === 'ar' ? 'تم تسجيل حضورك في الوقت المحدد! (+10 نقاط مكافأة)' : 'Checked in on time! (+10 bonus points awarded)')
+      : (state.lang === 'ar' ? `تم تسجيل حضورك متأخراً (${lateMinutes} دقيقة تأخير، خصم ${penaltyPoints} نقطة)` : `Checked in late (${lateMinutes}m late, -${penaltyPoints} penalty points deducted)`);
+    showCustomAlert(alertMsg, status === 'on_time' ? 'success' : 'warning', state.lang === 'ar' ? 'سجل الحضور' : 'Attendance Check-In');
   } catch (err) {
     console.error("Check in error:", err);
-    alert("Could not record check in: " + err.message);
+    showCustomAlert("Could not record check in: " + err.message, 'error');
   }
 }
 
@@ -1404,6 +1682,10 @@ function closeDrawer() {
 }
 
 function openEditProfileModal() {
+  if (!state.user) {
+    showAuthRequiredAlert();
+    return;
+  }
   const nameInput = document.getElementById('input-edit-profile-name');
   const avatarInput = document.getElementById('input-edit-profile-avatar');
   const previewImg = document.getElementById('edit-profile-preview');
@@ -1452,6 +1734,17 @@ function setupEventListeners() {
     applyLanguage(state.lang === 'en' ? 'ar' : 'en');
   });
 
+  // Drawer Guest Sign in with Google
+  document.getElementById('drawer-btn-google-signin')?.addEventListener('click', () => {
+    closeDrawer();
+    handleGoogleSignIn();
+  });
+
+  // Profile Tab Guest Sign in with Google
+  document.getElementById('btn-profile-google-signin')?.addEventListener('click', () => {
+    handleGoogleSignIn();
+  });
+
   // Drawer Install App PWA
   document.getElementById('drawer-btn-pwa')?.addEventListener('click', async () => {
     if (globalDeferredPrompt) {
@@ -1461,13 +1754,17 @@ function setupEventListeners() {
         globalDeferredPrompt = null;
       }
     } else {
-      alert(state.lang === 'ar' ? 'التطبيق جاهز للتثبيت كـ PWA عبر قائمة المتصفح أو تثبيته مباشرة على الشاشة الرئيسية.' : 'PWA is ready. You can install it via your browser menu or "Add to Home Screen".');
+      showCustomAlert(state.lang === 'ar' ? 'التطبيق جاهز للتثبيت كـ PWA عبر قائمة المتصفح أو تثبيته مباشرة على الشاشة الرئيسية.' : 'PWA is ready. You can install it via your browser menu or "Add to Home Screen".', 'info', 'PWA');
     }
   });
 
-  // Drawer Admin Dashboard ($J@@s#COC1982 exclusively here)
+  // Drawer Admin Dashboard ($J@@s#COC1982 exclusively here - with guest interception)
   document.getElementById('drawer-btn-admin')?.addEventListener('click', () => {
     closeDrawer();
+    if (!state.user) {
+      showAuthRequiredAlert();
+      return;
+    }
     if (state.isAdminUnlocked) {
       openModal('modal-admin-dashboard');
     } else {
@@ -1478,16 +1775,22 @@ function setupEventListeners() {
   // Drawer Sign Out / Switch Account
   document.getElementById('drawer-btn-signout')?.addEventListener('click', async () => {
     closeDrawer();
-    if (confirm(state.lang === 'ar' ? 'هل تريد تسجيل الخروج / تبديل الحساب؟' : 'Sign out or switch your account?')) {
+    showCustomConfirm(state.lang === 'ar' ? 'هل تريد تسجيل الخروج / تبديل الحساب؟' : 'Sign out or switch your account?', async () => {
       if (auth) await signOut(auth);
       localStorage.removeItem('coc_guest_user');
-      window.location.reload();
-    }
+      localStorage.removeItem('coc_logged_in_user');
+      state.user = null;
+      updateUserUI();
+    });
   });
 
-  // Drawer Interactive Profile Card -> Edit Profile Modal
+  // Drawer Interactive Profile Card -> Edit Profile Modal (guest interception)
   document.getElementById('drawer-profile-card')?.addEventListener('click', () => {
     closeDrawer();
+    if (!state.user) {
+      showAuthRequiredAlert();
+      return;
+    }
     openEditProfileModal();
   });
 
@@ -1519,25 +1822,15 @@ function setupEventListeners() {
     if (!newName) return;
 
     if (!state.user) {
-      state.user = {
-        uid: 'user_' + Math.random().toString(36).substring(2, 9),
-        displayName: newName,
-        email: `${newName.toLowerCase().replace(/\s+/g, '.')}@cocmedia.local`,
-        photoURL: newAvatar,
-        points: 0,
-        totalPenalties: 0,
-        role: 'member',
-        createdAt: new Date().toISOString(),
-        isActive: true,
-        streakDays: 1
-      };
-    } else {
-      state.user.displayName = newName;
-      state.user.photoURL = newAvatar;
+      showAuthRequiredAlert();
+      return;
     }
 
+    state.user.displayName = newName;
+    state.user.photoURL = newAvatar;
+
     try {
-      if (db && state.user.uid && !state.user.uid.startsWith('guest_')) {
+      if (db && state.user.uid && !state.user.uid.startsWith('guest_') && !state.user.uid.startsWith('local_')) {
         await updateDoc(doc(db, 'users', state.user.uid), {
           displayName: newName,
           photoURL: newAvatar
@@ -1548,11 +1841,13 @@ function setupEventListeners() {
       updateUserUI();
       closeModal('modal-edit-profile');
       triggerConfetti();
+      showCustomAlert(state.lang === 'ar' ? 'تم تحديث الملف الشخصي بنجاح!' : 'Profile updated successfully!', 'success');
     } catch (err) {
       console.warn("Could not save to remote user doc, saved locally:", err);
       localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
       updateUserUI();
       closeModal('modal-edit-profile');
+      showCustomAlert(state.lang === 'ar' ? 'تم حفظ التعديلات محلياً!' : 'Profile saved locally!', 'info');
     }
   });
 
@@ -1699,7 +1994,14 @@ function setupEventListeners() {
 
     try {
       if (db) {
-        await addDoc(collection(db, 'tasks'), newTask);
+        try {
+          await addDoc(collection(db, 'tasks'), newTask);
+        } catch (dbErr) {
+          console.warn("Task create fallback to local state:", dbErr.message);
+          state.tasks.unshift({ id: `task_${Date.now()}`, ...newTask });
+          renderTasks();
+          renderAdminTasks();
+        }
       } else {
         state.tasks.unshift({ id: `task_${Date.now()}`, ...newTask });
         renderTasks();
@@ -1707,9 +2009,9 @@ function setupEventListeners() {
       }
       document.getElementById('form-manage-task').reset();
       document.getElementById('admin-task-form-container').classList.add('hidden');
-      alert("Task created successfully!");
+      showCustomAlert("Task created successfully!", 'success');
     } catch (err) {
-      alert("Error saving task: " + err.message);
+      showCustomAlert("Error saving task: " + err.message, 'error');
     }
   });
 
@@ -1721,7 +2023,7 @@ function setupEventListeners() {
     if (!task) return;
 
     if (!state.user) {
-      openModal('modal-auth');
+      showAuthRequiredAlert();
       return;
     }
 
@@ -1745,12 +2047,19 @@ function setupEventListeners() {
     };
 
     try {
+      let savedDb = false;
       if (db) {
-        await addDoc(collection(db, 'submissions'), submission);
-        await updateDoc(doc(db, 'users', state.user.uid), {
-          points: increment(task.points)
-        });
-      } else {
+        try {
+          await addDoc(collection(db, 'submissions'), submission);
+          await updateDoc(doc(db, 'users', state.user.uid), {
+            points: increment(task.points)
+          });
+          savedDb = true;
+        } catch (dbErr) {
+          console.warn("Task submission write fallback to local:", dbErr.message);
+        }
+      }
+      if (!savedDb) {
         state.submissions.unshift({ id: `sub_${Date.now()}`, ...submission });
         state.user.points = (state.user.points || 0) + task.points;
         updateUserUI();
@@ -1762,8 +2071,13 @@ function setupEventListeners() {
       renderTasks();
       renderLeaderboard();
       renderProfileHistory();
+      showCustomAlert(
+        state.lang === 'ar' ? `تم إرسال المهمة بنجاح وحصلت على ${task.points} نقطة!` : `Task completed successfully! +${task.points} points awarded.`,
+        'success',
+        state.lang === 'ar' ? 'تم الإنجاز' : 'Task Completed'
+      );
     } catch (err) {
-      alert("Submission error: " + err.message);
+      showCustomAlert("Submission error: " + err.message, 'error');
     }
   });
 
@@ -1787,10 +2101,14 @@ function setupEventListeners() {
     state.settings.announcementAr = ar;
 
     if (db) {
-      await setDoc(doc(db, 'settings', 'app_config'), state.settings, { merge: true });
+      try {
+        await setDoc(doc(db, 'settings', 'app_config'), state.settings, { merge: true });
+      } catch (dbErr) {
+        console.warn("Announcement fallback to local:", dbErr.message);
+      }
     }
     updateAnnouncementUI();
-    alert("Announcement published!");
+    showCustomAlert("Announcement published!", 'success');
   });
 
   // Admin Settings Submit (Logo URL override & Branding)
@@ -1803,10 +2121,14 @@ function setupEventListeners() {
     state.settings.developerCredit = document.getElementById('input-settings-devcredit').value.trim();
 
     if (db) {
-      await setDoc(doc(db, 'settings', 'app_config'), state.settings, { merge: true });
+      try {
+        await setDoc(doc(db, 'settings', 'app_config'), state.settings, { merge: true });
+      } catch (dbErr) {
+        console.warn("Settings branding fallback to local:", dbErr.message);
+      }
     }
     applyBrandingSettings();
-    alert("Branding settings updated!");
+    showCustomAlert("Branding settings updated!", 'success');
   });
 
   // Reset logo button
@@ -1816,38 +2138,54 @@ function setupEventListeners() {
 
   // Sign out button
   document.getElementById('btn-user-signout')?.addEventListener('click', async () => {
-    if (confirm("Sign out from your account?")) {
+    showCustomConfirm(state.lang === 'ar' ? 'هل تريد تسجيل الخروج من حسابك؟' : 'Sign out from your account?', async () => {
       if (auth) await signOut(auth);
       localStorage.removeItem('coc_guest_user');
-      window.location.reload();
-    }
+      localStorage.removeItem('coc_logged_in_user');
+      state.user = null;
+      updateUserUI();
+    });
   });
 
-  // Edit display name
+  // Edit display name (using Custom Apple-Style Prompt)
   document.getElementById('btn-edit-display-name')?.addEventListener('click', async () => {
-    const newName = prompt("Enter new display name:", state.user?.displayName || '');
+    if (!state.user) {
+      showAuthRequiredAlert();
+      return;
+    }
+    const newName = await showCustomPrompt({
+      title: state.lang === 'ar' ? 'تعديل الاسم' : 'Edit Display Name',
+      message: state.lang === 'ar' ? 'أدخل اسمك المعروض الجديد:' : 'Enter your new display name:',
+      defaultValue: state.user?.displayName || '',
+      placeholder: 'Full Name'
+    });
     if (newName && newName.trim().length > 0) {
       state.user.displayName = newName.trim();
-      if (db && state.user.uid && !state.user.uid.startsWith('guest_')) {
-        await updateDoc(doc(db, 'users', state.user.uid), { displayName: newName.trim() });
+      if (db && state.user.uid && !state.user.uid.startsWith('guest_') && !state.user.uid.startsWith('local_')) {
+        try {
+          await updateDoc(doc(db, 'users', state.user.uid), { displayName: newName.trim() });
+        } catch (e) {
+          console.warn("Could not save display name to Firestore:", e);
+        }
       } else {
         localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
       }
       updateUserUI();
+      showCustomAlert(state.lang === 'ar' ? 'تم تحديث الاسم بنجاح' : 'Display name updated!', 'success');
     }
   });
 
   // Push Notifications Permission Request
   document.getElementById('btn-request-push')?.addEventListener('click', async () => {
     if (!('Notification' in window)) {
-      alert("Notifications are not supported in this browser.");
+      showCustomAlert("Notifications are not supported in this browser.", 'warning');
       return;
     }
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
-      alert("Push notifications enabled for COC Media Team!");
+      showCustomAlert("Push notifications enabled for COC Media Team!", 'success');
     } else {
-      alert("Notification permission denied or dismissed.");
+      showCustomAlert("Notification permission denied or dismissed.", 'info');
     }
   });
 
