@@ -1,41 +1,1021 @@
 <!doctype html>
-<html lang="en" dir="ltr" class="dark">
+<html lang="en" dir="ltr" class="dark" style="background-color: #000000; color: #ffffff;">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>COC Media Team v1.0.0</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
-    <!-- PWA Configuration -->
-    <link rel="manifest" href="/manifest.json" />
+    <!-- PWA Configuration (GitHub Pages Relative Paths) -->
+    <link rel="manifest" href="./manifest.json" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="COC Media" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
-    <link rel="icon" type="image/jpeg" href="/image_ad59c0.jpg" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192x192.png" />
+    <link rel="icon" type="image/jpeg" href="./image_ad59c0.jpg" />
 
-    <!-- Fonts -->
+    <!-- Typography: Cairo for Arabic & Plus Jakarta Sans for Latin -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  </head>
-  <body class="bg-[#000000] text-neutral-100 antialiased selection:bg-[#0A84FF]/30 selection:text-white min-h-screen overflow-x-hidden">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Tailwind CSS CDN for Zero-Build GitHub Pages execution -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      // Register service worker for standalone PWA capabilities
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              appleBlue: '#0A84FF',
+              flameGold: '#F59E0B',
+              darkSurface: '#0B0C10',
+              glassBorder: 'rgba(255, 255, 255, 0.08)',
+              glassBg: 'rgba(18, 20, 28, 0.65)'
+            },
+            fontFamily: {
+              sans: ['"Plus Jakarta Sans"', 'Cairo', 'sans-serif'],
+              cairo: ['Cairo', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'monospace']
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- Confetti & Lucide CDN for Rich Micro-interactions -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+      /* Glassmorphism & Apple Dark Design System */
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        font-family: 'Plus Jakarta Sans', Cairo, system-ui, -apple-system, sans-serif;
+        background-color: #000000;
+        color: #ffffff;
+        -webkit-tap-highlight-color: transparent;
+      }
+      [dir="rtl"] {
+        font-family: Cairo, 'Plus Jakarta Sans', system-ui, sans-serif;
+      }
+      .glass-card {
+        background: rgba(18, 20, 28, 0.65);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .glass-modal {
+        background: rgba(11, 13, 19, 0.88);
+        backdrop-filter: blur(32px);
+        -webkit-backdrop-filter: blur(32px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      .glass-input {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+      }
+      .glass-input:focus {
+        border-color: #0A84FF;
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.25);
+      }
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.2);
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 9999px;
+      }
+      @keyframes apple-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .animate-apple-spin {
+        animation: apple-spin 1s cubic-bezier(0.5, 0.1, 0.5, 0.9) infinite;
+      }
+      @keyframes pulse-glow {
+        0%, 100% { opacity: 0.4; transform: scale(1); }
+        50% { opacity: 0.8; transform: scale(1.05); }
+      }
+      .animate-pulse-glow {
+        animation: pulse-glow 3s infinite ease-in-out;
+      }
+    </style>
+  </head>
+  <body class="bg-[#000000] text-neutral-100 antialiased selection:bg-[#0A84FF]/30 selection:text-white min-h-screen overflow-x-hidden" style="background-color: #000000; color: #ffffff;">
+    
+    <!-- NON-BLOCKING FAIL-SAFE DARK LOADING OVERLAY -->
+    <div id="app-loader" style="position: fixed; inset: 0; background-color: #000000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.4s ease, visibility 0.4s ease;">
+      <div class="relative flex items-center justify-center mb-6">
+        <div class="absolute -inset-4 bg-gradient-to-tr from-[#0A84FF]/30 to-[#F59E0B]/30 rounded-full blur-xl animate-pulse-glow"></div>
+        <img src="./image_ad59c0.jpg" alt="COC Media Team Logo" class="relative w-24 h-24 rounded-full object-cover border-2 border-white/20 shadow-2xl" />
+      </div>
+      <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
+        <span>COC Media Team</span>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono">v1.0.0</span>
+      </div>
+      <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
+      <!-- Apple-style circular dark spinner -->
+      <div class="w-8 h-8 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-apple-spin"></div>
+    </div>
+
+    <!-- MAIN APPLICATION CONTAINER -->
+    <div id="app-root" class="min-h-screen flex flex-col justify-between relative selection:bg-[#0A84FF]/40">
+      
+      <!-- Top Ambient Glow -->
+      <div class="fixed top-0 left-1/2 -translate-x-1/2 w-full max-w-5xl h-48 bg-gradient-to-b from-[#0A84FF]/10 via-[#F59E0B]/5 to-transparent blur-3xl pointer-events-none -z-10"></div>
+
+      <!-- HEADER COMPONENT -->
+      <header class="sticky top-0 z-40 w-full glass-card border-b border-white/[0.08] backdrop-blur-2xl">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 h-18 flex items-center justify-between gap-3">
+          
+          <!-- Logo & Brand Identity -->
+          <div class="flex items-center gap-3 cursor-pointer group" id="brand-header-click">
+            <div class="relative w-11 h-11 rounded-full overflow-hidden border border-white/20 shadow-lg group-hover:border-[#0A84FF] transition duration-300">
+              <img id="header-logo-img" src="./image_ad59c0.jpg" alt="COC Media Team Logo" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h1 id="header-app-title" class="font-bold text-base sm:text-lg tracking-tight text-white group-hover:text-white/90">COC Media Team</h1>
+                <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400">v1.0.0</span>
+              </div>
+              <p id="header-subtitle" class="text-xs text-neutral-400 hidden sm:block truncate max-w-xs font-normal">Production Task, Quota & Attendance Platform</p>
+            </div>
+          </div>
+
+          <!-- Header Right Utilities: Language, Notifications, Admin Lock, User Account -->
+          <div class="flex items-center gap-2 sm:gap-3">
+            
+            <!-- Language Switcher Toggle (EN | AR) -->
+            <button id="btn-toggle-lang" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-neutral-300 hover:text-white transition flex items-center gap-1.5" title="Switch Language">
+              <i data-lucide="globe" class="w-3.5 h-3.5 text-[#0A84FF]"></i>
+              <span id="lang-indicator">AR</span>
+            </button>
+
+            <!-- Notifications Bell -->
+            <button id="btn-open-notifications" class="relative p-2 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-neutral-300 hover:text-white transition" title="Notifications">
+              <i data-lucide="bell" class="w-4 h-4"></i>
+              <span id="header-unread-badge" class="hidden absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">0</span>
+            </button>
+
+            <!-- Admin Dashboard Lock Icon -->
+            <button id="btn-open-admin-lock" class="p-2 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-neutral-300 hover:text-amber-400 transition" title="Admin Portal">
+              <i data-lucide="shield" class="w-4 h-4 text-amber-400"></i>
+            </button>
+
+            <!-- User Auth Profile Pill / Login Trigger -->
+            <div id="header-user-section">
+              <button id="btn-open-auth-modal" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0A84FF] hover:bg-[#0A84FF]/90 text-white text-xs font-semibold shadow-lg shadow-[#0A84FF]/20 transition">
+                <i data-lucide="user" class="w-3.5 h-3.5"></i>
+                <span id="auth-btn-label">Sign In</span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+      </header>
+
+      <!-- GLOBAL ANNOUNCEMENT BANNER -->
+      <div id="announcement-bar" class="hidden w-full bg-gradient-to-r from-[#0A84FF]/15 via-[#F59E0B]/15 to-[#0A84FF]/15 border-b border-white/10 px-4 py-2 text-xs sm:text-sm text-neutral-200">
+        <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2 truncate">
+            <span class="flex-shrink-0 w-2 h-2 rounded-full bg-[#F59E0B] animate-ping"></span>
+            <span class="font-semibold text-[#F59E0B]" id="announcement-tag">Notice:</span>
+            <span id="announcement-text" class="truncate font-medium text-white">Welcome to the COC Media Team platform!</span>
+          </div>
+          <button id="btn-close-announcement" class="text-neutral-400 hover:text-white p-1">
+            <i data-lucide="x" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- MAIN NAVIGATION TABS (Apple Segmented Bar) -->
+      <div class="max-w-6xl mx-auto w-full px-4 sm:px-6 pt-5 pb-2">
+        <div class="p-1 rounded-2xl glass-card flex items-center justify-between gap-1 overflow-x-auto custom-scrollbar">
+          
+          <button data-tab="tasks" class="tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-white bg-white/[0.12] shadow-sm">
+            <i data-lucide="check-square" class="w-4 h-4 text-[#0A84FF]"></i>
+            <span data-i18n="nav_tasks">Tasks</span>
+          </button>
+
+          <button data-tab="attendance" class="tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.05]">
+            <i data-lucide="clock" class="w-4 h-4 text-emerald-400"></i>
+            <span data-i18n="nav_attendance">Attendance</span>
+          </button>
+
+          <button data-tab="leaderboard" class="tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.05]">
+            <i data-lucide="trophy" class="w-4 h-4 text-[#F59E0B]"></i>
+            <span data-i18n="nav_leaderboard">Leaderboard</span>
+          </button>
+
+          <button data-tab="notifications" class="tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.05] relative">
+            <i data-lucide="bell" class="w-4 h-4 text-rose-400"></i>
+            <span data-i18n="nav_notifications">Updates</span>
+            <span id="tab-unread-dot" class="hidden w-2 h-2 rounded-full bg-rose-500 absolute top-2 right-2"></span>
+          </button>
+
+          <button data-tab="profile" class="tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.05]">
+            <i data-lucide="user" class="w-4 h-4 text-purple-400"></i>
+            <span data-i18n="nav_profile">Profile</span>
+          </button>
+
+        </div>
+      </div>
+
+      <!-- MAIN CONTENT VIEWPORTS -->
+      <main class="max-w-6xl mx-auto w-full px-4 sm:px-6 py-4 flex-1">
+        
+        <!-- ========================================== -->
+        <!-- VIEW 1: TASKS LISTING & FILTERS -->
+        <!-- ========================================== -->
+        <section id="view-tasks" class="tab-view block space-y-5">
+          
+          <!-- Top Stats Bar & Personalized Greeting -->
+          <div class="glass-card rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div>
+              <div class="text-xs uppercase font-mono tracking-wider text-[#0A84FF] font-semibold" id="hero-tag">Team Operations</div>
+              <h2 class="text-lg sm:text-xl font-bold text-white mt-0.5" id="hero-greeting">Welcome to COC Media Hub</h2>
+              <p class="text-xs sm:text-sm text-neutral-400 mt-1" id="hero-subtext">Complete your media quotas and climb the live team leaderboard.</p>
+            </div>
+            
+            <div class="flex items-center gap-3 w-full md:w-auto">
+              <div class="flex-1 md:flex-initial px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-center">
+                <div class="text-[11px] text-neutral-400 font-medium" data-i18n="stat_active_tasks">Active Tasks</div>
+                <div id="stat-active-tasks-count" class="text-base sm:text-lg font-bold text-white font-mono">0</div>
+              </div>
+              <div class="flex-1 md:flex-initial px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-center">
+                <div class="text-[11px] text-neutral-400 font-medium" data-i18n="stat_completed_today">Completed Today</div>
+                <div id="stat-completed-today-count" class="text-base sm:text-lg font-bold text-emerald-400 font-mono">0</div>
+              </div>
+              <div class="flex-1 md:flex-initial px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-center">
+                <div class="text-[11px] text-neutral-400 font-medium" data-i18n="stat_my_points">My Points</div>
+                <div id="stat-user-points" class="text-base sm:text-lg font-bold text-[#F59E0B] font-mono">0</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Category Filter Chips & Search Bar -->
+          <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            
+            <!-- Category Chips -->
+            <div class="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1 flex-1" id="category-filter-chips">
+              <button data-cat="all" class="cat-chip px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white whitespace-nowrap shadow-sm">All Tasks</button>
+              <!-- Dynamic Categories injected here -->
+            </div>
+
+            <!-- Search & Status Filter -->
+            <div class="flex items-center gap-2">
+              <div class="relative w-full sm:w-64">
+                <i data-lucide="search" class="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2"></i>
+                <input id="input-search-tasks" type="text" placeholder="Search tasks..." class="w-full pl-9 pr-3 py-1.5 rounded-xl text-xs glass-input focus:ring-1 focus:ring-[#0A84FF]" />
+              </div>
+              <select id="select-status-filter" class="px-2.5 py-1.5 rounded-xl text-xs glass-input bg-[#0B0C10] text-neutral-300">
+                <option value="all">All</option>
+                <option value="pending">Pending</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+
+          </div>
+
+          <!-- Tasks Grid Container -->
+          <div id="tasks-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <!-- Dynamic task cards will be rendered here -->
+          </div>
+
+          <!-- Empty State (Apple-Style) -->
+          <div id="tasks-empty-state" class="hidden glass-card rounded-2xl p-12 text-center border border-dashed border-white/15">
+            <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-white/[0.05] flex items-center justify-center text-neutral-400">
+              <i data-lucide="clipboard-list" class="w-8 h-8 opacity-60"></i>
+            </div>
+            <h3 class="text-base font-bold text-white" data-i18n="empty_tasks_title">No active tasks found</h3>
+            <p class="text-xs text-neutral-400 mt-1 max-w-sm mx-auto" data-i18n="empty_tasks_desc">There are no tasks available matching this filter. Check back later or adjust your filters.</p>
+          </div>
+
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 2: SMART ATTENDANCE & PENALTY ENGINE -->
+        <!-- ========================================== -->
+        <section id="view-attendance" class="tab-view hidden space-y-5">
+          
+          <!-- Attendance Live Time Hero -->
+          <div class="glass-card rounded-2xl p-5 border border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span class="text-xs uppercase font-mono tracking-wider text-emerald-400 font-semibold" data-i18n="attendance_engine_live">Live Attendance Engine</span>
+                </div>
+                <h2 class="text-2xl sm:text-3xl font-extrabold text-white mt-1 font-mono tracking-tight" id="live-clock">--:--:--</h2>
+                <p class="text-xs sm:text-sm text-neutral-300 font-medium" id="live-date">Loading schedule...</p>
+              </div>
+
+              <!-- Fast Check-in Status summary -->
+              <div class="px-4 py-3 rounded-xl bg-white/[0.04] border border-white/10 text-xs">
+                <div class="text-neutral-400" data-i18n="attendance_status_label">Your Today Status:</div>
+                <div id="user-today-attendance-badge" class="font-bold text-white mt-1 flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full bg-neutral-500"></span> Not Checked In
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Active Sessions Container -->
+          <div class="space-y-3">
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i data-lucide="calendar" class="w-4 h-4 text-emerald-400"></i>
+              <span data-i18n="scheduled_sessions">Scheduled Sessions</span>
+            </h3>
+            
+            <div id="attendance-sessions-container" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <!-- Active sessions rendered here -->
+            </div>
+          </div>
+
+          <!-- Today's Attendance Feed / History -->
+          <div class="glass-card rounded-2xl p-5 space-y-4">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                <i data-lucide="list-checks" class="w-4 h-4 text-[#0A84FF]"></i>
+                <span data-i18n="today_attendance_log">Today's Check-in Log</span>
+              </h3>
+              <span class="text-xs text-neutral-400 font-mono" id="attendance-log-count">0 Check-ins</span>
+            </div>
+
+            <div id="attendance-logs-feed" class="divide-y divide-white/5 space-y-2">
+              <!-- Log entries -->
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 3: GAMIFIED LEADERBOARD (TOP 3 PODIUM) -->
+        <!-- ========================================== -->
+        <section id="view-leaderboard" class="tab-view hidden space-y-6">
+          
+          <!-- Leaderboard Period Filter -->
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                <i data-lucide="award" class="w-5 h-5 text-[#F59E0B]"></i>
+                <span data-i18n="leaderboard_title">Team Leaderboard</span>
+              </h2>
+              <p class="text-xs text-neutral-400" data-i18n="leaderboard_sub">Rankings based on verified completed quotas and points.</p>
+            </div>
+
+            <div class="flex items-center p-1 rounded-xl glass-card text-xs">
+              <button data-period="all" class="leader-period-btn px-3 py-1 rounded-lg font-medium text-white bg-white/10">All Time</button>
+              <button data-period="month" class="leader-period-btn px-3 py-1 rounded-lg font-medium text-neutral-400 hover:text-white">This Month</button>
+              <button data-period="week" class="leader-period-btn px-3 py-1 rounded-lg font-medium text-neutral-400 hover:text-white">This Week</button>
+            </div>
+          </div>
+
+          <!-- TOP 3 PODIUM (Apple Glass Style) -->
+          <div id="leaderboard-podium" class="grid grid-cols-3 gap-2 sm:gap-4 items-end pt-8 pb-4">
+            <!-- 2nd Place -->
+            <div id="podium-second" class="glass-card rounded-2xl p-3 sm:p-5 text-center relative border-t-2 border-slate-300">
+              <div class="text-xl sm:text-2xl mb-1">🥈</div>
+              <div class="w-12 h-12 sm:w-16 sm:h-16 mx-auto rounded-full overflow-hidden border-2 border-slate-300 mb-2 relative shadow-lg">
+                <img id="podium-2-img" src="./image_ad59c0.jpg" alt="2nd Place" class="w-full h-full object-cover" />
+              </div>
+              <div id="podium-2-name" class="font-bold text-xs sm:text-sm text-white truncate">--</div>
+              <div id="podium-2-pts" class="text-xs sm:text-sm font-bold text-slate-300 font-mono mt-0.5">0 pts</div>
+              <div id="podium-2-tasks" class="text-[10px] text-neutral-400">0 tasks</div>
+            </div>
+
+            <!-- 1st Place (Center, Elevated) -->
+            <div id="podium-first" class="glass-card rounded-2xl p-4 sm:p-6 text-center relative border-t-2 border-[#F59E0B] shadow-2xl scale-105 z-10 bg-gradient-to-b from-[#F59E0B]/10 to-transparent">
+              <div class="text-2xl sm:text-3xl mb-1">🥇</div>
+              <div class="w-14 h-14 sm:w-20 sm:h-20 mx-auto rounded-full overflow-hidden border-2 border-[#F59E0B] mb-2 relative shadow-xl shadow-[#F59E0B]/20">
+                <img id="podium-1-img" src="./image_ad59c0.jpg" alt="1st Place" class="w-full h-full object-cover" />
+              </div>
+              <div id="podium-1-name" class="font-bold text-sm sm:text-base text-white truncate">--</div>
+              <div id="podium-1-pts" class="text-sm sm:text-base font-extrabold text-[#F59E0B] font-mono mt-0.5">0 pts</div>
+              <div id="podium-1-tasks" class="text-[11px] text-neutral-300">0 tasks</div>
+            </div>
+
+            <!-- 3rd Place -->
+            <div id="podium-third" class="glass-card rounded-2xl p-3 sm:p-5 text-center relative border-t-2 border-amber-700">
+              <div class="text-xl sm:text-2xl mb-1">🥉</div>
+              <div class="w-12 h-12 sm:w-16 sm:h-16 mx-auto rounded-full overflow-hidden border-2 border-amber-700 mb-2 relative shadow-lg">
+                <img id="podium-3-img" src="./image_ad59c0.jpg" alt="3rd Place" class="w-full h-full object-cover" />
+              </div>
+              <div id="podium-3-name" class="font-bold text-xs sm:text-sm text-white truncate">--</div>
+              <div id="podium-3-pts" class="text-xs sm:text-sm font-bold text-amber-600 font-mono mt-0.5">0 pts</div>
+              <div id="podium-3-tasks" class="text-[10px] text-neutral-400">0 tasks</div>
+            </div>
+          </div>
+
+          <!-- FULL RANKING LIST (Excluding zero points members) -->
+          <div class="glass-card rounded-2xl p-4 sm:p-5">
+            <h3 class="text-xs uppercase font-mono tracking-wider text-neutral-400 font-semibold mb-3" data-i18n="all_team_rankings">Team Rankings</h3>
+            
+            <div id="leaderboard-full-list" class="divide-y divide-white/5 space-y-2">
+              <!-- Leaderboard items rendered here -->
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 4: NOTIFICATIONS & UPDATES -->
+        <!-- ========================================== -->
+        <section id="view-notifications" class="tab-view hidden space-y-4">
+          
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                <i data-lucide="bell-ring" class="w-5 h-5 text-rose-400"></i>
+                <span data-i18n="notifications_title">Team Announcements & Alerts</span>
+              </h2>
+              <p class="text-xs text-neutral-400" data-i18n="notifications_sub">Real-time updates, task assignments, and points announcements.</p>
+            </div>
+
+            <button id="btn-mark-all-read" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/[0.06] hover:bg-white/[0.12] text-neutral-300 hover:text-white transition">
+              Mark all read
+            </button>
+          </div>
+
+          <div id="notifications-list" class="space-y-3">
+            <!-- Dynamic notifications rendered here -->
+          </div>
+
+        </section>
+
+        <!-- ========================================== -->
+        <!-- VIEW 5: USER PROFILE & STATS -->
+        <!-- ========================================== -->
+        <section id="view-profile" class="tab-view hidden space-y-5">
+          
+          <!-- User Profile Hero Card -->
+          <div class="glass-card rounded-2xl p-6 relative overflow-hidden">
+            <div class="flex flex-col sm:flex-row items-center sm:items-start gap-4">
+              <div class="relative w-20 h-20 rounded-full overflow-hidden border-2 border-white/20 shadow-xl">
+                <img id="profile-user-img" src="./image_ad59c0.jpg" alt="Profile" class="w-full h-full object-cover" />
+              </div>
+              <div class="text-center sm:text-left flex-1">
+                <div class="flex items-center justify-center sm:justify-start gap-2">
+                  <h2 id="profile-user-name" class="text-xl font-bold text-white">Guest User</h2>
+                  <span id="profile-role-badge" class="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold">Member</span>
+                </div>
+                <p id="profile-user-email" class="text-xs text-neutral-400 mt-0.5 font-mono">guest@cocmedia.local</p>
+                <div class="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                  <button id="btn-edit-display-name" class="px-3 py-1 rounded-lg text-xs font-medium bg-white/[0.08] hover:bg-white/[0.15] text-white transition flex items-center gap-1.5">
+                    <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Edit Name
+                  </button>
+                  <button id="btn-request-push" class="px-3 py-1 rounded-lg text-xs font-medium bg-white/[0.08] hover:bg-white/[0.15] text-white transition flex items-center gap-1.5">
+                    <i data-lucide="bell" class="w-3.5 h-3.5 text-rose-400"></i> Enable Notifications
+                  </button>
+                  <button id="btn-pwa-install" class="hidden px-3 py-1 rounded-lg text-xs font-medium bg-[#0A84FF] hover:bg-[#0A84FF]/90 text-white transition flex items-center gap-1.5">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Install App
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Profile 4-Card Stats -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-white/10">
+              <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
+                <div class="text-xs text-neutral-400 font-medium">Total Points</div>
+                <div id="prof-stat-points" class="text-lg font-bold text-[#F59E0B] font-mono mt-0.5">0</div>
+              </div>
+              <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
+                <div class="text-xs text-neutral-400 font-medium">Completed Tasks</div>
+                <div id="prof-stat-completed" class="text-lg font-bold text-[#0A84FF] font-mono mt-0.5">0</div>
+              </div>
+              <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
+                <div class="text-xs text-neutral-400 font-medium">Streak 🔥</div>
+                <div id="prof-stat-streak" class="text-lg font-bold text-amber-500 font-mono mt-0.5">0 Days</div>
+              </div>
+              <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
+                <div class="text-xs text-neutral-400 font-medium">Penalties</div>
+                <div id="prof-stat-penalties" class="text-lg font-bold text-rose-400 font-mono mt-0.5">0 pts</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- User Submissions History -->
+          <div class="glass-card rounded-2xl p-5 space-y-3">
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i data-lucide="history" class="w-4 h-4 text-[#0A84FF]"></i>
+              <span>My Activity & Submission History</span>
+            </h3>
+            <div id="profile-history-list" class="divide-y divide-white/5 space-y-2">
+              <!-- Submissions -->
+            </div>
+          </div>
+
+          <div class="text-center pt-2">
+            <button id="btn-user-signout" class="px-5 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:text-white bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition">
+              Sign Out from Account
+            </button>
+          </div>
+
+        </section>
+
+      </main>
+
+      <!-- FOOTER COMPONENT (STRICT RULES COMPLIANT) -->
+      <footer class="w-full glass-card border-t border-white/[0.08] mt-12 py-6">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-neutral-400">
+          
+          <!-- Brand Identity -->
+          <div class="flex items-center gap-2">
+            <img src="./image_ad59c0.jpg" alt="COC Media Team" class="w-5 h-5 rounded-full object-cover" />
+            <span class="font-bold text-white tracking-tight" id="footer-brand-name">COC Media Team</span>
+            <span class="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] font-mono text-neutral-300" id="footer-version-badge">v1.0.0</span>
+          </div>
+
+          <!-- Developer Credit (Editable from Admin Settings) -->
+          <div class="text-neutral-400 font-medium">
+            <span id="footer-dev-credit">Designed &amp; Developed by Steven Mario</span>
+          </div>
+
+        </div>
+      </footer>
+
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- MODALS & DIALOGS -->
+    <!-- ================================================================= -->
+
+    <!-- 1. ADMIN PASSWORD AUTH MODAL -->
+    <div id="modal-admin-auth" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative">
+        <button class="modal-close-btn absolute top-4 right-4 text-neutral-400 hover:text-white p-1">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+        <div class="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+          <i data-lucide="shield-check" class="w-6 h-6"></i>
+        </div>
+        <div class="text-center">
+          <h3 class="text-base font-bold text-white">Admin Portal</h3>
+          <p class="text-xs text-neutral-400 mt-1">Enter the master administrative key to manage tasks, quotas, and sessions.</p>
+        </div>
+        <form id="form-admin-auth" class="space-y-3">
+          <input id="input-admin-password" type="password" placeholder="Master Key" class="w-full px-3 py-2 rounded-xl text-sm glass-input font-mono" required />
+          <div id="admin-auth-error" class="hidden text-xs text-rose-400 font-medium text-center">Invalid password. Access denied.</div>
+          <button type="submit" class="w-full py-2.5 rounded-xl text-xs font-bold text-black bg-gradient-to-r from-amber-400 to-[#F59E0B] hover:opacity-95 transition shadow-lg shadow-amber-500/20">
+            Unlock Admin Console
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- 2. ADMIN DASHBOARD MODAL (6 COMPLETE TABS) -->
+    <div id="modal-admin-dashboard" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl hidden flex items-center justify-center p-2 sm:p-4">
+      <div class="glass-modal max-w-5xl w-full h-[90vh] rounded-2xl flex flex-col overflow-hidden shadow-2xl border border-white/15">
+        
+        <!-- Admin Dashboard Header -->
+        <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.02]">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <span>Admin Management Hub</span>
+              <span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-400 border border-amber-400/30 font-mono">Master Mode</span>
+            </h2>
+          </div>
+          <button class="modal-close-btn text-neutral-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+
+        <!-- Admin Tab Navigation -->
+        <div class="px-4 py-2 border-b border-white/10 flex items-center gap-1 overflow-x-auto custom-scrollbar bg-black/40">
+          <button data-admintab="tasks" class="admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-white/10 whitespace-nowrap">1. Task Manager</button>
+          <button data-admintab="attendance" class="admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white whitespace-nowrap">2. Attendance Engine</button>
+          <button data-admintab="members" class="admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white whitespace-nowrap">3. Team Members</button>
+          <button data-admintab="categories" class="admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white whitespace-nowrap">4. Categories</button>
+          <button data-admintab="announcements" class="admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white whitespace-nowrap">5. Broadcasts</button>
+          <button data-admintab="settings" class="admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white whitespace-nowrap">6. App Settings</button>
+        </div>
+
+        <!-- Admin Content Panels (Scrollable) -->
+        <div class="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar space-y-6">
+          
+          <!-- TAB 1: TASK MANAGER -->
+          <div id="admin-panel-tasks" class="admin-panel block space-y-5">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-bold text-white">Create &amp; Manage Team Tasks</h3>
+                <p class="text-xs text-neutral-400">Configure quotas, point values, links, and completion requirements.</p>
+              </div>
+              <button id="btn-admin-add-task" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#0A84FF] text-white hover:bg-[#0A84FF]/90 transition flex items-center gap-1.5">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add New Task
+              </button>
+            </div>
+
+            <!-- Task Edit/Create Form (Collapsible) -->
+            <div id="admin-task-form-container" class="hidden p-4 rounded-xl glass-card border border-[#0A84FF]/30 space-y-4">
+              <div class="flex items-center justify-between">
+                <h4 id="admin-task-form-title" class="text-xs font-bold text-[#0A84FF] uppercase tracking-wider">New Task Configuration</h4>
+                <button id="btn-cancel-task-form" class="text-xs text-neutral-400 hover:text-white">Cancel</button>
+              </div>
+              <form id="form-manage-task" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <input type="hidden" id="input-task-id" />
+                <div class="sm:col-span-2">
+                  <label class="block text-neutral-300 mb-1">Task Title *</label>
+                  <input id="input-task-title" type="text" class="w-full px-3 py-2 rounded-lg glass-input text-xs" placeholder="e.g. Edit Sunday Sermon Video Highlight" required />
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="block text-neutral-300 mb-1">Description *</label>
+                  <textarea id="input-task-desc" rows="2" class="w-full px-3 py-2 rounded-lg glass-input text-xs" placeholder="Guidelines and instructions..." required></textarea>
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Category</label>
+                  <select id="select-task-category" class="w-full px-3 py-2 rounded-lg glass-input text-xs bg-[#0B0C10]">
+                    <!-- Injected -->
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Points Value *</label>
+                  <input id="input-task-points" type="number" min="1" value="50" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" required />
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Quota Type</label>
+                  <select id="select-task-quota" class="w-full px-3 py-2 rounded-lg glass-input text-xs bg-[#0B0C10]">
+                    <option value="daily">Daily Quota (Resets daily)</option>
+                    <option value="once">Once Only per Member</option>
+                    <option value="unlimited">Unlimited Submissions</option>
+                    <option value="exact_target">Exact Target (e.g. 3 times)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Task Link URL (Optional)</label>
+                  <input id="input-task-link" type="url" placeholder="https://drive.google.com/..." class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Estimated Duration</label>
+                  <input id="input-task-duration" type="text" placeholder="e.g. 45 mins" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Deadline Type</label>
+                  <select id="select-task-deadline" class="w-full px-3 py-2 rounded-lg glass-input text-xs bg-[#0B0C10]">
+                    <option value="none">No Deadline</option>
+                    <option value="duration_hours">Duration in Hours</option>
+                    <option value="duration_days">Duration in Days</option>
+                    <option value="exact_datetime">Exact Date &amp; Time</option>
+                  </select>
+                </div>
+                <div class="sm:col-span-2 flex flex-wrap gap-4 pt-2">
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="check-enable-comment" class="rounded accent-[#0A84FF]" checked />
+                    <span>Allow Submitter Comment</span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="check-enable-question" class="rounded accent-[#0A84FF]" />
+                    <span>Require Specific Question Prompt</span>
+                  </label>
+                </div>
+                <div id="box-question-prompt" class="sm:col-span-2 hidden">
+                  <label class="block text-neutral-300 mb-1">Question Prompt for Submitter</label>
+                  <input id="input-question-prompt" type="text" placeholder="e.g. Paste your exported drive link here" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
+                </div>
+                <div class="sm:col-span-2 pt-2">
+                  <button type="submit" class="w-full py-2.5 rounded-lg text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition">
+                    Save Task to Firestore
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <!-- Existing Tasks Table -->
+            <div class="rounded-xl overflow-hidden border border-white/10">
+              <table class="w-full text-left text-xs">
+                <thead class="bg-white/[0.04] text-neutral-400 font-mono">
+                  <tr>
+                    <th class="p-3">Title</th>
+                    <th class="p-3">Category</th>
+                    <th class="p-3">Points</th>
+                    <th class="p-3">Quota</th>
+                    <th class="p-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-tasks-tbody" class="divide-y divide-white/5">
+                  <!-- Rendered tasks -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- TAB 2: ATTENDANCE ENGINE CONFIG -->
+          <div id="admin-panel-attendance" class="admin-panel hidden space-y-5">
+            <div>
+              <h3 class="text-sm font-bold text-white">Attendance Sessions &amp; Penalty Matrix</h3>
+              <p class="text-xs text-neutral-400">Configure scheduled service days, start times, grace period, and late penalty deduction formula.</p>
+            </div>
+
+            <!-- Add/Edit Session Form -->
+            <form id="form-manage-session" class="p-4 rounded-xl glass-card border border-white/10 space-y-3 text-xs">
+              <h4 class="font-bold text-white text-xs">Session Configuration</h4>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label class="block text-neutral-400 mb-1">Session Title</label>
+                  <input id="input-session-title" type="text" value="Sunday Morning Service" class="w-full px-3 py-2 rounded-lg glass-input text-xs" required />
+                </div>
+                <div>
+                  <label class="block text-neutral-400 mb-1">Exact Start Time (24h)</label>
+                  <input id="input-session-start" type="time" value="09:00" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" required />
+                </div>
+                <div>
+                  <label class="block text-neutral-400 mb-1">Check-in Window End</label>
+                  <input id="input-session-window-end" type="time" value="11:30" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" required />
+                </div>
+                <div>
+                  <label class="block text-neutral-400 mb-1">Grace Period (Minutes)</label>
+                  <input id="input-session-grace" type="number" value="10" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                </div>
+                <div>
+                  <label class="block text-neutral-400 mb-1">Penalty Deduction Rate</label>
+                  <input id="input-session-penalty-rate" type="number" value="5" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" placeholder="pts per 5 mins late" />
+                </div>
+                <div>
+                  <label class="block text-neutral-400 mb-1">Max Penalty Cap</label>
+                  <input id="input-session-max-cap" type="number" value="50" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                </div>
+              </div>
+              <div class="pt-2">
+                <button type="submit" class="px-4 py-2 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 transition">
+                  Save Attendance Session
+                </button>
+              </div>
+            </form>
+
+            <div id="admin-sessions-list" class="space-y-3">
+              <!-- Active sessions list -->
+            </div>
+          </div>
+
+          <!-- TAB 3: TEAM MEMBERS & POINTS OVERRIDE -->
+          <div id="admin-panel-members" class="admin-panel hidden space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-bold text-white">Team Roster &amp; Points Adjustment</h3>
+                <p class="text-xs text-neutral-400">View registered members, promote roles, and manually award or deduct points.</p>
+              </div>
+              <input id="input-admin-search-members" type="text" placeholder="Search member..." class="px-3 py-1.5 rounded-lg text-xs glass-input w-48" />
+            </div>
+
+            <div class="rounded-xl overflow-hidden border border-white/10">
+              <table class="w-full text-left text-xs">
+                <thead class="bg-white/[0.04] text-neutral-400 font-mono">
+                  <tr>
+                    <th class="p-3">Member</th>
+                    <th class="p-3">Role</th>
+                    <th class="p-3">Points</th>
+                    <th class="p-3">Penalties</th>
+                    <th class="p-3 text-right">Adjustment</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-members-tbody" class="divide-y divide-white/5">
+                  <!-- Members rows -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- TAB 4: CATEGORY MANAGER -->
+          <div id="admin-panel-categories" class="admin-panel hidden space-y-4">
+            <h3 class="text-sm font-bold text-white">Task Categories</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" id="admin-categories-list">
+              <!-- Categories list -->
+            </div>
+          </div>
+
+          <!-- TAB 5: BROADCAST ANNOUNCEMENTS -->
+          <div id="admin-panel-announcements" class="admin-panel hidden space-y-4">
+            <h3 class="text-sm font-bold text-white">Broadcast Announcement Banner</h3>
+            <form id="form-admin-announcement" class="p-4 rounded-xl glass-card space-y-3 text-xs">
+              <div>
+                <label class="block text-neutral-400 mb-1">Announcement (English)</label>
+                <input id="input-announcement-en" type="text" placeholder="Important team meeting this Friday at 7 PM" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
+              </div>
+              <div>
+                <label class="block text-neutral-400 mb-1">Announcement (Arabic)</label>
+                <input id="input-announcement-ar" type="text" dir="rtl" placeholder="اجتماع هام لفريق الميديا يوم الجمعة القادمة" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-cairo" />
+              </div>
+              <div class="flex items-center gap-2 pt-2">
+                <button type="submit" class="px-4 py-2 rounded-lg text-xs font-bold text-white bg-[#0A84FF]">Publish to All Screens</button>
+                <button type="button" id="btn-clear-announcement" class="px-3 py-2 rounded-lg text-xs font-semibold text-rose-400 hover:text-white bg-rose-500/10">Clear Banner</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- TAB 6: APP SETTINGS (LOGO OVERRIDE & BRANDING) -->
+          <div id="admin-panel-settings" class="admin-panel hidden space-y-4">
+            <h3 class="text-sm font-bold text-white">Branding &amp; Visual Settings</h3>
+            <form id="form-admin-settings" class="p-4 rounded-xl glass-card space-y-3 text-xs">
+              <div>
+                <label class="block text-neutral-400 mb-1">App Brand Name</label>
+                <input id="input-settings-appname" type="text" value="COC Media Team" class="w-full px-3 py-2 rounded-lg glass-input text-xs" required />
+              </div>
+              <div>
+                <label class="block text-neutral-400 mb-1">Logo URL or Local Path</label>
+                <div class="flex items-center gap-2">
+                  <input id="input-settings-logourl" type="text" value="./image_ad59c0.jpg" class="flex-1 px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                  <button type="button" id="btn-reset-logo" class="px-3 py-2 rounded-lg text-xs font-medium bg-white/10 text-white">Reset Default</button>
+                </div>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-neutral-400 mb-1">Subtitle (English)</label>
+                  <input id="input-settings-sub-en" type="text" value="Production Task, Quota & Attendance Platform" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
+                </div>
+                <div>
+                  <label class="block text-neutral-400 mb-1">Subtitle (Arabic)</label>
+                  <input id="input-settings-sub-ar" type="text" dir="rtl" value="منصة إدارة المهام، الكوتا ومحرك الحضور لفريق الميديا" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-cairo" />
+                </div>
+              </div>
+              <div>
+                <label class="block text-neutral-400 mb-1">Developer Credit</label>
+                <input id="input-settings-devcredit" type="text" value="Designed & Developed by Steven Mario" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
+              </div>
+              <div class="pt-2">
+                <button type="submit" class="w-full py-2.5 rounded-lg text-xs font-bold text-black bg-gradient-to-r from-amber-400 to-[#F59E0B]">
+                  Save Branding Changes
+                </button>
+              </div>
+            </form>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 3. SUBMIT TASK MODAL -->
+    <div id="modal-task-submit" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-md w-full rounded-2xl p-6 space-y-4 shadow-2xl relative">
+        <button class="modal-close-btn absolute top-4 right-4 text-neutral-400 hover:text-white p-1">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+        <div>
+          <span class="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold" id="submit-modal-category">Category</span>
+          <h3 class="text-base font-bold text-white mt-2" id="submit-modal-title">Task Title</h3>
+          <div class="text-xs text-neutral-400 flex items-center gap-1.5 mt-1">
+            <span>Points reward:</span>
+            <span class="font-bold text-[#F59E0B] font-mono" id="submit-modal-points">+50 pts</span>
+          </div>
+        </div>
+
+        <form id="form-submit-task" class="space-y-3 text-xs">
+          <input type="hidden" id="submit-task-id" />
+          
+          <div id="submit-question-box" class="hidden">
+            <label class="block font-semibold text-white mb-1" id="submit-question-label">Question Prompt</label>
+            <input id="input-submit-answer" type="text" class="w-full px-3 py-2 rounded-lg glass-input text-xs" placeholder="Your response or link..." />
+          </div>
+
+          <div id="submit-comment-box">
+            <label class="block text-neutral-300 mb-1">Completion Note / Details (Optional)</label>
+            <textarea id="input-submit-comment" rows="3" class="w-full px-3 py-2 rounded-lg glass-input text-xs" placeholder="What was completed, any roadblocks, etc."></textarea>
+          </div>
+
+          <div>
+            <label class="block text-neutral-300 mb-1">Estimated Time Spent (Minutes)</label>
+            <input id="input-submit-minutes" type="number" min="1" value="30" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+          </div>
+
+          <div class="pt-2">
+            <button type="submit" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 shadow-lg shadow-[#0A84FF]/25 transition flex items-center justify-center gap-1.5">
+              <i data-lucide="check-circle" class="w-4 h-4"></i>
+              <span>Confirm &amp; Collect Points</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 4. TASK COMPETITION & COMPLETIONS MODAL -->
+    <div id="modal-task-competition" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-lg w-full max-h-[85vh] rounded-2xl flex flex-col overflow-hidden shadow-2xl">
+        <div class="p-4 border-b border-white/10 flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-bold text-white" id="comp-modal-title">Task Completion History</h3>
+            <p class="text-xs text-neutral-400">Team members who completed this quota</p>
+          </div>
+          <button class="modal-close-btn text-neutral-400 hover:text-white p-1">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+        <div id="comp-modal-list" class="p-4 overflow-y-auto custom-scrollbar divide-y divide-white/5 space-y-2 flex-1">
+          <!-- Submissions -->
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. AUTH / USER SIGN IN MODAL -->
+    <div id="modal-auth" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative">
+        <button class="modal-close-btn absolute top-4 right-4 text-neutral-400 hover:text-white p-1">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+
+        <div class="text-center">
+          <div class="w-14 h-14 mx-auto rounded-full overflow-hidden border-2 border-white/20 mb-3 shadow-lg">
+            <img src="./image_ad59c0.jpg" alt="Logo" class="w-full h-full object-cover" />
+          </div>
+          <h3 class="text-base font-bold text-white">Sign In to COC Media</h3>
+          <p class="text-xs text-neutral-400 mt-1">Access your task quotas, check in to attendance, and track points.</p>
+        </div>
+
+        <div class="space-y-3 pt-2">
+          <!-- Google Sign In Button -->
+          <button id="btn-auth-google" class="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-white/[0.08] hover:bg-white/[0.14] border border-white/15 transition flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+            </svg>
+            <span>Continue with Google</span>
+          </button>
+
+          <!-- Divider -->
+          <div class="flex items-center gap-2 text-neutral-500 text-[11px]">
+            <div class="flex-1 h-px bg-white/10"></div>
+            <span>or direct name login</span>
+            <div class="flex-1 h-px bg-white/10"></div>
+          </div>
+
+          <!-- Local Name Input -->
+          <form id="form-auth-local" class="space-y-2">
+            <input id="input-local-name" type="text" placeholder="Enter your full name" class="w-full px-3 py-2 rounded-xl text-xs glass-input" required />
+            <button type="submit" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition shadow-lg shadow-[#0A84FF]/25">
+              Enter as Team Member
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. GITHUB PAGES UNAUTHORIZED DOMAIN WARNING MODAL -->
+    <div id="modal-unauthorized-domain" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-md w-full rounded-2xl p-6 space-y-4 shadow-2xl border border-amber-500/30">
+        <div class="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+          <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+        </div>
+        
+        <div class="text-center">
+          <h3 class="text-base font-bold text-white">Action Required: Authorize Domain</h3>
+          <p class="text-xs text-neutral-300 mt-1.5 leading-relaxed">
+            Google Sign-In blocked this request because your current GitHub Pages hosting domain is not yet whitelisted in Firebase.
+          </p>
+        </div>
+
+        <div class="p-3.5 rounded-xl bg-white/[0.04] border border-white/10 space-y-2 text-xs">
+          <div class="text-neutral-400 font-medium">Please add this domain to Firebase Console:</div>
+          <div class="flex items-center justify-between gap-2 bg-black/60 px-3 py-2 rounded-lg border border-white/10 font-mono text-[#0A84FF] text-[11px]">
+            <span id="current-hostname-label" class="truncate">domain.github.io</span>
+            <button id="btn-copy-hostname" class="text-neutral-300 hover:text-white px-2 py-0.5 rounded bg-white/10 text-[10px] font-sans font-semibold">Copy</button>
+          </div>
+          <p class="text-[11px] text-neutral-400">
+            Path: <strong class="text-neutral-200">Firebase Console &gt; Authentication &gt; Settings &gt; Authorized domains</strong>
+          </p>
+        </div>
+
+        <div class="space-y-2 pt-1">
+          <button id="btn-fallback-guest" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition">
+            Continue as Local Team Member
+          </button>
+          <button class="modal-close-btn w-full py-2 rounded-xl text-xs font-semibold text-neutral-400 hover:text-white">
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SERVICE WORKER REGISTRATION (GITHUB PAGES SAFE) -->
+    <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').then((reg) => {
-            console.log('COC Media PWA ServiceWorker active:', reg.scope);
-          }).catch((err) => {
-            console.warn('SW registration issue:', err);
-          });
+          try {
+            navigator.serviceWorker.register('./sw.js')
+              .then((reg) => console.log('COC Media PWA ServiceWorker active:', reg.scope))
+              .catch((err) => console.warn('ServiceWorker registration ignored (non-blocking):', err));
+          } catch (e) {
+            console.warn('ServiceWorker registration error handled:', e);
+          }
         });
       }
     </script>
+
+    <!-- CORE VANILLA JS APPLICATION LOGIC -->
+    <script type="module" src="./app.js"></script>
+
   </body>
 </html>
