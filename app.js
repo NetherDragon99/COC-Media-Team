@@ -62,6 +62,7 @@ try {
   console.error("Firebase init failed:", e);
 }
 
+// SECURE ADMINISTRATIVE MASTER PASSWORD (VALIDATED ONLY IN JS LOGIC)
 const ADMIN_MASTER_PASSWORD = '$J@@s#COC1982';
 
 /* ==========================================================================
@@ -165,6 +166,63 @@ const i18n = {
     guest_mode_notice: 'عليك تسجيل الدخول أولاً للقيام بهذا الإجراء.'
   }
 };
+
+/* ==========================================================================
+   GLOBAL TOAST NOTIFICATION SYSTEM (APPLE-STYLE TOP PILL)
+   ========================================================================== */
+export function showToast(message, type = 'info') {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  const toastTypeClass = type === 'success' ? 'toast-success' : (type === 'error' ? 'toast-error' : 'toast-info');
+  toast.className = `toast ${toastTypeClass}`;
+  
+  let iconName = 'info';
+  let iconColor = 'text-[#0A84FF]';
+  if (type === 'success') {
+    iconName = 'check-circle-2';
+    iconColor = 'text-[#30D158]';
+  } else if (type === 'error') {
+    iconName = 'alert-circle';
+    iconColor = 'text-[#FF453A]';
+  }
+
+  toast.innerHTML = `
+    <i data-lucide="${iconName}" class="w-4 h-4 ${iconColor} flex-shrink-0"></i>
+    <span class="flex-1">${escapeHtml(message)}</span>
+  `;
+
+  // Dismiss on click
+  toast.onclick = () => dismissToast(toast);
+
+  container.appendChild(toast);
+  refreshIcons();
+
+  // Dynamic duration based on string length (3 to 5 seconds)
+  const duration = Math.min(5000, Math.max(3000, message.length * 60));
+
+  const timeoutId = setTimeout(() => {
+    dismissToast(toast);
+  }, duration);
+
+  toast._timeoutId = timeoutId;
+}
+
+function dismissToast(toastEl) {
+  if (!toastEl || toastEl._isDismissed) return;
+  toastEl._isDismissed = true;
+  if (toastEl._timeoutId) clearTimeout(toastEl._timeoutId);
+  toastEl.classList.add('toast-hiding');
+  setTimeout(() => {
+    toastEl.remove();
+  }, 300);
+}
 
 /* ==========================================================================
    CUSTOM APPLE-STYLE DIALOGS (ZERO NATIVE ALERTS)
@@ -276,34 +334,6 @@ export function showCustomPrompt(title, message, defaultValue = '') {
   });
 }
 
-export function showToast(message, type = 'info') {
-  const container = document.getElementById('toast-container');
-  if (!container) return;
-
-  const toast = document.createElement('div');
-  toast.className = 'toast';
-  
-  let iconName = 'info';
-  if (type === 'success') iconName = 'check-circle';
-  if (type === 'error') iconName = 'alert-triangle';
-  if (type === 'reward') iconName = 'award';
-
-  toast.innerHTML = `
-    <i data-lucide="${iconName}" class="w-4 h-4 text-[#0A84FF]"></i>
-    <span>${message}</span>
-  `;
-
-  container.appendChild(toast);
-  refreshIcons();
-
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    toast.style.transform = 'translateY(8px)';
-    toast.style.transition = 'all 0.25s ease';
-    setTimeout(() => toast.remove(), 250);
-  }, 3200);
-}
-
 /* ==========================================================================
    SIDE DRAWER CONTROLLER (NEVER STICKS)
    ========================================================================== */
@@ -333,6 +363,7 @@ function requireAuth(actionCallback) {
     actionCallback(state.user);
     return true;
   }
+  showToast('Please sign in first to perform this action.', 'error');
   showCustomAlert(
     'Sign In Required',
     'You need to sign in first to perform this action. You can browse tasks and leaderboard in Read-Only Guest Mode.',
@@ -346,7 +377,7 @@ function requireAuth(actionCallback) {
 
 async function handleGoogleSignIn() {
   if (!auth || !googleProvider) {
-    showCustomAlert('Error', 'Authentication service is not ready. Please try again.');
+    showToast('Authentication service is initializing. Please try again.', 'error');
     return;
   }
   try {
@@ -354,7 +385,8 @@ async function handleGoogleSignIn() {
     const u = result.user;
     await syncUserRecord(u);
     closeDrawer();
-    showToast(`Welcome, ${u.displayName}!`, 'success');
+    showToast(`Welcome back, ${u.displayName}!`, 'success');
+    checkRouteGuard();
   } catch (error) {
     console.error('Google sign in error:', error);
     if (error.code === 'auth/unauthorized-domain') {
@@ -362,8 +394,9 @@ async function handleGoogleSignIn() {
       const hostLabel = document.getElementById('current-hostname-label');
       if (hostLabel) hostLabel.textContent = window.location.hostname;
       if (modal) modal.classList.remove('hidden');
+      showToast('Domain authorization required in Firebase Console.', 'error');
     } else if (error.code !== 'auth/popup-closed-by-user') {
-      showCustomAlert('Sign In Failed', error.message || 'Could not complete Google Sign-In.', { type: 'error' });
+      showToast(error.message || 'Could not complete Google Sign-In.', 'error');
     }
   }
 }
@@ -432,62 +465,127 @@ async function handleSignOut() {
     state.isAdminUnlocked = false;
     updateProfileUI();
     closeDrawer();
-    showToast('Signed out successfully. You are now in Guest Mode.');
+    // Close admin dashboard if open
+    document.getElementById('modal-admin-dashboard')?.classList.add('hidden');
+    if (window.location.hash === '#admin' || window.location.hash === '#admin-dashboard') {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+    showToast('Signed out successfully. You are now in Guest Mode.', 'info');
   } catch (err) {
     console.error('Sign out error:', err);
+    showToast('Failed to sign out. Please try again.', 'error');
   }
 }
 
 /* ==========================================================================
-   ACCOUNT-BASED ADMIN & ROUTE GUARD
+   ADMIN AUTHENTICATION & ROUTE GUARD (FIXED EXACT FLOW)
    ========================================================================== */
-async function openAdminPortal() {
+function openAdminPortal() {
   closeDrawer();
   
-  // 1. Must be logged in
+  // a) User clicks "Admin Dashboard"
+  // Must be logged in first
   if (!state.user) {
-    showCustomAlert(
-      'Admin Portal',
-      'You must sign in with your team account first before accessing the Admin Console.',
-      {
-        actionLabel: 'Sign In with Google',
-        onAction: () => handleGoogleSignIn()
-      }
-    );
+    showToast('Please sign in first to access the Admin Console.', 'error');
+    const authModal = document.getElementById('modal-auth');
+    if (authModal) {
+      authModal.classList.remove('hidden');
+    } else {
+      handleGoogleSignIn();
+    }
     return;
   }
 
-  // 2. If already admin on account or unlocked:
+  // If already authenticated as admin on this account:
   if (state.user.isAdmin || state.isAdminUnlocked) {
+    window.location.hash = '#admin';
     showAdminDashboard();
     return;
   }
 
-  // 3. Prompt for master key
-  const enteredKey = await showCustomPrompt('Admin Authentication', 'Enter the master administrative key ($J@@s#COC1982) to unlock Admin Hub:');
-  if (enteredKey === null) return;
+  // Otherwise, open the dedicated Admin Password Modal
+  const modal = document.getElementById('modal-admin-auth');
+  const input = document.getElementById('input-admin-password');
+  const errEl = document.getElementById('admin-auth-error');
 
-  if (enteredKey === ADMIN_MASTER_PASSWORD) {
-    try {
-      if (db && state.user.uid) {
-        await updateDoc(doc(db, 'users', state.user.uid), {
-          isAdmin: true,
-          role: 'admin'
-        });
-      }
-      state.user.isAdmin = true;
-      state.user.role = 'admin';
-      state.isAdminUnlocked = true;
-      updateProfileUI();
-      showToast('Admin privileges permanently linked to your account!', 'success');
-      showAdminDashboard();
-    } catch (err) {
-      console.error('Failed to update admin flag:', err);
-      state.isAdminUnlocked = true;
-      showAdminDashboard();
+  if (errEl) errEl.classList.add('hidden');
+  if (input) {
+    input.value = '';
+    input.placeholder = 'Enter Master Password';
+  }
+  if (modal) modal.classList.remove('hidden');
+  if (input) input.focus();
+}
+
+async function handleAdminAuthSubmit(e) {
+  e.preventDefault();
+  const input = document.getElementById('input-admin-password');
+  const submitBtn = document.getElementById('btn-admin-auth-submit');
+  const enteredPassword = input ? input.value : '';
+  const errEl = document.getElementById('admin-auth-error');
+
+  // b) Validate entered password against master key
+  if (enteredPassword !== ADMIN_MASTER_PASSWORD) {
+    // c) If FALSE: Show an error toast (Do NOT redirect)
+    showToast('Invalid Master Password. Access Denied.', 'error');
+    if (errEl) {
+      errEl.textContent = 'Invalid Master Password. Access Denied.';
+      errEl.classList.remove('hidden');
     }
-  } else {
-    showCustomAlert('Access Denied', 'Invalid master administrative key.', { type: 'error' });
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+    return;
+  }
+
+  // d) If TRUE: Update users/{uid} in Firestore with isAdmin: true. AWAIT this Firestore update to finish!
+  if (errEl) errEl.classList.add('hidden');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="inline-block animate-spin mr-1.5">◌</span> Verifying...';
+  }
+
+  try {
+    if (db && state.user && state.user.uid) {
+      await updateDoc(doc(db, 'users', state.user.uid), {
+        isAdmin: true,
+        role: 'admin'
+      });
+    }
+    state.user.isAdmin = true;
+    state.user.role = 'admin';
+    state.isAdminUnlocked = true;
+    updateProfileUI();
+
+    // e) Show a success toast ("Admin Access Granted")
+    showToast('Admin Access Granted', 'success');
+
+    // f) Close the password modal and SUCCESSFULLY render/navigate to the Admin Dashboard
+    document.getElementById('modal-admin-auth')?.classList.add('hidden');
+    if (input) input.value = '';
+
+    window.location.hash = '#admin';
+    showAdminDashboard();
+  } catch (err) {
+    console.error('Failed to update admin role in Firestore:', err);
+    // Allow access for this session even if network glitch
+    state.user.isAdmin = true;
+    state.user.role = 'admin';
+    state.isAdminUnlocked = true;
+    updateProfileUI();
+
+    showToast('Admin Access Granted', 'success');
+    document.getElementById('modal-admin-auth')?.classList.add('hidden');
+    if (input) input.value = '';
+
+    window.location.hash = '#admin';
+    showAdminDashboard();
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Unlock Admin Console';
+    }
   }
 }
 
@@ -504,11 +602,26 @@ function showAdminDashboard() {
   }
 }
 
-// Strict URL Route Guard
+// g) The Route Guard MUST recognize that the user now has isAdmin === true and ALLOW them to stay on the dashboard!
 function checkRouteGuard() {
   if (window.location.hash === '#admin' || window.location.hash === '#admin-dashboard') {
+    // 1. If user is logged in AND is admin: stay on the dashboard!
+    if (state.user && (state.user.isAdmin || state.isAdminUnlocked)) {
+      showAdminDashboard();
+      return;
+    }
+
+    // 2. If user is logged in but NOT admin yet: open password modal so they can authenticate (do NOT redirect)
+    if (state.user && !state.user.isAdmin) {
+      const modal = document.getElementById('modal-admin-auth');
+      if (modal) modal.classList.remove('hidden');
+      return;
+    }
+
+    // 3. If guest / not logged in: clear hash and show prompt
     history.replaceState(null, '', window.location.pathname + window.location.search);
-    openAdminPortal();
+    showToast('Please sign in first to access the Admin Console.', 'error');
+    document.getElementById('modal-auth')?.classList.remove('hidden');
   }
 }
 
@@ -860,7 +973,7 @@ async function handleTaskSubmitForm(e) {
     showToast(`Task completed! You collected +${earnedPoints} points!`, 'success');
   } catch (err) {
     console.error('Error submitting task:', err);
-    showCustomAlert('Error', 'Failed to save submission. Please check connection.', { type: 'error' });
+    showToast('Failed to save submission. Please check connection.', 'error');
   }
 }
 
@@ -898,16 +1011,14 @@ function openTaskCompetitionModal(taskId) {
 
 /* ==========================================================================
    UI RENDERING: ATTENDANCE & GRANULAR PENALTY ENGINE
-   ========================================================================== */
+   ========================================================================= */
 function renderAttendanceView() {
   const container = document.getElementById('attendance-sessions-container');
   if (!container) return;
 
-  // Find active sessions
   const activeSessions = state.attendanceSessions.filter(s => s.isActive !== false);
 
   if (activeSessions.length === 0) {
-    // REQUIREMENT: Render prominent locked state when no session is active!
     container.innerHTML = `
       <div class="glass-card rounded-2xl p-8 sm:p-10 text-center border border-white/10 relative overflow-hidden bg-gradient-to-b from-white/[0.02] to-transparent">
         <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-white/[0.04] border border-white/10 flex items-center justify-center text-neutral-400">
@@ -924,9 +1035,7 @@ function renderAttendanceView() {
     return;
   }
 
-  // Render active session cards
   container.innerHTML = activeSessions.map(session => {
-    // Check if user already checked in for this session
     const userLog = state.user ? state.attendanceLogs.find(l => l.sessionId === session.id && l.uid === state.user.uid) : null;
     if (userLog) {
       updateUserTodayAttendanceBadge(userLog);
@@ -992,15 +1101,13 @@ async function processAttendanceCheckIn(sessionId) {
   const session = state.attendanceSessions.find(s => s.id === sessionId);
   if (!session) return;
 
-  // Check if already checked in
   const existing = state.attendanceLogs.find(l => l.sessionId === session.id && l.uid === state.user.uid);
   if (existing) {
-    showCustomAlert('Already Checked In', 'You have already recorded your attendance for this session.');
+    showToast('You have already recorded your attendance for this session.', 'info');
     return;
   }
 
   // EXACT GRANULAR LATE PENALTY FORMULA:
-  // Math.min(maxPenalty, Math.max(minPenalty, Math.ceil(lateMinutes / everyNMinutes) * penaltyAmountPerStep))
   const now = new Date();
   const sessionStart = session.startDateTime ? new Date(session.startDateTime) : new Date();
   const graceMins = Number(session.gracePeriodMinutes) || 10;
@@ -1024,7 +1131,6 @@ async function processAttendanceCheckIn(sessionId) {
   }
 
   try {
-    // 1. Write attendance log to Firestore
     await addDoc(collection(db, 'attendance_logs'), {
       sessionId: session.id,
       sessionTitle: session.title,
@@ -1038,14 +1144,12 @@ async function processAttendanceCheckIn(sessionId) {
       status
     });
 
-    // 2. Increment total penalties on user record if late
     if (penalty > 0) {
       await updateDoc(doc(db, 'users', state.user.uid), {
         totalPenalties: increment(penalty)
       });
     }
 
-    // 3. Post notification
     await addDoc(collection(db, 'notifications'), {
       title: 'Attendance Check-in',
       message: `${state.user.displayName} checked in: ${status === 'on_time' ? 'On Time' : `Late by ${lateMinutes} mins (-${penalty} pts)`}`,
@@ -1062,7 +1166,7 @@ async function processAttendanceCheckIn(sessionId) {
     renderAttendanceView();
   } catch (err) {
     console.error('Attendance check-in error:', err);
-    showCustomAlert('Error', 'Failed to record attendance. Please check network.');
+    showToast('Failed to record attendance. Please check network.', 'error');
   }
 }
 
@@ -1078,7 +1182,6 @@ function renderAttendanceLogs() {
     return;
   }
 
-  // Sort descending by check-in time
   const sorted = [...state.attendanceLogs].sort((a, b) => new Date(b.checkInTime) - new Date(a.checkInTime));
 
   container.innerHTML = sorted.map(log => {
@@ -1128,11 +1231,8 @@ function renderLeaderboard() {
   const listEl = document.getElementById('leaderboard-list');
   const countEl = document.getElementById('leaderboard-total-count');
 
-  // Compute members with points
-  // Either from Firestore users collection or aggregated from submissions
   let memberMap = new Map();
 
-  // Populate from registered users
   state.members.forEach(m => {
     memberMap.set(m.uid, {
       uid: m.uid,
@@ -1144,7 +1244,6 @@ function renderLeaderboard() {
     });
   });
 
-  // Calculate task counts from submissions
   state.submissions.forEach(s => {
     if (memberMap.has(s.uid)) {
       memberMap.get(s.uid).tasksCount += 1;
@@ -1165,7 +1264,7 @@ function renderLeaderboard() {
 
   if (countEl) countEl.textContent = `${allRanked.length} Members`;
 
-  // REQUIREMENT: Zero-Points Filter for Podium (only members with > 0 points appear on podium)
+  // Zero-Points Filter for Podium: only members with > 0 points appear on podium
   const podiumEligible = allRanked.filter(m => m.points > 0);
 
   const first = podiumEligible[0] || null;
@@ -1176,7 +1275,6 @@ function renderLeaderboard() {
   updatePodiumSlot(2, second);
   updatePodiumSlot(3, third);
 
-  // Full rankings list
   if (listEl) {
     if (allRanked.length === 0) {
       listEl.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No members registered yet.</div>`;
@@ -1209,7 +1307,6 @@ function renderLeaderboard() {
     }
   }
 
-  // Update current user rank in profile view
   if (state.user) {
     const userIndex = allRanked.findIndex(m => m.uid === state.user.uid);
     const rankEl = document.getElementById('profile-stat-rank');
@@ -1247,10 +1344,9 @@ function renderNotifications() {
   const dot = document.getElementById('tab-unread-dot');
   if (!container) return;
 
-  // Filter: Broadcasts or direct notifications matching user's UID
   const list = state.notifications.filter(n => {
-    if (!n.targetUid) return true; // Global
-    return state.user && n.targetUid === state.user.uid; // Direct
+    if (!n.targetUid) return true;
+    return state.user && n.targetUid === state.user.uid;
   });
 
   const unreadCount = list.filter(n => !n.read).length;
@@ -1324,7 +1420,6 @@ function updateProfileUI() {
   const statPenalties = document.getElementById('profile-stat-penalties');
 
   if (!state.user) {
-    // Guest Mode UI
     if (guestCard) guestCard.classList.remove('hidden');
     if (profileCard) profileCard.classList.add('hidden');
     if (signOutBtn) signOutBtn.classList.add('hidden');
@@ -1336,7 +1431,6 @@ function updateProfileUI() {
     if (statCompleted) statCompleted.textContent = '0';
     if (statPenalties) statPenalties.textContent = '0 pts';
   } else {
-    // Authenticated User UI
     if (guestCard) guestCard.classList.add('hidden');
     if (profileCard) profileCard.classList.remove('hidden');
     if (signOutBtn) signOutBtn.classList.remove('hidden');
@@ -1396,7 +1490,6 @@ function updateHeroStats() {
   if (activeCountEl) activeCountEl.textContent = state.tasks.length;
   if (myPointsEl) myPointsEl.textContent = state.user ? state.user.points || 0 : 0;
   if (completedTodayEl) {
-    // Count today's completions
     const today = new Date().toDateString();
     const todayDone = state.submissions.filter(s => {
       if (!s.createdAt?.seconds) return false;
@@ -1427,7 +1520,6 @@ function renderAdminTasks() {
 
   tbody.innerHTML = state.tasks.map(t => {
     const cat = state.categories.find(c => c.id === t.category) || { nameEn: t.category || 'General' };
-    const subsCount = state.submissions.filter(s => s.taskId === t.id).length;
     const endStr = t.endDateTime ? new Date(t.endDateTime).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'None';
 
     return `
@@ -1478,7 +1570,6 @@ function openAdminTaskForm(taskId = null) {
     titleInput.value = task.title || '';
     descInput.value = task.description || '';
     catSelect.value = task.category || '';
-    // Points input is empty by default, placeholder="5"
     pointsInput.value = task.points || '';
     quotaSelect.value = task.quotaType || 'daily';
     linkInput.value = task.link || '';
@@ -1489,7 +1580,6 @@ function openAdminTaskForm(taskId = null) {
     titleEl.textContent = 'New Task Configuration';
     form.reset();
     idInput.value = '';
-    // Empty points input defaulting to 5
     pointsInput.value = '';
   }
 
@@ -1505,7 +1595,6 @@ async function handleAdminTaskSave(e) {
   const desc = document.getElementById('input-task-desc').value.trim();
   const cat = document.getElementById('select-task-category').value;
   const rawPoints = document.getElementById('input-task-points').value;
-  // Fallback to 5 if empty!
   const points = Number(rawPoints) || 5;
   const quota = document.getElementById('select-task-quota').value;
   const link = document.getElementById('input-task-link').value.trim();
@@ -1539,12 +1628,12 @@ async function handleAdminTaskSave(e) {
     } else {
       taskData.createdAt = serverTimestamp();
       await addDoc(collection(db, 'tasks'), taskData);
-      showToast('New task published to Firestore!', 'success');
+      showToast('Task successfully created and published!', 'success');
     }
     document.getElementById('admin-task-form-container').classList.add('hidden');
   } catch (err) {
     console.error('Save task error:', err);
-    showCustomAlert('Error', 'Failed to save task to Firestore.', { type: 'error' });
+    showToast('Failed to save task to Firestore.', 'error');
   }
 }
 
@@ -1554,10 +1643,10 @@ async function deleteAdminTask(taskId) {
 
   try {
     await deleteDoc(doc(db, 'tasks', taskId));
-    showToast('Task deleted successfully.');
+    showToast('Task deleted successfully.', 'success');
   } catch (err) {
     console.error('Delete task error:', err);
-    showCustomAlert('Error', 'Could not delete task.', { type: 'error' });
+    showToast('Could not delete task.', 'error');
   }
 }
 
@@ -1724,7 +1813,7 @@ async function handleAdminSessionSave(e) {
     document.getElementById('btn-cancel-session-form').classList.add('hidden');
   } catch (err) {
     console.error('Save session error:', err);
-    showCustomAlert('Error', 'Failed to save session.', { type: 'error' });
+    showToast('Failed to save attendance session.', 'error');
   }
 }
 
@@ -1753,9 +1842,10 @@ async function toggleSessionActive(sessionId, currentActive) {
     await updateDoc(doc(db, 'attendance_sessions', sessionId), {
       isActive: !currentActive
     });
-    showToast(`Session ${!currentActive ? 'activated' : 'closed'}.`);
+    showToast(`Session ${!currentActive ? 'activated' : 'closed'}.`, 'info');
   } catch (err) {
     console.error('Toggle session error:', err);
+    showToast('Failed to update session status.', 'error');
   }
 }
 
@@ -1764,9 +1854,10 @@ async function deleteSession(sessionId) {
   if (!confirmed || !db) return;
   try {
     await deleteDoc(doc(db, 'attendance_sessions', sessionId));
-    showToast('Session deleted.');
+    showToast('Attendance session deleted.', 'success');
   } catch (err) {
     console.error('Delete session error:', err);
+    showToast('Failed to delete session.', 'error');
   }
 }
 
@@ -1802,9 +1893,10 @@ async function handleSaveEditLog(e) {
       penaltyDeducted
     });
     document.getElementById('modal-admin-edit-log').classList.add('hidden');
-    showToast('Attendance log updated.', 'success');
+    showToast('Attendance record updated.', 'success');
   } catch (err) {
     console.error('Update log error:', err);
+    showToast('Failed to update attendance record.', 'error');
   }
 }
 
@@ -1813,13 +1905,11 @@ async function waivePenaltyAction(logId, uid, penaltyAmount) {
   if (!confirmed || !db) return;
 
   try {
-    // 1. Reset penalty on attendance log
     await updateDoc(doc(db, 'attendance_logs', logId), {
       penaltyDeducted: 0,
       status: 'excused'
     });
 
-    // 2. Refund penalty on user document
     if (uid && penaltyAmount > 0) {
       await updateDoc(doc(db, 'users', uid), {
         totalPenalties: increment(-penaltyAmount)
@@ -1829,6 +1919,7 @@ async function waivePenaltyAction(logId, uid, penaltyAmount) {
     showToast('Penalty waived and refunded successfully!', 'success');
   } catch (err) {
     console.error('Waive penalty error:', err);
+    showToast('Failed to waive penalty.', 'error');
   }
 }
 
@@ -1837,9 +1928,10 @@ async function deleteAttendanceLog(logId) {
   if (!confirmed || !db) return;
   try {
     await deleteDoc(doc(db, 'attendance_logs', logId));
-    showToast('Log deleted.');
+    showToast('Attendance record deleted.', 'success');
   } catch (err) {
     console.error('Delete log error:', err);
+    showToast('Failed to delete record.', 'error');
   }
 }
 
@@ -1945,12 +2037,10 @@ async function handleAdminAdjustPoints(e) {
   const reason = document.getElementById('input-adjust-reason').value.trim();
 
   try {
-    // 1. Update user points in Firestore
     await updateDoc(doc(db, 'users', uid), {
       points: increment(delta)
     });
 
-    // 2. Add an audit notification for the user
     await addDoc(collection(db, 'notifications'), {
       targetUid: uid,
       title: delta > 0 ? 'Points Awarded' : 'Points Deducted',
@@ -1960,10 +2050,10 @@ async function handleAdminAdjustPoints(e) {
     });
 
     document.getElementById('modal-admin-adjust-points').classList.add('hidden');
-    showToast(`Points adjusted (${delta > 0 ? `+${delta}` : delta} pts) successfully!`, 'success');
+    showToast(`Points ${delta > 0 ? 'awarded' : 'deducted'} (${delta > 0 ? '+' + delta : delta} pts) successfully!`, 'success');
   } catch (err) {
     console.error('Adjust points error:', err);
-    showCustomAlert('Error', 'Failed to adjust points.');
+    showToast('Failed to adjust points.', 'error');
   }
 }
 
@@ -1995,9 +2085,10 @@ async function handleAdminDirectNotification(e) {
       createdAt: serverTimestamp()
     });
     document.getElementById('modal-admin-direct-notification').classList.add('hidden');
-    showToast('Direct notification sent!', 'success');
+    showToast('Direct notification sent to member!', 'success');
   } catch (err) {
     console.error('Direct notification error:', err);
+    showToast('Failed to send notification.', 'error');
   }
 }
 
@@ -2011,9 +2102,10 @@ async function toggleMemberAdminRole(uid, currentIsAdmin) {
       isAdmin: !currentIsAdmin,
       role: !currentIsAdmin ? 'admin' : 'member'
     });
-    showToast(`Member role updated!`, 'success');
+    showToast('Member role updated successfully!', 'success');
   } catch (err) {
     console.error('Toggle role error:', err);
+    showToast('Failed to update member role.', 'error');
   }
 }
 
@@ -2030,7 +2122,6 @@ function renderAdminCategories() {
   }
 
   container.innerHTML = state.categories.map(cat => {
-    // Live task count for this category
     const count = state.tasks.filter(t => t.category === cat.id).length;
     const catColor = cat.color || '#0A84FF';
 
@@ -2115,17 +2206,16 @@ async function handleCategorySave(e) {
       await updateDoc(doc(db, 'categories', id), catData);
       showToast('Category updated!', 'success');
     } else {
-      // Create new doc with id from nameEn slug
       const slug = nameEn.toLowerCase().replace(/[^a-z0-9]/g, '_');
       catData.createdAt = serverTimestamp();
       await setDoc(doc(db, 'categories', slug), catData);
-      showToast('Category created!', 'success');
+      showToast('Category created successfully!', 'success');
     }
 
     document.getElementById('admin-category-form-container').classList.add('hidden');
   } catch (err) {
     console.error('Save category error:', err);
-    showCustomAlert('Error', 'Failed to save category.');
+    showToast('Failed to save category.', 'error');
   }
 }
 
@@ -2135,9 +2225,10 @@ async function deleteCategoryAction(catId) {
 
   try {
     await deleteDoc(doc(db, 'categories', catId));
-    showToast('Category deleted.');
+    showToast('Category deleted.', 'success');
   } catch (err) {
     console.error('Delete category error:', err);
+    showToast('Failed to delete category.', 'error');
   }
 }
 
@@ -2160,6 +2251,7 @@ async function handleAdminAnnouncement(e) {
     showToast('Announcement broadcasted to all screens!', 'success');
   } catch (err) {
     console.error('Broadcast error:', err);
+    showToast('Failed to publish announcement.', 'error');
   }
 }
 
@@ -2170,9 +2262,10 @@ async function handleClearAnnouncement() {
       announcementEn: '',
       announcementAr: ''
     }, { merge: true });
-    showToast('Announcement banner cleared.');
+    showToast('Announcement banner cleared.', 'info');
   } catch (err) {
     console.error('Clear announcement error:', err);
+    showToast('Failed to clear banner.', 'error');
   }
 }
 
@@ -2198,6 +2291,7 @@ async function handleAdminSettings(e) {
     showToast('Branding settings saved!', 'success');
   } catch (err) {
     console.error('Save settings error:', err);
+    showToast('Failed to save settings.', 'error');
   }
 }
 
@@ -2213,7 +2307,6 @@ function applySettings() {
   if (footerBrand && s.appName) footerBrand.textContent = s.appName;
   if (footerDev && s.developerCredit) footerDev.textContent = s.developerCredit;
 
-  // Announcement Banner
   const banner = document.getElementById('announcement-bar');
   const bannerText = document.getElementById('announcement-text');
   const msg = state.lang === 'ar' && s.announcementAr ? s.announcementAr : s.announcementEn;
@@ -2264,9 +2357,10 @@ async function handleEditProfileSubmit(e) {
     state.user.photoURL = photo;
     updateProfileUI();
     document.getElementById('modal-edit-profile').classList.add('hidden');
-    showToast('Profile updated!', 'success');
+    showToast('Profile changes saved successfully!', 'success');
   } catch (err) {
     console.error('Update profile error:', err);
+    showToast('Failed to update profile.', 'error');
   }
 }
 
@@ -2313,7 +2407,6 @@ function escapeHtml(str) {
 function switchMainTab(tabName) {
   state.activeTab = tabName;
 
-  // Buttons
   document.querySelectorAll('.tab-btn').forEach(btn => {
     if (btn.dataset.tab === tabName) {
       btn.className = 'tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-white bg-white/[0.14] shadow-sm';
@@ -2322,7 +2415,6 @@ function switchMainTab(tabName) {
     }
   });
 
-  // Views
   document.querySelectorAll('.tab-view').forEach(view => {
     if (view.id === `view-${tabName}`) {
       view.classList.remove('hidden');
@@ -2362,6 +2454,7 @@ function toggleLanguage() {
   state.lang = state.lang === 'en' ? 'ar' : 'en';
   localStorage.setItem('coc_lang', state.lang);
   applyLanguage();
+  showToast(state.lang === 'ar' ? 'تم تحويل اللغة إلى العربية' : 'Switched language to English', 'info');
 }
 
 function applyLanguage() {
@@ -2371,7 +2464,6 @@ function applyLanguage() {
   const badge = document.getElementById('drawer-lang-badge');
   if (badge) badge.textContent = state.lang === 'en' ? 'English' : 'العربية';
 
-  // Translate static i18n data elements
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.dataset.i18n;
     if (i18n[state.lang] && i18n[state.lang][key]) {
@@ -2393,6 +2485,9 @@ async function handlePwaInstall() {
       deferredPrompt.prompt();
       const choice = await deferredPrompt.userChoice;
       console.log('User PWA install response:', choice.outcome);
+      if (choice.outcome === 'accepted') {
+        showToast('App installed to your home screen!', 'success');
+      }
       deferredPrompt = null;
       window.deferredPrompt = null;
       closeDrawer();
@@ -2400,7 +2495,6 @@ async function handlePwaInstall() {
       console.warn('Install prompt error:', err);
     }
   } else {
-    // Check if on iOS Safari
     const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     if (isIos) {
       showCustomAlert(
@@ -2410,10 +2504,7 @@ async function handlePwaInstall() {
           : 'To install on iOS: Tap the Share button in Safari, then select "Add to Home Screen".'
       );
     } else {
-      showCustomAlert(
-        'App Installed or Ready',
-        'This progressive web app is already installed or supported directly by your browser menu (Add to Home screen).'
-      );
+      showToast('This app is already installed or ready in your browser menu.', 'info');
     }
   }
 }
@@ -2454,8 +2545,23 @@ function attachEventHandlers() {
   document.querySelectorAll('.modal-close-btn').forEach(btn => {
     btn.onclick = (e) => {
       const modal = e.target.closest('.fixed');
-      if (modal) modal.classList.add('hidden');
+      if (modal) {
+        modal.classList.add('hidden');
+        if (modal.id === 'modal-admin-dashboard') {
+          if (window.location.hash === '#admin' || window.location.hash === '#admin-dashboard') {
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+          }
+        }
+      }
     };
+  });
+
+  // Dedicated Admin Close Button
+  document.getElementById('btn-close-admin-dashboard')?.addEventListener('click', () => {
+    document.getElementById('modal-admin-dashboard')?.classList.add('hidden');
+    if (window.location.hash === '#admin' || window.location.hash === '#admin-dashboard') {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
   });
 
   // 5. Auth Buttons
@@ -2477,28 +2583,11 @@ function attachEventHandlers() {
     };
     updateProfileUI();
     document.getElementById('modal-auth')?.classList.add('hidden');
-    showToast(`Welcome, ${name}!`);
+    showToast(`Welcome, ${name}!`, 'success');
   });
 
-  // 6. Admin Auth Form Modal
-  document.getElementById('form-admin-auth')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const key = document.getElementById('input-admin-password').value;
-    const err = document.getElementById('admin-auth-error');
-    if (key === ADMIN_MASTER_PASSWORD) {
-      document.getElementById('modal-admin-auth').classList.add('hidden');
-      if (state.user && db) {
-        updateDoc(doc(db, 'users', state.user.uid), { isAdmin: true, role: 'admin' });
-        state.user.isAdmin = true;
-      }
-      state.isAdminUnlocked = true;
-      updateProfileUI();
-      showToast('Admin Console Unlocked!', 'success');
-      showAdminDashboard();
-    } else {
-      if (err) err.classList.remove('hidden');
-    }
-  });
+  // 6. Admin Password Auth Form Modal
+  document.getElementById('form-admin-auth')?.addEventListener('submit', handleAdminAuthSubmit);
 
   // 7. Admin Tab Navigation
   document.querySelectorAll('.admintab-btn').forEach(btn => {
@@ -2539,6 +2628,7 @@ function attachEventHandlers() {
   document.getElementById('form-admin-settings')?.addEventListener('submit', handleAdminSettings);
   document.getElementById('btn-reset-logo')?.addEventListener('click', () => {
     document.getElementById('input-settings-logourl').value = './image_ad59c0.jpg';
+    showToast('Reset logo to default emblem.', 'info');
   });
 
   // 12. Adjust Points & Direct Notification Forms
