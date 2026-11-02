@@ -1,0 +1,356 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model & Architecture
+// ===============================================================
+//
+// Collection: users/{uid}
+//   - uid: string (user identifier, matches auth.uid)
+//   - name / displayName: string (optional/editable by owner)
+//   - avatarUrl / photoURL: string (optional/editable by owner)
+//   - role: string ('member' | 'leader' | 'admin' - set to 'member' on create, admin-only modify)
+//   - points: int (set to 0 on create; incremented via atomic batch with submission or admin)
+//   - penalties: int (set to 0 on create; incremented via atomic batch with attendance check-in or admin)
+//   - lastOpId: string (submission ID or attendanceLog ID tracking atomic point/penalty credit; prevents double-credit)
+//   - updatedAt: timestamp (editable by owner)
+//   - lastSeenAt: timestamp (editable by owner with request.time constraint)
+//
+// Collection: users_private/{uid}
+//   - email: string (owner or admin managed)
+//   - fcmTokens: list / map / string (push notification tokens)
+//
+// Collection: tasks/{taskId}
+//   - active: bool (defaults to true)
+//   - archived: bool (defaults to false)
+//   - points: int (points awarded for completion, defaults to 5)
+//   - Read: signed-in users
+//   - Write: admin only
+//
+// Collection: categories/{categoryId}
+//   - Read: signed-in users
+//   - Write: admin only
+//
+// Collection: submissions/{submissionId}
+//   - submissionId format: taskId + '_' + uid + '_' + occurrenceKey
+//   - taskId: string (foreign key to tasks/{taskId})
+//   - uid: string (author UID, matches auth.uid)
+//   - occurrenceKey: string
+//   - submittedAt: timestamp (must equal request.time)
+//   - pointsAwarded: int (must match task points)
+//   - Read: owner or admin
+//   - Create: admin or authenticated user completing a valid, active, non-archived task
+//   - Update / Delete: admin only
+//
+// Collection: attendance_sessions/{sessionId}
+//   - active: bool (defaults to true)
+//   - archived: bool (defaults to false)
+//   - earlyCheckInMinutes: int (early grace window in minutes)
+//   - lateCutoffMinutes: int (late cutoff window in minutes)
+//   - minPenalty: int (minimum penalty points for late arrival)
+//   - maxPenalty: int (maximum penalty points for late arrival)
+//   - Read: signed-in users
+//   - Write: admin only
+//
+// Collection: attendance_logs/{logId}
+//   - logId format: sessionId + '_' + uid + '_' + occurrenceKey
+//   - sessionId: string (foreign key to attendance_sessions/{sessionId})
+//   - uid: string (attendee UID, matches auth.uid)
+//   - occurrenceKey: string
+//   - occurrenceStart: timestamp
+//   - checkedInAt: timestamp (must equal request.time)
+//   - status: string ('on_time' | 'late')
+//   - penalty: int (0 if on_time, bounded calculation if late)
+//   - delaySeconds: int
+//   - Read: owner or admin
+//   - Create: admin or authenticated user checking in within allowed session window
+//   - Update / Delete: admin only
+//
+// Collection: notifications/{notificationId}
+//   - uid: string (recipient user UID)
+//   - title: string
+//   - body: string
+//   - type: string ('task' | 'attendance' | 'announcement' | 'system' | 'penalty' | 'reward')
+//   - read: bool (read/unread status, user can update only this field)
+//   - link: string (optional)
+//   - createdAt: timestamp
+//   - Read: admin or recipient (resource.data.uid == request.auth.uid)
+//   - Create / Delete: admin only
+//   - Update: admin, or recipient updating read state only
+//
+// Collection: broadcasts/{broadcastId}
+//   - title: string (required)
+//   - description: string (optional)
+//   - durationSeconds: int / number (default 5)
+//   - startDateTime: timestamp / string
+//   - endDateTime: timestamp / string
+//   - createdAt: timestamp
+//   - updatedAt: timestamp
+//   - Read: signedIn()
+//   - Write: isAdmin()
+//
+// Collection: admin_logs/{logId}
+//   - adminUid: string (UID of executing admin)
+//   - action: string (e.g., 'task_review', 'repair_totals', 'role_change')
+//   - targetId: string (ID of affected user, task, submission, or log)
+//   - details: map (contextual payload)
+//   - timestamp: timestamp
+//   - Read / Create: admin only
+//   - Update / Delete: false (append-only immutable audit trail)
+//
+// Collection: push_queue/{id}
+//   - title: string
+//   - body: string
+//   - target: string ("all" | user uid)
+//   - createdBy: string (admin uid)
+//   - createdAt: timestamp
+//   - status: string ("queued")
+//   - Read / Create: isAdmin()
+//   - Update / Delete: false
+//
+// Collection: settings/{settingId}
+//   - Document representing system settings / application config (e.g., 'global')
+//   - Read: public (true) so the client app can load global configuration prior to / during auth
+//   - Write: admin only (isAdmin())
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------
+    // Helper Functions
+    // ---------------------------------------------------------------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'member') == 'admin';
+    }
+
+    // ---------------------------------------------------------------
+    // Default Deny Root
+    // ---------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // Core User Collections
+    // ---------------------------------------------------------------
+
+    match /users/{uid} {
+      // Read allowed for any signed-in user (needed for member list & leaderboard)
+      allow read: if signedIn();
+
+      // Create only by the owner with initial role 'member' and zero points/penalties
+      allow create: if isOwner(uid) &&
+                       request.resource.data.role == 'member' &&
+                       request.resource.data.points == 0 &&
+                       request.resource.data.penalties == 0;
+
+      // Update: Admin can update any field (including repairing points/penalties or updating roles).
+      // Owner can update:
+      //   1. Profile fields: name, avatarUrl, updatedAt
+      //   2. Heartbeat: lastSeenAt == request.time
+      //   3. Atomic point increment via atomic batch with submission:
+      //      - Affected keys must strictly be ['points', 'lastOpId']
+      //      - lastOpId must differ from existing lastOpId
+      //      - Submission document must not exist before the batch (!exists)
+      //      - Submission document must exist after the batch (existsAfter)
+      //      - Submission document must belong to the user
+      //      - Point delta must exactly equal the submission's pointsAwarded
+      //   4. Atomic penalty increment via atomic batch with attendance check-in:
+      //      - Affected keys must strictly be ['penalties', 'lastOpId']
+      //      - lastOpId must differ from existing lastOpId
+      //      - Attendance log document must not exist before the batch (!exists)
+      //      - Attendance log document must exist after the batch (existsAfter)
+      //      - Attendance log document must belong to the user
+      //      - Penalty delta must exactly equal the attendance log's penalty
+      //   Limitations / Notes:
+      //   - Atomic batch commits: Client MUST execute both the target document creation
+      //     and the user doc update in the same WriteBatch or transaction.
+      //   - existsAfter and getAfter depend on the batch containing the target doc.
+      // Owner can NEVER change role.
+      allow update: if isAdmin() || (
+                       isOwner(uid) &&
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) &&
+                       (
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'avatarUrl', 'updatedAt']) ||
+                         (
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeenAt']) &&
+                           request.resource.data.lastSeenAt == request.time
+                         ) ||
+                         (
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId']) &&
+                           request.resource.data.lastOpId != resource.data.get('lastOpId', null) &&
+                           !exists(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
+                           existsAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
+                           getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
+                           request.resource.data.points - resource.data.get('points', 0) == getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.pointsAwarded
+                         ) ||
+                         (
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penalties', 'lastOpId']) &&
+                           request.resource.data.lastOpId != resource.data.get('lastOpId', null) &&
+                           !exists(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
+                           existsAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
+                           getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
+                           request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty
+                         )
+                       )
+                     );
+
+      // Delete allowed for admins only
+      allow delete: if isAdmin();
+    }
+
+    match /users_private/{uid} {
+      // Sensitive private data readable only by the owner or admins
+      allow read: if isOwner(uid) || isAdmin();
+
+      // Create allowed for owner (only email & fcmTokens) or admin
+      allow create: if (isOwner(uid) && request.resource.data.keys().hasOnly(['email', 'fcmTokens'])) || isAdmin();
+
+      // Update allowed for owner (only email & fcmTokens) or admin
+      allow update: if (isOwner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'fcmTokens'])) || isAdmin();
+
+      // Delete allowed for admins
+      allow delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Tasks & Categories Collections
+    // ---------------------------------------------------------------
+
+    match /tasks/{taskId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Submissions Collection
+    // ---------------------------------------------------------------
+
+    match /submissions/{submissionId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isAdmin() || (
+        signedIn() &&
+        request.resource.data.uid == request.auth.uid &&
+        submissionId == (request.resource.data.taskId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey) &&
+        request.resource.data.submittedAt == request.time &&
+        exists(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)) &&
+        get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('active', true) == true &&
+        get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('archived', false) == false &&
+        request.resource.data.pointsAwarded == get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('points', 5)
+      );
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Attendance Collections
+    // ---------------------------------------------------------------
+
+    match /attendance_sessions/{sessionId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /attendance_logs/{logId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+
+      allow update, delete: if isAdmin();
+
+      allow create: if isAdmin() || (
+        signedIn() &&
+        request.resource.data.uid == request.auth.uid &&
+        logId == (request.resource.data.sessionId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey) &&
+        request.resource.data.checkedInAt == request.time &&
+        exists(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)) &&
+        get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('active', true) == true &&
+        get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('archived', false) == false &&
+        request.time.toMillis() >= request.resource.data.occurrenceStart.toMillis() - (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('earlyCheckInMinutes', 0) * 60 * 1000) &&
+        request.time.toMillis() <= request.resource.data.occurrenceStart.toMillis() + (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('lateCutoffMinutes', 120) * 60 * 1000) &&
+        (
+          (
+            request.resource.data.status == 'on_time' &&
+            request.resource.data.penalty == 0 &&
+            request.time <= request.resource.data.occurrenceStart
+          ) ||
+          (
+            request.resource.data.status == 'late' &&
+            request.time > request.resource.data.occurrenceStart &&
+            request.resource.data.penalty >= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('minPenalty', 0) &&
+            request.resource.data.penalty <= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('maxPenalty', 999999) &&
+            math.abs(request.time.toMillis() - request.resource.data.occurrenceStart.toMillis() - request.resource.data.delaySeconds * 1000) <= 10000
+          )
+        )
+      );
+    }
+
+    // ---------------------------------------------------------------
+    // Notifications Collection
+    // ---------------------------------------------------------------
+
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        signedIn() &&
+        resource.data.uid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+      );
+    }
+
+    // ---------------------------------------------------------------
+    // Broadcasts Collection
+    // ---------------------------------------------------------------
+
+    match /broadcasts/{broadcastId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Admin Audit Logs Collection
+    // ---------------------------------------------------------------
+
+    match /admin_logs/{logId} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false; // Append-only audit trail
+    }
+
+    // ---------------------------------------------------------------
+    // Push Notifications Queue Collection
+    // ---------------------------------------------------------------
+
+    match /push_queue/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // Application Settings Collection
+    // ---------------------------------------------------------------
+
+    // Global application settings (e.g. settings/global):
+    // Public read allows the app to load branding, custom theme colors, and config.
+    // Writes are strictly restricted to administrators.
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
