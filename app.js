@@ -506,82 +506,101 @@ function openAdminPortal() {
   // Otherwise, open the dedicated Admin Password Modal
   const modal = document.getElementById('modal-admin-auth');
   const input = document.getElementById('input-admin-password');
+  const submitBtn = document.getElementById('btn-admin-auth-submit');
   const errEl = document.getElementById('admin-auth-error');
 
   if (errEl) errEl.classList.add('hidden');
   if (input) {
     input.value = '';
+    input.disabled = false;
     input.placeholder = 'Enter Master Password';
   }
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Unlock Admin Console';
+  }
   if (modal) modal.classList.remove('hidden');
-  if (input) input.focus();
+  if (input) setTimeout(() => input.focus(), 50);
 }
 
 async function handleAdminAuthSubmit(e) {
   e.preventDefault();
   const input = document.getElementById('input-admin-password');
   const submitBtn = document.getElementById('btn-admin-auth-submit');
-  const enteredPassword = input ? input.value : '';
   const errEl = document.getElementById('admin-auth-error');
+  const enteredPassword = input ? input.value : '';
 
-  // b) Validate entered password against master key
-  if (enteredPassword !== ADMIN_MASTER_PASSWORD) {
-    // c) If FALSE: Show an error toast (Do NOT redirect)
-    showToast('Invalid Master Password. Access Denied.', 'error');
-    if (errEl) {
-      errEl.textContent = 'Invalid Master Password. Access Denied.';
-      errEl.classList.remove('hidden');
-    }
-    if (input) {
-      input.value = '';
-      input.focus();
-    }
-    return;
-  }
-
-  // d) If TRUE: Update users/{uid} in Firestore with isAdmin: true. AWAIT this Firestore update to finish!
-  if (errEl) errEl.classList.add('hidden');
+  // 1. DISABLE INPUT DURING VERIFICATION:
+  // As soon as user clicks submit (or presses Enter), IMMEDIATELY set disabled = true on BOTH input and button.
+  if (input) input.disabled = true;
   if (submitBtn) {
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<span class="inline-block animate-spin mr-1.5">◌</span> Verifying...';
   }
+  if (errEl) errEl.classList.add('hidden');
 
+  // 2. FIX INFINITE HANGING (STRICT PROMISE HANDLING):
+  // Verification and Firestore update logic MUST be wrapped in a strict try { ... } catch (error) { ... } finally { ... } block
   try {
-    if (db && state.user && state.user.uid) {
-      await updateDoc(doc(db, 'users', state.user.uid), {
+    if (enteredPassword !== ADMIN_MASTER_PASSWORD) {
+      throw new Error('Incorrect password');
+    }
+
+    // Attempt Firestore update with safety timeout so network hangs never freeze the UI
+    if (db && state.user && state.user.uid && !state.user.uid.startsWith('local_')) {
+      const updatePromise = updateDoc(doc(db, 'users', state.user.uid), {
         isAdmin: true,
         role: 'admin'
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Firestore update timed out')), 3500)
+      );
+      await Promise.race([updatePromise, timeoutPromise]).catch(err => {
+        console.warn('Firestore update timed out or encountered offline mode:', err);
+      });
     }
-    state.user.isAdmin = true;
-    state.user.role = 'admin';
+
+    if (!state.user) {
+      state.user = {
+        uid: 'admin_local',
+        displayName: 'Administrator',
+        email: 'admin@cocmedia.local',
+        photoURL: './image_ad59c0.jpg',
+        points: 1000,
+        totalPenalties: 0,
+        isAdmin: true,
+        role: 'admin',
+        streakDays: 1
+      };
+    } else {
+      state.user.isAdmin = true;
+      state.user.role = 'admin';
+    }
     state.isAdminUnlocked = true;
     updateProfileUI();
 
-    // e) Show a success toast ("Admin Access Granted")
     showToast('Admin Access Granted', 'success');
 
-    // f) Close the password modal and SUCCESSFULLY render/navigate to the Admin Dashboard
-    document.getElementById('modal-admin-auth')?.classList.add('hidden');
+    const modal = document.getElementById('modal-admin-auth');
+    if (modal) modal.classList.add('hidden');
     if (input) input.value = '';
 
     window.location.hash = '#admin';
     showAdminDashboard();
-  } catch (err) {
-    console.error('Failed to update admin role in Firestore:', err);
-    // Allow access for this session even if network glitch
-    state.user.isAdmin = true;
-    state.user.role = 'admin';
-    state.isAdminUnlocked = true;
-    updateProfileUI();
-
-    showToast('Admin Access Granted', 'success');
-    document.getElementById('modal-admin-auth')?.classList.add('hidden');
-    if (input) input.value = '';
-
-    window.location.hash = '#admin';
-    showAdminDashboard();
+  } catch (error) {
+    console.error('Admin verification error:', error);
+    showToast('Incorrect password or network error', 'error');
+    if (errEl) {
+      errEl.textContent = 'Incorrect password or network error. Access denied.';
+      errEl.classList.remove('hidden');
+    }
+    if (input) {
+      input.value = '';
+      setTimeout(() => input.focus(), 50);
+    }
   } finally {
+    // 3. ALWAYS reset UI state: re-enable input and button, revert button text
+    if (input) input.disabled = false;
     if (submitBtn) {
       submitBtn.disabled = false;
       submitBtn.textContent = 'Unlock Admin Console';
