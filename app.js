@@ -1,10 +1,20 @@
 /**
- * COC Media Team - v1.0.3
- * Production Task, Quota & Attendance Platform
+ * COC Media Team - v1.0.4
+ * Production Task, Quota, Attendance & Gamification Platform
  * Designed & Developed by Steven Mario
- * GitHub Pages Compatible (Vanilla JS + Firebase CDN)
+ * GitHub Pages Compatible (Vanilla JS + Firebase Modular CDN)
  */
 
+// 1. CAPTURE PWA INSTALL PROMPT GLOBALLY AT TOP
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  window.deferredPrompt = e;
+  console.log('PWA beforeinstallprompt captured successfully');
+});
+
+// 2. FIREBASE CDN MODULAR IMPORTS
 import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
 import { 
   getAuth, 
@@ -24,15 +34,12 @@ import {
   updateDoc, 
   deleteDoc, 
   onSnapshot, 
-  query, 
-  where, 
-  orderBy, 
   serverTimestamp, 
   increment 
 } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js';
 
 /* ==========================================================================
-   1. FIREBASE CONFIGURATION & INITIALIZATION
+   FIREBASE CONFIGURATION
    ========================================================================== */
 const firebaseConfig = {
   apiKey: "AIzaSyBgnWU2azejTgCr-zVtVPLQYYRMGNtfieQ",
@@ -58,25 +65,25 @@ try {
 const ADMIN_MASTER_PASSWORD = '$J@@s#COC1982';
 
 /* ==========================================================================
-   2. GLOBAL STATE & I18N DICTIONARY
+   GLOBAL APPLICATION STATE
    ========================================================================== */
 const state = {
   lang: localStorage.getItem('coc_lang') || 'en',
-  user: null, // { uid, displayName, email, photoURL, points, totalPenalties, role, streakDays }
+  user: null, // null = Guest Mode, or { uid, displayName, email, photoURL, points, totalPenalties, isAdmin, role, streakDays }
   isAdminUnlocked: false,
   activeTab: 'tasks',
   tasks: [],
   categories: [
-    { id: 'video', nameEn: 'Video Editing', nameAr: 'مونتاج الفيديو', color: '#0A84FF' },
-    { id: 'social', nameEn: 'Social Media', nameAr: 'سوشيال ميديا', color: '#EC4899' },
-    { id: 'stream', nameEn: 'Live Streaming', nameAr: 'البث المباشر', color: '#10B981' },
-    { id: 'design', nameEn: 'Graphic Design', nameAr: 'تصميم جرافيك', color: '#F59E0B' },
-    { id: 'sound', nameEn: 'Sound Engineering', nameAr: 'هندسة الصوت', color: '#8B5CF6' },
-    { id: 'photo', nameEn: 'Photography', nameAr: 'التصوير الفوتوغرافي', color: '#06B6D4' }
+    { id: 'video', nameEn: 'Video Editing', nameAr: 'مونتاج الفيديو', color: '#0A84FF', icon: 'film' },
+    { id: 'social', nameEn: 'Social Media', nameAr: 'سوشيال ميديا', color: '#EC4899', icon: 'share-2' },
+    { id: 'stream', nameEn: 'Live Streaming', nameAr: 'البث المباشر', color: '#10B981', icon: 'radio' },
+    { id: 'design', nameEn: 'Graphic Design', nameAr: 'تصميم جرافيك', color: '#F59E0B', icon: 'palette' },
+    { id: 'sound', nameEn: 'Sound Engineering', nameAr: 'هندسة الصوت', color: '#8B5CF6', icon: 'mic-2' },
+    { id: 'photo', nameEn: 'Photography', nameAr: 'التصوير الفوتوغرافي', color: '#06B6D4', icon: 'camera' }
   ],
   attendanceSessions: [],
-  submissions: [],
   attendanceLogs: [],
+  submissions: [],
   notifications: [],
   members: [],
   selectedCategory: 'all',
@@ -90,11 +97,14 @@ const state = {
     announcementEn: '',
     announcementAr: '',
     logoUrl: './image_ad59c0.jpg',
-    developerCredit: 'Steven Mario',
-    version: 'v1.0.3'
+    developerCredit: 'Designed & Developed by Steven Mario',
+    version: 'v1.0.4'
   }
 };
 
+/* ==========================================================================
+   I18N DICTIONARY
+   ========================================================================== */
 const i18n = {
   en: {
     nav_tasks: 'Tasks',
@@ -118,782 +128,554 @@ const i18n = {
     notifications_sub: 'Real-time updates, task assignments, and points announcements.',
     sign_in: 'Sign In',
     complete_task: 'Complete Task',
-    already_completed: 'Completed Today',
-    open_link: 'Open Task Link ↗'
+    task_completed: 'Completed',
+    check_in_now: 'Check In Now',
+    checked_in: 'Checked In',
+    on_time: 'On Time',
+    late: 'Late',
+    guest_mode_notice: 'You need to sign in first to perform this action.'
   },
   ar: {
     nav_tasks: 'المهام',
     nav_attendance: 'الحضور',
     nav_leaderboard: 'المتصدرين',
-    nav_notifications: 'الإشعارات',
-    nav_profile: 'الملف الشخصي',
-    stat_active_tasks: 'المهام المتاحة',
-    stat_completed_today: 'منجزات اليوم',
+    nav_notifications: 'التحديثات',
+    nav_profile: 'حسابي',
+    stat_active_tasks: 'المهام النشطة',
+    stat_completed_today: 'المنجز اليوم',
     stat_my_points: 'نقاطي',
-    empty_tasks_title: 'لا توجد مهام حالياً',
-    empty_tasks_desc: 'لا توجد مهام تطابق هذا التصنيف حالياً. يرجى المتابعة لاحقاً أو تغيير الفلتر.',
-    attendance_engine_live: 'محرك تسجيل الحضور المباشر',
+    empty_tasks_title: 'لا توجد مهام نشطة',
+    empty_tasks_desc: 'لا توجد مهام مطابقة للفلتر المحدد حالياً. تحقق لاحقاً أو غيّر الفلتر.',
+    attendance_engine_live: 'محرك الحضور المباشر',
     attendance_status_label: 'حالة حضورك اليوم:',
-    scheduled_sessions: 'جلسات الخدمة المجدولة',
+    scheduled_sessions: 'الجلسات المجدولة',
     today_attendance_log: 'سجل حضور اليوم',
-    leaderboard_title: 'لوحة شرف الفريق',
-    leaderboard_sub: 'ترتيب أعضاء الفريق بناءً على النقاط والكوتا المنجزة.',
-    all_team_rankings: 'ترتيب أعضاء الفريق',
-    notifications_title: 'تنبيهات وإعلانات الفريق',
-    notifications_sub: 'تحديثات فورية، مهام جديدة، وإشعارات النقاط والكوتا.',
+    leaderboard_title: 'لوحة الشرف والمتصدرين',
+    leaderboard_sub: 'الترتيب مبني على الكوتا المكتملة والنقاط الموثقة.',
+    all_team_rankings: 'ترتيب الفريق بالكامل',
+    notifications_title: 'إعلانات وتنبيهات الفريق',
+    notifications_sub: 'تحديثات مباشرة، إسناد المهام وإعلانات النقاط.',
     sign_in: 'تسجيل الدخول',
     complete_task: 'إنجاز المهمة',
-    already_completed: 'تم إنجازها اليوم',
-    open_link: 'فتح رابط المهمة ↗'
+    task_completed: 'مكتملة',
+    check_in_now: 'تسجيل الحضور الآن',
+    checked_in: 'تم تسجيل الحضور',
+    on_time: 'في الموعد',
+    late: 'متأخر',
+    guest_mode_notice: 'عليك تسجيل الدخول أولاً للقيام بهذا الإجراء.'
   }
 };
 
 /* ==========================================================================
-   3. NON-BLOCKING FAIL-SAFE LOADER
+   CUSTOM APPLE-STYLE DIALOGS (ZERO NATIVE ALERTS)
    ========================================================================== */
-let isLoaderHidden = false;
-function hideLoader() {
-  if (isLoaderHidden) return;
-  isLoaderHidden = true;
-  const loader = document.getElementById('app-loader');
-  if (loader) {
-    loader.style.opacity = '0';
-    loader.style.pointerEvents = 'none';
-    setTimeout(() => {
-      loader.style.display = 'none';
-    }, 420);
-  }
-}
-// Guaranteed fallback so the screen NEVER gets stuck black under any circumstance
-setTimeout(hideLoader, 2500);
+export function showCustomAlert(title, message, options = {}) {
+  const modal = document.getElementById('modal-custom-alert');
+  const titleEl = document.getElementById('custom-alert-title');
+  const msgEl = document.getElementById('custom-alert-message');
+  const okBtn = document.getElementById('btn-custom-alert-ok');
+  const actionBtn = document.getElementById('btn-custom-alert-action');
+  const actionLabel = document.getElementById('btn-custom-alert-action-label');
+  const icon = document.getElementById('custom-alert-icon');
+  const iconBox = document.getElementById('custom-alert-icon-box');
 
-/* ==========================================================================
-   4. DOM HELPERS & UI UPDATERS
-   ========================================================================== */
-function refreshIcons() {
-  if (window.lucide && typeof window.lucide.createIcons === 'function') {
-    window.lucide.createIcons();
-  }
-}
+  if (!modal) return;
 
-function triggerConfetti() {
-  if (typeof window.confetti === 'function') {
-    window.confetti({
-      particleCount: 80,
-      spread: 70,
-      origin: { y: 0.7 },
-      colors: ['#0A84FF', '#F59E0B', '#10B981', '#FFFFFF']
-    });
-  }
-}
+  titleEl.textContent = title;
+  msgEl.textContent = message;
 
-function formatRelativeTime(isoString) {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMinutes = Math.floor((now - date) / 60000);
-  if (diffMinutes < 1) return 'Just now';
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return date.toLocaleDateString();
-}
-
-function getTodayKey() {
-  return new Date().toISOString().split('T')[0];
-}
-
-/* ==========================================================================
-   5. I18N & LANGUAGE TOGGLE
-   ========================================================================== */
-function applyLanguage(lang) {
-  state.lang = lang;
-  localStorage.setItem('coc_lang', lang);
-  
-  const isArabic = lang === 'ar';
-  document.documentElement.lang = lang;
-  document.documentElement.dir = isArabic ? 'rtl' : 'ltr';
-  
-  const langIndicator = document.getElementById('lang-indicator');
-  if (langIndicator) {
-    langIndicator.textContent = isArabic ? 'EN' : 'AR';
-  }
-
-  const drawerLangBadge = document.getElementById('drawer-lang-badge');
-  if (drawerLangBadge) {
-    drawerLangBadge.textContent = isArabic ? 'English' : 'العربية';
-  }
-
-  // Update text strings with data-i18n
-  document.querySelectorAll('[data-i18n]').forEach((el) => {
-    const key = el.getAttribute('data-i18n');
-    if (i18n[lang] && i18n[lang][key]) {
-      el.textContent = i18n[lang][key];
-    }
-  });
-
-  // Dynamic Subtitle
-  const subEl = document.getElementById('header-subtitle');
-  if (subEl) {
-    subEl.textContent = isArabic ? (state.settings.subtitleAr || i18n.ar.subtitle) : (state.settings.subtitleEn || i18n.en.subtitle);
-  }
-
-  // Dynamic Announcement
-  updateAnnouncementUI();
-  renderTasks();
-  renderAttendance();
-  renderLeaderboard();
-  renderNotifications();
-  refreshIcons();
-}
-
-function updateAnnouncementUI() {
-  const bar = document.getElementById('announcement-bar');
-  const textEl = document.getElementById('announcement-text');
-  const text = state.lang === 'ar' ? state.settings.announcementAr : state.settings.announcementEn;
-  if (text && text.trim().length > 0) {
-    if (textEl) textEl.textContent = text;
-    if (bar) bar.classList.remove('hidden');
+  if (options.type === 'error') {
+    iconBox.className = 'w-14 h-14 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400';
+    icon.setAttribute('data-lucide', 'alert-circle');
+  } else if (options.type === 'success') {
+    iconBox.className = 'w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400';
+    icon.setAttribute('data-lucide', 'check-circle-2');
   } else {
-    if (bar) bar.classList.add('hidden');
+    iconBox.className = 'w-14 h-14 rounded-full bg-[#0A84FF]/15 border border-[#0A84FF]/30 flex items-center justify-center mx-auto text-[#0A84FF]';
+    icon.setAttribute('data-lucide', 'info');
   }
-}
 
-/* ==========================================================================
-   CUSTOM APPLE-STYLE DIALOGS (ALERT, CONFIRM, PROMPT) - ZERO BROWSER POPUPS
-   ========================================================================== */
-function showCustomAlert(message, type = 'info', title = null, actionBtn = null) {
-  return new Promise((resolve) => {
-    const modal = document.getElementById('modal-custom-alert');
-    const titleEl = document.getElementById('custom-alert-title');
-    const msgEl = document.getElementById('custom-alert-message');
-    const iconBox = document.getElementById('custom-alert-icon-box');
-    const iconEl = document.getElementById('custom-alert-icon');
-    const okBtn = document.getElementById('btn-custom-alert-ok');
-    const actionBtnEl = document.getElementById('btn-custom-alert-action');
-    const actionLabel = document.getElementById('btn-custom-alert-action-label');
-
-    if (!modal) {
-      console.warn("Custom alert modal missing:", message);
-      resolve(true);
-      return;
-    }
-
-    const defaultTitles = {
-      info: state.lang === 'ar' ? 'تنبيه' : 'Notice',
-      success: state.lang === 'ar' ? 'تم بنجاح' : 'Success',
-      warning: state.lang === 'ar' ? 'تنبيه' : 'Attention',
-      error: state.lang === 'ar' ? 'خطأ' : 'Error'
-    };
-    if (titleEl) titleEl.textContent = title || defaultTitles[type] || 'Notice';
-    if (msgEl) msgEl.textContent = message;
-
-    if (iconBox && iconEl) {
-      if (type === 'success') {
-        iconBox.className = 'w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400';
-        iconEl.setAttribute('data-lucide', 'check-circle');
-      } else if (type === 'warning') {
-        iconBox.className = 'w-14 h-14 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400';
-        iconEl.setAttribute('data-lucide', 'alert-triangle');
-      } else if (type === 'error') {
-        iconBox.className = 'w-14 h-14 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400';
-        iconEl.setAttribute('data-lucide', 'x-circle');
-      } else {
-        iconBox.className = 'w-14 h-14 rounded-full bg-[#0A84FF]/15 border border-[#0A84FF]/30 flex items-center justify-center mx-auto text-[#0A84FF]';
-        iconEl.setAttribute('data-lucide', 'info');
-      }
-    }
-
-    if (actionBtn && actionBtnEl) {
-      actionBtnEl.classList.remove('hidden');
-      if (actionLabel && actionBtn.label) actionLabel.textContent = actionBtn.label;
-      actionBtnEl.onclick = () => {
-        modal.classList.add('hidden');
-        actionBtn.onClick?.();
-        resolve(true);
-      };
-    } else if (actionBtnEl) {
-      actionBtnEl.classList.add('hidden');
-    }
-
-    if (okBtn) {
-      okBtn.onclick = () => {
-        modal.classList.add('hidden');
-        resolve(true);
-      };
-    }
-
-    modal.classList.remove('hidden');
-    refreshIcons();
-  });
-}
-
-function showCustomConfirm(message, onConfirm = null, title = null) {
-  return new Promise((resolve) => {
-    const modal = document.getElementById('modal-custom-confirm');
-    const titleEl = document.getElementById('custom-confirm-title');
-    const msgEl = document.getElementById('custom-confirm-message');
-    const cancelBtn = document.getElementById('btn-custom-confirm-cancel');
-    const okBtn = document.getElementById('btn-custom-confirm-ok');
-
-    if (!modal) {
-      resolve(false);
-      return;
-    }
-
-    if (titleEl) titleEl.textContent = title || (state.lang === 'ar' ? 'تأكيد الإجراء' : 'Confirm Action');
-    if (msgEl) msgEl.textContent = message;
-
-    if (cancelBtn) {
-      cancelBtn.onclick = () => {
-        modal.classList.add('hidden');
-        resolve(false);
-      };
-    }
-
-    if (okBtn) {
-      okBtn.onclick = () => {
-        modal.classList.add('hidden');
-        if (typeof onConfirm === 'function') onConfirm();
-        resolve(true);
-      };
-    }
-
-    modal.classList.remove('hidden');
-    refreshIcons();
-  });
-}
-
-function showCustomPrompt({ title, message, placeholder = '', defaultValue = '', isPassword = false, onConfirm = null }) {
-  return new Promise((resolve) => {
-    const modal = document.getElementById('modal-custom-prompt');
-    const titleEl = document.getElementById('custom-prompt-title');
-    const msgEl = document.getElementById('custom-prompt-message');
-    const inputEl = document.getElementById('input-custom-prompt');
-    const errEl = document.getElementById('custom-prompt-error');
-    const form = document.getElementById('form-custom-prompt');
-    const cancelBtn = document.getElementById('btn-custom-prompt-cancel');
-
-    if (!modal || !inputEl || !form) {
-      resolve(null);
-      return;
-    }
-
-    if (titleEl) titleEl.textContent = title || (state.lang === 'ar' ? 'إدخال بيانات' : 'Enter Value');
-    if (msgEl) msgEl.textContent = message || '';
-    inputEl.type = isPassword ? 'password' : 'text';
-    inputEl.placeholder = placeholder || '';
-    inputEl.value = defaultValue || '';
-    if (errEl) errEl.classList.add('hidden');
-
-    const cleanup = () => {
+  if (options.actionLabel && typeof options.onAction === 'function') {
+    actionBtn.classList.remove('hidden');
+    actionLabel.textContent = options.actionLabel;
+    actionBtn.onclick = () => {
       modal.classList.add('hidden');
-      form.onsubmit = null;
-      if (cancelBtn) cancelBtn.onclick = null;
+      options.onAction();
     };
+  } else {
+    actionBtn.classList.add('hidden');
+  }
 
-    if (cancelBtn) {
-      cancelBtn.onclick = () => {
-        cleanup();
-        resolve(null);
-      };
-    }
+  modal.classList.remove('hidden');
+  refreshIcons();
 
+  return new Promise((resolve) => {
+    okBtn.onclick = () => {
+      modal.classList.add('hidden');
+      resolve(true);
+    };
+  });
+}
+
+export function showCustomConfirm(title, message) {
+  const modal = document.getElementById('modal-custom-confirm');
+  const titleEl = document.getElementById('custom-confirm-title');
+  const msgEl = document.getElementById('custom-confirm-message');
+  const okBtn = document.getElementById('btn-custom-confirm-ok');
+  const cancelBtn = document.getElementById('btn-custom-confirm-cancel');
+
+  if (!modal) return Promise.resolve(false);
+
+  titleEl.textContent = title;
+  msgEl.textContent = message;
+  modal.classList.remove('hidden');
+  refreshIcons();
+
+  return new Promise((resolve) => {
+    okBtn.onclick = () => {
+      modal.classList.add('hidden');
+      resolve(true);
+    };
+    cancelBtn.onclick = () => {
+      modal.classList.add('hidden');
+      resolve(false);
+    };
+  });
+}
+
+export function showCustomPrompt(title, message, defaultValue = '') {
+  const modal = document.getElementById('modal-custom-prompt');
+  const titleEl = document.getElementById('custom-prompt-title');
+  const msgEl = document.getElementById('custom-prompt-message');
+  const input = document.getElementById('input-custom-prompt');
+  const form = document.getElementById('form-custom-prompt');
+  const cancelBtn = document.getElementById('btn-custom-prompt-cancel');
+  const errEl = document.getElementById('custom-prompt-error');
+
+  if (!modal) return Promise.resolve(null);
+
+  titleEl.textContent = title;
+  msgEl.textContent = message;
+  input.value = defaultValue;
+  errEl.classList.add('hidden');
+  modal.classList.remove('hidden');
+  input.focus();
+  refreshIcons();
+
+  return new Promise((resolve) => {
     form.onsubmit = (e) => {
       e.preventDefault();
-      const val = inputEl.value;
-      cleanup();
-      if (typeof onConfirm === 'function') onConfirm(val);
+      const val = input.value;
+      modal.classList.add('hidden');
       resolve(val);
     };
-
-    modal.classList.remove('hidden');
-    setTimeout(() => inputEl.focus(), 50);
-    refreshIcons();
+    cancelBtn.onclick = () => {
+      modal.classList.add('hidden');
+      resolve(null);
+    };
   });
 }
 
-function showAuthRequiredAlert() {
-  const msg = state.lang === 'ar'
-    ? 'يجب تسجيل الدخول أولاً لتنفيذ هذا الإجراء.'
-    : 'You need to sign in first to perform this action.';
-  const title = state.lang === 'ar' ? 'تسجيل الدخول مطلوب' : 'Sign In Required';
+export function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = 'toast';
   
-  return showCustomAlert(msg, 'warning', title, {
-    label: state.lang === 'ar' ? 'تسجيل الدخول بحساب Google' : 'Sign in with Google',
-    onClick: () => handleGoogleSignIn()
-  });
-}
+  let iconName = 'info';
+  if (type === 'success') iconName = 'check-circle';
+  if (type === 'error') iconName = 'alert-triangle';
+  if (type === 'reward') iconName = 'award';
 
-function requireAuth(action) {
-  if (!state.user) {
-    showAuthRequiredAlert();
-    return false;
-  }
-  if (typeof action === 'function') {
-    action();
-  }
-  return true;
-}
+  toast.innerHTML = `
+    <i data-lucide="${iconName}" class="w-4 h-4 text-[#0A84FF]"></i>
+    <span>${message}</span>
+  `;
 
-/* ==========================================================================
-   6. AUTHENTICATION & USER PROFILE MANAGEMENT (GUEST / READ-ONLY MODE)
-   ========================================================================== */
-function initAuth() {
-  if (!auth) {
-    state.user = null;
-    updateUserUI();
-    hideLoader();
-    return;
-  }
-
-  onAuthStateChanged(auth, async (firebaseUser) => {
-    try {
-      if (firebaseUser) {
-        let userData = null;
-        if (db) {
-          try {
-            const userRef = doc(db, 'users', firebaseUser.uid);
-            const userSnap = await getDoc(userRef);
-            if (userSnap.exists()) {
-              userData = userSnap.data();
-              updateDoc(userRef, { lastActiveDate: getTodayKey() }).catch(() => {});
-            } else {
-              userData = {
-                uid: firebaseUser.uid,
-                displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Team Member',
-                email: firebaseUser.email || '',
-                photoURL: firebaseUser.photoURL || './image_ad59c0.jpg',
-                points: 0,
-                totalPenalties: 0,
-                role: 'member',
-                createdAt: new Date().toISOString(),
-                lastActiveDate: getTodayKey(),
-                isActive: true,
-                streakDays: 1
-              };
-              setDoc(userRef, userData).catch(() => {});
-            }
-          } catch (dbErr) {
-            console.warn("User Firestore lookup fallback to auth profile:", dbErr.message);
-          }
-        }
-        if (!userData) {
-          userData = {
-            uid: firebaseUser.uid,
-            displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Team Member',
-            email: firebaseUser.email || '',
-            photoURL: firebaseUser.photoURL || './image_ad59c0.jpg',
-            points: 0,
-            totalPenalties: 0,
-            role: 'member',
-            createdAt: new Date().toISOString(),
-            lastActiveDate: getTodayKey(),
-            isActive: true,
-            streakDays: 1
-          };
-        }
-        state.user = userData;
-        localStorage.removeItem('coc_guest_user');
-      } else {
-        // Read-only guest mode: strictly null, no dummy profile
-        state.user = null;
-        localStorage.removeItem('coc_guest_user');
-      }
-      updateUserUI();
-    } catch (err) {
-      console.warn("Auth state resolution warning:", err);
-      state.user = null;
-      updateUserUI();
-    } finally {
-      hideLoader();
-    }
-  });
-}
-
-function updateUserUI() {
-  const drawerGuestCard = document.getElementById('drawer-guest-card');
-  const drawerProfileCard = document.getElementById('drawer-profile-card');
-  const drawerSignoutBtn = document.getElementById('drawer-btn-signout');
-  const greetingEl = document.getElementById('hero-greeting');
-  const userPointsEl = document.getElementById('stat-user-points');
-  
-  if (state.user) {
-    // Authenticated User State
-    if (drawerGuestCard) drawerGuestCard.classList.add('hidden');
-    if (drawerProfileCard) drawerProfileCard.classList.remove('hidden');
-    if (drawerSignoutBtn) drawerSignoutBtn.classList.remove('hidden');
-
-    if (greetingEl) {
-      greetingEl.textContent = state.lang === 'ar' ? `أهلاً بك، ${state.user.displayName}` : `Welcome back, ${state.user.displayName}`;
-    }
-    if (userPointsEl) {
-      userPointsEl.textContent = `${state.user.points || 0} pts`;
-    }
-
-    // Update Drawer Profile Card
-    const drawerAvatar = document.getElementById('drawer-user-avatar');
-    const drawerName = document.getElementById('drawer-user-name');
-    const drawerEmail = document.getElementById('drawer-user-email');
-    const drawerPoints = document.getElementById('drawer-user-points');
-    const drawerRole = document.getElementById('drawer-user-role');
-    const drawerSignoutText = document.getElementById('drawer-signout-text');
-
-    if (drawerAvatar) drawerAvatar.src = state.user.photoURL || './image_ad59c0.jpg';
-    if (drawerName) drawerName.textContent = state.user.displayName || 'Team Member';
-    if (drawerEmail) drawerEmail.textContent = state.user.email || 'member@cocmedia.local';
-    if (drawerPoints) drawerPoints.textContent = `${state.user.points || 0} pts`;
-    if (drawerRole) {
-      drawerRole.textContent = state.user.role?.toUpperCase() || 'MEMBER';
-      if (state.user.role === 'admin') {
-        drawerRole.className = 'text-[10px] font-mono uppercase text-amber-400 font-bold';
-      } else {
-        drawerRole.className = 'text-[10px] font-mono uppercase text-neutral-400';
-      }
-    }
-    if (drawerSignoutText) {
-      drawerSignoutText.textContent = state.lang === 'ar' ? 'تسجيل الخروج / تبديل الحساب' : 'Sign Out / Switch Account';
-    }
-
-    // Update Profile View Elements
-    const profImg = document.getElementById('profile-user-img');
-    const profName = document.getElementById('profile-user-name');
-    const profEmail = document.getElementById('profile-user-email');
-    const profRole = document.getElementById('profile-role-badge');
-    const profPts = document.getElementById('prof-stat-points');
-    const profStreak = document.getElementById('prof-stat-streak');
-    const profPenalties = document.getElementById('prof-stat-penalties');
-    const userSignoutBtn = document.getElementById('btn-user-signout');
-
-    if (profImg) profImg.src = state.user.photoURL || './image_ad59c0.jpg';
-    if (profName) profName.textContent = state.user.displayName;
-    if (profEmail) profEmail.textContent = state.user.email || 'member@cocmedia.local';
-    if (profRole) {
-      profRole.textContent = state.user.role?.toUpperCase() || 'MEMBER';
-      if (state.user.role === 'admin') {
-        profRole.className = 'text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-400 border border-amber-400/30 font-semibold';
-      } else {
-        profRole.className = 'text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold';
-      }
-    }
-    if (profPts) profPts.textContent = `${state.user.points || 0}`;
-    if (profStreak) profStreak.textContent = `${state.user.streakDays || 1} Days`;
-    if (profPenalties) profPenalties.textContent = `-${state.user.totalPenalties || 0} pts`;
-    const profileGoogleBtn = document.getElementById('btn-profile-google-signin');
-    if (profileGoogleBtn) profileGoogleBtn.classList.add('hidden');
-    if (userSignoutBtn) userSignoutBtn.classList.remove('hidden');
-
-    const editPreview = document.getElementById('edit-profile-preview');
-    if (editPreview) editPreview.src = state.user.photoURL || './image_ad59c0.jpg';
-  } else {
-    // Read-Only Guest Mode UI
-    if (drawerGuestCard) drawerGuestCard.classList.remove('hidden');
-    if (drawerProfileCard) drawerProfileCard.classList.add('hidden');
-    if (drawerSignoutBtn) drawerSignoutBtn.classList.add('hidden');
-
-    const guestTitle = document.getElementById('drawer-guest-name');
-    const guestDesc = document.getElementById('drawer-guest-desc');
-    const guestBadge = document.getElementById('drawer-guest-badge');
-    const guestBtnLabel = document.getElementById('drawer-btn-signin-label');
-    if (guestTitle) guestTitle.textContent = state.lang === 'ar' ? 'زائر' : 'Guest User';
-    if (guestDesc) guestDesc.textContent = state.lang === 'ar' ? 'وضع القراءة فقط • Read-Only' : 'Read-Only Mode • زائر';
-    if (guestBadge) guestBadge.textContent = state.lang === 'ar' ? 'زائر' : 'GUEST';
-    if (guestBtnLabel) guestBtnLabel.textContent = state.lang === 'ar' ? 'تسجيل الدخول باستخدام Google' : 'Sign In with Google';
-
-    if (greetingEl) {
-      greetingEl.textContent = state.lang === 'ar' ? 'مرحباً بك في منصة ميديا COC' : 'Welcome to COC Media Hub';
-    }
-    if (userPointsEl) {
-      userPointsEl.textContent = '0 pts';
-    }
-
-    // Profile View Elements for Guest
-    const profImg = document.getElementById('profile-user-img');
-    const profName = document.getElementById('profile-user-name');
-    const profEmail = document.getElementById('profile-user-email');
-    const profRole = document.getElementById('profile-role-badge');
-    const profPts = document.getElementById('prof-stat-points');
-    const profStreak = document.getElementById('prof-stat-streak');
-    const profPenalties = document.getElementById('prof-stat-penalties');
-    const userSignoutBtn = document.getElementById('btn-user-signout');
-    const profileGoogleBtn = document.getElementById('btn-profile-google-signin');
-
-    if (profImg) profImg.src = './image_ad59c0.jpg';
-    if (profName) profName.textContent = state.lang === 'ar' ? 'زائر' : 'Guest User';
-    if (profEmail) profEmail.textContent = state.lang === 'ar' ? 'وضع القراءة فقط — سجل الدخول للمشاركة' : 'Read-Only Mode — Sign in to participate';
-    if (profRole) {
-      profRole.textContent = state.lang === 'ar' ? 'زائر' : 'GUEST';
-      profRole.className = 'text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 font-semibold';
-    }
-    if (profPts) profPts.textContent = '0';
-    if (profStreak) profStreak.textContent = '0 Days';
-    if (profPenalties) profPenalties.textContent = '0 pts';
-    if (userSignoutBtn) userSignoutBtn.classList.add('hidden');
-    if (profileGoogleBtn) profileGoogleBtn.classList.remove('hidden');
-  }
-
-  renderTasks();
-  renderLeaderboard();
-  renderProfileHistory();
+  container.appendChild(toast);
   refreshIcons();
+
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(8px)';
+    toast.style.transition = 'all 0.25s ease';
+    setTimeout(() => toast.remove(), 250);
+  }, 3200);
 }
 
 /* ==========================================================================
-   7. GITHUB PAGES UNAUTHORIZED DOMAIN WARNING HANDLER
+   SIDE DRAWER CONTROLLER (NEVER STICKS)
    ========================================================================== */
+function openDrawer() {
+  const drawer = document.getElementById('side-drawer');
+  const backdrop = document.getElementById('side-drawer-backdrop');
+  if (drawer && backdrop) {
+    drawer.classList.add('drawer-open');
+    backdrop.classList.add('drawer-open');
+  }
+}
+
+function closeDrawer() {
+  const drawer = document.getElementById('side-drawer');
+  const backdrop = document.getElementById('side-drawer-backdrop');
+  if (drawer && backdrop) {
+    drawer.classList.remove('drawer-open');
+    backdrop.classList.remove('drawer-open');
+  }
+}
+
+/* ==========================================================================
+   AUTH & GUEST MODE CONTROLLER
+   ========================================================================== */
+function requireAuth(actionCallback) {
+  if (state.user) {
+    actionCallback(state.user);
+    return true;
+  }
+  showCustomAlert(
+    'Sign In Required',
+    'You need to sign in first to perform this action. You can browse tasks and leaderboard in Read-Only Guest Mode.',
+    {
+      actionLabel: 'Sign In with Google',
+      onAction: () => handleGoogleSignIn()
+    }
+  );
+  return false;
+}
+
 async function handleGoogleSignIn() {
-  if (!auth) {
-    showCustomAlert("Firebase Auth is not ready. Continuing with Local Mode.", 'warning');
-    openModal('modal-auth');
+  if (!auth || !googleProvider) {
+    showCustomAlert('Error', 'Authentication service is not ready. Please try again.');
     return;
   }
-
   try {
     const result = await signInWithPopup(auth, googleProvider);
-    closeAllModals();
-    triggerConfetti();
+    const u = result.user;
+    await syncUserRecord(u);
+    closeDrawer();
+    showToast(`Welcome, ${u.displayName}!`, 'success');
   } catch (error) {
-    console.error("Firebase Sign-In Error:", error);
-    
-    // Check specifically for GitHub Pages unauthorized domain error
-    if (error.code === 'auth/unauthorized-domain' || error.message?.includes('unauthorized-domain')) {
-      const hostnameLabel = document.getElementById('current-hostname-label');
-      if (hostnameLabel) {
-        hostnameLabel.textContent = window.location.hostname;
-      }
-      closeModal('modal-auth');
-      openModal('modal-unauthorized-domain');
-    } else {
-      showCustomAlert(`Sign in could not complete (${error.message}). You can log in directly with your name below.`, 'error', 'Sign In Notice');
+    console.error('Google sign in error:', error);
+    if (error.code === 'auth/unauthorized-domain') {
+      const modal = document.getElementById('modal-unauthorized-domain');
+      const hostLabel = document.getElementById('current-hostname-label');
+      if (hostLabel) hostLabel.textContent = window.location.hostname;
+      if (modal) modal.classList.remove('hidden');
+    } else if (error.code !== 'auth/popup-closed-by-user') {
+      showCustomAlert('Sign In Failed', error.message || 'Could not complete Google Sign-In.', { type: 'error' });
     }
   }
 }
 
+async function syncUserRecord(firebaseUser) {
+  if (!db || !firebaseUser) return;
+  const userRef = doc(db, 'users', firebaseUser.uid);
+  try {
+    const userSnap = await getDoc(userRef);
+    if (userSnap.exists()) {
+      const data = userSnap.data();
+      state.user = {
+        uid: firebaseUser.uid,
+        displayName: firebaseUser.displayName || data.displayName || 'Member',
+        email: firebaseUser.email || data.email || '',
+        photoURL: firebaseUser.photoURL || data.photoURL || './image_ad59c0.jpg',
+        points: data.points || 0,
+        totalPenalties: data.totalPenalties || 0,
+        isAdmin: data.isAdmin || false,
+        role: data.role || (data.isAdmin ? 'admin' : 'member'),
+        streakDays: data.streakDays || 1
+      };
+      if (data.isAdmin) {
+        state.isAdminUnlocked = true;
+      }
+    } else {
+      const newUser = {
+        uid: firebaseUser.uid,
+        displayName: firebaseUser.displayName || 'Team Member',
+        email: firebaseUser.email || '',
+        photoURL: firebaseUser.photoURL || './image_ad59c0.jpg',
+        points: 0,
+        totalPenalties: 0,
+        isAdmin: false,
+        role: 'member',
+        streakDays: 1,
+        createdAt: serverTimestamp()
+      };
+      await setDoc(userRef, newUser);
+      state.user = newUser;
+    }
+    updateProfileUI();
+  } catch (err) {
+    console.warn('Sync user record offline/error:', err);
+    state.user = {
+      uid: firebaseUser.uid,
+      displayName: firebaseUser.displayName || 'Team Member',
+      email: firebaseUser.email || '',
+      photoURL: firebaseUser.photoURL || './image_ad59c0.jpg',
+      points: 0,
+      totalPenalties: 0,
+      isAdmin: false,
+      role: 'member',
+      streakDays: 1
+    };
+    updateProfileUI();
+  }
+}
+
+async function handleSignOut() {
+  const confirmed = await showCustomConfirm('Sign Out', 'Are you sure you want to sign out and return to Guest Mode?');
+  if (!confirmed) return;
+  try {
+    if (auth) await signOut(auth);
+    state.user = null;
+    state.isAdminUnlocked = false;
+    updateProfileUI();
+    closeDrawer();
+    showToast('Signed out successfully. You are now in Guest Mode.');
+  } catch (err) {
+    console.error('Sign out error:', err);
+  }
+}
+
 /* ==========================================================================
-   8. REALTIME DATA LISTENERS (FIRESTORE RESILIENT & OFFLINE-READY)
+   ACCOUNT-BASED ADMIN & ROUTE GUARD
    ========================================================================== */
-function initDataSubscriptions() {
-  if (!db) {
-    hideLoader();
-    state.tasks = [];
-    seedDefaultAttendanceSessions();
-    renderTasks();
+async function openAdminPortal() {
+  closeDrawer();
+  
+  // 1. Must be logged in
+  if (!state.user) {
+    showCustomAlert(
+      'Admin Portal',
+      'You must sign in with your team account first before accessing the Admin Console.',
+      {
+        actionLabel: 'Sign In with Google',
+        onAction: () => handleGoogleSignIn()
+      }
+    );
     return;
   }
 
+  // 2. If already admin on account or unlocked:
+  if (state.user.isAdmin || state.isAdminUnlocked) {
+    showAdminDashboard();
+    return;
+  }
+
+  // 3. Prompt for master key
+  const enteredKey = await showCustomPrompt('Admin Authentication', 'Enter the master administrative key ($J@@s#COC1982) to unlock Admin Hub:');
+  if (enteredKey === null) return;
+
+  if (enteredKey === ADMIN_MASTER_PASSWORD) {
+    try {
+      if (db && state.user.uid) {
+        await updateDoc(doc(db, 'users', state.user.uid), {
+          isAdmin: true,
+          role: 'admin'
+        });
+      }
+      state.user.isAdmin = true;
+      state.user.role = 'admin';
+      state.isAdminUnlocked = true;
+      updateProfileUI();
+      showToast('Admin privileges permanently linked to your account!', 'success');
+      showAdminDashboard();
+    } catch (err) {
+      console.error('Failed to update admin flag:', err);
+      state.isAdminUnlocked = true;
+      showAdminDashboard();
+    }
+  } else {
+    showCustomAlert('Access Denied', 'Invalid master administrative key.', { type: 'error' });
+  }
+}
+
+function showAdminDashboard() {
+  const modal = document.getElementById('modal-admin-dashboard');
+  if (modal) {
+    modal.classList.remove('hidden');
+    renderAdminTasks();
+    renderAdminSessions();
+    renderAdminAttendanceLogs();
+    renderAdminMembers();
+    renderAdminCategories();
+    refreshIcons();
+  }
+}
+
+// Strict URL Route Guard
+function checkRouteGuard() {
+  if (window.location.hash === '#admin' || window.location.hash === '#admin-dashboard') {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    openAdminPortal();
+  }
+}
+
+/* ==========================================================================
+   REAL-TIME FIRESTORE SYNCHRONIZATION
+   ========================================================================== */
+function initFirestoreListeners() {
+  if (!db) {
+    console.warn('Firestore db not available, running in offline fallback mode.');
+    return;
+  }
+
+  // 1. Categories Listener
   try {
-    // 1. Settings & Branding Listener
-    onSnapshot(doc(db, 'settings', 'app_config'), (snapshot) => {
-      if (snapshot.exists()) {
-        state.settings = { ...state.settings, ...snapshot.data() };
-        applyBrandingSettings();
+    onSnapshot(collection(db, 'categories'), (snapshot) => {
+      if (!snapshot.empty) {
+        state.categories = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       }
-    }, (err) => {
-      console.warn("Settings listener fallback (operating offline):", err.message);
-      applyBrandingSettings();
-    });
+      populateCategoryFilters();
+      populateTaskCategorySelect();
+      renderAdminCategories();
+    }, (err) => console.warn('Categories snapshot listener:', err));
+  } catch (e) { console.warn(e); }
 
-    // 2. Tasks Listener (Strictly real tasks — 0 tasks renders clean empty state)
+  // 2. Tasks Listener
+  try {
     onSnapshot(collection(db, 'tasks'), (snapshot) => {
-      const loadedTasks = [];
-      snapshot.forEach((doc) => {
-        loadedTasks.push({ id: doc.id, ...doc.data() });
-      });
-      state.tasks = loadedTasks;
+      state.tasks = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       renderTasks();
       renderAdminTasks();
-      hideLoader();
-    }, (err) => {
-      console.warn("Tasks listener fallback (operating offline):", err.message);
-      state.tasks = [];
-      renderTasks();
-      renderAdminTasks();
-      hideLoader();
-    });
+      updateHeroStats();
+    }, (err) => console.warn('Tasks snapshot listener:', err));
+  } catch (e) { console.warn(e); }
 
-    // 3. Submissions Listener (For Leaderboard aggregation)
-    onSnapshot(collection(db, 'submissions'), (snapshot) => {
-      const loadedSubs = [];
-      snapshot.forEach((doc) => {
-        loadedSubs.push({ id: doc.id, ...doc.data() });
-      });
-      state.submissions = loadedSubs;
-      renderLeaderboard();
-      renderTasks(); // update completion status
-      renderProfileHistory();
-    }, (err) => {
-      console.warn("Submissions listener fallback (operating offline):", err.message);
-      renderLeaderboard();
-    });
-
-    // 4. Attendance Sessions Listener
+  // 3. Attendance Sessions Listener
+  try {
     onSnapshot(collection(db, 'attendance_sessions'), (snapshot) => {
-      const loadedSessions = [];
-      snapshot.forEach((doc) => {
-        loadedSessions.push({ id: doc.id, ...doc.data() });
-      });
-      if (loadedSessions.length > 0) {
-        state.attendanceSessions = loadedSessions;
-        renderAttendance();
-        renderAdminSessions();
-      } else {
-        seedDefaultAttendanceSessions();
-      }
-    }, (err) => {
-      console.warn("Attendance listener fallback (operating offline):", err.message);
-      if (state.attendanceSessions.length === 0) {
-        seedDefaultAttendanceSessions();
-      }
-    });
+      state.attendanceSessions = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderAttendanceView();
+      renderAdminSessions();
+    }, (err) => console.warn('Attendance sessions listener:', err));
+  } catch (e) { console.warn(e); }
 
-    // 5. Attendance Logs Listener
+  // 4. Attendance Logs Listener
+  try {
     onSnapshot(collection(db, 'attendance_logs'), (snapshot) => {
-      const loadedLogs = [];
-      snapshot.forEach((doc) => {
-        loadedLogs.push({ id: doc.id, ...doc.data() });
-      });
-      loadedLogs.sort((a, b) => new Date(b.checkInTimestamp) - new Date(a.checkInTimestamp));
-      state.attendanceLogs = loadedLogs;
+      state.attendanceLogs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       renderAttendanceLogs();
-    }, (err) => {
-      console.warn("Attendance logs listener fallback (operating offline):", err.message);
-    });
+      renderAdminAttendanceLogs();
+    }, (err) => console.warn('Attendance logs listener:', err));
+  } catch (e) { console.warn(e); }
 
-    // 6. Registered Members Listener
+  // 5. Submissions Listener
+  try {
+    onSnapshot(collection(db, 'submissions'), (snapshot) => {
+      state.submissions = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderTasks();
+      renderLeaderboard();
+      updateHeroStats();
+      if (state.user) renderProfileSubmissions();
+    }, (err) => console.warn('Submissions snapshot listener:', err));
+  } catch (e) { console.warn(e); }
+
+  // 6. Registered Members Listener
+  try {
     onSnapshot(collection(db, 'users'), (snapshot) => {
-      const loadedUsers = [];
-      snapshot.forEach((doc) => {
-        loadedUsers.push({ id: doc.id, ...doc.data() });
-      });
-      state.members = loadedUsers;
+      state.members = snapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
       renderLeaderboard();
       renderAdminMembers();
-    }, (err) => {
-      console.warn("Users listener fallback (operating offline):", err.message);
-      renderLeaderboard();
-    });
-
-    // 7. Notifications Listener
-    onSnapshot(collection(db, 'notifications'), (snapshot) => {
-      const loadedNotifications = [];
-      snapshot.forEach((doc) => {
-        loadedNotifications.push({ id: doc.id, ...doc.data() });
-      });
-      loadedNotifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      state.notifications = loadedNotifications;
-      renderNotifications();
-    }, (err) => {
-      console.warn("Notifications listener fallback (operating offline):", err.message);
-    });
-
-  } catch (err) {
-    console.warn("Data subscription handled:", err.message);
-    hideLoader();
-  }
-}
-
-function applyBrandingSettings() {
-  const brandTitle = document.getElementById('header-app-title');
-  const footerBrand = document.getElementById('footer-brand-name');
-  const footerDev = document.getElementById('footer-dev-credit');
-  const headerLogo = document.getElementById('header-logo-img');
-  const drawerBrand = document.getElementById('drawer-footer-brand');
-  const drawerDev = document.getElementById('drawer-footer-dev');
-  const drawerVer = document.getElementById('drawer-footer-version');
-
-  if (brandTitle) brandTitle.textContent = state.settings.appName || 'COC Media Team';
-  if (footerBrand) footerBrand.textContent = state.settings.appName || 'COC Media Team';
-  if (footerDev) footerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
-  if (drawerBrand) drawerBrand.textContent = state.settings.appName || 'COC Media Team';
-  if (drawerDev) drawerDev.textContent = `Designed & Developed by ${state.settings.developerCredit || 'Steven Mario'}`;
-  if (drawerVer) drawerVer.textContent = 'Version 1.0.3';
-  if (headerLogo && state.settings.logoUrl) {
-    headerLogo.src = state.settings.logoUrl;
-  }
-  updateAnnouncementUI();
-}
-
-/* ==========================================================================
-   9. INITIAL SEEDS (ATTENDANCE SESSIONS ONLY - RESILIENT)
-   ========================================================================== */
-async function seedDefaultAttendanceSessions() {
-  const defaultSessions = [
-    {
-      title: "Sunday Morning Liturgy & Media Setup",
-      scheduledDays: [0], // Sunday
-      exactStartTime: "08:30",
-      checkInWindowEnd: "11:30",
-      gracePeriodMinutes: 15,
-      penaltyRatePerUnit: 5,
-      penaltyUnitMinutes: 5,
-      maxPenaltyCap: 50,
-      isActive: true
-    },
-    {
-      title: "Friday Youth Meeting & Live Stream",
-      scheduledDays: [5], // Friday
-      exactStartTime: "18:45",
-      checkInWindowEnd: "21:00",
-      gracePeriodMinutes: 10,
-      penaltyRatePerUnit: 5,
-      penaltyUnitMinutes: 5,
-      maxPenaltyCap: 40,
-      isActive: true
-    }
-  ];
-
-  state.attendanceSessions = defaultSessions.map((s, idx) => ({ id: `sess_${idx}`, ...s }));
-  renderAttendance();
-  renderAdminSessions();
-
-  if (db) {
-    try {
-      for (const s of defaultSessions) {
-        await addDoc(collection(db, 'attendance_sessions'), s);
+      // Keep current user updated
+      if (state.user) {
+        const currentUpdated = state.members.find(m => m.uid === state.user.uid);
+        if (currentUpdated) {
+          state.user = { ...state.user, ...currentUpdated };
+          if (currentUpdated.isAdmin) state.isAdminUnlocked = true;
+          updateProfileUI();
+        }
       }
-    } catch (err) {
-      console.info("Default sessions running locally (Firestore offline/permission):", err.message);
-    }
-  }
+    }, (err) => console.warn('Users snapshot listener:', err));
+  } catch (e) { console.warn(e); }
+
+  // 7. Notifications Listener
+  try {
+    onSnapshot(collection(db, 'notifications'), (snapshot) => {
+      state.notifications = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      renderNotifications();
+    }, (err) => console.warn('Notifications snapshot listener:', err));
+  } catch (e) { console.warn(e); }
+
+  // 8. Settings Listener
+  try {
+    onSnapshot(doc(db, 'settings', 'app_config'), (docSnap) => {
+      if (docSnap.exists()) {
+        state.settings = { ...state.settings, ...docSnap.data() };
+        applySettings();
+      }
+    }, (err) => console.warn('Settings snapshot listener:', err));
+  } catch (e) { console.warn(e); }
 }
 
 /* ==========================================================================
-   10. RENDERING FUNCTIONS
+   UI RENDERING: TASKS
    ========================================================================== */
+function populateCategoryFilters() {
+  const container = document.getElementById('category-filter-chips');
+  if (!container) return;
 
-// 1. Render Task Cards
+  const currentSelected = state.selectedCategory;
+  let html = `
+    <button data-category="all" class="cat-filter-btn px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${currentSelected === 'all' ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}">
+      ${state.lang === 'ar' ? 'جميع المهام' : 'All Tasks'}
+    </button>
+  `;
+
+  state.categories.forEach(cat => {
+    const isSelected = currentSelected === cat.id;
+    const catName = state.lang === 'ar' && cat.nameAr ? cat.nameAr : cat.nameEn;
+    html += `
+      <button data-category="${cat.id}" class="cat-filter-btn px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${isSelected ? 'text-white shadow-sm' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}" style="${isSelected ? `background-color: ${cat.color || '#0A84FF'};` : ''}">
+        ${catName}
+      </button>
+    `;
+  });
+
+  container.innerHTML = html;
+
+  container.querySelectorAll('.cat-filter-btn').forEach(btn => {
+    btn.onclick = () => {
+      state.selectedCategory = btn.dataset.category;
+      populateCategoryFilters();
+      renderTasks();
+    };
+  });
+}
+
+function populateTaskCategorySelect() {
+  const select = document.getElementById('select-task-category');
+  if (!select) return;
+  select.innerHTML = state.categories.map(c => `
+    <option value="${c.id}">${c.nameEn} / ${c.nameAr || ''}</option>
+  `).join('');
+}
+
 function renderTasks() {
   const container = document.getElementById('tasks-container');
   const emptyState = document.getElementById('tasks-empty-state');
-  const activeCountEl = document.getElementById('stat-active-tasks-count');
-  const completedTodayEl = document.getElementById('stat-completed-today-count');
-  
   if (!container) return;
 
-  const todayKey = getTodayKey();
-  const userSubmissions = state.submissions.filter(s => s.userId === state.user?.uid);
-  const completedTodayCount = userSubmissions.filter(s => s.dateKey === todayKey).length;
-  
-  if (completedTodayEl) completedTodayEl.textContent = completedTodayCount;
-
-  // Filter tasks
-  const filtered = state.tasks.filter((task) => {
-    if (state.selectedCategory !== 'all' && task.categoryId !== state.selectedCategory) {
-      return false;
-    }
-    if (state.searchQuery.trim().length > 0) {
+  let filtered = state.tasks.filter(t => {
+    // Category filter
+    if (state.selectedCategory !== 'all' && t.category !== state.selectedCategory) return false;
+    // Search query
+    if (state.searchQuery) {
       const q = state.searchQuery.toLowerCase();
-      const matchTitle = task.title?.toLowerCase().includes(q);
-      const matchDesc = task.description?.toLowerCase().includes(q);
+      const matchTitle = t.title?.toLowerCase().includes(q);
+      const matchDesc = t.description?.toLowerCase().includes(q);
       if (!matchTitle && !matchDesc) return false;
     }
-    const isCompleted = userSubmissions.some(s => s.taskId === task.id);
-    if (state.statusFilter === 'pending' && isCompleted) return false;
-    if (state.statusFilter === 'completed' && !isCompleted) return false;
+    // Status filter
+    if (state.statusFilter !== 'all') {
+      const isCompleted = state.user && state.submissions.some(s => s.taskId === t.id && s.uid === state.user.uid);
+      if (state.statusFilter === 'completed' && !isCompleted) return false;
+      if (state.statusFilter === 'pending' && isCompleted) return false;
+    }
     return true;
   });
-
-  if (activeCountEl) activeCountEl.textContent = state.tasks.length;
 
   if (filtered.length === 0) {
     container.innerHTML = '';
@@ -903,234 +685,385 @@ function renderTasks() {
 
   if (emptyState) emptyState.classList.add('hidden');
 
-  container.innerHTML = filtered.map((task) => {
-    const category = state.categories.find(c => c.id === task.categoryId) || {
-      nameEn: 'General',
-      nameAr: 'عام',
-      color: '#0A84FF'
-    };
-    const catName = state.lang === 'ar' ? category.nameAr : category.nameEn;
+  container.innerHTML = filtered.map(task => {
+    const categoryObj = state.categories.find(c => c.id === task.category) || { nameEn: task.category || 'General', color: '#0A84FF' };
+    const categoryName = state.lang === 'ar' && categoryObj.nameAr ? categoryObj.nameAr : categoryObj.nameEn;
+    const catColor = categoryObj.color || '#0A84FF';
 
-    // Check completion status for current user
-    const hasCompletedEver = userSubmissions.some(s => s.taskId === task.id);
-    const hasCompletedToday = userSubmissions.some(s => s.taskId === task.id && s.dateKey === todayKey);
-    
-    let isActionDisabled = false;
-    let buttonText = state.lang === 'ar' ? i18n.ar.complete_task : i18n.en.complete_task;
+    const taskCompletions = state.submissions.filter(s => s.taskId === task.id);
+    const userCompleted = state.user ? taskCompletions.some(s => s.uid === state.user.uid) : false;
 
-    if (task.quotaType === 'once' && hasCompletedEver) {
-      isActionDisabled = true;
-      buttonText = state.lang === 'ar' ? 'تم الإنجاز' : 'Completed';
-    } else if (task.quotaType === 'daily' && hasCompletedToday) {
-      isActionDisabled = true;
-      buttonText = state.lang === 'ar' ? i18n.ar.already_completed : i18n.en.already_completed;
+    // Schedule / Deadline preview
+    let scheduleBadge = '';
+    if (task.startDateTime || task.endDateTime) {
+      const endStr = task.endDateTime ? new Date(task.endDateTime).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      scheduleBadge = `
+        <div class="flex items-center gap-1.5 text-[11px] text-neutral-400 font-mono mt-2">
+          <i data-lucide="clock" class="w-3.5 h-3.5 text-neutral-500"></i>
+          <span>Deadline: ${endStr || 'No cutoff'}</span>
+        </div>
+      `;
     }
 
-    const taskCompletionsCount = state.submissions.filter(s => s.taskId === task.id).length;
-
     return `
-      <div class="glass-card rounded-2xl p-5 flex flex-col justify-between hover:border-white/20 transition-all duration-300 relative group">
+      <div class="glass-card rounded-2xl p-5 flex flex-col justify-between hover:border-white/20 transition-all duration-200 relative group">
         <div>
-          <!-- Header Chip & Points -->
-          <div class="flex items-center justify-between gap-2 mb-3">
-            <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full" style="background-color: ${category.color}20; color: ${category.color}; border: 1px solid ${category.color}40;">
-              ${catName}
+          <!-- Card Header: Category & Points -->
+          <div class="flex items-center justify-between gap-2 mb-2.5">
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold border" style="background-color: ${catColor}15; color: ${catColor}; border-color: ${catColor}35;">
+              ${categoryName}
             </span>
-            <span class="text-xs font-bold font-mono px-2 py-0.5 rounded-lg bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30">
-              +${task.points} pts
+            <span class="text-xs font-mono font-bold text-[#F59E0B] px-2 py-0.5 rounded-lg bg-[#F59E0B]/15 border border-[#F59E0B]/30">
+              +${task.points || 5} pts
             </span>
           </div>
 
-          <!-- Title & Description -->
-          <h3 class="text-sm sm:text-base font-bold text-white group-hover:text-[#0A84FF] transition leading-snug">
-            ${task.title}
-          </h3>
-          <p class="text-xs text-neutral-400 mt-2 line-clamp-3 leading-relaxed">
-            ${task.description}
-          </p>
+          <h3 class="font-bold text-sm sm:text-base text-white group-hover:text-white/95 leading-snug">${escapeHtml(task.title)}</h3>
+          <p class="text-xs text-neutral-400 mt-1.5 line-clamp-2 leading-relaxed">${escapeHtml(task.description || '')}</p>
 
-          <!-- Badges & Quota Info -->
-          <div class="flex flex-wrap items-center gap-2 mt-4 text-[10px] text-neutral-300">
-            <span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 flex items-center gap-1">
-              <i data-lucide="repeat" class="w-3 h-3 text-neutral-400"></i>
-              ${task.quotaType || 'daily'}
-            </span>
-            ${task.estimatedDuration ? `
-              <span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 flex items-center gap-1">
-                <i data-lucide="clock" class="w-3 h-3 text-neutral-400"></i>
-                ${task.estimatedDuration}
-              </span>
-            ` : ''}
-            <button class="btn-view-task-comp text-neutral-400 hover:text-white flex items-center gap-1 underline underline-offset-2 ml-auto" data-taskid="${task.id}">
-              <i data-lucide="users" class="w-3 h-3"></i>
-              ${taskCompletionsCount} completed
-            </button>
-          </div>
+          ${scheduleBadge}
         </div>
 
-        <!-- Action Buttons -->
-        <div class="mt-5 pt-3 border-t border-white/10 flex items-center gap-2">
-          ${task.taskLink ? `
-            <a href="${task.taskLink}" target="_blank" rel="noopener noreferrer" class="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-neutral-300 hover:text-white transition" title="Open Task Link">
-              <i data-lucide="external-link" class="w-4 h-4 text-[#0A84FF]"></i>
-            </a>
-          ` : ''}
+        <div class="pt-4 mt-3 border-t border-white/5 space-y-2">
+          <!-- Completions Row -->
+          <div class="flex items-center justify-between text-xs text-neutral-400">
+            <button class="btn-view-task-completions hover:text-white transition flex items-center gap-1.5" data-task-id="${task.id}">
+              <i data-lucide="users" class="w-3.5 h-3.5 text-[#0A84FF]"></i>
+              <span>${taskCompletions.length} completions</span>
+            </button>
+            ${task.link ? `
+              <a href="${task.link}" target="_blank" rel="noopener noreferrer" class="text-xs text-[#0A84FF] hover:underline flex items-center gap-1">
+                <span>Task Link</span>
+                <i data-lucide="external-link" class="w-3 h-3"></i>
+              </a>
+            ` : ''}
+          </div>
 
-          <button 
-            class="btn-complete-task flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-              isActionDisabled 
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 cursor-not-allowed' 
-                : 'bg-[#0A84FF] hover:bg-[#0A84FF]/90 text-white shadow-lg shadow-[#0A84FF]/20 active:scale-[0.98]'
-            }"
-            data-taskid="${task.id}"
-            ${isActionDisabled ? 'disabled' : ''}
-          >
-            <i data-lucide="${isActionDisabled ? 'check' : 'check-circle'}" class="w-3.5 h-3.5"></i>
-            <span>${buttonText}</span>
-          </button>
+          <!-- Action Button -->
+          ${userCompleted ? `
+            <button class="w-full py-2.5 rounded-xl text-xs font-bold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center gap-1.5 cursor-default">
+              <i data-lucide="check" class="w-4 h-4"></i>
+              <span>${i18n[state.lang].task_completed}</span>
+            </button>
+          ` : `
+            <button class="btn-complete-task w-full py-2.5 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition shadow-lg shadow-[#0A84FF]/25 flex items-center justify-center gap-1.5" data-task-id="${task.id}">
+              <i data-lucide="check-circle" class="w-4 h-4"></i>
+              <span>${i18n[state.lang].complete_task}</span>
+            </button>
+          `}
         </div>
       </div>
     `;
   }).join('');
 
-  // Attach complete button listeners
-  container.querySelectorAll('.btn-complete-task').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!state.user) {
-        showAuthRequiredAlert();
-        return;
-      }
-      const taskId = btn.getAttribute('data-taskid');
-      const task = state.tasks.find(t => t.id === taskId);
-      if (task) openSubmitModal(task);
-    });
+  // Event Listeners for Task Cards
+  container.querySelectorAll('.btn-complete-task').forEach(btn => {
+    btn.onclick = () => {
+      const taskId = btn.dataset.taskId;
+      requireAuth(() => openSubmitTaskModal(taskId));
+    };
   });
 
-  // Attach view competition listeners
-  container.querySelectorAll('.btn-view-task-comp').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const taskId = btn.getAttribute('data-taskid');
-      const task = state.tasks.find(t => t.id === taskId);
-      if (task) openCompetitionModal(task);
-    });
+  container.querySelectorAll('.btn-view-task-completions').forEach(btn => {
+    btn.onclick = () => {
+      const taskId = btn.dataset.taskId;
+      openTaskCompetitionModal(taskId);
+    };
   });
 
   refreshIcons();
 }
 
-// 2. Render Attendance View & Active Sessions
-function renderAttendance() {
+function openSubmitTaskModal(taskId) {
+  const task = state.tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const modal = document.getElementById('modal-task-submit');
+  const catEl = document.getElementById('submit-modal-category');
+  const titleEl = document.getElementById('submit-modal-title');
+  const ptsEl = document.getElementById('submit-modal-points');
+  const idInput = document.getElementById('submit-task-id');
+  const questionBox = document.getElementById('submit-question-box');
+  const questionLabel = document.getElementById('submit-question-label');
+  const answerInput = document.getElementById('input-submit-answer');
+  const commentInput = document.getElementById('input-submit-comment');
+
+  idInput.value = task.id;
+  titleEl.textContent = task.title;
+  catEl.textContent = task.category || 'General';
+  ptsEl.textContent = `+${task.points || 5} pts`;
+
+  if (task.enableQuestion && task.questionPrompt) {
+    questionBox.classList.remove('hidden');
+    questionLabel.textContent = task.questionPrompt;
+    answerInput.required = true;
+  } else {
+    questionBox.classList.add('hidden');
+    answerInput.required = false;
+  }
+
+  commentInput.value = '';
+  modal.classList.remove('hidden');
+  refreshIcons();
+}
+
+async function handleTaskSubmitForm(e) {
+  e.preventDefault();
+  if (!state.user || !db) return;
+
+  const taskId = document.getElementById('submit-task-id').value;
+  const answer = document.getElementById('input-submit-answer').value.trim();
+  const comment = document.getElementById('input-submit-comment').value.trim();
+  const minutes = Number(document.getElementById('input-submit-minutes').value) || 30;
+
+  const task = state.tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const earnedPoints = Number(task.points) || 5;
+
+  try {
+    // 1. Record submission in Firestore
+    await addDoc(collection(db, 'submissions'), {
+      taskId: task.id,
+      taskTitle: task.title,
+      taskCategory: task.category || 'General',
+      uid: state.user.uid,
+      userName: state.user.displayName,
+      userPhoto: state.user.photoURL,
+      pointsEarned: earnedPoints,
+      answer: answer || '',
+      comment: comment || '',
+      minutesSpent: minutes,
+      createdAt: serverTimestamp()
+    });
+
+    // 2. Increment user points in Firestore
+    await updateDoc(doc(db, 'users', state.user.uid), {
+      points: increment(earnedPoints)
+    });
+
+    // 3. Post a system notification
+    await addDoc(collection(db, 'notifications'), {
+      title: 'Quota Completed',
+      message: `${state.user.displayName} completed "${task.title}" (+${earnedPoints} pts)`,
+      type: 'reward',
+      createdAt: serverTimestamp()
+    });
+
+    document.getElementById('modal-task-submit').classList.add('hidden');
+
+    // Confetti celebration
+    if (typeof confetti === 'function') {
+      confetti({ particleCount: 75, spread: 60, origin: { y: 0.7 } });
+    }
+
+    showToast(`Task completed! You collected +${earnedPoints} points!`, 'success');
+  } catch (err) {
+    console.error('Error submitting task:', err);
+    showCustomAlert('Error', 'Failed to save submission. Please check connection.', { type: 'error' });
+  }
+}
+
+function openTaskCompetitionModal(taskId) {
+  const task = state.tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const modal = document.getElementById('modal-task-competition');
+  const titleEl = document.getElementById('comp-modal-title');
+  const listEl = document.getElementById('comp-modal-list');
+
+  titleEl.textContent = `${task.title} - Completions`;
+  const completions = state.submissions.filter(s => s.taskId === task.id);
+
+  if (completions.length === 0) {
+    listEl.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No member has submitted this quota yet. Be the first!</div>`;
+  } else {
+    listEl.innerHTML = completions.map(sub => `
+      <div class="py-2.5 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2.5">
+          <img src="${sub.userPhoto || './image_ad59c0.jpg'}" alt="Avatar" class="w-8 h-8 rounded-full object-cover border border-white/10" />
+          <div>
+            <div class="font-bold text-xs text-white">${escapeHtml(sub.userName || 'Member')}</div>
+            ${sub.comment ? `<div class="text-[11px] text-neutral-400 italic truncate max-w-xs">"${escapeHtml(sub.comment)}"</div>` : ''}
+          </div>
+        </div>
+        <span class="text-xs font-mono font-bold text-[#F59E0B]">+${sub.pointsEarned || 5} pts</span>
+      </div>
+    `).join('');
+  }
+
+  modal.classList.remove('hidden');
+  refreshIcons();
+}
+
+/* ==========================================================================
+   UI RENDERING: ATTENDANCE & GRANULAR PENALTY ENGINE
+   ========================================================================== */
+function renderAttendanceView() {
   const container = document.getElementById('attendance-sessions-container');
   if (!container) return;
 
-  const now = new Date();
-  const currentDay = now.getDay(); // 0 is Sunday
-  const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  // Find active sessions
+  const activeSessions = state.attendanceSessions.filter(s => s.isActive !== false);
 
-  const userLogs = state.attendanceLogs.filter(l => l.userId === state.user?.uid && l.dateKey === getTodayKey());
-  const todayBadge = document.getElementById('user-today-attendance-badge');
-  
-  if (todayBadge) {
-    if (userLogs.length > 0) {
-      const latest = userLogs[0];
-      todayBadge.innerHTML = `
-        <span class="w-2 h-2 rounded-full ${latest.status === 'on_time' ? 'bg-emerald-400' : 'bg-amber-400'}"></span>
-        <span class="${latest.status === 'on_time' ? 'text-emerald-400' : 'text-amber-400'}">${latest.status === 'on_time' ? 'Checked In (On Time)' : `Checked In (${latest.lateMinutes}m Late)`}</span>
-      `;
-    } else {
-      todayBadge.innerHTML = `<span class="w-2 h-2 rounded-full bg-neutral-500"></span> Not Checked In Today`;
-    }
-  }
-
-  if (state.attendanceSessions.length === 0) {
-    container.innerHTML = `<div class="col-span-2 text-center text-xs text-neutral-400 p-6 glass-card rounded-2xl">No attendance sessions configured.</div>`;
+  if (activeSessions.length === 0) {
+    // REQUIREMENT: Render prominent locked state when no session is active!
+    container.innerHTML = `
+      <div class="glass-card rounded-2xl p-8 sm:p-10 text-center border border-white/10 relative overflow-hidden bg-gradient-to-b from-white/[0.02] to-transparent">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-white/[0.04] border border-white/10 flex items-center justify-center text-neutral-400">
+          <i data-lucide="lock" class="w-7 h-7 text-neutral-400"></i>
+        </div>
+        <h3 class="text-base sm:text-lg font-bold text-white">No Active Attendance Session Right Now</h3>
+        <p class="text-xs sm:text-sm text-neutral-400 mt-1.5 max-w-md mx-auto leading-relaxed">
+          Attendance check-in is currently locked. Check-in unlocks automatically when an attendance session is activated by the media administration.
+        </p>
+      </div>
+    `;
+    updateUserTodayAttendanceBadge(null);
+    refreshIcons();
     return;
   }
 
-  container.innerHTML = state.attendanceSessions.map((sess) => {
-    const isToday = sess.scheduledDays ? sess.scheduledDays.includes(currentDay) : true;
-    const hasCheckedIn = userLogs.some(l => l.sessionId === sess.id);
-
-    // Calculate time status
-    const [startH, startM] = (sess.exactStartTime || '09:00').split(':').map(Number);
-    const [endH, endM] = (sess.checkInWindowEnd || '11:00').split(':').map(Number);
-    
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const startMinutes = startH * 60 + startM;
-    const endMinutes = endH * 60 + endM;
-    const graceEndMinutes = startMinutes + (sess.gracePeriodMinutes || 10);
-
-    let statusText = 'Closed';
-    let isWindowOpen = false;
-    let lateMinutes = 0;
-    let calculatedPenalty = 0;
-
-    if (nowMinutes >= startMinutes && nowMinutes <= endMinutes) {
-      isWindowOpen = true;
-      if (nowMinutes <= graceEndMinutes) {
-        statusText = 'On-Time Window Open';
-      } else {
-        lateMinutes = nowMinutes - startMinutes;
-        const penaltyUnit = sess.penaltyUnitMinutes || 5;
-        const penaltyRate = sess.penaltyRatePerUnit || 5;
-        const units = Math.ceil((lateMinutes - (sess.gracePeriodMinutes || 10)) / penaltyUnit);
-        calculatedPenalty = Math.min(units * penaltyRate, sess.maxPenaltyCap || 50);
-        statusText = `Late Window (${lateMinutes}m late, -${calculatedPenalty} pts)`;
-      }
-    } else if (nowMinutes < startMinutes) {
-      statusText = `Starts at ${sess.exactStartTime}`;
+  // Render active session cards
+  container.innerHTML = activeSessions.map(session => {
+    // Check if user already checked in for this session
+    const userLog = state.user ? state.attendanceLogs.find(l => l.sessionId === session.id && l.uid === state.user.uid) : null;
+    if (userLog) {
+      updateUserTodayAttendanceBadge(userLog);
     }
 
+    const startDateTimeStr = session.startDateTime ? new Date(session.startDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '09:00 AM';
+    const endDateTimeStr = session.endDateTime ? new Date(session.endDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '12:00 PM';
+
     return `
-      <div class="glass-card rounded-2xl p-5 border ${isWindowOpen ? 'border-emerald-500/30' : 'border-white/10'} space-y-4">
+      <div class="glass-card rounded-2xl p-5 border border-emerald-500/20 space-y-4">
         <div class="flex items-start justify-between gap-3">
           <div>
-            <div class="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full ${isWindowOpen ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/5 text-neutral-400'} inline-block">
-              ${statusText}
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              <span class="text-xs font-mono uppercase text-emerald-400 font-bold">Active Attendance Session</span>
             </div>
-            <h4 class="text-sm sm:text-base font-bold text-white mt-1.5">${sess.title}</h4>
-            <div class="text-xs text-neutral-400 mt-1 flex items-center gap-3">
-              <span>Time: <strong class="text-neutral-200 font-mono">${sess.exactStartTime} - ${sess.checkInWindowEnd}</strong></span>
-              <span>Grace: <strong class="text-neutral-200 font-mono">${sess.gracePeriodMinutes || 10}m</strong></span>
+            <h3 class="text-base font-bold text-white mt-1">${escapeHtml(session.title)}</h3>
+            <div class="text-xs text-neutral-400 mt-0.5 flex flex-wrap gap-2">
+              <span>Time: ${startDateTimeStr} - ${endDateTimeStr}</span>
+              <span>•</span>
+              <span>Grace: ${session.gracePeriodMinutes || 10} mins</span>
+              <span>•</span>
+              <span>Late Step: -${session.penaltyAmountPerStep || 5} pts / ${session.everyNMinutes || 5}m</span>
             </div>
           </div>
         </div>
 
-        <div class="pt-2 border-t border-white/10 flex items-center justify-between">
-          <div class="text-[11px] text-neutral-400">
-            Penalty: <span class="text-amber-400 font-mono">-${sess.penaltyRatePerUnit || 5} pts / ${sess.penaltyUnitMinutes || 5}m</span>
-          </div>
-
-          <button 
-            class="btn-checkin-session px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              hasCheckedIn 
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 cursor-not-allowed' 
-                : 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-lg shadow-emerald-500/20'
-            }"
-            data-sessid="${sess.id}"
-            ${hasCheckedIn ? 'disabled' : ''}
-          >
-            <i data-lucide="${hasCheckedIn ? 'check' : 'user-check'}" class="w-3.5 h-3.5"></i>
-            <span>${hasCheckedIn ? 'Checked In' : 'One-Tap Check In'}</span>
-          </button>
+        <div class="pt-2">
+          ${userLog ? `
+            <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs">
+              <div class="flex items-center gap-2 text-emerald-400 font-semibold">
+                <i data-lucide="check-circle" class="w-4 h-4"></i>
+                <span>You checked in: ${userLog.status === 'on_time' ? 'On Time' : `Late (${userLog.lateMinutes}m late)`}</span>
+              </div>
+              <span class="font-mono ${userLog.penaltyDeducted > 0 ? 'text-rose-400' : 'text-emerald-400'} font-bold">
+                ${userLog.penaltyDeducted > 0 ? `-${userLog.penaltyDeducted} pts penalty` : '0 penalty'}
+              </span>
+            </div>
+          ` : `
+            <button class="btn-check-in-session w-full py-3 rounded-xl text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-500 transition shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2" data-session-id="${session.id}">
+              <i data-lucide="user-check" class="w-4 h-4"></i>
+              <span>${i18n[state.lang].check_in_now}</span>
+            </button>
+          `}
         </div>
       </div>
     `;
   }).join('');
 
-  container.querySelectorAll('.btn-checkin-session').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!state.user) {
-        showAuthRequiredAlert();
-        return;
-      }
-      const sessId = btn.getAttribute('data-sessid');
-      const sess = state.attendanceSessions.find(s => s.id === sessId);
-      if (sess) performCheckIn(sess);
-    });
+  container.querySelectorAll('.btn-check-in-session').forEach(btn => {
+    btn.onclick = () => {
+      const sessionId = btn.dataset.sessionId;
+      requireAuth(() => processAttendanceCheckIn(sessionId));
+    };
   });
 
   refreshIcons();
+}
+
+async function processAttendanceCheckIn(sessionId) {
+  if (!state.user || !db) return;
+
+  const session = state.attendanceSessions.find(s => s.id === sessionId);
+  if (!session) return;
+
+  // Check if already checked in
+  const existing = state.attendanceLogs.find(l => l.sessionId === session.id && l.uid === state.user.uid);
+  if (existing) {
+    showCustomAlert('Already Checked In', 'You have already recorded your attendance for this session.');
+    return;
+  }
+
+  // EXACT GRANULAR LATE PENALTY FORMULA:
+  // Math.min(maxPenalty, Math.max(minPenalty, Math.ceil(lateMinutes / everyNMinutes) * penaltyAmountPerStep))
+  const now = new Date();
+  const sessionStart = session.startDateTime ? new Date(session.startDateTime) : new Date();
+  const graceMins = Number(session.gracePeriodMinutes) || 10;
+  const cutoffTime = new Date(sessionStart.getTime() + (graceMins * 60 * 1000));
+
+  let lateMinutes = 0;
+  let penalty = 0;
+  let status = 'on_time';
+
+  if (now > cutoffTime) {
+    status = 'late';
+    lateMinutes = Math.floor((now.getTime() - cutoffTime.getTime()) / (60 * 1000));
+    
+    const everyN = Number(session.everyNMinutes) || 5;
+    const stepAmount = Number(session.penaltyAmountPerStep) || 5;
+    const minP = Number(session.minPenalty) || 5;
+    const maxP = Number(session.maxPenalty) || 50;
+
+    const steps = Math.ceil(lateMinutes / everyN);
+    penalty = Math.min(maxP, Math.max(minP, steps * stepAmount));
+  }
+
+  try {
+    // 1. Write attendance log to Firestore
+    await addDoc(collection(db, 'attendance_logs'), {
+      sessionId: session.id,
+      sessionTitle: session.title,
+      uid: state.user.uid,
+      userName: state.user.displayName,
+      userEmail: state.user.email,
+      userPhoto: state.user.photoURL,
+      checkInTime: new Date().toISOString(),
+      lateMinutes,
+      penaltyDeducted: penalty,
+      status
+    });
+
+    // 2. Increment total penalties on user record if late
+    if (penalty > 0) {
+      await updateDoc(doc(db, 'users', state.user.uid), {
+        totalPenalties: increment(penalty)
+      });
+    }
+
+    // 3. Post notification
+    await addDoc(collection(db, 'notifications'), {
+      title: 'Attendance Check-in',
+      message: `${state.user.displayName} checked in: ${status === 'on_time' ? 'On Time' : `Late by ${lateMinutes} mins (-${penalty} pts)`}`,
+      type: status === 'on_time' ? 'info' : 'warning',
+      createdAt: serverTimestamp()
+    });
+
+    if (status === 'on_time') {
+      showToast('Checked in successfully! On time badge recorded.', 'success');
+    } else {
+      showToast(`Checked in! You were ${lateMinutes}m late (-${penalty} pts penalty).`, 'error');
+    }
+
+    renderAttendanceView();
+  } catch (err) {
+    console.error('Attendance check-in error:', err);
+    showCustomAlert('Error', 'Failed to record attendance. Please check network.');
+  }
 }
 
 function renderAttendanceLogs() {
@@ -1138,160 +1071,192 @@ function renderAttendanceLogs() {
   const countEl = document.getElementById('attendance-log-count');
   if (!container) return;
 
-  const todayKey = getTodayKey();
-  const todayLogs = state.attendanceLogs.filter(l => l.dateKey === todayKey);
-  
-  if (countEl) countEl.textContent = `${todayLogs.length} Check-ins Today`;
+  if (countEl) countEl.textContent = `${state.attendanceLogs.length} Check-ins`;
 
-  if (todayLogs.length === 0) {
-    container.innerHTML = `<div class="text-center text-xs text-neutral-500 py-6">No check-ins recorded today yet.</div>`;
+  if (state.attendanceLogs.length === 0) {
+    container.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No attendance records logged today yet.</div>`;
     return;
   }
 
-  container.innerHTML = todayLogs.map((log) => {
-    const isLate = log.status === 'late';
+  // Sort descending by check-in time
+  const sorted = [...state.attendanceLogs].sort((a, b) => new Date(b.checkInTime) - new Date(a.checkInTime));
+
+  container.innerHTML = sorted.map(log => {
+    const timeStr = log.checkInTime ? new Date(log.checkInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    const isOnTime = log.status === 'on_time';
     return `
       <div class="py-2.5 flex items-center justify-between gap-3 text-xs">
-        <div class="flex items-center gap-2.5 truncate">
-          <div class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-white font-bold text-[10px]">
-            ${log.userDisplayName ? log.userDisplayName.charAt(0).toUpperCase() : 'M'}
-          </div>
-          <div class="truncate">
-            <div class="font-bold text-white truncate">${log.userDisplayName}</div>
-            <div class="text-[10px] text-neutral-400 font-mono">${log.sessionTitle || 'Service'} • ${new Date(log.checkInTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+        <div class="flex items-center gap-2.5">
+          <img src="${log.userPhoto || './image_ad59c0.jpg'}" alt="Avatar" class="w-8 h-8 rounded-full object-cover border border-white/10" />
+          <div>
+            <div class="font-bold text-white">${escapeHtml(log.userName || 'Member')}</div>
+            <div class="text-[11px] text-neutral-400">${escapeHtml(log.sessionTitle || 'Session')} • ${timeStr}</div>
           </div>
         </div>
-
-        <div class="text-right flex-shrink-0">
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${isLate ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}">
-            ${isLate ? `Late (-${log.penaltyPointsApplied} pts)` : 'On Time (+10 pts)'}
+        <div class="text-right">
+          <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${isOnTime ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'}">
+            ${isOnTime ? 'On Time' : `Late (-${log.penaltyDeducted || 0} pts)`}
           </span>
         </div>
       </div>
     `;
   }).join('');
+
+  refreshIcons();
 }
 
-// 3. Render Gamified Leaderboard
+function updateUserTodayAttendanceBadge(log) {
+  const badge = document.getElementById('user-today-attendance-badge');
+  if (!badge) return;
+
+  if (!log) {
+    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-neutral-500"></span> Not Checked In`;
+    badge.className = 'font-bold text-neutral-400 mt-1 flex items-center gap-1.5';
+  } else if (log.status === 'on_time') {
+    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Checked In (On Time)`;
+    badge.className = 'font-bold text-emerald-400 mt-1 flex items-center gap-1.5';
+  } else {
+    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Checked In (Late: -${log.penaltyDeducted} pts)`;
+    badge.className = 'font-bold text-rose-400 mt-1 flex items-center gap-1.5';
+  }
+}
+
+/* ==========================================================================
+   UI RENDERING: LEADERBOARD (ZERO-POINTS PODIUM FILTER)
+   ========================================================================== */
 function renderLeaderboard() {
-  const fullList = document.getElementById('leaderboard-full-list');
-  if (!fullList) return;
+  const listEl = document.getElementById('leaderboard-list');
+  const countEl = document.getElementById('leaderboard-total-count');
 
-  // Aggregate user points from members and submissions
-  const memberPointsMap = new Map();
-  const memberTasksMap = new Map();
+  // Compute members with points
+  // Either from Firestore users collection or aggregated from submissions
+  let memberMap = new Map();
 
-  // Populate from known members
-  state.members.forEach((m) => {
-    memberPointsMap.set(m.uid, {
+  // Populate from registered users
+  state.members.forEach(m => {
+    memberMap.set(m.uid, {
       uid: m.uid,
       displayName: m.displayName || 'Member',
       photoURL: m.photoURL || './image_ad59c0.jpg',
       points: m.points || 0,
-      completionsCount: 0
+      totalPenalties: m.totalPenalties || 0,
+      tasksCount: 0
     });
   });
 
-  // Aggregate submissions
-  state.submissions.forEach((sub) => {
-    const existing = memberPointsMap.get(sub.userId) || {
-      uid: sub.userId,
-      displayName: sub.userDisplayName || 'Team Member',
-      photoURL: sub.userPhotoURL || './image_ad59c0.jpg',
-      points: 0,
-      completionsCount: 0
-    };
-    existing.completionsCount += 1;
-    // ensure points include pointsEarned if member record was not yet synchronized
-    if (!memberPointsMap.has(sub.userId)) {
-      existing.points += (sub.pointsEarned || 0);
+  // Calculate task counts from submissions
+  state.submissions.forEach(s => {
+    if (memberMap.has(s.uid)) {
+      memberMap.get(s.uid).tasksCount += 1;
+    } else {
+      memberMap.set(s.uid, {
+        uid: s.uid,
+        displayName: s.userName || 'Member',
+        photoURL: s.userPhoto || './image_ad59c0.jpg',
+        points: s.pointsEarned || 5,
+        totalPenalties: 0,
+        tasksCount: 1
+      });
     }
-    memberPointsMap.set(sub.userId, existing);
   });
 
-  // Ensure current user is in map
-  if (state.user && !memberPointsMap.has(state.user.uid)) {
-    memberPointsMap.set(state.user.uid, {
-      uid: state.user.uid,
-      displayName: state.user.displayName,
-      photoURL: state.user.photoURL || './image_ad59c0.jpg',
-      points: state.user.points || 0,
-      completionsCount: state.submissions.filter(s => s.userId === state.user.uid).length
-    });
-  }
-
-  // Sort by points descending
-  const ranked = Array.from(memberPointsMap.values())
-    .filter(m => m.points > 0 || m.completionsCount > 0) // EXCLUDE ZERO POINT MEMBERS FROM TOP RANKINGS
+  const allRanked = Array.from(memberMap.values())
     .sort((a, b) => b.points - a.points);
 
-  // Update Top 3 Podium
-  const p1 = ranked[0];
-  const p2 = ranked[1];
-  const p3 = ranked[2];
+  if (countEl) countEl.textContent = `${allRanked.length} Members`;
 
-  if (p1) {
-    document.getElementById('podium-1-name').textContent = p1.displayName;
-    document.getElementById('podium-1-pts').textContent = `${p1.points} pts`;
-    document.getElementById('podium-1-tasks').textContent = `${p1.completionsCount} quotas`;
-    document.getElementById('podium-1-img').src = p1.photoURL || './image_ad59c0.jpg';
-  }
-  if (p2) {
-    document.getElementById('podium-2-name').textContent = p2.displayName;
-    document.getElementById('podium-2-pts').textContent = `${p2.points} pts`;
-    document.getElementById('podium-2-tasks').textContent = `${p2.completionsCount} quotas`;
-    document.getElementById('podium-2-img').src = p2.photoURL || './image_ad59c0.jpg';
-  }
-  if (p3) {
-    document.getElementById('podium-3-name').textContent = p3.displayName;
-    document.getElementById('podium-3-pts').textContent = `${p3.points} pts`;
-    document.getElementById('podium-3-tasks').textContent = `${p3.completionsCount} quotas`;
-    document.getElementById('podium-3-img').src = p3.photoURL || './image_ad59c0.jpg';
-  }
+  // REQUIREMENT: Zero-Points Filter for Podium (only members with > 0 points appear on podium)
+  const podiumEligible = allRanked.filter(m => m.points > 0);
 
-  if (ranked.length === 0) {
-    fullList.innerHTML = `<div class="text-center text-xs text-neutral-400 py-8">No active scores recorded yet. Complete tasks to claim rank #1!</div>`;
-    return;
-  }
+  const first = podiumEligible[0] || null;
+  const second = podiumEligible[1] || null;
+  const third = podiumEligible[2] || null;
 
-  fullList.innerHTML = ranked.map((m, index) => {
-    const rank = index + 1;
-    const isMe = m.uid === state.user?.uid;
-    const rankBadge = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
+  updatePodiumSlot(1, first);
+  updatePodiumSlot(2, second);
+  updatePodiumSlot(3, third);
 
-    return `
-      <div class="py-3 px-3 rounded-xl flex items-center justify-between gap-3 transition ${isMe ? 'bg-[#0A84FF]/10 border border-[#0A84FF]/30' : 'hover:bg-white/[0.02]'}">
-        <div class="flex items-center gap-3">
-          <span class="w-7 text-center font-bold font-mono text-sm ${rank <= 3 ? 'text-lg' : 'text-neutral-400'}">${rankBadge}</span>
-          <img src="${m.photoURL || './image_ad59c0.jpg'}" alt="${m.displayName}" class="w-8 h-8 rounded-full object-cover border border-white/20" onerror="this.src='./image_ad59c0.jpg'" />
-          <div>
-            <div class="text-xs font-bold text-white flex items-center gap-1.5">
-              <span>${m.displayName}</span>
-              ${isMe ? `<span class="text-[9px] px-1.5 py-0.2 rounded bg-[#0A84FF] text-white">YOU</span>` : ''}
+  // Full rankings list
+  if (listEl) {
+    if (allRanked.length === 0) {
+      listEl.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No members registered yet.</div>`;
+    } else {
+      listEl.innerHTML = allRanked.map((member, index) => {
+        const rank = index + 1;
+        const isCurrentUser = state.user && state.user.uid === member.uid;
+        return `
+          <div class="p-3.5 flex items-center justify-between gap-3 text-xs ${isCurrentUser ? 'bg-[#0A84FF]/10 border-l-2 border-[#0A84FF]' : 'hover:bg-white/[0.02]'} transition">
+            <div class="flex items-center gap-3">
+              <span class="w-6 text-center font-mono font-bold ${rank <= 3 ? 'text-[#F59E0B]' : 'text-neutral-400'}">
+                #${rank}
+              </span>
+              <img src="${member.photoURL || './image_ad59c0.jpg'}" alt="Avatar" class="w-8 h-8 rounded-full object-cover border border-white/10" />
+              <div>
+                <div class="font-bold text-white flex items-center gap-1.5">
+                  <span>${escapeHtml(member.displayName)}</span>
+                  ${isCurrentUser ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-[#0A84FF]/30 text-[#0A84FF] font-mono">YOU</span>' : ''}
+                </div>
+                <div class="text-[11px] text-neutral-400">${member.tasksCount || 0} completed quotas</div>
+              </div>
             </div>
-            <div class="text-[10px] text-neutral-400 font-mono">${m.completionsCount} tasks completed</div>
+            <div class="text-right">
+              <div class="font-mono font-extrabold text-[#F59E0B] text-sm">${member.points || 0} pts</div>
+              ${member.totalPenalties > 0 ? `<div class="text-[10px] text-rose-400 font-mono">-${member.totalPenalties} penalties</div>` : ''}
+            </div>
           </div>
-        </div>
+        `;
+      }).join('');
+    }
+  }
 
-        <div class="text-right">
-          <span class="text-xs sm:text-sm font-extrabold font-mono text-[#F59E0B]">${m.points} pts</span>
-        </div>
-      </div>
-    `;
-  }).join('');
+  // Update current user rank in profile view
+  if (state.user) {
+    const userIndex = allRanked.findIndex(m => m.uid === state.user.uid);
+    const rankEl = document.getElementById('profile-stat-rank');
+    if (rankEl) rankEl.textContent = userIndex !== -1 ? `#${userIndex + 1}` : '--';
+  }
 }
 
-// 4. Render Notifications View
+function updatePodiumSlot(rankNum, member) {
+  const nameEl = document.getElementById(`podium-${rankNum}-name`);
+  const ptsEl = document.getElementById(`podium-${rankNum}-pts`);
+  const tasksEl = document.getElementById(`podium-${rankNum}-tasks`);
+  const imgEl = document.getElementById(`podium-${rankNum}-img`);
+
+  if (!nameEl) return;
+
+  if (member && member.points > 0) {
+    nameEl.textContent = member.displayName;
+    ptsEl.textContent = `${member.points} pts`;
+    if (tasksEl) tasksEl.textContent = `${member.tasksCount || 0} tasks`;
+    if (imgEl && member.photoURL) imgEl.src = member.photoURL;
+  } else {
+    nameEl.textContent = 'Vacant';
+    ptsEl.textContent = '0 pts';
+    if (tasksEl) tasksEl.textContent = '0 tasks';
+    if (imgEl) imgEl.src = './image_ad59c0.jpg';
+  }
+}
+
+/* ==========================================================================
+   UI RENDERING: NOTIFICATIONS & BROADCASTS
+   ========================================================================== */
 function renderNotifications() {
-  const container = document.getElementById('notifications-list');
+  const container = document.getElementById('notifications-container');
   const badge = document.getElementById('header-unread-badge');
   const dot = document.getElementById('tab-unread-dot');
   if (!container) return;
 
-  const unreadCount = state.notifications.filter(n => !n.read).length;
+  // Filter: Broadcasts or direct notifications matching user's UID
+  const list = state.notifications.filter(n => {
+    if (!n.targetUid) return true; // Global
+    return state.user && n.targetUid === state.user.uid; // Direct
+  });
+
+  const unreadCount = list.filter(n => !n.read).length;
   if (badge) {
     if (unreadCount > 0) {
-      badge.textContent = unreadCount;
+      badge.textContent = unreadCount > 9 ? '9+' : unreadCount;
       badge.classList.remove('hidden');
     } else {
       badge.classList.add('hidden');
@@ -1302,23 +1267,32 @@ function renderNotifications() {
     else dot.classList.add('hidden');
   }
 
-  if (state.notifications.length === 0) {
-    container.innerHTML = `<div class="p-8 text-center glass-card rounded-2xl text-xs text-neutral-500">No new announcements or alerts at this time.</div>`;
+  if (list.length === 0) {
+    container.innerHTML = `<div class="p-8 text-center text-xs text-neutral-400 glass-card rounded-2xl">No notifications or updates right now.</div>`;
     return;
   }
 
-  container.innerHTML = state.notifications.map((n) => {
+  container.innerHTML = list.map(notif => {
+    let icon = 'bell';
+    let iconClass = 'text-[#0A84FF]';
+    if (notif.type === 'reward') { icon = 'award'; iconClass = 'text-[#F59E0B]'; }
+    if (notif.type === 'warning') { icon = 'alert-triangle'; iconClass = 'text-rose-400'; }
+
+    const timeStr = notif.createdAt?.seconds 
+      ? new Date(notif.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })
+      : 'Just now';
+
     return `
-      <div class="glass-card rounded-2xl p-4 flex items-start justify-between gap-3 border ${n.read ? 'border-white/5 opacity-80' : 'border-[#0A84FF]/30'}">
-        <div class="flex items-start gap-3">
-          <div class="w-9 h-9 rounded-full bg-[#0A84FF]/10 text-[#0A84FF] flex items-center justify-center flex-shrink-0 mt-0.5">
-            <i data-lucide="bell" class="w-4 h-4"></i>
+      <div class="glass-card rounded-2xl p-4 flex items-start gap-3 text-xs">
+        <div class="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0 ${iconClass}">
+          <i data-lucide="${icon}" class="w-4 h-4"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="font-bold text-white text-xs sm:text-sm truncate">${escapeHtml(notif.title)}</h4>
+            <span class="text-[10px] text-neutral-500 font-mono">${timeStr}</span>
           </div>
-          <div>
-            <h4 class="text-xs sm:text-sm font-bold text-white">${n.title}</h4>
-            <p class="text-xs text-neutral-300 mt-0.5 leading-relaxed">${n.body}</p>
-            <div class="text-[10px] text-neutral-500 font-mono mt-1.5">${formatRelativeTime(n.createdAt)}</div>
-          </div>
+          <p class="text-neutral-300 mt-1 leading-relaxed">${escapeHtml(notif.message)}</p>
         </div>
       </div>
     `;
@@ -1327,927 +1301,1351 @@ function renderNotifications() {
   refreshIcons();
 }
 
-// 5. Render Profile Submissions History
-function renderProfileHistory() {
-  const container = document.getElementById('profile-history-list');
-  if (!container) return;
+/* ==========================================================================
+   UI RENDERING: PROFILE VIEW
+   ========================================================================== */
+function updateProfileUI() {
+  const guestCard = document.getElementById('drawer-guest-card');
+  const profileCard = document.getElementById('drawer-profile-card');
+  const signOutBtn = document.getElementById('drawer-btn-signout');
 
-  const mySubs = state.submissions.filter(s => s.userId === state.user?.uid);
-  mySubs.sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+  const avatarEl = document.getElementById('drawer-user-avatar');
+  const nameEl = document.getElementById('drawer-user-name');
+  const emailEl = document.getElementById('drawer-user-email');
+  const pointsEl = document.getElementById('drawer-user-points');
+  const roleEl = document.getElementById('drawer-user-role');
 
-  const countEl = document.getElementById('prof-stat-completed');
-  if (countEl) countEl.textContent = mySubs.length;
+  const viewAvatar = document.getElementById('profile-view-avatar');
+  const viewName = document.getElementById('profile-view-name');
+  const viewEmail = document.getElementById('profile-view-email');
+  const viewRole = document.getElementById('profile-view-role');
+  const statPoints = document.getElementById('profile-stat-points');
+  const statCompleted = document.getElementById('profile-stat-completed');
+  const statPenalties = document.getElementById('profile-stat-penalties');
+
+  if (!state.user) {
+    // Guest Mode UI
+    if (guestCard) guestCard.classList.remove('hidden');
+    if (profileCard) profileCard.classList.add('hidden');
+    if (signOutBtn) signOutBtn.classList.add('hidden');
+
+    if (viewName) viewName.textContent = 'Guest User (زائر)';
+    if (viewEmail) viewEmail.textContent = 'Read-Only Mode • Sign in to save progress';
+    if (viewRole) viewRole.textContent = 'GUEST';
+    if (statPoints) statPoints.textContent = '0';
+    if (statCompleted) statCompleted.textContent = '0';
+    if (statPenalties) statPenalties.textContent = '0 pts';
+  } else {
+    // Authenticated User UI
+    if (guestCard) guestCard.classList.add('hidden');
+    if (profileCard) profileCard.classList.remove('hidden');
+    if (signOutBtn) signOutBtn.classList.remove('hidden');
+
+    const photo = state.user.photoURL || './image_ad59c0.jpg';
+    if (avatarEl) avatarEl.src = photo;
+    if (nameEl) nameEl.textContent = state.user.displayName;
+    if (emailEl) emailEl.textContent = state.user.email;
+    if (pointsEl) pointsEl.textContent = `${state.user.points || 0} pts`;
+    if (roleEl) roleEl.textContent = state.user.isAdmin ? 'ADMIN' : 'MEMBER';
+
+    if (viewAvatar) viewAvatar.src = photo;
+    if (viewName) viewName.textContent = state.user.displayName;
+    if (viewEmail) viewEmail.textContent = state.user.email;
+    if (viewRole) viewRole.textContent = state.user.isAdmin ? '👑 ADMIN' : 'MEMBER';
+    if (statPoints) statPoints.textContent = state.user.points || 0;
+    if (statPenalties) statPenalties.textContent = `${state.user.totalPenalties || 0} pts`;
+
+    renderProfileSubmissions();
+  }
+
+  updateHeroStats();
+}
+
+function renderProfileSubmissions() {
+  const container = document.getElementById('profile-submissions-list');
+  const statCompleted = document.getElementById('profile-stat-completed');
+  if (!container || !state.user) return;
+
+  const mySubs = state.submissions.filter(s => s.uid === state.user.uid);
+  if (statCompleted) statCompleted.textContent = mySubs.length;
 
   if (mySubs.length === 0) {
-    container.innerHTML = `<div class="text-center text-xs text-neutral-500 py-6">You haven't submitted any tasks yet. Head over to the Tasks tab to get started!</div>`;
+    container.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">You haven't completed any quotas yet. Browse the Tasks tab to start!</div>`;
     return;
   }
 
-  container.innerHTML = mySubs.map((sub) => {
+  container.innerHTML = mySubs.map(s => `
+    <div class="py-2.5 flex items-center justify-between text-xs">
+      <div>
+        <div class="font-bold text-white">${escapeHtml(s.taskTitle || 'Task')}</div>
+        <div class="text-[11px] text-neutral-400">${s.taskCategory || 'General'} • ${s.minutesSpent || 30} mins spent</div>
+      </div>
+      <span class="font-mono font-bold text-[#F59E0B]">+${s.pointsEarned || 5} pts</span>
+    </div>
+  `).join('');
+
+  refreshIcons();
+}
+
+function updateHeroStats() {
+  const activeCountEl = document.getElementById('stat-active-tasks-count');
+  const completedTodayEl = document.getElementById('stat-completed-today-count');
+  const myPointsEl = document.getElementById('stat-user-points');
+  const heroGreeting = document.getElementById('hero-greeting');
+
+  if (activeCountEl) activeCountEl.textContent = state.tasks.length;
+  if (myPointsEl) myPointsEl.textContent = state.user ? state.user.points || 0 : 0;
+  if (completedTodayEl) {
+    // Count today's completions
+    const today = new Date().toDateString();
+    const todayDone = state.submissions.filter(s => {
+      if (!s.createdAt?.seconds) return false;
+      return new Date(s.createdAt.seconds * 1000).toDateString() === today;
+    }).length;
+    completedTodayEl.textContent = todayDone;
+  }
+  if (heroGreeting) {
+    if (state.user) {
+      heroGreeting.textContent = `Welcome back, ${state.user.displayName}!`;
+    } else {
+      heroGreeting.textContent = `Welcome to COC Media Hub`;
+    }
+  }
+}
+
+/* ==========================================================================
+   ADMIN HUB: TASKS MANAGER (CRUD & SUBMISSIONS)
+   ========================================================================== */
+function renderAdminTasks() {
+  const tbody = document.getElementById('admin-tasks-tbody');
+  if (!tbody) return;
+
+  if (state.tasks.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-neutral-400">No tasks created yet. Click "+ Add New Task" above.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = state.tasks.map(t => {
+    const cat = state.categories.find(c => c.id === t.category) || { nameEn: t.category || 'General' };
+    const subsCount = state.submissions.filter(s => s.taskId === t.id).length;
+    const endStr = t.endDateTime ? new Date(t.endDateTime).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'None';
+
     return `
-      <div class="py-2.5 flex items-center justify-between gap-3 text-xs">
+      <tr class="border-b border-white/5 hover:bg-white/[0.02]">
+        <td class="p-3 font-medium text-white">${escapeHtml(t.title)}</td>
+        <td class="p-3 text-neutral-300">${escapeHtml(cat.nameEn)}</td>
+        <td class="p-3 font-mono font-bold text-[#F59E0B]">${t.points || 5} pts</td>
+        <td class="p-3 text-neutral-400 font-mono text-[11px]">${endStr}</td>
+        <td class="p-3 text-right space-x-1">
+          <button class="btn-admin-edit-task px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[#0A84FF] text-[11px] font-semibold" data-id="${t.id}">Edit</button>
+          <button class="btn-admin-delete-task px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px] font-semibold" data-id="${t.id}">Delete</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  tbody.querySelectorAll('.btn-admin-edit-task').forEach(btn => {
+    btn.onclick = () => openAdminTaskForm(btn.dataset.id);
+  });
+  tbody.querySelectorAll('.btn-admin-delete-task').forEach(btn => {
+    btn.onclick = () => deleteAdminTask(btn.dataset.id);
+  });
+}
+
+function openAdminTaskForm(taskId = null) {
+  const container = document.getElementById('admin-task-form-container');
+  const titleEl = document.getElementById('admin-task-form-title');
+  const form = document.getElementById('form-manage-task');
+
+  const idInput = document.getElementById('input-task-id');
+  const titleInput = document.getElementById('input-task-title');
+  const descInput = document.getElementById('input-task-desc');
+  const catSelect = document.getElementById('select-task-category');
+  const pointsInput = document.getElementById('input-task-points');
+  const quotaSelect = document.getElementById('select-task-quota');
+  const linkInput = document.getElementById('input-task-link');
+  const startInput = document.getElementById('input-task-start-datetime');
+  const endInput = document.getElementById('input-task-end-datetime');
+  const durationInput = document.getElementById('input-task-duration');
+
+  populateTaskCategorySelect();
+
+  if (taskId) {
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    titleEl.textContent = 'Edit Task Configuration';
+    idInput.value = task.id;
+    titleInput.value = task.title || '';
+    descInput.value = task.description || '';
+    catSelect.value = task.category || '';
+    // Points input is empty by default, placeholder="5"
+    pointsInput.value = task.points || '';
+    quotaSelect.value = task.quotaType || 'daily';
+    linkInput.value = task.link || '';
+    startInput.value = task.startDateTime || '';
+    endInput.value = task.endDateTime || '';
+    durationInput.value = task.duration || '';
+  } else {
+    titleEl.textContent = 'New Task Configuration';
+    form.reset();
+    idInput.value = '';
+    // Empty points input defaulting to 5
+    pointsInput.value = '';
+  }
+
+  container.classList.remove('hidden');
+}
+
+async function handleAdminTaskSave(e) {
+  e.preventDefault();
+  if (!db) return;
+
+  const id = document.getElementById('input-task-id').value;
+  const title = document.getElementById('input-task-title').value.trim();
+  const desc = document.getElementById('input-task-desc').value.trim();
+  const cat = document.getElementById('select-task-category').value;
+  const rawPoints = document.getElementById('input-task-points').value;
+  // Fallback to 5 if empty!
+  const points = Number(rawPoints) || 5;
+  const quota = document.getElementById('select-task-quota').value;
+  const link = document.getElementById('input-task-link').value.trim();
+  const startDateTime = document.getElementById('input-task-start-datetime').value;
+  const endDateTime = document.getElementById('input-task-end-datetime').value;
+  const duration = document.getElementById('input-task-duration').value.trim();
+  const enableComment = document.getElementById('check-enable-comment').checked;
+  const enableQuestion = document.getElementById('check-enable-question').checked;
+  const questionPrompt = document.getElementById('input-question-prompt').value.trim();
+
+  const taskData = {
+    title,
+    description: desc,
+    category: cat,
+    points,
+    quotaType: quota,
+    link,
+    startDateTime,
+    endDateTime,
+    duration,
+    enableComment,
+    enableQuestion,
+    questionPrompt,
+    updatedAt: serverTimestamp()
+  };
+
+  try {
+    if (id) {
+      await updateDoc(doc(db, 'tasks', id), taskData);
+      showToast('Task updated in Firestore!', 'success');
+    } else {
+      taskData.createdAt = serverTimestamp();
+      await addDoc(collection(db, 'tasks'), taskData);
+      showToast('New task published to Firestore!', 'success');
+    }
+    document.getElementById('admin-task-form-container').classList.add('hidden');
+  } catch (err) {
+    console.error('Save task error:', err);
+    showCustomAlert('Error', 'Failed to save task to Firestore.', { type: 'error' });
+  }
+}
+
+async function deleteAdminTask(taskId) {
+  const confirmed = await showCustomConfirm('Delete Task', 'Are you sure you want to delete this task? This action cannot be undone.');
+  if (!confirmed || !db) return;
+
+  try {
+    await deleteDoc(doc(db, 'tasks', taskId));
+    showToast('Task deleted successfully.');
+  } catch (err) {
+    console.error('Delete task error:', err);
+    showCustomAlert('Error', 'Could not delete task.', { type: 'error' });
+  }
+}
+
+/* ==========================================================================
+   ADMIN HUB: ATTENDANCE SESSIONS & LIVE LOGS (WAIVER/EDIT)
+   ========================================================================== */
+function renderAdminSessions() {
+  const container = document.getElementById('admin-sessions-list');
+  if (!container) return;
+
+  if (state.attendanceSessions.length === 0) {
+    container.innerHTML = `<div class="p-4 text-center text-xs text-neutral-400">No scheduled sessions configured. Use the form above to add one.</div>`;
+    return;
+  }
+
+  container.innerHTML = state.attendanceSessions.map(session => {
+    const isActive = session.isActive !== false;
+    const startStr = session.startDateTime ? new Date(session.startDateTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
+    const endStr = session.endDateTime ? new Date(session.endDateTime).toLocaleString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A';
+
+    return `
+      <div class="p-3.5 rounded-xl glass-card border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
         <div>
-          <div class="font-bold text-white">${sub.taskTitle}</div>
-          <div class="text-[10px] text-neutral-400 font-mono">${formatRelativeTime(sub.completedAt)} • ${sub.actualDurationMinutes || 30} mins spent</div>
-          ${sub.comment ? `<div class="text-[11px] text-neutral-300 italic mt-0.5">"${sub.comment}"</div>` : ''}
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-white text-sm">${escapeHtml(session.title)}</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isActive ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-neutral-500/20 text-neutral-400 border border-neutral-500/30'}">
+              ${isActive ? 'Active / Open' : 'Closed'}
+            </span>
+          </div>
+          <div class="text-neutral-400 text-[11px] mt-1 space-x-2">
+            <span>Window: ${startStr} - ${endStr}</span>
+            <span>• Grace: ${session.gracePeriodMinutes || 10}m</span>
+            <span>• Deduction: -${session.penaltyAmountPerStep || 5}pts / ${session.everyNMinutes || 5}m</span>
+          </div>
         </div>
-        <div class="text-right flex-shrink-0">
-          <span class="font-mono font-bold text-[#F59E0B] text-xs">+${sub.pointsEarned} pts</span>
+
+        <div class="flex items-center gap-1.5 self-end sm:self-center">
+          <button class="btn-toggle-session-active px-2.5 py-1.5 rounded-lg text-xs font-semibold ${isActive ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}" data-id="${session.id}" data-active="${isActive}">
+            ${isActive ? 'Close Session' : 'Activate'}
+          </button>
+          <button class="btn-edit-session px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white font-semibold" data-id="${session.id}">
+            Edit
+          </button>
+          <button class="btn-delete-session px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold" data-id="${session.id}">
+            Delete
+          </button>
         </div>
       </div>
     `;
   }).join('');
+
+  container.querySelectorAll('.btn-toggle-session-active').forEach(btn => {
+    btn.onclick = () => toggleSessionActive(btn.dataset.id, btn.dataset.active === 'true');
+  });
+  container.querySelectorAll('.btn-edit-session').forEach(btn => {
+    btn.onclick = () => openEditSessionForm(btn.dataset.id);
+  });
+  container.querySelectorAll('.btn-delete-session').forEach(btn => {
+    btn.onclick = () => deleteSession(btn.dataset.id);
+  });
 }
 
-// 6. Admin Panel Renderers
-function renderAdminTasks() {
-  const tbody = document.getElementById('admin-tasks-tbody');
-  const catSelect = document.getElementById('select-task-category');
-  if (catSelect) {
-    catSelect.innerHTML = state.categories.map(c => `<option value="${c.id}">${state.lang === 'ar' ? c.nameAr : c.nameEn}</option>`).join('');
+function renderAdminAttendanceLogs() {
+  const tbody = document.getElementById('admin-attendance-logs-tbody');
+  const countEl = document.getElementById('admin-attendance-log-count');
+  if (!tbody) return;
+
+  if (countEl) countEl.textContent = `${state.attendanceLogs.length} logs`;
+
+  if (state.attendanceLogs.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-neutral-400">No attendance records logged yet.</td></tr>`;
+    return;
   }
 
-  if (!tbody) return;
-  tbody.innerHTML = state.tasks.map((t) => {
+  tbody.innerHTML = state.attendanceLogs.map(log => {
+    const timeStr = log.checkInTime ? new Date(log.checkInTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
+    const isOnTime = log.status === 'on_time';
+
     return `
-      <tr class="hover:bg-white/[0.02]">
-        <td class="p-3 font-semibold text-white">${t.title}</td>
-        <td class="p-3 text-neutral-400 font-mono">${t.categoryId}</td>
-        <td class="p-3 text-[#F59E0B] font-mono font-bold">+${t.points}</td>
-        <td class="p-3 text-neutral-300">${t.quotaType || 'daily'}</td>
-        <td class="p-3 text-right">
-          <button class="btn-admin-delete-task text-rose-400 hover:text-white p-1" data-taskid="${t.id}" title="Delete Task">
-            <i data-lucide="trash-2" class="w-4 h-4"></i>
+      <tr class="border-b border-white/5 hover:bg-white/[0.02]">
+        <td class="p-3">
+          <div class="font-semibold text-white">${escapeHtml(log.userName || 'Member')}</div>
+          <div class="text-[10px] text-neutral-400">${escapeHtml(log.userEmail || '')}</div>
+        </td>
+        <td class="p-3 text-neutral-300">${escapeHtml(log.sessionTitle || 'Session')}</td>
+        <td class="p-3 font-mono text-[11px] text-neutral-400">${timeStr}</td>
+        <td class="p-3">
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isOnTime ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
+            ${isOnTime ? 'On Time' : `${log.lateMinutes || 0}m late`}
+          </span>
+        </td>
+        <td class="p-3 font-mono font-bold ${log.penaltyDeducted > 0 ? 'text-rose-400' : 'text-emerald-400'}">
+          ${log.penaltyDeducted > 0 ? `-${log.penaltyDeducted} pts` : '0'}
+        </td>
+        <td class="p-3 text-right space-x-1">
+          <button class="btn-edit-attendance-log px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-[#0A84FF] text-[11px]" data-id="${log.id}">
+            Edit
+          </button>
+          ${log.penaltyDeducted > 0 ? `
+            <button class="btn-waive-penalty px-2 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[11px]" data-id="${log.id}" data-uid="${log.uid}" data-penalty="${log.penaltyDeducted}">
+              Waive
+            </button>
+          ` : ''}
+          <button class="btn-delete-attendance-log px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px]" data-id="${log.id}">
+            Delete
           </button>
         </td>
       </tr>
     `;
   }).join('');
 
-  tbody.querySelectorAll('.btn-admin-delete-task').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const taskId = btn.getAttribute('data-taskid');
-      showCustomConfirm("Are you sure you want to permanently delete this task?", async () => {
-        if (db) {
-          try {
-            await deleteDoc(doc(db, 'tasks', taskId));
-          } catch (e) {
-            console.warn("Delete task local fallback:", e.message);
-            state.tasks = state.tasks.filter(t => t.id !== taskId);
-            renderTasks();
-            renderAdminTasks();
-          }
-        } else {
-          state.tasks = state.tasks.filter(t => t.id !== taskId);
-          renderTasks();
-          renderAdminTasks();
-        }
-        showCustomAlert("Task deleted.", 'info');
-      });
-    });
+  tbody.querySelectorAll('.btn-edit-attendance-log').forEach(btn => {
+    btn.onclick = () => openEditLogModal(btn.dataset.id);
   });
-
-  refreshIcons();
+  tbody.querySelectorAll('.btn-waive-penalty').forEach(btn => {
+    btn.onclick = () => waivePenaltyAction(btn.dataset.id, btn.dataset.uid, Number(btn.dataset.penalty));
+  });
+  tbody.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
+    btn.onclick = () => deleteAttendanceLog(btn.dataset.id);
+  });
 }
 
-function renderAdminSessions() {
-  const list = document.getElementById('admin-sessions-list');
-  if (!list) return;
-  list.innerHTML = state.attendanceSessions.map((s) => {
-    return `
-      <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-between text-xs">
-        <div>
-          <div class="font-bold text-white">${s.title}</div>
-          <div class="text-[10px] text-neutral-400 font-mono">Time: ${s.exactStartTime} - ${s.checkInWindowEnd} | Grace: ${s.gracePeriodMinutes}m | Penalty: -${s.penaltyRatePerUnit} pts</div>
-        </div>
-        <button class="btn-admin-delete-session text-rose-400 hover:text-white p-1" data-sessid="${s.id}">
-          <i data-lucide="trash" class="w-4 h-4"></i>
-        </button>
-      </div>
-    `;
-  }).join('');
+async function handleAdminSessionSave(e) {
+  e.preventDefault();
+  if (!db) return;
 
-  list.querySelectorAll('.btn-admin-delete-session').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const sessId = btn.getAttribute('data-sessid');
-      showCustomConfirm("Delete this attendance session?", async () => {
-        if (db) {
-          try {
-            await deleteDoc(doc(db, 'attendance_sessions', sessId));
-          } catch (e) {
-            console.warn("Delete session local fallback:", e.message);
-            state.attendanceSessions = state.attendanceSessions.filter(s => s.id !== sessId);
-            renderAttendance();
-            renderAdminSessions();
-          }
-        } else {
-          state.attendanceSessions = state.attendanceSessions.filter(s => s.id !== sessId);
-          renderAttendance();
-          renderAdminSessions();
-        }
-        showCustomAlert("Session deleted.", 'info');
-      });
-    });
-  });
-  refreshIcons();
+  const id = document.getElementById('input-session-id').value;
+  const title = document.getElementById('input-session-title').value.trim();
+  const startDateTime = document.getElementById('input-session-start-datetime').value;
+  const endDateTime = document.getElementById('input-session-end-datetime').value;
+  const gracePeriodMinutes = Number(document.getElementById('input-session-grace').value) || 10;
+  const everyNMinutes = Number(document.getElementById('input-session-every-n').value) || 5;
+  const penaltyAmountPerStep = Number(document.getElementById('input-session-step-amount').value) || 5;
+  const minPenalty = Number(document.getElementById('input-session-min-penalty').value) || 5;
+  const maxPenalty = Number(document.getElementById('input-session-max-penalty').value) || 50;
+  const isActive = document.getElementById('check-session-active').checked;
+
+  const sessionData = {
+    title,
+    startDateTime,
+    endDateTime,
+    gracePeriodMinutes,
+    everyNMinutes,
+    penaltyAmountPerStep,
+    minPenalty,
+    maxPenalty,
+    isActive,
+    updatedAt: serverTimestamp()
+  };
+
+  try {
+    if (id) {
+      await updateDoc(doc(db, 'attendance_sessions', id), sessionData);
+      showToast('Attendance session updated!', 'success');
+    } else {
+      sessionData.createdAt = serverTimestamp();
+      await addDoc(collection(db, 'attendance_sessions'), sessionData);
+      showToast('Attendance session created!', 'success');
+    }
+
+    document.getElementById('form-manage-session').reset();
+    document.getElementById('input-session-id').value = '';
+    document.getElementById('admin-session-form-title').textContent = 'Create Attendance Session';
+    document.getElementById('btn-cancel-session-form').classList.add('hidden');
+  } catch (err) {
+    console.error('Save session error:', err);
+    showCustomAlert('Error', 'Failed to save session.', { type: 'error' });
+  }
 }
 
+function openEditSessionForm(sessionId) {
+  const session = state.attendanceSessions.find(s => s.id === sessionId);
+  if (!session) return;
+
+  document.getElementById('input-session-id').value = session.id;
+  document.getElementById('input-session-title').value = session.title || '';
+  document.getElementById('input-session-start-datetime').value = session.startDateTime || '';
+  document.getElementById('input-session-end-datetime').value = session.endDateTime || '';
+  document.getElementById('input-session-grace').value = session.gracePeriodMinutes || 10;
+  document.getElementById('input-session-every-n').value = session.everyNMinutes || 5;
+  document.getElementById('input-session-step-amount').value = session.penaltyAmountPerStep || 5;
+  document.getElementById('input-session-min-penalty').value = session.minPenalty || 5;
+  document.getElementById('input-session-max-penalty').value = session.maxPenalty || 50;
+  document.getElementById('check-session-active').checked = session.isActive !== false;
+
+  document.getElementById('admin-session-form-title').textContent = 'Edit Attendance Session';
+  document.getElementById('btn-cancel-session-form').classList.remove('hidden');
+}
+
+async function toggleSessionActive(sessionId, currentActive) {
+  if (!db) return;
+  try {
+    await updateDoc(doc(db, 'attendance_sessions', sessionId), {
+      isActive: !currentActive
+    });
+    showToast(`Session ${!currentActive ? 'activated' : 'closed'}.`);
+  } catch (err) {
+    console.error('Toggle session error:', err);
+  }
+}
+
+async function deleteSession(sessionId) {
+  const confirmed = await showCustomConfirm('Delete Session', 'Are you sure you want to delete this session?');
+  if (!confirmed || !db) return;
+  try {
+    await deleteDoc(doc(db, 'attendance_sessions', sessionId));
+    showToast('Session deleted.');
+  } catch (err) {
+    console.error('Delete session error:', err);
+  }
+}
+
+// Attendance Log Edit & Waive
+function openEditLogModal(logId) {
+  const log = state.attendanceLogs.find(l => l.id === logId);
+  if (!log) return;
+
+  const modal = document.getElementById('modal-admin-edit-log');
+  document.getElementById('input-edit-log-id').value = log.id;
+  document.getElementById('input-edit-log-uid').value = log.uid || '';
+  document.getElementById('edit-log-member-name').textContent = `Member: ${log.userName || log.uid}`;
+  document.getElementById('select-edit-log-status').value = log.status || 'on_time';
+  document.getElementById('input-edit-log-late-mins').value = log.lateMinutes || 0;
+  document.getElementById('input-edit-log-penalty').value = log.penaltyDeducted || 0;
+
+  modal.classList.remove('hidden');
+}
+
+async function handleSaveEditLog(e) {
+  e.preventDefault();
+  if (!db) return;
+
+  const logId = document.getElementById('input-edit-log-id').value;
+  const status = document.getElementById('select-edit-log-status').value;
+  const lateMinutes = Number(document.getElementById('input-edit-log-late-mins').value) || 0;
+  const penaltyDeducted = Number(document.getElementById('input-edit-log-penalty').value) || 0;
+
+  try {
+    await updateDoc(doc(db, 'attendance_logs', logId), {
+      status,
+      lateMinutes,
+      penaltyDeducted
+    });
+    document.getElementById('modal-admin-edit-log').classList.add('hidden');
+    showToast('Attendance log updated.', 'success');
+  } catch (err) {
+    console.error('Update log error:', err);
+  }
+}
+
+async function waivePenaltyAction(logId, uid, penaltyAmount) {
+  const confirmed = await showCustomConfirm('Waive Penalty', `Are you sure you want to waive the ${penaltyAmount} pts penalty for this member?`);
+  if (!confirmed || !db) return;
+
+  try {
+    // 1. Reset penalty on attendance log
+    await updateDoc(doc(db, 'attendance_logs', logId), {
+      penaltyDeducted: 0,
+      status: 'excused'
+    });
+
+    // 2. Refund penalty on user document
+    if (uid && penaltyAmount > 0) {
+      await updateDoc(doc(db, 'users', uid), {
+        totalPenalties: increment(-penaltyAmount)
+      });
+    }
+
+    showToast('Penalty waived and refunded successfully!', 'success');
+  } catch (err) {
+    console.error('Waive penalty error:', err);
+  }
+}
+
+async function deleteAttendanceLog(logId) {
+  const confirmed = await showCustomConfirm('Delete Log', 'Delete this attendance record?');
+  if (!confirmed || !db) return;
+  try {
+    await deleteDoc(doc(db, 'attendance_logs', logId));
+    showToast('Log deleted.');
+  } catch (err) {
+    console.error('Delete log error:', err);
+  }
+}
+
+/* ==========================================================================
+   ADMIN HUB: REGISTERED MEMBERS & POINT ADJUSTMENTS
+   ========================================================================== */
 function renderAdminMembers() {
   const tbody = document.getElementById('admin-members-tbody');
+  const searchInput = document.getElementById('input-admin-search-members');
   if (!tbody) return;
 
-  tbody.innerHTML = state.members.map((m) => {
+  let query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+  let filtered = state.members.filter(m => {
+    if (!query) return true;
+    return m.displayName?.toLowerCase().includes(query) || m.email?.toLowerCase().includes(query);
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-neutral-400">No members match your search.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(member => {
+    const isAdmin = member.isAdmin || member.role === 'admin';
     return `
-      <tr class="hover:bg-white/[0.02]">
+      <tr class="border-b border-white/5 hover:bg-white/[0.02]">
         <td class="p-3">
-          <div class="flex items-center gap-2">
-            <img src="${m.photoURL || './image_ad59c0.jpg'}" class="w-6 h-6 rounded-full object-cover" />
-            <span class="font-bold text-white">${m.displayName}</span>
+          <div class="flex items-center gap-2.5">
+            <img src="${member.photoURL || './image_ad59c0.jpg'}" alt="Avatar" class="w-8 h-8 rounded-full object-cover border border-white/10" />
+            <div>
+              <div class="font-bold text-white">${escapeHtml(member.displayName || 'Member')}</div>
+              <div class="text-[10px] text-neutral-400">${escapeHtml(member.email || '')}</div>
+            </div>
           </div>
         </td>
-        <td class="p-3 font-mono text-[11px] uppercase">${m.role || 'member'}</td>
-        <td class="p-3 font-mono font-bold text-[#F59E0B]">${m.points || 0}</td>
-        <td class="p-3 font-mono text-rose-400">-${m.totalPenalties || 0}</td>
-        <td class="p-3 text-right">
-          <button class="btn-adjust-points px-2 py-1 rounded bg-[#0A84FF]/20 text-[#0A84FF] hover:bg-[#0A84FF]/40 font-mono text-[11px]" data-uid="${m.uid}">+25 pts</button>
-          <button class="btn-deduct-points px-2 py-1 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 font-mono text-[11px] ml-1" data-uid="${m.uid}">-25 pts</button>
+        <td class="p-3">
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isAdmin ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30' : 'bg-neutral-500/20 text-neutral-300'}">
+            ${isAdmin ? 'ADMIN' : 'MEMBER'}
+          </span>
+        </td>
+        <td class="p-3 font-mono font-bold text-[#F59E0B]">${member.points || 0}</td>
+        <td class="p-3 font-mono text-rose-400">${member.totalPenalties || 0}</td>
+        <td class="p-3 text-right space-x-1 whitespace-nowrap">
+          <button class="btn-admin-adjust-points px-2.5 py-1 rounded bg-[#0A84FF]/15 hover:bg-[#0A84FF]/25 text-[#0A84FF] text-[11px] font-semibold" data-uid="${member.uid}" data-name="${escapeHtml(member.displayName || 'Member')}">
+            +/- Points
+          </button>
+          <button class="btn-admin-send-notif px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-neutral-300 text-[11px]" data-uid="${member.uid}" data-name="${escapeHtml(member.displayName || 'Member')}">
+            Message
+          </button>
+          <button class="btn-admin-toggle-role px-2 py-1 rounded ${isAdmin ? 'bg-rose-500/10 text-rose-400' : 'bg-amber-500/10 text-amber-300'} text-[11px] font-semibold" data-uid="${member.uid}" data-is-admin="${isAdmin}">
+            ${isAdmin ? 'Demote' : 'Make Admin'}
+          </button>
         </td>
       </tr>
     `;
   }).join('');
 
-  tbody.querySelectorAll('.btn-adjust-points').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const uid = btn.getAttribute('data-uid');
-      if (db) await updateDoc(doc(db, 'users', uid), { points: increment(25) });
-    });
+  tbody.querySelectorAll('.btn-admin-adjust-points').forEach(btn => {
+    btn.onclick = () => openAdjustPointsModal(btn.dataset.uid, btn.dataset.name);
   });
-
-  tbody.querySelectorAll('.btn-deduct-points').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const uid = btn.getAttribute('data-uid');
-      if (db) await updateDoc(doc(db, 'users', uid), { points: increment(-25) });
-    });
+  tbody.querySelectorAll('.btn-admin-send-notif').forEach(btn => {
+    btn.onclick = () => openDirectNotificationModal(btn.dataset.uid, btn.dataset.name);
+  });
+  tbody.querySelectorAll('.btn-admin-toggle-role').forEach(btn => {
+    btn.onclick = () => toggleMemberAdminRole(btn.dataset.uid, btn.dataset.isAdmin === 'true');
   });
 }
 
-/* ==========================================================================
-   11. ACTIONS & MODAL CONTROLLERS
-   ========================================================================== */
-function openModal(id) {
-  const m = document.getElementById(id);
-  if (m) {
-    m.classList.remove('hidden');
-    refreshIcons();
-  }
+// Points Adjustment Modal
+let currentAdjustType = 'add';
+function openAdjustPointsModal(uid, name) {
+  const modal = document.getElementById('modal-admin-adjust-points');
+  document.getElementById('input-adjust-points-uid').value = uid;
+  document.getElementById('adjust-points-target-name').textContent = `Target Member: ${name}`;
+  document.getElementById('input-adjust-amount').value = '10';
+  document.getElementById('input-adjust-reason').value = '';
+
+  currentAdjustType = 'add';
+  updateAdjustTypeButtons();
+
+  modal.classList.remove('hidden');
 }
 
-function closeModal(id) {
-  const m = document.getElementById(id);
-  if (m) m.classList.add('hidden');
-}
-
-function closeAllModals() {
-  document.querySelectorAll('.fixed.z-50').forEach(m => m.classList.add('hidden'));
-}
-
-function openSubmitModal(task) {
-  document.getElementById('submit-task-id').value = task.id;
-  document.getElementById('submit-modal-title').textContent = task.title;
-  document.getElementById('submit-modal-points').textContent = `+${task.points} pts`;
-  document.getElementById('submit-modal-category').textContent = task.categoryId;
-
-  const qBox = document.getElementById('submit-question-box');
-  const qLabel = document.getElementById('submit-question-label');
-  if (task.enableQuestion && task.questionPrompt) {
-    qLabel.textContent = task.questionPrompt;
-    qBox.classList.remove('hidden');
+function updateAdjustTypeButtons() {
+  const addBtn = document.getElementById('btn-adjust-type-add');
+  const deductBtn = document.getElementById('btn-adjust-type-deduct');
+  if (currentAdjustType === 'add') {
+    addBtn.className = 'py-2 rounded-xl font-bold border border-emerald-500 bg-emerald-500/20 text-emerald-400';
+    deductBtn.className = 'py-2 rounded-xl font-bold border border-white/10 bg-white/5 text-neutral-400 hover:text-white';
   } else {
-    qBox.classList.add('hidden');
+    deductBtn.className = 'py-2 rounded-xl font-bold border border-rose-500 bg-rose-500/20 text-rose-400';
+    addBtn.className = 'py-2 rounded-xl font-bold border border-white/10 bg-white/5 text-neutral-400 hover:text-white';
   }
-
-  openModal('modal-task-submit');
 }
 
-function openCompetitionModal(task) {
-  const titleEl = document.getElementById('comp-modal-title');
-  const listEl = document.getElementById('comp-modal-list');
-  if (titleEl) titleEl.textContent = task.title;
+async function handleAdminAdjustPoints(e) {
+  e.preventDefault();
+  if (!db) return;
 
-  const taskSubs = state.submissions.filter(s => s.taskId === task.id);
-  if (taskSubs.length === 0) {
-    listEl.innerHTML = `<div class="text-center text-xs text-neutral-500 py-8">Be the first to complete this task and earn ${task.points} points!</div>`;
-  } else {
-    listEl.innerHTML = taskSubs.map(s => `
-      <div class="py-3 flex items-start gap-3">
-        <img src="${s.userPhotoURL || './image_ad59c0.jpg'}" class="w-8 h-8 rounded-full object-cover border border-white/10" />
-        <div class="flex-1">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-bold text-white">${s.userDisplayName}</span>
-            <span class="text-[10px] font-mono text-[#F59E0B] font-bold">+${s.pointsEarned} pts</span>
-          </div>
-          <div class="text-[10px] text-neutral-400 font-mono">${formatRelativeTime(s.completedAt)}</div>
-          ${s.questionAnswer ? `<div class="mt-1 text-xs text-neutral-200 bg-white/5 p-2 rounded-lg font-mono">${s.questionAnswer}</div>` : ''}
-          ${s.comment ? `<div class="mt-1 text-xs text-neutral-400 italic">"${s.comment}"</div>` : ''}
-        </div>
-      </div>
-    `).join('');
-  }
-
-  openModal('modal-task-competition');
-}
-
-async function performCheckIn(session) {
-  if (!state.user) {
-    showAuthRequiredAlert();
-    return;
-  }
-
-  const now = new Date();
-  const [startH, startM] = (session.exactStartTime || '09:00').split(':').map(Number);
-  const startMinutes = startH * 60 + startM;
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-
-  let status = 'on_time';
-  let lateMinutes = 0;
-  let penaltyPoints = 0;
-  let bonusPoints = 10;
-
-  if (nowMinutes > startMinutes + (session.gracePeriodMinutes || 10)) {
-    status = 'late';
-    lateMinutes = nowMinutes - startMinutes;
-    const penaltyUnit = session.penaltyUnitMinutes || 5;
-    const penaltyRate = session.penaltyRatePerUnit || 5;
-    const units = Math.ceil((lateMinutes - (session.gracePeriodMinutes || 10)) / penaltyUnit);
-    penaltyPoints = Math.min(units * penaltyRate, session.maxPenaltyCap || 50);
-    bonusPoints = 0;
-  }
-
-  const logEntry = {
-    sessionId: session.id,
-    sessionTitle: session.title,
-    userId: state.user.uid,
-    userDisplayName: state.user.displayName,
-    checkInTimestamp: now.toISOString(),
-    dateKey: getTodayKey(),
-    status,
-    lateMinutes,
-    penaltyPointsApplied: penaltyPoints,
-    bonusPointsApplied: bonusPoints
-  };
+  const uid = document.getElementById('input-adjust-points-uid').value;
+  const rawAmount = Number(document.getElementById('input-adjust-amount').value) || 0;
+  const delta = currentAdjustType === 'add' ? rawAmount : -rawAmount;
+  const reason = document.getElementById('input-adjust-reason').value.trim();
 
   try {
-    let savedToDb = false;
-    if (db) {
-      try {
-        await addDoc(collection(db, 'attendance_logs'), logEntry);
-        const pointsDiff = bonusPoints - penaltyPoints;
-        await updateDoc(doc(db, 'users', state.user.uid), {
-          points: increment(pointsDiff),
-          totalPenalties: increment(penaltyPoints)
-        });
-        savedToDb = true;
-      } catch (dbErr) {
-        console.warn("Attendance log fallback to local state:", dbErr.message);
-      }
-    }
-    
-    if (!savedToDb) {
-      state.attendanceLogs.unshift({ id: `log_${Date.now()}`, ...logEntry });
-      state.user.points = (state.user.points || 0) + bonusPoints - penaltyPoints;
-      state.user.totalPenalties = (state.user.totalPenalties || 0) + penaltyPoints;
-      updateUserUI();
-    }
+    // 1. Update user points in Firestore
+    await updateDoc(doc(db, 'users', uid), {
+      points: increment(delta)
+    });
 
-    triggerConfetti();
-    renderAttendance();
-    const alertMsg = status === 'on_time'
-      ? (state.lang === 'ar' ? 'تم تسجيل حضورك في الوقت المحدد! (+10 نقاط مكافأة)' : 'Checked in on time! (+10 bonus points awarded)')
-      : (state.lang === 'ar' ? `تم تسجيل حضورك متأخراً (${lateMinutes} دقيقة تأخير، خصم ${penaltyPoints} نقطة)` : `Checked in late (${lateMinutes}m late, -${penaltyPoints} penalty points deducted)`);
-    showCustomAlert(alertMsg, status === 'on_time' ? 'success' : 'warning', state.lang === 'ar' ? 'سجل الحضور' : 'Attendance Check-In');
+    // 2. Add an audit notification for the user
+    await addDoc(collection(db, 'notifications'), {
+      targetUid: uid,
+      title: delta > 0 ? 'Points Awarded' : 'Points Deducted',
+      message: `${delta > 0 ? `+${delta}` : delta} points: ${reason}`,
+      type: delta > 0 ? 'reward' : 'warning',
+      createdAt: serverTimestamp()
+    });
+
+    document.getElementById('modal-admin-adjust-points').classList.add('hidden');
+    showToast(`Points adjusted (${delta > 0 ? `+${delta}` : delta} pts) successfully!`, 'success');
   } catch (err) {
-    console.error("Check in error:", err);
-    showCustomAlert("Could not record check in: " + err.message, 'error');
+    console.error('Adjust points error:', err);
+    showCustomAlert('Error', 'Failed to adjust points.');
   }
 }
 
-function switchTab(tabId) {
-  state.activeTab = tabId;
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    if (btn.getAttribute('data-tab') === tabId) {
-      btn.className = 'tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-white bg-white/[0.12] shadow-sm';
-    } else {
-      btn.className = 'tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.05]';
-    }
-  });
+// Direct Notification Modal
+function openDirectNotificationModal(uid, name) {
+  const modal = document.getElementById('modal-admin-direct-notification');
+  document.getElementById('input-direct-notif-uid').value = uid;
+  document.getElementById('direct-notif-target-name').textContent = `To: ${name}`;
+  document.getElementById('input-direct-notif-title').value = '';
+  document.getElementById('input-direct-notif-message').value = '';
+  modal.classList.remove('hidden');
+}
 
-  document.querySelectorAll('.tab-view').forEach(view => {
-    if (view.id === `view-${tabId}`) {
-      view.classList.remove('hidden');
-      view.classList.add('block');
-    } else {
-      view.classList.add('hidden');
-      view.classList.remove('block');
-    }
-  });
+async function handleAdminDirectNotification(e) {
+  e.preventDefault();
+  if (!db) return;
 
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-  refreshIcons();
+  const uid = document.getElementById('input-direct-notif-uid').value;
+  const title = document.getElementById('input-direct-notif-title').value.trim();
+  const message = document.getElementById('input-direct-notif-message').value.trim();
+  const type = document.getElementById('select-direct-notif-type').value;
+
+  try {
+    await addDoc(collection(db, 'notifications'), {
+      targetUid: uid,
+      title,
+      message,
+      type,
+      createdAt: serverTimestamp()
+    });
+    document.getElementById('modal-admin-direct-notification').classList.add('hidden');
+    showToast('Direct notification sent!', 'success');
+  } catch (err) {
+    console.error('Direct notification error:', err);
+  }
+}
+
+async function toggleMemberAdminRole(uid, currentIsAdmin) {
+  const actionText = currentIsAdmin ? 'demote this admin to regular member' : 'promote this member to ADMIN';
+  const confirmed = await showCustomConfirm('Change Role', `Are you sure you want to ${actionText}?`);
+  if (!confirmed || !db) return;
+
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      isAdmin: !currentIsAdmin,
+      role: !currentIsAdmin ? 'admin' : 'member'
+    });
+    showToast(`Member role updated!`, 'success');
+  } catch (err) {
+    console.error('Toggle role error:', err);
+  }
 }
 
 /* ==========================================================================
-   DRAWER & PROFILE MODAL CONTROLLERS
+   ADMIN HUB: CATEGORIES MANAGER (CRUD & DYNAMIC TASK COUNTS)
    ========================================================================== */
-function openDrawer() {
-  const drawer = document.getElementById('side-drawer');
-  const backdrop = document.getElementById('side-drawer-backdrop');
-  if (drawer && backdrop) {
-    drawer.classList.remove('translate-x-full');
-    drawer.classList.add('translate-x-0');
-    backdrop.classList.remove('opacity-0', 'pointer-events-none');
-    backdrop.classList.add('opacity-100', 'pointer-events-auto');
-  }
-  refreshIcons();
-}
+function renderAdminCategories() {
+  const container = document.getElementById('admin-categories-list');
+  if (!container) return;
 
-function closeDrawer() {
-  const drawer = document.getElementById('side-drawer');
-  const backdrop = document.getElementById('side-drawer-backdrop');
-  if (drawer && backdrop) {
-    drawer.classList.add('translate-x-full');
-    drawer.classList.remove('translate-x-0');
-    backdrop.classList.add('opacity-0', 'pointer-events-none');
-    backdrop.classList.remove('opacity-100', 'pointer-events-auto');
-  }
-}
-
-function openEditProfileModal() {
-  if (!state.user) {
-    showAuthRequiredAlert();
+  if (state.categories.length === 0) {
+    container.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400 sm:col-span-3">No categories found. Click "+ Add Category" to create one.</div>`;
     return;
   }
+
+  container.innerHTML = state.categories.map(cat => {
+    // Live task count for this category
+    const count = state.tasks.filter(t => t.category === cat.id).length;
+    const catColor = cat.color || '#0A84FF';
+
+    return `
+      <div class="glass-card rounded-2xl p-4 border border-white/10 flex flex-col justify-between space-y-3 relative overflow-hidden">
+        <div class="flex items-start justify-between gap-2">
+          <div class="flex items-center gap-2.5">
+            <span class="w-4 h-4 rounded-full flex-shrink-0" style="background-color: ${catColor};"></span>
+            <div>
+              <h4 class="font-bold text-white text-xs sm:text-sm">${escapeHtml(cat.nameEn)}</h4>
+              <div class="text-[11px] text-neutral-400 font-cairo">${escapeHtml(cat.nameAr || '')}</div>
+            </div>
+          </div>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-white/5 border border-white/10 text-neutral-300">
+            ${count} ${count === 1 ? 'task' : 'tasks'}
+          </span>
+        </div>
+
+        <div class="flex items-center justify-end gap-1.5 pt-2 border-t border-white/5">
+          <button class="btn-edit-category px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 text-[#0A84FF] text-[11px] font-semibold" data-id="${cat.id}">
+            Edit
+          </button>
+          <button class="btn-delete-category px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px] font-semibold" data-id="${cat.id}">
+            Delete
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.btn-edit-category').forEach(btn => {
+    btn.onclick = () => openCategoryForm(btn.dataset.id);
+  });
+  container.querySelectorAll('.btn-delete-category').forEach(btn => {
+    btn.onclick = () => deleteCategoryAction(btn.dataset.id);
+  });
+}
+
+function openCategoryForm(catId = null) {
+  const container = document.getElementById('admin-category-form-container');
+  const titleEl = document.getElementById('admin-category-form-title');
+  const idInput = document.getElementById('input-category-id');
+  const nameEn = document.getElementById('input-cat-name-en');
+  const nameAr = document.getElementById('input-cat-name-ar');
+  const color = document.getElementById('input-cat-color');
+  const icon = document.getElementById('input-cat-icon');
+
+  if (catId) {
+    const cat = state.categories.find(c => c.id === catId);
+    if (!cat) return;
+    titleEl.textContent = 'Edit Category';
+    idInput.value = cat.id;
+    nameEn.value = cat.nameEn || '';
+    nameAr.value = cat.nameAr || '';
+    color.value = cat.color || '#0A84FF';
+    icon.value = cat.icon || 'film';
+  } else {
+    titleEl.textContent = 'New Category';
+    document.getElementById('form-manage-category').reset();
+    idInput.value = '';
+    color.value = '#0A84FF';
+    icon.value = 'film';
+  }
+
+  container.classList.remove('hidden');
+}
+
+async function handleCategorySave(e) {
+  e.preventDefault();
+  if (!db) return;
+
+  const id = document.getElementById('input-category-id').value;
+  const nameEn = document.getElementById('input-cat-name-en').value.trim();
+  const nameAr = document.getElementById('input-cat-name-ar').value.trim();
+  const color = document.getElementById('input-cat-color').value;
+  const icon = document.getElementById('input-cat-icon').value.trim() || 'film';
+
+  const catData = { nameEn, nameAr, color, icon, updatedAt: serverTimestamp() };
+
+  try {
+    if (id) {
+      await updateDoc(doc(db, 'categories', id), catData);
+      showToast('Category updated!', 'success');
+    } else {
+      // Create new doc with id from nameEn slug
+      const slug = nameEn.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      catData.createdAt = serverTimestamp();
+      await setDoc(doc(db, 'categories', slug), catData);
+      showToast('Category created!', 'success');
+    }
+
+    document.getElementById('admin-category-form-container').classList.add('hidden');
+  } catch (err) {
+    console.error('Save category error:', err);
+    showCustomAlert('Error', 'Failed to save category.');
+  }
+}
+
+async function deleteCategoryAction(catId) {
+  const confirmed = await showCustomConfirm('Delete Category', 'Are you sure you want to delete this category? Tasks with this category may lose their styling.');
+  if (!confirmed || !db) return;
+
+  try {
+    await deleteDoc(doc(db, 'categories', catId));
+    showToast('Category deleted.');
+  } catch (err) {
+    console.error('Delete category error:', err);
+  }
+}
+
+/* ==========================================================================
+   ADMIN HUB: BROADCASTS & BRANDING SETTINGS
+   ========================================================================== */
+async function handleAdminAnnouncement(e) {
+  e.preventDefault();
+  if (!db) return;
+
+  const en = document.getElementById('input-announcement-en').value.trim();
+  const ar = document.getElementById('input-announcement-ar').value.trim();
+
+  try {
+    await setDoc(doc(db, 'settings', 'app_config'), {
+      announcementEn: en,
+      announcementAr: ar
+    }, { merge: true });
+
+    showToast('Announcement broadcasted to all screens!', 'success');
+  } catch (err) {
+    console.error('Broadcast error:', err);
+  }
+}
+
+async function handleClearAnnouncement() {
+  if (!db) return;
+  try {
+    await setDoc(doc(db, 'settings', 'app_config'), {
+      announcementEn: '',
+      announcementAr: ''
+    }, { merge: true });
+    showToast('Announcement banner cleared.');
+  } catch (err) {
+    console.error('Clear announcement error:', err);
+  }
+}
+
+async function handleAdminSettings(e) {
+  e.preventDefault();
+  if (!db) return;
+
+  const appName = document.getElementById('input-settings-appname').value.trim();
+  const logoUrl = document.getElementById('input-settings-logourl').value.trim();
+  const subEn = document.getElementById('input-settings-sub-en').value.trim();
+  const subAr = document.getElementById('input-settings-sub-ar').value.trim();
+  const devCredit = document.getElementById('input-settings-devcredit').value.trim();
+
+  try {
+    await setDoc(doc(db, 'settings', 'app_config'), {
+      appName,
+      logoUrl,
+      subtitleEn: subEn,
+      subtitleAr: subAr,
+      developerCredit: devCredit
+    }, { merge: true });
+
+    showToast('Branding settings saved!', 'success');
+  } catch (err) {
+    console.error('Save settings error:', err);
+  }
+}
+
+function applySettings() {
+  const s = state.settings;
+  const headerTitle = document.getElementById('header-app-title');
+  const headerLogo = document.getElementById('header-logo-img');
+  const footerBrand = document.getElementById('drawer-footer-brand');
+  const footerDev = document.getElementById('drawer-footer-dev');
+
+  if (headerTitle && s.appName) headerTitle.textContent = s.appName;
+  if (headerLogo && s.logoUrl) headerLogo.src = s.logoUrl;
+  if (footerBrand && s.appName) footerBrand.textContent = s.appName;
+  if (footerDev && s.developerCredit) footerDev.textContent = s.developerCredit;
+
+  // Announcement Banner
+  const banner = document.getElementById('announcement-bar');
+  const bannerText = document.getElementById('announcement-text');
+  const msg = state.lang === 'ar' && s.announcementAr ? s.announcementAr : s.announcementEn;
+
+  if (banner && bannerText) {
+    if (msg) {
+      bannerText.textContent = msg;
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
+  }
+}
+
+/* ==========================================================================
+   EDIT PROFILE MODAL (LOCAL + FIRESTORE)
+   ========================================================================== */
+function openEditProfileModal() {
+  if (!state.user) {
+    requireAuth(() => {});
+    return;
+  }
+  const modal = document.getElementById('modal-edit-profile');
   const nameInput = document.getElementById('input-edit-profile-name');
   const avatarInput = document.getElementById('input-edit-profile-avatar');
-  const previewImg = document.getElementById('edit-profile-preview');
-  if (nameInput) nameInput.value = state.user?.displayName || '';
-  if (avatarInput) avatarInput.value = state.user?.photoURL || '';
-  if (previewImg) previewImg.src = state.user?.photoURL || './image_ad59c0.jpg';
-  openModal('modal-edit-profile');
+  const preview = document.getElementById('edit-profile-preview');
+
+  nameInput.value = state.user.displayName || '';
+  avatarInput.value = state.user.photoURL && state.user.photoURL !== './image_ad59c0.jpg' ? state.user.photoURL : '';
+  if (preview) preview.src = state.user.photoURL || './image_ad59c0.jpg';
+
+  modal.classList.remove('hidden');
+}
+
+async function handleEditProfileSubmit(e) {
+  e.preventDefault();
+  if (!state.user || !db) return;
+
+  const name = document.getElementById('input-edit-profile-name').value.trim();
+  const photo = document.getElementById('input-edit-profile-avatar').value.trim() || './image_ad59c0.jpg';
+
+  try {
+    await updateDoc(doc(db, 'users', state.user.uid), {
+      displayName: name,
+      photoURL: photo
+    });
+    state.user.displayName = name;
+    state.user.photoURL = photo;
+    updateProfileUI();
+    document.getElementById('modal-edit-profile').classList.add('hidden');
+    showToast('Profile updated!', 'success');
+  } catch (err) {
+    console.error('Update profile error:', err);
+  }
 }
 
 /* ==========================================================================
-   12. EVENT LISTENERS SETUP
-   ========================================================================== */
-let globalDeferredPrompt = null;
-
-function setupEventListeners() {
-  // Navigation Tabs
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.getAttribute('data-tab')));
-  });
-
-  // Slide-Over Drawer Controls
-  document.getElementById('btn-open-drawer')?.addEventListener('click', openDrawer);
-  document.getElementById('btn-close-drawer')?.addEventListener('click', closeDrawer);
-  document.getElementById('side-drawer-backdrop')?.addEventListener('click', closeDrawer);
-
-  // Drawer Nav Links
-  document.getElementById('drawer-nav-tasks')?.addEventListener('click', () => {
-    switchTab('tasks');
-    closeDrawer();
-  });
-  document.getElementById('drawer-nav-attendance')?.addEventListener('click', () => {
-    switchTab('attendance');
-    closeDrawer();
-  });
-  document.getElementById('drawer-nav-leaderboard')?.addEventListener('click', () => {
-    switchTab('leaderboard');
-    closeDrawer();
-  });
-  document.getElementById('drawer-nav-notifications')?.addEventListener('click', () => {
-    switchTab('notifications');
-    closeDrawer();
-  });
-
-  // Drawer Language Switch
-  document.getElementById('drawer-btn-lang')?.addEventListener('click', () => {
-    applyLanguage(state.lang === 'en' ? 'ar' : 'en');
-  });
-
-  // Drawer Guest Sign in with Google
-  document.getElementById('drawer-btn-google-signin')?.addEventListener('click', () => {
-    closeDrawer();
-    handleGoogleSignIn();
-  });
-
-  // Profile Tab Guest Sign in with Google
-  document.getElementById('btn-profile-google-signin')?.addEventListener('click', () => {
-    handleGoogleSignIn();
-  });
-
-  // Drawer Install App PWA
-  document.getElementById('drawer-btn-pwa')?.addEventListener('click', async () => {
-    if (globalDeferredPrompt) {
-      globalDeferredPrompt.prompt();
-      const choice = await globalDeferredPrompt.userChoice;
-      if (choice.outcome === 'accepted') {
-        globalDeferredPrompt = null;
-      }
-    } else {
-      showCustomAlert(state.lang === 'ar' ? 'التطبيق جاهز للتثبيت كـ PWA عبر قائمة المتصفح أو تثبيته مباشرة على الشاشة الرئيسية.' : 'PWA is ready. You can install it via your browser menu or "Add to Home Screen".', 'info', 'PWA');
-    }
-  });
-
-  // Drawer Admin Dashboard ($J@@s#COC1982 exclusively here - with guest interception)
-  document.getElementById('drawer-btn-admin')?.addEventListener('click', () => {
-    closeDrawer();
-    if (!state.user) {
-      showAuthRequiredAlert();
-      return;
-    }
-    if (state.isAdminUnlocked) {
-      openModal('modal-admin-dashboard');
-    } else {
-      openModal('modal-admin-auth');
-    }
-  });
-
-  // Drawer Sign Out / Switch Account
-  document.getElementById('drawer-btn-signout')?.addEventListener('click', async () => {
-    closeDrawer();
-    showCustomConfirm(state.lang === 'ar' ? 'هل تريد تسجيل الخروج / تبديل الحساب؟' : 'Sign out or switch your account?', async () => {
-      if (auth) await signOut(auth);
-      localStorage.removeItem('coc_guest_user');
-      localStorage.removeItem('coc_logged_in_user');
-      state.user = null;
-      updateUserUI();
-    });
-  });
-
-  // Drawer Interactive Profile Card -> Edit Profile Modal (guest interception)
-  document.getElementById('drawer-profile-card')?.addEventListener('click', () => {
-    closeDrawer();
-    if (!state.user) {
-      showAuthRequiredAlert();
-      return;
-    }
-    openEditProfileModal();
-  });
-
-  // Edit Profile Modal handlers
-  document.getElementById('input-edit-profile-avatar')?.addEventListener('input', (e) => {
-    const preview = document.getElementById('edit-profile-preview');
-    if (preview) {
-      preview.src = e.target.value.trim() || './image_ad59c0.jpg';
-      preview.onerror = () => { preview.src = './image_ad59c0.jpg'; };
-    }
-  });
-
-  document.getElementById('btn-preset-default-avatar')?.addEventListener('click', () => {
-    const avatarInput = document.getElementById('input-edit-profile-avatar');
-    const preview = document.getElementById('edit-profile-preview');
-    if (avatarInput) avatarInput.value = './image_ad59c0.jpg';
-    if (preview) preview.src = './image_ad59c0.jpg';
-  });
-
-  document.getElementById('btn-view-full-profile')?.addEventListener('click', () => {
-    closeModal('modal-edit-profile');
-    switchTab('profile');
-  });
-
-  document.getElementById('form-edit-profile')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const newName = document.getElementById('input-edit-profile-name').value.trim();
-    const newAvatar = document.getElementById('input-edit-profile-avatar').value.trim() || './image_ad59c0.jpg';
-    if (!newName) return;
-
-    if (!state.user) {
-      showAuthRequiredAlert();
-      return;
-    }
-
-    state.user.displayName = newName;
-    state.user.photoURL = newAvatar;
-
-    try {
-      if (db && state.user.uid && !state.user.uid.startsWith('guest_') && !state.user.uid.startsWith('local_')) {
-        await updateDoc(doc(db, 'users', state.user.uid), {
-          displayName: newName,
-          photoURL: newAvatar
-        });
-      } else {
-        localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
-      }
-      updateUserUI();
-      closeModal('modal-edit-profile');
-      triggerConfetti();
-      showCustomAlert(state.lang === 'ar' ? 'تم تحديث الملف الشخصي بنجاح!' : 'Profile updated successfully!', 'success');
-    } catch (err) {
-      console.warn("Could not save to remote user doc, saved locally:", err);
-      localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
-      updateUserUI();
-      closeModal('modal-edit-profile');
-      showCustomAlert(state.lang === 'ar' ? 'تم حفظ التعديلات محلياً!' : 'Profile saved locally!', 'info');
-    }
-  });
-
-  // Language Switch
-  document.getElementById('btn-toggle-lang')?.addEventListener('click', () => {
-    applyLanguage(state.lang === 'en' ? 'ar' : 'en');
-  });
-
-  // Notifications Bell
-  document.getElementById('btn-open-notifications')?.addEventListener('click', () => {
-    switchTab('notifications');
-  });
-
-  // Announcement close
-  document.getElementById('btn-close-announcement')?.addEventListener('click', () => {
-    document.getElementById('announcement-bar')?.classList.add('hidden');
-  });
-
-  // Modal Closers
-  document.querySelectorAll('.modal-close-btn').forEach(btn => {
-    btn.addEventListener('click', closeAllModals);
-  });
-
-  // Auth Modal trigger
-  document.getElementById('btn-open-auth-modal')?.addEventListener('click', () => {
-    openModal('modal-auth');
-  });
-
-  // Google Sign In trigger
-  document.getElementById('btn-auth-google')?.addEventListener('click', handleGoogleSignIn);
-
-  // Local Name Sign In form
-  document.getElementById('form-auth-local')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = document.getElementById('input-local-name').value.trim();
-    if (name) {
-      state.user = {
-        uid: 'user_' + Math.random().toString(36).substring(2, 9),
-        displayName: name,
-        email: `${name.toLowerCase().replace(/\s+/g, '.')}@cocmedia.local`,
-        photoURL: './image_ad59c0.jpg',
-        points: 0,
-        totalPenalties: 0,
-        role: 'member',
-        createdAt: new Date().toISOString(),
-        isActive: true,
-        streakDays: 1
-      };
-      localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
-      updateUserUI();
-      closeAllModals();
-      triggerConfetti();
-    }
-  });
-
-  // Copy hostname button in Unauthorized Domain Modal
-  document.getElementById('btn-copy-hostname')?.addEventListener('click', () => {
-    navigator.clipboard.writeText(window.location.hostname);
-    const btn = document.getElementById('btn-copy-hostname');
-    if (btn) {
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-    }
-  });
-
-  // Fallback guest button in Unauthorized Domain Modal
-  document.getElementById('btn-fallback-guest')?.addEventListener('click', () => {
-    closeModal('modal-unauthorized-domain');
-    openModal('modal-auth');
-  });
-
-  // Admin Portal Lock
-  document.getElementById('btn-open-admin-lock')?.addEventListener('click', () => {
-    if (state.isAdminUnlocked) {
-      openModal('modal-admin-dashboard');
-    } else {
-      openModal('modal-admin-auth');
-    }
-  });
-
-  // Admin Password submit
-  document.getElementById('form-admin-auth')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const pass = document.getElementById('input-admin-password').value;
-    const errEl = document.getElementById('admin-auth-error');
-    if (pass === ADMIN_MASTER_PASSWORD) {
-      state.isAdminUnlocked = true;
-      closeModal('modal-admin-auth');
-      openModal('modal-admin-dashboard');
-      if (errEl) errEl.classList.add('hidden');
-    } else {
-      if (errEl) errEl.classList.remove('hidden');
-    }
-  });
-
-  // Admin Dashboard Tabs
-  document.querySelectorAll('.admintab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tab = btn.getAttribute('data-admintab');
-      document.querySelectorAll('.admintab-btn').forEach(b => {
-        b.className = 'admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white whitespace-nowrap';
-      });
-      btn.className = 'admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-white/10 whitespace-nowrap';
-
-      document.querySelectorAll('.admin-panel').forEach(p => {
-        p.classList.add('hidden');
-        p.classList.remove('block');
-      });
-      const target = document.getElementById(`admin-panel-${tab}`);
-      if (target) {
-        target.classList.remove('hidden');
-        target.classList.add('block');
-      }
-      refreshIcons();
-    });
-  });
-
-  // Admin Task Form Toggle
-  document.getElementById('btn-admin-add-task')?.addEventListener('click', () => {
-    document.getElementById('admin-task-form-container')?.classList.toggle('hidden');
-  });
-  document.getElementById('btn-cancel-task-form')?.addEventListener('click', () => {
-    document.getElementById('admin-task-form-container')?.classList.add('hidden');
-  });
-
-  // Admin Task Form Submit
-  document.getElementById('form-manage-task')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const newTask = {
-      title: document.getElementById('input-task-title').value.trim(),
-      description: document.getElementById('input-task-desc').value.trim(),
-      categoryId: document.getElementById('select-task-category').value,
-      points: Number(document.getElementById('input-task-points').value) || 50,
-      quotaType: document.getElementById('select-task-quota').value,
-      taskLink: document.getElementById('input-task-link').value.trim(),
-      estimatedDuration: document.getElementById('input-task-duration').value.trim(),
-      deadlineType: document.getElementById('select-task-deadline').value,
-      enableComment: document.getElementById('check-enable-comment').checked,
-      enableQuestion: document.getElementById('check-enable-question').checked,
-      questionPrompt: document.getElementById('input-question-prompt').value.trim(),
-      isActive: true,
-      createdAt: new Date().toISOString()
-    };
-
-    try {
-      if (db) {
-        try {
-          await addDoc(collection(db, 'tasks'), newTask);
-        } catch (dbErr) {
-          console.warn("Task create fallback to local state:", dbErr.message);
-          state.tasks.unshift({ id: `task_${Date.now()}`, ...newTask });
-          renderTasks();
-          renderAdminTasks();
-        }
-      } else {
-        state.tasks.unshift({ id: `task_${Date.now()}`, ...newTask });
-        renderTasks();
-        renderAdminTasks();
-      }
-      document.getElementById('form-manage-task').reset();
-      document.getElementById('admin-task-form-container').classList.add('hidden');
-      showCustomAlert("Task created successfully!", 'success');
-    } catch (err) {
-      showCustomAlert("Error saving task: " + err.message, 'error');
-    }
-  });
-
-  // Submit Task Form
-  document.getElementById('form-submit-task')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const taskId = document.getElementById('submit-task-id').value;
-    const task = state.tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    if (!state.user) {
-      showAuthRequiredAlert();
-      return;
-    }
-
-    const comment = document.getElementById('input-submit-comment').value.trim();
-    const answer = document.getElementById('input-submit-answer').value.trim();
-    const duration = Number(document.getElementById('input-submit-minutes').value) || 30;
-
-    const submission = {
-      taskId: task.id,
-      taskTitle: task.title,
-      userId: state.user.uid,
-      userDisplayName: state.user.displayName,
-      userPhotoURL: state.user.photoURL || './image_ad59c0.jpg',
-      categoryId: task.categoryId,
-      pointsEarned: task.points,
-      comment,
-      questionAnswer: answer,
-      actualDurationMinutes: duration,
-      completedAt: new Date().toISOString(),
-      dateKey: getTodayKey()
-    };
-
-    try {
-      let savedDb = false;
-      if (db) {
-        try {
-          await addDoc(collection(db, 'submissions'), submission);
-          await updateDoc(doc(db, 'users', state.user.uid), {
-            points: increment(task.points)
-          });
-          savedDb = true;
-        } catch (dbErr) {
-          console.warn("Task submission write fallback to local:", dbErr.message);
-        }
-      }
-      if (!savedDb) {
-        state.submissions.unshift({ id: `sub_${Date.now()}`, ...submission });
-        state.user.points = (state.user.points || 0) + task.points;
-        updateUserUI();
-      }
-
-      closeModal('modal-task-submit');
-      document.getElementById('form-submit-task').reset();
-      triggerConfetti();
-      renderTasks();
-      renderLeaderboard();
-      renderProfileHistory();
-      showCustomAlert(
-        state.lang === 'ar' ? `تم إرسال المهمة بنجاح وحصلت على ${task.points} نقطة!` : `Task completed successfully! +${task.points} points awarded.`,
-        'success',
-        state.lang === 'ar' ? 'تم الإنجاز' : 'Task Completed'
-      );
-    } catch (err) {
-      showCustomAlert("Submission error: " + err.message, 'error');
-    }
-  });
-
-  // Task Search & Filters
-  document.getElementById('input-search-tasks')?.addEventListener('input', (e) => {
-    state.searchQuery = e.target.value;
-    renderTasks();
-  });
-
-  document.getElementById('select-status-filter')?.addEventListener('change', (e) => {
-    state.statusFilter = e.target.value;
-    renderTasks();
-  });
-
-  // Admin Announcement Publish
-  document.getElementById('form-admin-announcement')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const en = document.getElementById('input-announcement-en').value.trim();
-    const ar = document.getElementById('input-announcement-ar').value.trim();
-    state.settings.announcementEn = en;
-    state.settings.announcementAr = ar;
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'settings', 'app_config'), state.settings, { merge: true });
-      } catch (dbErr) {
-        console.warn("Announcement fallback to local:", dbErr.message);
-      }
-    }
-    updateAnnouncementUI();
-    showCustomAlert("Announcement published!", 'success');
-  });
-
-  // Admin Settings Submit (Logo URL override & Branding)
-  document.getElementById('form-admin-settings')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    state.settings.appName = document.getElementById('input-settings-appname').value.trim();
-    state.settings.logoUrl = document.getElementById('input-settings-logourl').value.trim() || './image_ad59c0.jpg';
-    state.settings.subtitleEn = document.getElementById('input-settings-sub-en').value.trim();
-    state.settings.subtitleAr = document.getElementById('input-settings-sub-ar').value.trim();
-    state.settings.developerCredit = document.getElementById('input-settings-devcredit').value.trim();
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'settings', 'app_config'), state.settings, { merge: true });
-      } catch (dbErr) {
-        console.warn("Settings branding fallback to local:", dbErr.message);
-      }
-    }
-    applyBrandingSettings();
-    showCustomAlert("Branding settings updated!", 'success');
-  });
-
-  // Reset logo button
-  document.getElementById('btn-reset-logo')?.addEventListener('click', () => {
-    document.getElementById('input-settings-logourl').value = './image_ad59c0.jpg';
-  });
-
-  // Sign out button
-  document.getElementById('btn-user-signout')?.addEventListener('click', async () => {
-    showCustomConfirm(state.lang === 'ar' ? 'هل تريد تسجيل الخروج من حسابك؟' : 'Sign out from your account?', async () => {
-      if (auth) await signOut(auth);
-      localStorage.removeItem('coc_guest_user');
-      localStorage.removeItem('coc_logged_in_user');
-      state.user = null;
-      updateUserUI();
-    });
-  });
-
-  // Edit display name (using Custom Apple-Style Prompt)
-  document.getElementById('btn-edit-display-name')?.addEventListener('click', async () => {
-    if (!state.user) {
-      showAuthRequiredAlert();
-      return;
-    }
-    const newName = await showCustomPrompt({
-      title: state.lang === 'ar' ? 'تعديل الاسم' : 'Edit Display Name',
-      message: state.lang === 'ar' ? 'أدخل اسمك المعروض الجديد:' : 'Enter your new display name:',
-      defaultValue: state.user?.displayName || '',
-      placeholder: 'Full Name'
-    });
-    if (newName && newName.trim().length > 0) {
-      state.user.displayName = newName.trim();
-      if (db && state.user.uid && !state.user.uid.startsWith('guest_') && !state.user.uid.startsWith('local_')) {
-        try {
-          await updateDoc(doc(db, 'users', state.user.uid), { displayName: newName.trim() });
-        } catch (e) {
-          console.warn("Could not save display name to Firestore:", e);
-        }
-      } else {
-        localStorage.setItem('coc_guest_user', JSON.stringify(state.user));
-      }
-      updateUserUI();
-      showCustomAlert(state.lang === 'ar' ? 'تم تحديث الاسم بنجاح' : 'Display name updated!', 'success');
-    }
-  });
-
-  // Push Notifications Permission Request
-  document.getElementById('btn-request-push')?.addEventListener('click', async () => {
-    if (!('Notification' in window)) {
-      showCustomAlert("Notifications are not supported in this browser.", 'warning');
-      return;
-    }
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') {
-      showCustomAlert("Push notifications enabled for COC Media Team!", 'success');
-    } else {
-      showCustomAlert("Notification permission denied or dismissed.", 'info');
-    }
-  });
-
-  // PWA Install prompt listener
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    globalDeferredPrompt = e;
-    const installBtn = document.getElementById('btn-pwa-install');
-    if (installBtn) {
-      installBtn.classList.remove('hidden');
-      installBtn.onclick = async () => {
-        if (globalDeferredPrompt) {
-          globalDeferredPrompt.prompt();
-          const { outcome } = await globalDeferredPrompt.userChoice;
-          if (outcome === 'accepted') {
-            installBtn.classList.add('hidden');
-            globalDeferredPrompt = null;
-          }
-        }
-      };
-    }
-  });
-}
-
-/* ==========================================================================
-   13. LIVE CLOCK TICKER
+   LIVE CLOCK & UTILITIES
    ========================================================================== */
 function startLiveClock() {
+  const clockEl = document.getElementById('live-clock');
+  const dateEl = document.getElementById('live-date');
+
   function tick() {
     const now = new Date();
-    const clockEl = document.getElementById('live-clock');
-    const dateEl = document.getElementById('live-date');
     if (clockEl) {
-      clockEl.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      clockEl.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
     }
     if (dateEl) {
-      dateEl.textContent = now.toLocaleDateString(state.lang === 'ar' ? 'ar-EG' : 'en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      });
+      const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+      dateEl.textContent = now.toLocaleDateString(state.lang === 'ar' ? 'ar-EG' : 'en-US', options);
     }
   }
   tick();
   setInterval(tick, 1000);
 }
 
-/* ==========================================================================
-   14. APPLICATION BOOTSTRAP
-   ========================================================================== */
-window.addEventListener('DOMContentLoaded', () => {
-  try {
-    startLiveClock();
-    setupEventListeners();
-    applyLanguage(state.lang);
-    initAuth();
-    initDataSubscriptions();
-  } catch (err) {
-    console.error("Initialization error:", err);
-  } finally {
-    // Failsafe loader dismissal
-    setTimeout(hideLoader, 1500);
+function refreshIcons() {
+  if (window.lucide && typeof window.lucide.createIcons === 'function') {
+    window.lucide.createIcons();
   }
-});
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/* ==========================================================================
+   TAB NAVIGATION (MAIN APPS & ADMIN)
+   ========================================================================== */
+function switchMainTab(tabName) {
+  state.activeTab = tabName;
+
+  // Buttons
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    if (btn.dataset.tab === tabName) {
+      btn.className = 'tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-white bg-white/[0.14] shadow-sm';
+    } else {
+      btn.className = 'tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-neutral-400 hover:text-white hover:bg-white/[0.05]';
+    }
+  });
+
+  // Views
+  document.querySelectorAll('.tab-view').forEach(view => {
+    if (view.id === `view-${tabName}`) {
+      view.classList.remove('hidden');
+    } else {
+      view.classList.add('hidden');
+    }
+  });
+
+  closeDrawer();
+  refreshIcons();
+}
+
+function switchAdminTab(tabName) {
+  document.querySelectorAll('.admintab-btn').forEach(btn => {
+    if (btn.dataset.admintab === tabName) {
+      btn.className = 'admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-white/10 whitespace-nowrap';
+    } else {
+      btn.className = 'admintab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white whitespace-nowrap';
+    }
+  });
+
+  document.querySelectorAll('.admin-panel').forEach(panel => {
+    if (panel.id === `admin-panel-${tabName}`) {
+      panel.classList.remove('hidden');
+    } else {
+      panel.classList.add('hidden');
+    }
+  });
+
+  refreshIcons();
+}
+
+/* ==========================================================================
+   LANGUAGE TOGGLE
+   ========================================================================== */
+function toggleLanguage() {
+  state.lang = state.lang === 'en' ? 'ar' : 'en';
+  localStorage.setItem('coc_lang', state.lang);
+  applyLanguage();
+}
+
+function applyLanguage() {
+  document.documentElement.lang = state.lang;
+  document.documentElement.dir = state.lang === 'ar' ? 'rtl' : 'ltr';
+
+  const badge = document.getElementById('drawer-lang-badge');
+  if (badge) badge.textContent = state.lang === 'en' ? 'English' : 'العربية';
+
+  // Translate static i18n data elements
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    if (i18n[state.lang] && i18n[state.lang][key]) {
+      el.textContent = i18n[state.lang][key];
+    }
+  });
+
+  populateCategoryFilters();
+  renderTasks();
+  applySettings();
+}
+
+/* ==========================================================================
+   1-CLICK PWA INSTALLATION TRIGGER
+   ========================================================================== */
+async function handlePwaInstall() {
+  if (deferredPrompt) {
+    try {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      console.log('User PWA install response:', choice.outcome);
+      deferredPrompt = null;
+      window.deferredPrompt = null;
+      closeDrawer();
+    } catch (err) {
+      console.warn('Install prompt error:', err);
+    }
+  } else {
+    // Check if on iOS Safari
+    const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isIos) {
+      showCustomAlert(
+        'Install on iOS Safari',
+        state.lang === 'ar' 
+          ? 'لتثبيت التطبيق على الآيفون: اضغط على زر المشاركة (Share) في متصفح سفاري، ثم اختر "إضافة إلى الشاشة الرئيسية" (Add to Home Screen).'
+          : 'To install on iOS: Tap the Share button in Safari, then select "Add to Home Screen".'
+      );
+    } else {
+      showCustomAlert(
+        'App Installed or Ready',
+        'This progressive web app is already installed or supported directly by your browser menu (Add to Home screen).'
+      );
+    }
+  }
+}
+
+/* ==========================================================================
+   INITIALIZATION & EVENT BINDINGS
+   ========================================================================== */
+function attachEventHandlers() {
+  // 1. Drawer open & close
+  const openDrawerBtn = document.getElementById('btn-open-drawer');
+  const closeDrawerBtn = document.getElementById('btn-close-drawer');
+  const drawerBackdrop = document.getElementById('side-drawer-backdrop');
+
+  if (openDrawerBtn) openDrawerBtn.onclick = openDrawer;
+  if (closeDrawerBtn) closeDrawerBtn.onclick = closeDrawer;
+  if (drawerBackdrop) drawerBackdrop.onclick = closeDrawer;
+
+  // 2. Navigation items
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.onclick = () => switchMainTab(btn.dataset.tab);
+  });
+
+  document.getElementById('drawer-nav-tasks')?.addEventListener('click', () => switchMainTab('tasks'));
+  document.getElementById('drawer-nav-attendance')?.addEventListener('click', () => switchMainTab('attendance'));
+  document.getElementById('drawer-nav-leaderboard')?.addEventListener('click', () => switchMainTab('leaderboard'));
+  document.getElementById('drawer-nav-notifications')?.addEventListener('click', () => switchMainTab('notifications'));
+  document.getElementById('btn-open-notifications')?.addEventListener('click', () => switchMainTab('notifications'));
+
+  // 3. Drawer actions
+  document.getElementById('drawer-btn-lang')?.addEventListener('click', toggleLanguage);
+  document.getElementById('drawer-btn-pwa')?.addEventListener('click', handlePwaInstall);
+  document.getElementById('drawer-btn-admin')?.addEventListener('click', openAdminPortal);
+  document.getElementById('drawer-btn-google-signin')?.addEventListener('click', handleGoogleSignIn);
+  document.getElementById('drawer-btn-signout')?.addEventListener('click', handleSignOut);
+  document.getElementById('drawer-profile-card')?.addEventListener('click', openEditProfileModal);
+
+  // 4. Modal Close Buttons
+  document.querySelectorAll('.modal-close-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      const modal = e.target.closest('.fixed');
+      if (modal) modal.classList.add('hidden');
+    };
+  });
+
+  // 5. Auth Buttons
+  document.getElementById('btn-auth-google')?.addEventListener('click', handleGoogleSignIn);
+  document.getElementById('form-auth-local')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = document.getElementById('input-local-name').value.trim();
+    if (!name) return;
+    state.user = {
+      uid: 'local_' + Date.now(),
+      displayName: name,
+      email: `${name.toLowerCase().replace(/\s+/g, '')}@cocmedia.local`,
+      photoURL: './image_ad59c0.jpg',
+      points: 0,
+      totalPenalties: 0,
+      isAdmin: false,
+      role: 'member',
+      streakDays: 1
+    };
+    updateProfileUI();
+    document.getElementById('modal-auth')?.classList.add('hidden');
+    showToast(`Welcome, ${name}!`);
+  });
+
+  // 6. Admin Auth Form Modal
+  document.getElementById('form-admin-auth')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const key = document.getElementById('input-admin-password').value;
+    const err = document.getElementById('admin-auth-error');
+    if (key === ADMIN_MASTER_PASSWORD) {
+      document.getElementById('modal-admin-auth').classList.add('hidden');
+      if (state.user && db) {
+        updateDoc(doc(db, 'users', state.user.uid), { isAdmin: true, role: 'admin' });
+        state.user.isAdmin = true;
+      }
+      state.isAdminUnlocked = true;
+      updateProfileUI();
+      showToast('Admin Console Unlocked!', 'success');
+      showAdminDashboard();
+    } else {
+      if (err) err.classList.remove('hidden');
+    }
+  });
+
+  // 7. Admin Tab Navigation
+  document.querySelectorAll('.admintab-btn').forEach(btn => {
+    btn.onclick = () => switchAdminTab(btn.dataset.admintab);
+  });
+
+  // 8. Admin Task Form Triggers
+  document.getElementById('btn-admin-add-task')?.addEventListener('click', () => openAdminTaskForm(null));
+  document.getElementById('btn-cancel-task-form')?.addEventListener('click', () => {
+    document.getElementById('admin-task-form-container').classList.add('hidden');
+  });
+  document.getElementById('form-manage-task')?.addEventListener('submit', handleAdminTaskSave);
+
+  // 9. Admin Attendance Form
+  document.getElementById('form-manage-session')?.addEventListener('submit', handleAdminSessionSave);
+  document.getElementById('btn-cancel-session-form')?.addEventListener('click', () => {
+    document.getElementById('form-manage-session').reset();
+    document.getElementById('input-session-id').value = '';
+    document.getElementById('admin-session-form-title').textContent = 'Create Attendance Session';
+    document.getElementById('btn-cancel-session-form').classList.add('hidden');
+  });
+
+  // 10. Admin Categories Form
+  document.getElementById('btn-admin-add-category')?.addEventListener('click', () => openCategoryForm(null));
+  document.getElementById('btn-cancel-category-form')?.addEventListener('click', () => {
+    document.getElementById('admin-category-form-container').classList.add('hidden');
+  });
+  document.getElementById('form-manage-category')?.addEventListener('submit', handleCategorySave);
+  document.querySelectorAll('.preset-color-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.getElementById('input-cat-color').value = btn.dataset.preset;
+    };
+  });
+
+  // 11. Admin Announcements & Settings
+  document.getElementById('form-admin-announcement')?.addEventListener('submit', handleAdminAnnouncement);
+  document.getElementById('btn-clear-announcement')?.addEventListener('click', handleClearAnnouncement);
+  document.getElementById('form-admin-settings')?.addEventListener('submit', handleAdminSettings);
+  document.getElementById('btn-reset-logo')?.addEventListener('click', () => {
+    document.getElementById('input-settings-logourl').value = './image_ad59c0.jpg';
+  });
+
+  // 12. Adjust Points & Direct Notification Forms
+  document.getElementById('btn-adjust-type-add')?.addEventListener('click', () => {
+    currentAdjustType = 'add';
+    updateAdjustTypeButtons();
+  });
+  document.getElementById('btn-adjust-type-deduct')?.addEventListener('click', () => {
+    currentAdjustType = 'deduct';
+    updateAdjustTypeButtons();
+  });
+  document.getElementById('form-admin-adjust-points')?.addEventListener('submit', handleAdminAdjustPoints);
+  document.getElementById('form-admin-direct-notification')?.addEventListener('submit', handleAdminDirectNotification);
+  document.getElementById('form-admin-edit-log')?.addEventListener('submit', handleSaveEditLog);
+
+  // 13. Submit Task Modal
+  document.getElementById('form-submit-task')?.addEventListener('submit', handleTaskSubmitForm);
+
+  // 14. Edit Profile
+  document.getElementById('btn-open-edit-profile')?.addEventListener('click', openEditProfileModal);
+  document.getElementById('form-edit-profile')?.addEventListener('submit', handleEditProfileSubmit);
+  document.getElementById('btn-preset-default-avatar')?.addEventListener('click', () => {
+    document.getElementById('input-edit-profile-avatar').value = './image_ad59c0.jpg';
+    document.getElementById('edit-profile-preview').src = './image_ad59c0.jpg';
+  });
+
+  // 15. Search & Filters
+  document.getElementById('input-search-tasks')?.addEventListener('input', (e) => {
+    state.searchQuery = e.target.value.trim();
+    renderTasks();
+  });
+  document.getElementById('select-status-filter')?.addEventListener('change', (e) => {
+    state.statusFilter = e.target.value;
+    renderTasks();
+  });
+  document.getElementById('input-admin-search-members')?.addEventListener('input', renderAdminMembers);
+
+  // 16. Leaderboard Period
+  document.querySelectorAll('.leader-period-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.leader-period-btn').forEach(b => {
+        b.className = 'leader-period-btn px-3 py-1 rounded-lg font-medium text-neutral-400 hover:text-white';
+      });
+      btn.className = 'leader-period-btn px-3 py-1 rounded-lg font-medium text-white bg-white/10';
+      state.leaderboardPeriod = btn.dataset.period;
+      renderLeaderboard();
+    };
+  });
+
+  // 17. Close announcement button
+  document.getElementById('btn-close-announcement')?.addEventListener('click', () => {
+    document.getElementById('announcement-bar').classList.add('hidden');
+  });
+
+  // 18. Route Guard hash listener
+  window.addEventListener('hashchange', checkRouteGuard);
+}
+
+// Fail-safe dark loader dismissal (2.5s absolute maximum)
+function dismissLoader() {
+  const loader = document.getElementById('app-loader');
+  if (loader) {
+    loader.style.opacity = '0';
+    loader.style.pointerEvents = 'none';
+    setTimeout(() => {
+      loader.remove();
+    }, 350);
+  }
+}
+
+// App Bootstrap
+async function initApp() {
+  applyLanguage();
+  startLiveClock();
+  attachEventHandlers();
+
+  // Listen to Firebase Auth state
+  if (auth) {
+    onAuthStateChanged(auth, async (u) => {
+      if (u) {
+        await syncUserRecord(u);
+      } else {
+        state.user = null;
+        updateProfileUI();
+      }
+      renderTasks();
+      renderAttendanceView();
+      renderLeaderboard();
+      dismissLoader();
+      checkRouteGuard();
+    });
+  }
+
+  // Connect Firestore Real-Time Subscriptions
+  initFirestoreListeners();
+
+  // Fail-safe loader dismissal after 2.5s maximum
+  setTimeout(dismissLoader, 2500);
+
+  // Initial Route Guard Check
+  checkRouteGuard();
+  refreshIcons();
+}
+
+// Launch on DOM ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}

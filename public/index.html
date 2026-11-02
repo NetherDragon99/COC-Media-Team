@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v1.0.3</title>
+    <title>COC Media Team v1.0.4</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
     <!-- PWA Configuration (GitHub Pages Relative Paths) -->
@@ -34,7 +34,7 @@
               flameGold: '#F59E0B',
               darkSurface: '#0B0C10',
               glassBorder: 'rgba(255, 255, 255, 0.08)',
-              glassBg: 'rgba(18, 20, 28, 0.65)'
+              glassBg: 'rgba(28, 28, 30, 0.72)'
             },
             fontFamily: {
               sans: ['"Plus Jakarta Sans"', 'Cairo', 'sans-serif'],
@@ -46,84 +46,24 @@
       }
     </script>
 
+    <!-- Custom CSS stylesheet -->
+    <link rel="stylesheet" href="./styles.css" />
+
     <!-- Confetti & Lucide CDN for Rich Micro-interactions -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-
-    <style>
-      /* Glassmorphism & Apple Dark Design System */
-      :root {
-        color-scheme: dark;
-      }
-      body {
-        font-family: 'Plus Jakarta Sans', Cairo, system-ui, -apple-system, sans-serif;
-        background-color: #000000;
-        color: #ffffff;
-        -webkit-tap-highlight-color: transparent;
-      }
-      [dir="rtl"] {
-        font-family: Cairo, 'Plus Jakarta Sans', system-ui, sans-serif;
-      }
-      .glass-card {
-        background: rgba(18, 20, 28, 0.65);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-      }
-      .glass-modal {
-        background: rgba(11, 13, 19, 0.88);
-        backdrop-filter: blur(32px);
-        -webkit-backdrop-filter: blur(32px);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-      }
-      .glass-input {
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        color: #ffffff;
-      }
-      .glass-input:focus {
-        border-color: #0A84FF;
-        outline: none;
-        box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.25);
-      }
-      .custom-scrollbar::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
-      }
-      .custom-scrollbar::-webkit-scrollbar-track {
-        background: rgba(0, 0, 0, 0.2);
-      }
-      .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.15);
-        border-radius: 9999px;
-      }
-      @keyframes apple-spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-      .animate-apple-spin {
-        animation: apple-spin 1s cubic-bezier(0.5, 0.1, 0.5, 0.9) infinite;
-      }
-      @keyframes pulse-glow {
-        0%, 100% { opacity: 0.4; transform: scale(1); }
-        50% { opacity: 0.8; transform: scale(1.05); }
-      }
-      .animate-pulse-glow {
-        animation: pulse-glow 3s infinite ease-in-out;
-      }
-    </style>
   </head>
   <body class="bg-[#000000] text-neutral-100 antialiased selection:bg-[#0A84FF]/30 selection:text-white min-h-screen overflow-x-hidden" style="background-color: #000000; color: #ffffff;">
     
     <!-- NON-BLOCKING FAIL-SAFE DARK LOADING OVERLAY -->
-    <div id="app-loader" style="position: fixed; inset: 0; background-color: #000000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.4s ease, visibility 0.4s ease;">
+    <div id="app-loader" style="position: fixed; inset: 0; background-color: #000000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.35s ease, visibility 0.35s ease;">
       <div class="relative flex items-center justify-center mb-6">
         <div class="absolute -inset-4 bg-gradient-to-tr from-[#0A84FF]/30 to-[#F59E0B]/30 rounded-full blur-xl animate-pulse-glow"></div>
         <img src="./image_ad59c0.jpg" alt="COC Media Team Logo" class="relative w-24 h-24 rounded-full object-cover border-2 border-white/20 shadow-2xl" />
       </div>
       <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
         <span>COC Media Team</span>
-        <span class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono">v1.0.3</span>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono">v1.0.4</span>
       </div>
       <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
       <!-- Apple-style circular dark spinner -->
@@ -182,7 +122,7 @@
       <div class="max-w-6xl mx-auto w-full px-4 sm:px-6 pt-5 pb-2">
         <div class="p-1 rounded-2xl glass-card flex items-center justify-between gap-1 overflow-x-auto custom-scrollbar">
           
-          <button data-tab="tasks" class="tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-white bg-white/[0.12] shadow-sm">
+          <button data-tab="tasks" class="tab-btn flex-1 min-w-[76px] py-2.5 px-3 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 text-white bg-white/[0.14] shadow-sm">
             <i data-lucide="check-square" class="w-4 h-4 text-[#0A84FF]"></i>
             <span data-i18n="nav_tasks">Tasks</span>
           </button>
@@ -246,17 +186,18 @@
           <!-- Category Filter Chips & Search Bar -->
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             
-            <!-- Category Chips -->
+            <!-- Category Chips (Populated Dynamically from Firestore) -->
             <div class="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1 flex-1" id="category-filter-chips">
-              <button data-cat="all" class="cat-chip px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white whitespace-nowrap shadow-sm">All Tasks</button>
-              <!-- Dynamic Categories injected here -->
+              <button data-category="all" class="cat-filter-btn px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition bg-[#0A84FF] text-white shadow-sm">
+                All Tasks
+              </button>
             </div>
 
-            <!-- Search & Status Filter -->
+            <!-- Search & Status Select -->
             <div class="flex items-center gap-2">
-              <div class="relative w-full sm:w-64">
+              <div class="relative flex-1 sm:w-56">
                 <i data-lucide="search" class="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2"></i>
-                <input id="input-search-tasks" type="text" placeholder="Search tasks..." class="w-full pl-9 pr-3 py-1.5 rounded-xl text-xs glass-input focus:ring-1 focus:ring-[#0A84FF]" />
+                <input id="input-search-tasks" type="text" placeholder="Search tasks..." class="w-full pl-8 pr-3 py-1.5 rounded-xl text-xs glass-input" />
               </div>
               <select id="select-status-filter" class="px-2.5 py-1.5 rounded-xl text-xs glass-input bg-[#0B0C10] text-neutral-300">
                 <option value="all">All</option>
@@ -310,15 +251,15 @@
             </div>
           </div>
 
-          <!-- Active Sessions Container -->
+          <!-- Attendance Sessions (Active Sessions OR Prominent Locked State) -->
           <div class="space-y-3">
             <h3 class="text-sm font-bold text-white flex items-center gap-2">
               <i data-lucide="calendar" class="w-4 h-4 text-emerald-400"></i>
               <span data-i18n="scheduled_sessions">Scheduled Sessions</span>
             </h3>
             
-            <div id="attendance-sessions-container" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <!-- Active sessions rendered here -->
+            <div id="attendance-sessions-container" class="space-y-4">
+              <!-- Active session cards or locked placeholder rendered here -->
             </div>
           </div>
 
@@ -361,7 +302,7 @@
             </div>
           </div>
 
-          <!-- TOP 3 PODIUM (Apple Glass Style) -->
+          <!-- TOP 3 PODIUM (Apple Glass Style, Filter out 0 points) -->
           <div id="leaderboard-podium" class="grid grid-cols-3 gap-2 sm:gap-4 items-end pt-8 pb-4">
             <!-- 2nd Place -->
             <div id="podium-second" class="glass-card rounded-2xl p-3 sm:p-5 text-center relative border-t-2 border-slate-300">
@@ -382,7 +323,7 @@
               </div>
               <div id="podium-1-name" class="font-bold text-sm sm:text-base text-white truncate">--</div>
               <div id="podium-1-pts" class="text-sm sm:text-base font-extrabold text-[#F59E0B] font-mono mt-0.5">0 pts</div>
-              <div id="podium-1-tasks" class="text-[11px] text-neutral-300">0 tasks</div>
+              <div id="podium-1-tasks" class="text-[11px] text-amber-300/80 font-medium">0 tasks</div>
             </div>
 
             <!-- 3rd Place -->
@@ -392,17 +333,19 @@
                 <img id="podium-3-img" src="./image_ad59c0.jpg" alt="3rd Place" class="w-full h-full object-cover" />
               </div>
               <div id="podium-3-name" class="font-bold text-xs sm:text-sm text-white truncate">--</div>
-              <div id="podium-3-pts" class="text-xs sm:text-sm font-bold text-amber-600 font-mono mt-0.5">0 pts</div>
+              <div id="podium-3-pts" class="text-xs sm:text-sm font-bold text-amber-500 font-mono mt-0.5">0 pts</div>
               <div id="podium-3-tasks" class="text-[10px] text-neutral-400">0 tasks</div>
             </div>
           </div>
 
-          <!-- FULL RANKING LIST (Excluding zero points members) -->
-          <div class="glass-card rounded-2xl p-4 sm:p-5">
-            <h3 class="text-xs uppercase font-mono tracking-wider text-neutral-400 font-semibold mb-3" data-i18n="all_team_rankings">Team Rankings</h3>
-            
-            <div id="leaderboard-full-list" class="divide-y divide-white/5 space-y-2">
-              <!-- Leaderboard items rendered here -->
+          <!-- Leaderboard List Table -->
+          <div class="glass-card rounded-2xl overflow-hidden border border-white/10">
+            <div class="p-4 border-b border-white/10 flex items-center justify-between">
+              <h3 class="text-sm font-bold text-white" data-i18n="all_team_rankings">Team Rankings</h3>
+              <span class="text-xs text-neutral-400 font-mono" id="leaderboard-total-count">0 Members</span>
+            </div>
+            <div class="divide-y divide-white/5" id="leaderboard-list">
+              <!-- Full rankings list items -->
             </div>
           </div>
 
@@ -412,106 +355,81 @@
         <!-- VIEW 4: NOTIFICATIONS & UPDATES -->
         <!-- ========================================== -->
         <section id="view-notifications" class="tab-view hidden space-y-4">
-          
           <div class="flex items-center justify-between">
             <div>
               <h2 class="text-lg font-bold text-white flex items-center gap-2">
                 <i data-lucide="bell-ring" class="w-5 h-5 text-rose-400"></i>
-                <span data-i18n="notifications_title">Team Announcements & Alerts</span>
+                <span data-i18n="notifications_title">Team Announcements &amp; Alerts</span>
               </h2>
               <p class="text-xs text-neutral-400" data-i18n="notifications_sub">Real-time updates, task assignments, and points announcements.</p>
             </div>
-
-            <button id="btn-mark-all-read" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/[0.06] hover:bg-white/[0.12] text-neutral-300 hover:text-white transition">
-              Mark all read
-            </button>
+            <button id="btn-mark-all-read" class="text-xs text-[#0A84FF] hover:underline font-semibold">Mark All as Read</button>
           </div>
 
-          <div id="notifications-list" class="space-y-3">
-            <!-- Dynamic notifications rendered here -->
+          <div id="notifications-container" class="space-y-3">
+            <!-- Dynamic notifications -->
           </div>
-
         </section>
 
         <!-- ========================================== -->
-        <!-- VIEW 5: USER PROFILE & STATS -->
+        <!-- VIEW 5: USER PROFILE VIEW -->
         <!-- ========================================== -->
         <section id="view-profile" class="tab-view hidden space-y-5">
-          
-          <!-- User Profile Hero Card -->
           <div class="glass-card rounded-2xl p-6 relative overflow-hidden">
-            <div class="flex flex-col sm:flex-row items-center sm:items-start gap-4">
-              <div class="relative w-20 h-20 rounded-full overflow-hidden border-2 border-white/20 shadow-xl">
-                <img id="profile-user-img" src="./image_ad59c0.jpg" alt="Profile" class="w-full h-full object-cover" />
+            <div class="flex flex-col sm:flex-row items-center sm:items-start gap-5">
+              <div class="relative w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden border-2 border-[#0A84FF] shadow-2xl flex-shrink-0">
+                <img id="profile-view-avatar" src="./image_ad59c0.jpg" alt="Profile Avatar" class="w-full h-full object-cover" />
               </div>
-              <div class="text-center sm:text-left flex-1">
-                <div class="flex items-center justify-center sm:justify-start gap-2">
-                  <h2 id="profile-user-name" class="text-xl font-bold text-white">Guest User</h2>
-                  <span id="profile-role-badge" class="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold">Member</span>
+
+              <div class="flex-1 text-center sm:text-left space-y-2">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h2 id="profile-view-name" class="text-xl font-bold text-white">Team Member</h2>
+                    <p id="profile-view-email" class="text-xs text-neutral-400">member@email.com</p>
+                  </div>
+                  <button id="btn-open-edit-profile" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition flex items-center justify-center gap-1.5 self-center sm:self-start">
+                    <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Edit Profile
+                  </button>
                 </div>
-                <p id="profile-user-email" class="text-xs text-neutral-400 mt-0.5 font-mono">guest@cocmedia.local</p>
-                <div class="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                  <!-- Guest Sign In Button -->
-                  <button id="btn-profile-google-signin" class="px-4 py-1.5 rounded-lg text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition shadow-lg shadow-[#0A84FF]/25 flex items-center gap-2">
-                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24">
-                      <path fill="#ffffff" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                      <path fill="#ffffff" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                      <path fill="#ffffff" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                      <path fill="#ffffff" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                    </svg>
-                    <span>Sign In with Google</span>
-                  </button>
-                  <button id="btn-edit-display-name" class="px-3 py-1 rounded-lg text-xs font-medium bg-white/[0.08] hover:bg-white/[0.15] text-white transition flex items-center gap-1.5">
-                    <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Edit Name
-                  </button>
-                  <button id="btn-request-push" class="px-3 py-1 rounded-lg text-xs font-medium bg-white/[0.08] hover:bg-white/[0.15] text-white transition flex items-center gap-1.5">
-                    <i data-lucide="bell" class="w-3.5 h-3.5 text-rose-400"></i> Enable Notifications
-                  </button>
-                  <button id="btn-pwa-install" class="hidden px-3 py-1 rounded-lg text-xs font-medium bg-[#0A84FF] hover:bg-[#0A84FF]/90 text-white transition flex items-center gap-1.5">
-                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Install App
-                  </button>
+
+                <div class="flex flex-wrap items-center justify-center sm:justify-start gap-2 pt-2">
+                  <span id="profile-view-role" class="px-2.5 py-1 rounded-full text-xs font-mono font-semibold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30">Member</span>
+                  <span id="profile-view-streak" class="px-2.5 py-1 rounded-full text-xs font-mono font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">🔥 Active Member</span>
                 </div>
               </div>
             </div>
 
-            <!-- Profile 4-Card Stats -->
+            <!-- Stats Grid -->
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-white/10">
               <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
-                <div class="text-xs text-neutral-400 font-medium">Total Points</div>
-                <div id="prof-stat-points" class="text-lg font-bold text-[#F59E0B] font-mono mt-0.5">0</div>
+                <div class="text-[11px] text-neutral-400">Total Points</div>
+                <div id="profile-stat-points" class="text-lg font-bold text-[#F59E0B] font-mono mt-0.5">0</div>
               </div>
               <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
-                <div class="text-xs text-neutral-400 font-medium">Completed Tasks</div>
-                <div id="prof-stat-completed" class="text-lg font-bold text-[#0A84FF] font-mono mt-0.5">0</div>
+                <div class="text-[11px] text-neutral-400">Completed Quotas</div>
+                <div id="profile-stat-completed" class="text-lg font-bold text-white font-mono mt-0.5">0</div>
               </div>
               <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
-                <div class="text-xs text-neutral-400 font-medium">Streak 🔥</div>
-                <div id="prof-stat-streak" class="text-lg font-bold text-amber-500 font-mono mt-0.5">0 Days</div>
+                <div class="text-[11px] text-neutral-400">Attendance Penalties</div>
+                <div id="profile-stat-penalties" class="text-lg font-bold text-rose-400 font-mono mt-0.5">0 pts</div>
               </div>
               <div class="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-center">
-                <div class="text-xs text-neutral-400 font-medium">Penalties</div>
-                <div id="prof-stat-penalties" class="text-lg font-bold text-rose-400 font-mono mt-0.5">0 pts</div>
+                <div class="text-[11px] text-neutral-400">Rank Placement</div>
+                <div id="profile-stat-rank" class="text-lg font-bold text-[#0A84FF] font-mono mt-0.5">--</div>
               </div>
             </div>
           </div>
 
-          <!-- User Submissions History -->
+          <!-- Recent Submissions History -->
           <div class="glass-card rounded-2xl p-5 space-y-3">
             <h3 class="text-sm font-bold text-white flex items-center gap-2">
               <i data-lucide="history" class="w-4 h-4 text-[#0A84FF]"></i>
-              <span>My Activity & Submission History</span>
+              <span>My Task Submission History</span>
             </h3>
-            <div id="profile-history-list" class="divide-y divide-white/5 space-y-2">
-              <!-- Submissions -->
+            <div id="profile-submissions-list" class="divide-y divide-white/5 space-y-2">
+              <!-- Rendered submission records -->
             </div>
           </div>
-
-          <div class="text-center pt-2">
-            <button id="btn-user-signout" class="px-5 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:text-white bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition">
-              Sign Out from Account
-            </button>
-          </div>
-
         </section>
 
       </main>
@@ -521,9 +439,9 @@
     <!-- ================================================================= -->
     <!-- APPLE-STYLE SLIDE-OVER SIDE MENU (HAMBURGER DRAWER) -->
     <!-- ================================================================= -->
-    <div id="side-drawer-backdrop" class="fixed inset-0 bg-black/75 backdrop-blur-md z-50 transition-opacity duration-300 opacity-0 pointer-events-none"></div>
+    <div id="side-drawer-backdrop" class="fixed inset-0 bg-black/75 backdrop-blur-md z-50"></div>
 
-    <aside id="side-drawer" class="fixed top-0 bottom-0 right-0 w-80 max-w-[85vw] bg-[#0c0e16]/98 backdrop-blur-3xl border-l border-white/10 z-50 transform translate-x-full transition-transform duration-300 ease-out flex flex-col justify-between shadow-2xl overflow-hidden" aria-label="Sidebar Menu">
+    <aside id="side-drawer" class="fixed top-0 bottom-0 right-0 w-80 max-w-[85vw] bg-[#0c0e16]/98 backdrop-blur-3xl border-l border-white/10 z-50 flex flex-col justify-between shadow-2xl overflow-hidden" aria-label="Sidebar Menu">
       
       <!-- Drawer Header & Profile Card -->
       <div class="p-5 space-y-4 border-b border-white/10">
@@ -629,10 +547,10 @@
           <i data-lucide="lock" class="w-3.5 h-3.5 text-amber-400/80"></i>
         </button>
 
-        <!-- Sign Out / Switch Google Account Button (Hidden for Guest, Visible when Logged In) -->
+        <!-- Sign Out Button (Hidden for Guest, Visible when Logged In) -->
         <button id="drawer-btn-signout" class="hidden w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/15 transition text-left font-medium">
           <i data-lucide="log-out" class="w-4 h-4"></i>
-          <span class="flex-1" id="drawer-signout-text">Sign Out / Switch Account</span>
+          <span class="flex-1" id="drawer-signout-text">Sign Out</span>
         </button>
 
       </div>
@@ -647,7 +565,7 @@
           Designed &amp; Developed by Steven Mario
         </div>
         <div class="pt-1">
-          <span id="drawer-footer-version" class="inline-block text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-neutral-400">Version 1.0.3</span>
+          <span id="drawer-footer-version" class="inline-block text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-neutral-400">Version 1.0.4</span>
         </div>
       </div>
 
@@ -686,7 +604,7 @@
               Default Emblem
             </button>
             <button type="button" id="btn-view-full-profile" class="flex-1 py-1.5 px-2 rounded-lg bg-[#0A84FF]/15 hover:bg-[#0A84FF]/25 border border-[#0A84FF]/30 text-[11px] text-[#0A84FF] font-semibold transition">
-              View Stats &amp; History
+              View My Stats
             </button>
           </div>
 
@@ -714,11 +632,11 @@
         </div>
         <div class="text-center">
           <h3 class="text-base font-bold text-white">Admin Portal</h3>
-          <p class="text-xs text-neutral-400 mt-1">Enter the master administrative key to manage tasks, quotas, and sessions.</p>
+          <p class="text-xs text-neutral-400 mt-1">Enter the master administrative key to unlock admin privileges.</p>
         </div>
         <form id="form-admin-auth" class="space-y-3">
           <input id="input-admin-password" type="password" placeholder="Master Key" class="w-full px-3 py-2 rounded-xl text-sm glass-input font-mono" required />
-          <div id="admin-auth-error" class="hidden text-xs text-rose-400 font-medium text-center">Invalid password. Access denied.</div>
+          <div id="admin-auth-error" class="hidden text-xs text-rose-400 font-medium text-center">Invalid key. Access denied.</div>
           <button type="submit" class="w-full py-2.5 rounded-xl text-xs font-bold text-black bg-gradient-to-r from-amber-400 to-[#F59E0B] hover:opacity-95 transition shadow-lg shadow-amber-500/20">
             Unlock Admin Console
           </button>
@@ -762,7 +680,7 @@
             <div class="flex items-center justify-between">
               <div>
                 <h3 class="text-sm font-bold text-white">Create &amp; Manage Team Tasks</h3>
-                <p class="text-xs text-neutral-400">Configure quotas, point values, links, and completion requirements.</p>
+                <p class="text-xs text-neutral-400">Configure quotas, point values, scheduled deadlines, and guidelines.</p>
               </div>
               <button id="btn-admin-add-task" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#0A84FF] text-white hover:bg-[#0A84FF]/90 transition flex items-center gap-1.5">
                 <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add New Task
@@ -773,13 +691,13 @@
             <div id="admin-task-form-container" class="hidden p-4 rounded-xl glass-card border border-[#0A84FF]/30 space-y-4">
               <div class="flex items-center justify-between">
                 <h4 id="admin-task-form-title" class="text-xs font-bold text-[#0A84FF] uppercase tracking-wider">New Task Configuration</h4>
-                <button id="btn-cancel-task-form" class="text-xs text-neutral-400 hover:text-white">Cancel</button>
+                <button id="btn-cancel-task-form" type="button" class="text-xs text-neutral-400 hover:text-white">Cancel</button>
               </div>
               <form id="form-manage-task" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <input type="hidden" id="input-task-id" />
                 <div class="sm:col-span-2">
                   <label class="block text-neutral-300 mb-1">Task Title *</label>
-                  <input id="input-task-title" type="text" class="w-full px-3 py-2 rounded-lg glass-input text-xs" placeholder="e.g. Edit Sunday Sermon Video Highlight" required />
+                  <input id="input-task-title" type="text" class="w-full px-3 py-2 rounded-lg glass-input text-xs" placeholder="e.g. Sunday Highlight Reel Edit" required />
                 </div>
                 <div class="sm:col-span-2">
                   <label class="block text-neutral-300 mb-1">Description *</label>
@@ -788,12 +706,12 @@
                 <div>
                   <label class="block text-neutral-300 mb-1">Category</label>
                   <select id="select-task-category" class="w-full px-3 py-2 rounded-lg glass-input text-xs bg-[#0B0C10]">
-                    <!-- Injected -->
+                    <!-- Dynamically populated from Firestore categories -->
                   </select>
                 </div>
                 <div>
-                  <label class="block text-neutral-300 mb-1">Points Value *</label>
-                  <input id="input-task-points" type="number" min="1" value="50" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" required />
+                  <label class="block text-neutral-300 mb-1">Points Value * (Defaults to 5)</label>
+                  <input id="input-task-points" type="number" min="1" value="" placeholder="5" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
                 </div>
                 <div>
                   <label class="block text-neutral-300 mb-1">Quota Type</label>
@@ -809,17 +727,16 @@
                   <input id="input-task-link" type="url" placeholder="https://drive.google.com/..." class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
                 </div>
                 <div>
-                  <label class="block text-neutral-300 mb-1">Estimated Duration</label>
-                  <input id="input-task-duration" type="text" placeholder="e.g. 45 mins" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
+                  <label class="block text-neutral-300 mb-1">Scheduled Start Date &amp; Time (Optional)</label>
+                  <input id="input-task-start-datetime" type="datetime-local" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono bg-[#0B0C10]" />
                 </div>
                 <div>
-                  <label class="block text-neutral-300 mb-1">Deadline Type</label>
-                  <select id="select-task-deadline" class="w-full px-3 py-2 rounded-lg glass-input text-xs bg-[#0B0C10]">
-                    <option value="none">No Deadline</option>
-                    <option value="duration_hours">Duration in Hours</option>
-                    <option value="duration_days">Duration in Days</option>
-                    <option value="exact_datetime">Exact Date &amp; Time</option>
-                  </select>
+                  <label class="block text-neutral-300 mb-1">Scheduled End Date &amp; Time / Deadline (Optional)</label>
+                  <input id="input-task-end-datetime" type="datetime-local" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono bg-[#0B0C10]" />
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Estimated Duration</label>
+                  <input id="input-task-duration" type="text" placeholder="e.g. 45 mins" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
                 </div>
                 <div class="sm:col-span-2 flex flex-wrap gap-4 pt-2">
                   <label class="flex items-center gap-2 cursor-pointer">
@@ -833,7 +750,7 @@
                 </div>
                 <div id="box-question-prompt" class="sm:col-span-2 hidden">
                   <label class="block text-neutral-300 mb-1">Question Prompt for Submitter</label>
-                  <input id="input-question-prompt" type="text" placeholder="e.g. Paste your exported drive link here" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
+                  <input id="input-question-prompt" type="text" placeholder="e.g. Paste link to export" class="w-full px-3 py-2 rounded-lg glass-input text-xs" />
                 </div>
                 <div class="sm:col-span-2 pt-2">
                   <button type="submit" class="w-full py-2.5 rounded-lg text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition">
@@ -851,7 +768,7 @@
                     <th class="p-3">Title</th>
                     <th class="p-3">Category</th>
                     <th class="p-3">Points</th>
-                    <th class="p-3">Quota</th>
+                    <th class="p-3">Schedule / Deadline</th>
                     <th class="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -863,50 +780,97 @@
           </div>
 
           <!-- TAB 2: ATTENDANCE ENGINE CONFIG -->
-          <div id="admin-panel-attendance" class="admin-panel hidden space-y-5">
+          <div id="admin-panel-attendance" class="admin-panel hidden space-y-6">
             <div>
-              <h3 class="text-sm font-bold text-white">Attendance Sessions &amp; Penalty Matrix</h3>
-              <p class="text-xs text-neutral-400">Configure scheduled service days, start times, grace period, and late penalty deduction formula.</p>
+              <h3 class="text-sm font-bold text-white">Attendance Sessions &amp; Granular Penalty Matrix</h3>
+              <p class="text-xs text-neutral-400">Configure start/end times, grace period, and exact late penalty step deduction.</p>
             </div>
 
             <!-- Add/Edit Session Form -->
             <form id="form-manage-session" class="p-4 rounded-xl glass-card border border-white/10 space-y-3 text-xs">
-              <h4 class="font-bold text-white text-xs">Session Configuration</h4>
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label class="block text-neutral-400 mb-1">Session Title</label>
-                  <input id="input-session-title" type="text" value="Sunday Morning Service" class="w-full px-3 py-2 rounded-lg glass-input text-xs" required />
+              <div class="flex items-center justify-between">
+                <h4 id="admin-session-form-title" class="font-bold text-white text-xs">Create Attendance Session</h4>
+                <button type="button" id="btn-cancel-session-form" class="hidden text-xs text-neutral-400 hover:text-white">Cancel Edit</button>
+              </div>
+              <input type="hidden" id="input-session-id" />
+              <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                <div class="sm:col-span-2">
+                  <label class="block text-neutral-400 mb-1">Session Title *</label>
+                  <input id="input-session-title" type="text" placeholder="e.g. Sunday Morning Service" class="w-full px-3 py-2 rounded-lg glass-input text-xs" required />
                 </div>
                 <div>
-                  <label class="block text-neutral-400 mb-1">Exact Start Time (24h)</label>
-                  <input id="input-session-start" type="time" value="09:00" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" required />
+                  <label class="block text-neutral-400 mb-1">Start Date &amp; Time *</label>
+                  <input id="input-session-start-datetime" type="datetime-local" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono bg-[#0B0C10]" required />
                 </div>
                 <div>
-                  <label class="block text-neutral-400 mb-1">Check-in Window End</label>
-                  <input id="input-session-window-end" type="time" value="11:30" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" required />
+                  <label class="block text-neutral-400 mb-1">End Date &amp; Time *</label>
+                  <input id="input-session-end-datetime" type="datetime-local" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono bg-[#0B0C10]" required />
                 </div>
                 <div>
                   <label class="block text-neutral-400 mb-1">Grace Period (Minutes)</label>
-                  <input id="input-session-grace" type="number" value="10" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                  <input id="input-session-grace" type="number" min="0" value="10" placeholder="10" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
                 </div>
                 <div>
-                  <label class="block text-neutral-400 mb-1">Penalty Deduction Rate</label>
-                  <input id="input-session-penalty-rate" type="number" value="5" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" placeholder="pts per 5 mins late" />
+                  <label class="block text-neutral-400 mb-1">Step: Every N Mins</label>
+                  <input id="input-session-every-n" type="number" min="1" value="5" placeholder="5" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
                 </div>
                 <div>
-                  <label class="block text-neutral-400 mb-1">Max Penalty Cap</label>
-                  <input id="input-session-max-cap" type="number" value="50" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                  <label class="block text-neutral-400 mb-1">Penalty Per Step (pts)</label>
+                  <input id="input-session-step-amount" type="number" min="1" value="5" placeholder="5" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                </div>
+                <div>
+                  <label class="block text-neutral-400 mb-1">Min / Max Penalty (pts)</label>
+                  <div class="flex items-center gap-2">
+                    <input id="input-session-min-penalty" type="number" min="0" value="5" placeholder="Min" class="w-1/2 px-2 py-2 rounded-lg glass-input text-xs font-mono" />
+                    <input id="input-session-max-penalty" type="number" min="1" value="50" placeholder="Max" class="w-1/2 px-2 py-2 rounded-lg glass-input text-xs font-mono" />
+                  </div>
                 </div>
               </div>
-              <div class="pt-2">
+              <div class="flex items-center justify-between pt-2">
+                <label class="flex items-center gap-2 cursor-pointer text-neutral-300">
+                  <input type="checkbox" id="check-session-active" class="rounded accent-emerald-500" checked />
+                  <span>Session is Active / Open for Check-in</span>
+                </label>
                 <button type="submit" class="px-4 py-2 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 transition">
                   Save Attendance Session
                 </button>
               </div>
             </form>
 
-            <div id="admin-sessions-list" class="space-y-3">
-              <!-- Active sessions list -->
+            <!-- Configured Sessions List -->
+            <div class="space-y-2">
+              <h4 class="text-xs font-bold text-neutral-300 uppercase tracking-wider">Scheduled Sessions</h4>
+              <div id="admin-sessions-list" class="space-y-3">
+                <!-- Rendered session cards -->
+              </div>
+            </div>
+
+            <!-- Live Attendance Logs Table -->
+            <div class="space-y-2 pt-4 border-t border-white/10">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h4 class="text-xs font-bold text-neutral-300 uppercase tracking-wider">Live Check-in Logs</h4>
+                  <p class="text-[11px] text-neutral-400">View real-time records, edit times, or waive late penalty deductions.</p>
+                </div>
+                <span id="admin-attendance-log-count" class="text-xs font-mono text-neutral-400">0 logs</span>
+              </div>
+              <div class="rounded-xl overflow-hidden border border-white/10">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-white/[0.04] text-neutral-400 font-mono">
+                    <tr>
+                      <th class="p-3">Member</th>
+                      <th class="p-3">Session</th>
+                      <th class="p-3">Check-in Time</th>
+                      <th class="p-3">Status</th>
+                      <th class="p-3">Penalty</th>
+                      <th class="p-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="admin-attendance-logs-tbody" class="divide-y divide-white/5">
+                    <!-- Logs rows -->
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
@@ -914,8 +878,8 @@
           <div id="admin-panel-members" class="admin-panel hidden space-y-4">
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="text-sm font-bold text-white">Team Roster &amp; Points Adjustment</h3>
-                <p class="text-xs text-neutral-400">View registered members, promote roles, and manually award or deduct points.</p>
+                <h3 class="text-sm font-bold text-white">Team Roster &amp; Member Adjustments</h3>
+                <p class="text-xs text-neutral-400">Promote to Admin, award/deduct points with reason, or send direct notification.</p>
               </div>
               <input id="input-admin-search-members" type="text" placeholder="Search member..." class="px-3 py-1.5 rounded-lg text-xs glass-input w-48" />
             </div>
@@ -928,7 +892,7 @@
                     <th class="p-3">Role</th>
                     <th class="p-3">Points</th>
                     <th class="p-3">Penalties</th>
-                    <th class="p-3 text-right">Adjustment</th>
+                    <th class="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="admin-members-tbody" class="divide-y divide-white/5">
@@ -939,10 +903,62 @@
           </div>
 
           <!-- TAB 4: CATEGORY MANAGER -->
-          <div id="admin-panel-categories" class="admin-panel hidden space-y-4">
-            <h3 class="text-sm font-bold text-white">Task Categories</h3>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" id="admin-categories-list">
-              <!-- Categories list -->
+          <div id="admin-panel-categories" class="admin-panel hidden space-y-5">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-bold text-white">Task Categories Manager</h3>
+                <p class="text-xs text-neutral-400">Create, customize, and manage task categories. Dynamic counts reflect live tasks.</p>
+              </div>
+              <button id="btn-admin-add-category" type="button" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#0A84FF] text-white hover:bg-[#0A84FF]/90 transition flex items-center gap-1.5">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Category
+              </button>
+            </div>
+
+            <!-- Category Form (Collapsible) -->
+            <div id="admin-category-form-container" class="hidden p-4 rounded-xl glass-card border border-[#0A84FF]/30 space-y-3">
+              <div class="flex items-center justify-between">
+                <h4 id="admin-category-form-title" class="text-xs font-bold text-[#0A84FF] uppercase tracking-wider">New Category</h4>
+                <button id="btn-cancel-category-form" type="button" class="text-xs text-neutral-400 hover:text-white">Cancel</button>
+              </div>
+              <form id="form-manage-category" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <input type="hidden" id="input-category-id" />
+                <div>
+                  <label class="block text-neutral-300 mb-1">Name (English) *</label>
+                  <input id="input-cat-name-en" type="text" placeholder="e.g. Video Production" class="w-full px-3 py-2 rounded-lg glass-input text-xs" required />
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Name (Arabic) *</label>
+                  <input id="input-cat-name-ar" type="text" dir="rtl" placeholder="مثال: إنتاج الفيديو" class="w-full px-3 py-2 rounded-lg glass-input text-xs font-cairo" required />
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Color Accent</label>
+                  <div class="flex items-center gap-2">
+                    <input id="input-cat-color" type="color" value="#0A84FF" class="w-9 h-9 rounded-lg cursor-pointer bg-transparent border-0 p-0" />
+                    <div class="flex items-center gap-1 flex-1">
+                      <button type="button" data-preset="#0A84FF" class="preset-color-btn w-6 h-6 rounded-full bg-[#0A84FF] border border-white/20"></button>
+                      <button type="button" data-preset="#8B5CF6" class="preset-color-btn w-6 h-6 rounded-full bg-[#8B5CF6] border border-white/20"></button>
+                      <button type="button" data-preset="#EC4899" class="preset-color-btn w-6 h-6 rounded-full bg-[#EC4899] border border-white/20"></button>
+                      <button type="button" data-preset="#F59E0B" class="preset-color-btn w-6 h-6 rounded-full bg-[#F59E0B] border border-white/20"></button>
+                      <button type="button" data-preset="#10B981" class="preset-color-btn w-6 h-6 rounded-full bg-[#10B981] border border-white/20"></button>
+                      <button type="button" data-preset="#06B6D4" class="preset-color-btn w-6 h-6 rounded-full bg-[#06B6D4] border border-white/20"></button>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-neutral-300 mb-1">Icon (Lucide name)</label>
+                  <input id="input-cat-icon" type="text" value="film" placeholder="film, camera, mic, etc." class="w-full px-3 py-2 rounded-lg glass-input text-xs font-mono" />
+                </div>
+                <div class="sm:col-span-2 pt-1">
+                  <button type="submit" class="w-full py-2.5 rounded-lg text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition">
+                    Save Category
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <!-- Categories Grid -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3" id="admin-categories-list">
+              <!-- Rendered categories -->
             </div>
           </div>
 
@@ -1018,7 +1034,7 @@
           <h3 class="text-base font-bold text-white mt-2" id="submit-modal-title">Task Title</h3>
           <div class="text-xs text-neutral-400 flex items-center gap-1.5 mt-1">
             <span>Points reward:</span>
-            <span class="font-bold text-[#F59E0B] font-mono" id="submit-modal-points">+50 pts</span>
+            <span class="font-bold text-[#F59E0B] font-mono" id="submit-modal-points">+5 pts</span>
           </div>
         </div>
 
@@ -1123,7 +1139,7 @@
         <div class="text-center">
           <h3 class="text-base font-bold text-white">Action Required: Authorize Domain</h3>
           <p class="text-xs text-neutral-300 mt-1.5 leading-relaxed">
-            Google Sign-In blocked this request because your current GitHub Pages hosting domain is not yet whitelisted in Firebase.
+            Google Sign-In blocked this request because your current hosting domain is not yet whitelisted in Firebase Auth.
           </p>
         </div>
 
@@ -1149,7 +1165,128 @@
       </div>
     </div>
 
-    <!-- 7. CUSTOM APPLE-STYLE ALERT MODAL -->
+    <!-- 7. ADMIN ADJUST MEMBER POINTS MODAL -->
+    <div id="modal-admin-adjust-points" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative border border-white/15">
+        <button class="modal-close-btn absolute top-4 right-4 text-neutral-400 hover:text-white p-1">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+        <div class="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+          <i data-lucide="sparkles" class="w-6 h-6"></i>
+        </div>
+        <div class="text-center">
+          <h3 class="text-base font-bold text-white">Adjust Member Points</h3>
+          <p class="text-xs text-neutral-300 mt-1" id="adjust-points-target-name">Member: --</p>
+        </div>
+        <form id="form-admin-adjust-points" class="space-y-3 text-xs">
+          <input type="hidden" id="input-adjust-points-uid" />
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" id="btn-adjust-type-add" class="py-2 rounded-xl font-bold border border-emerald-500 bg-emerald-500/20 text-emerald-400">
+              + Award Points
+            </button>
+            <button type="button" id="btn-adjust-type-deduct" class="py-2 rounded-xl font-bold border border-white/10 bg-white/5 text-neutral-400 hover:text-white">
+              - Deduct Points
+            </button>
+          </div>
+          <div>
+            <label class="block text-neutral-300 mb-1">Points Delta *</label>
+            <input id="input-adjust-amount" type="number" min="1" value="10" class="w-full px-3 py-2 rounded-xl glass-input font-mono text-xs" required />
+          </div>
+          <div>
+            <label class="block text-neutral-300 mb-1">Mandatory Reason / Note *</label>
+            <input id="input-adjust-reason" type="text" placeholder="e.g. Outstanding Live Stream Audio Handling" class="w-full px-3 py-2 rounded-xl glass-input text-xs" required />
+          </div>
+          <div class="pt-2">
+            <button type="submit" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition shadow-lg shadow-[#0A84FF]/25">
+              Confirm Points Adjustment
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 8. ADMIN DIRECT NOTIFICATION MODAL -->
+    <div id="modal-admin-direct-notification" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative border border-white/15">
+        <button class="modal-close-btn absolute top-4 right-4 text-neutral-400 hover:text-white p-1">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+        <div class="w-12 h-12 rounded-full bg-[#0A84FF]/10 border border-[#0A84FF]/30 flex items-center justify-center mx-auto text-[#0A84FF]">
+          <i data-lucide="send" class="w-6 h-6"></i>
+        </div>
+        <div class="text-center">
+          <h3 class="text-base font-bold text-white">Send Direct Notification</h3>
+          <p class="text-xs text-neutral-300 mt-1" id="direct-notif-target-name">To: --</p>
+        </div>
+        <form id="form-admin-direct-notification" class="space-y-3 text-xs">
+          <input type="hidden" id="input-direct-notif-uid" />
+          <div>
+            <label class="block text-neutral-300 mb-1">Notification Title *</label>
+            <input id="input-direct-notif-title" type="text" placeholder="e.g. Schedule Update" class="w-full px-3 py-2 rounded-xl glass-input text-xs" required />
+          </div>
+          <div>
+            <label class="block text-neutral-300 mb-1">Message Content *</label>
+            <textarea id="input-direct-notif-message" rows="3" placeholder="Enter message here..." class="w-full px-3 py-2 rounded-xl glass-input text-xs" required></textarea>
+          </div>
+          <div>
+            <label class="block text-neutral-300 mb-1">Alert Type</label>
+            <select id="select-direct-notif-type" class="w-full px-3 py-2 rounded-xl glass-input text-xs bg-[#0B0C10]">
+              <option value="info">Info / General Update</option>
+              <option value="reward">Reward / Points Awarded</option>
+              <option value="warning">Reminder / Attendance Notice</option>
+            </select>
+          </div>
+          <div class="pt-2">
+            <button type="submit" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90 transition">
+              Deliver Message
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 9. ADMIN EDIT ATTENDANCE LOG MODAL -->
+    <div id="modal-admin-edit-log" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative border border-white/15">
+        <button class="modal-close-btn absolute top-4 right-4 text-neutral-400 hover:text-white p-1">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+        <div class="text-center">
+          <h3 class="text-base font-bold text-white">Edit Attendance Check-in</h3>
+          <p class="text-xs text-neutral-300 mt-1" id="edit-log-member-name">Member: --</p>
+        </div>
+        <form id="form-admin-edit-log" class="space-y-3 text-xs">
+          <input type="hidden" id="input-edit-log-id" />
+          <input type="hidden" id="input-edit-log-uid" />
+          <div>
+            <label class="block text-neutral-300 mb-1">Attendance Status</label>
+            <select id="select-edit-log-status" class="w-full px-3 py-2 rounded-xl glass-input text-xs bg-[#0B0C10]">
+              <option value="on_time">On Time (0 penalty)</option>
+              <option value="late">Late</option>
+              <option value="excused">Excused / Waived</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-neutral-300 mb-1">Late Minutes</label>
+            <input id="input-edit-log-late-mins" type="number" min="0" value="0" class="w-full px-3 py-2 rounded-xl glass-input font-mono text-xs" />
+          </div>
+          <div>
+            <label class="block text-neutral-300 mb-1">Penalty Deducted (pts)</label>
+            <input id="input-edit-log-penalty" type="number" min="0" value="0" class="w-full px-3 py-2 rounded-xl glass-input font-mono text-xs" />
+          </div>
+          <div class="pt-2 flex items-center gap-2">
+            <button type="button" id="btn-waive-penalty-direct" class="flex-1 py-2 rounded-xl text-xs font-semibold text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20">
+              Waive Penalty
+            </button>
+            <button type="submit" class="flex-1 py-2.5 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0A84FF]/90">
+              Save Record
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 10. CUSTOM APPLE-STYLE ALERT MODAL -->
     <div id="modal-custom-alert" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
       <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative text-center border border-white/15 animate-in fade-in zoom-in-95 duration-200">
         <div id="custom-alert-icon-box" class="w-14 h-14 rounded-full bg-[#0A84FF]/15 border border-[#0A84FF]/30 flex items-center justify-center mx-auto text-[#0A84FF]">
@@ -1178,7 +1315,7 @@
       </div>
     </div>
 
-    <!-- 8. CUSTOM APPLE-STYLE CONFIRM MODAL -->
+    <!-- 11. CUSTOM APPLE-STYLE CONFIRM MODAL -->
     <div id="modal-custom-confirm" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
       <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative text-center border border-white/15 animate-in fade-in zoom-in-95 duration-200">
         <div id="custom-confirm-icon-box" class="w-14 h-14 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
@@ -1199,7 +1336,7 @@
       </div>
     </div>
 
-    <!-- 9. CUSTOM APPLE-STYLE PROMPT MODAL -->
+    <!-- 12. CUSTOM APPLE-STYLE PROMPT MODAL -->
     <div id="modal-custom-prompt" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
       <div class="glass-modal max-w-sm w-full rounded-2xl p-6 space-y-4 shadow-2xl relative border border-white/15 animate-in fade-in zoom-in-95 duration-200">
         <div id="custom-prompt-icon-box" class="w-12 h-12 rounded-full bg-white/[0.06] border border-white/15 flex items-center justify-center mx-auto text-white">
@@ -1223,6 +1360,9 @@
         </form>
       </div>
     </div>
+
+    <!-- TOAST NOTIFICATIONS CONTAINER -->
+    <div id="toast-container" class="toast-container"></div>
 
     <!-- SERVICE WORKER REGISTRATION (GITHUB PAGES SAFE) -->
     <script>
