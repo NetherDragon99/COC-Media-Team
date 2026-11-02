@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "name": "COC Media Team",
+  "short_name": "COC Media",
+  "description": "Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "categories": ["productivity", "utilities", "business"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/image_ad59c0.jpg",
+      "sizes": "872x872",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,564 +1,970 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Task, Submission, LeaderboardMember } from './types.ts';
-import {
-  API_URL,
-  DEFAULT_TASKS,
-  DEFAULT_SUBMISSIONS,
-  STORAGE_KEYS,
-} from './constants.ts';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { 
+  Task, 
+  Category, 
+  UserProfile, 
+  AttendanceSession, 
+  AttendanceLog, 
+  TaskSubmission, 
+  NotificationItem, 
+  AppSettings, 
+  Language 
+} from './types.ts';
+import { 
+  auth, 
+  db, 
+  googleProvider, 
+  signInWithPopup, 
+  firebaseSignOut, 
+  onAuthStateChanged,
+  collection, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  increment 
+} from './firebase.ts';
+import { translations, DEFAULT_CATEGORIES } from './i18n.ts';
 import { Header } from './components/Header.tsx';
+import { BottomNav } from './components/BottomNav.tsx';
+import { Footer } from './components/Footer.tsx';
 import { TaskCard } from './components/TaskCard.tsx';
-import { Leaderboard } from './components/Leaderboard.tsx';
-import { GeminiChatbot } from './components/GeminiChatbot.tsx';
+import { SubmitTaskModal } from './components/SubmitTaskModal.tsx';
+import { TaskCompetitionModal } from './components/TaskCompetitionModal.tsx';
+import { AttendanceView } from './components/AttendanceView.tsx';
+import { LeaderboardView } from './components/LeaderboardView.tsx';
+import { NotificationsView } from './components/NotificationsView.tsx';
+import { ProfileView } from './components/ProfileView.tsx';
+import { AdminDashboard } from './components/AdminDashboard.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
-import { AddTaskModal } from './components/AddTaskModal.tsx';
+import { AdminPasswordModal } from './components/AdminPasswordModal.tsx';
 import { ConfettiEffect } from './components/ConfettiEffect.tsx';
-import {
-  Search,
-  Filter,
-  CheckCircle,
-  Clock,
-  Sparkles,
-  Trophy,
-  Plus,
-  RefreshCw,
-  SlidersHorizontal,
-  Flame,
-  Award,
-  Radio,
-  Layers
-} from 'lucide-react';
+import { Search, Inbox, AlertCircle, Layers, CheckSquare } from 'lucide-react';
+
+const DEFAULT_SETTINGS: AppSettings = {
+  appName: 'COC Media Team',
+  subtitleEn: 'Production Task, Quota & Attendance Platform',
+  subtitleAr: 'منصة إدارة المهام، الكوتا ومحرك الحضور لفريق الميديا',
+  announcementEn: '',
+  announcementAr: '',
+  accentColor: '#0A84FF',
+  logoUrl: 'image_ad59c0.jpg',
+  developerCredit: 'Steven Mario',
+  version: 'v1.0.0',
+};
 
 export default function App() {
-  // Member authentication state
-  const [currentMember, setCurrentMember] = useState<string>('');
+  // Navigation Tabs: 'tasks' | 'attendance' | 'leaderboard' | 'notifications' | 'profile' | 'admin'
+  const [activeTab, setActiveTab] = useState<'tasks' | 'attendance' | 'leaderboard' | 'notifications' | 'profile' | 'admin'>('tasks');
+
+  // Language State - DEFAULT ENGLISH per prompt requirement
+  const [language, setLanguage] = useState<Language>(() => {
+    try {
+      return (localStorage.getItem('coc_pwa_lang') as Language) || 'en';
+    } catch {
+      return 'en';
+    }
+  });
+
+  const t = translations[language];
+
+  // Document direction & lang synchronization
+  useEffect(() => {
+    document.documentElement.lang = language;
+    document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
+    try {
+      localStorage.setItem('coc_pwa_lang', language);
+    } catch {}
+  }, [language]);
+
+  const toggleLanguage = () => {
+    setLanguage((prev) => (prev === 'en' ? 'ar' : 'en'));
+  };
+
+  // User Authentication State
+  const [user, setUser] = useState<UserProfile | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isFirstVisit, setIsFirstVisit] = useState(false);
 
-  // Active navigation tab
-  const [activeTab, setActiveTab] = useState<'tasks' | 'leaderboard' | 'chat'>('tasks');
+  // Admin Mode Unlock State
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('coc_admin_unlocked') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [isAdminPasswordModalOpen, setIsAdminPasswordModalOpen] = useState(false);
 
-  // CMS Tasks & Submissions
+  // Firestore Data Collections
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [completedTaskNames, setCompletedTaskNames] = useState<Set<string>>(new Set());
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [apiError, setApiError] = useState<string | null>(null);
+  const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [submissions, setSubmissions] = useState<TaskSubmission[]>([]);
+  const [sessions, setSessions] = useState<AttendanceSession[]>([]);
+  const [attendanceLogs, setAttendanceLogs] = useState<AttendanceLog[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [pushPermissionState, setPushPermissionState] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  );
 
-  // Filters & Search
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'completed'>('all');
+  // Search & Category Filter for Tasks
+  const [taskSearch, setTaskSearch] = useState('');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
 
   // Modals & Celebrations
-  const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
+  const [submittingTask, setSubmittingTask] = useState<Task | null>(null);
+  const [competitionTask, setCompetitionTask] = useState<Task | null>(null);
   const [celebration, setCelebration] = useState<{ show: boolean; points: number; title: string }>({
     show: false,
     points: 0,
     title: '',
   });
 
-  // Load persistent user profile & completed tasks from localStorage on initial mount
+  // Listen for Firebase Auth State Changes
   useEffect(() => {
-    try {
-      const savedName = localStorage.getItem(STORAGE_KEYS.MEMBER_NAME);
-      if (savedName) {
-        setCurrentMember(savedName);
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        const userRef = doc(db, 'users', fbUser.uid);
+        try {
+          const userSnap = await getDoc(userRef);
+          if (userSnap.exists()) {
+            const data = userSnap.data();
+            setUser({
+              uid: fbUser.uid,
+              email: fbUser.email || '',
+              displayName: data.displayName || fbUser.displayName || 'Media Operator',
+              photoURL: data.photoURL || fbUser.photoURL || '',
+              points: data.points ?? 0,
+              totalPenalties: data.totalPenalties ?? 0,
+              role: data.role || 'member',
+              createdAt: data.createdAt || new Date().toISOString(),
+              isActive: data.isActive !== false,
+              streakDays: data.streakDays || 1,
+            });
+          } else {
+            // New User Registration in Firestore
+            const newProfile: UserProfile = {
+              uid: fbUser.uid,
+              email: fbUser.email || '',
+              displayName: fbUser.displayName || 'Media Operator',
+              photoURL: fbUser.photoURL || '',
+              points: 0,
+              totalPenalties: 0,
+              role: 'member',
+              createdAt: new Date().toISOString(),
+              isActive: true,
+              streakDays: 1,
+            };
+            await setDoc(userRef, newProfile);
+            setUser(newProfile);
+          }
+        } catch (e) {
+          console.warn('Firestore user fetch note:', e);
+          setUser({
+            uid: fbUser.uid,
+            email: fbUser.email || '',
+            displayName: fbUser.displayName || 'Media Operator',
+            photoURL: fbUser.photoURL || '',
+            points: 0,
+            totalPenalties: 0,
+            role: 'member',
+            createdAt: new Date().toISOString(),
+            isActive: true,
+          });
+        }
       } else {
-        setIsFirstVisit(true);
-        setIsAuthModalOpen(true);
+        // Fallback demo profile from localStorage if offline/preview
+        const savedDemo = localStorage.getItem('coc_demo_user');
+        if (savedDemo) {
+          try {
+            setUser(JSON.parse(savedDemo));
+          } catch {}
+        }
       }
+    });
 
-      const savedCompleted = localStorage.getItem(STORAGE_KEYS.COMPLETED_TASKS);
-      if (savedCompleted) {
-        setCompletedTaskNames(new Set(JSON.parse(savedCompleted)));
-      }
-    } catch (e) {
-      console.warn('Error reading from localStorage:', e);
-    }
+    return () => unsubscribe();
   }, []);
 
-  // Save member name persistently
-  const handleSaveMemberName = (name: string) => {
-    setCurrentMember(name);
-    setIsFirstVisit(false);
-    try {
-      localStorage.setItem(STORAGE_KEYS.MEMBER_NAME, name);
-    } catch (e) {
-      console.warn('Error saving to localStorage:', e);
+  // Real-time Firestore Listeners
+  useEffect(() => {
+    // 1. App Settings
+    const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (snap) => {
+      if (snap.exists()) {
+        setSettings({ ...DEFAULT_SETTINGS, ...snap.data() });
+      }
+    });
+
+    // 2. Tasks Collection
+    const unsubTasks = onSnapshot(collection(db, 'tasks'), (snap) => {
+      const taskList: Task[] = [];
+      snap.forEach((doc) => {
+        const d = doc.data();
+        if (d.isActive !== false) {
+          taskList.push({
+            id: doc.id,
+            title: d.title || 'Untitled Task',
+            description: d.description || '',
+            categoryId: d.categoryId || 'cat_general',
+            taskLink: d.taskLink || '',
+            points: Number(d.points) || 50,
+            estimatedDuration: d.estimatedDuration || '',
+            startTime: d.startTime || '',
+            deadlineType: d.deadlineType || 'none',
+            deadlineValue: d.deadlineValue || '',
+            deadlineTimestamp: d.deadlineTimestamp,
+            quotaType: d.quotaType || 'daily',
+            targetQuota: Number(d.targetQuota) || 1,
+            enableComment: Boolean(d.enableComment),
+            isCommentRequired: Boolean(d.isCommentRequired),
+            enableQuestion: Boolean(d.enableQuestion),
+            questionPrompt: d.questionPrompt || '',
+            isQuestionRequired: Boolean(d.isQuestionRequired),
+            isActive: d.isActive !== false,
+            createdAt: d.createdAt || '',
+          });
+        }
+      });
+      setTasks(taskList);
+    });
+
+    // 3. Categories Collection
+    const unsubCategories = onSnapshot(collection(db, 'categories'), (snap) => {
+      if (!snap.empty) {
+        const catList: Category[] = [];
+        snap.forEach((doc) => {
+          const d = doc.data();
+          catList.push({
+            id: doc.id,
+            nameEn: d.nameEn || doc.id,
+            nameAr: d.nameAr || d.nameEn || doc.id,
+            color: d.color || '#0A84FF',
+            icon: d.icon,
+          });
+        });
+        setCategories(catList);
+      } else {
+        // Seed default categories into firestore
+        DEFAULT_CATEGORIES.forEach(async (c) => {
+          try {
+            await setDoc(doc(db, 'categories', c.id), c);
+          } catch {}
+        });
+      }
+    });
+
+    // 4. Users Collection
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snap) => {
+      const userList: UserProfile[] = [];
+      snap.forEach((doc) => {
+        const d = doc.data();
+        userList.push({
+          uid: doc.id,
+          email: d.email || '',
+          displayName: d.displayName || 'Member',
+          photoURL: d.photoURL || '',
+          points: d.points || 0,
+          totalPenalties: d.totalPenalties || 0,
+          role: d.role || 'member',
+          createdAt: d.createdAt || '',
+          isActive: d.isActive !== false,
+          streakDays: d.streakDays || 1,
+        });
+      });
+      setUsers(userList);
+
+      // Keep active user object in sync with database updates
+      if (user) {
+        const currentUpdated = userList.find((u) => u.uid === user.uid);
+        if (currentUpdated) {
+          setUser(currentUpdated);
+        }
+      }
+    });
+
+    // 5. Submissions Collection
+    const unsubSubmissions = onSnapshot(collection(db, 'submissions'), (snap) => {
+      const subList: TaskSubmission[] = [];
+      snap.forEach((doc) => {
+        const d = doc.data();
+        subList.push({
+          id: doc.id,
+          taskId: d.taskId,
+          taskTitle: d.taskTitle,
+          userId: d.userId,
+          userDisplayName: d.userDisplayName,
+          userPhotoURL: d.userPhotoURL,
+          categoryId: d.categoryId,
+          pointsEarned: d.pointsEarned || 0,
+          comment: d.comment,
+          questionAnswer: d.questionAnswer,
+          completedAt: d.completedAt,
+          actualDurationMinutes: d.actualDurationMinutes,
+          dateKey: d.dateKey || (d.completedAt ? d.completedAt.slice(0, 10) : ''),
+        });
+      });
+      setSubmissions(subList);
+    });
+
+    // 6. Attendance Sessions & Logs
+    const unsubSessions = onSnapshot(collection(db, 'attendance_sessions'), (snap) => {
+      const sList: AttendanceSession[] = [];
+      snap.forEach((doc) => {
+        const d = doc.data();
+        sList.push({
+          id: doc.id,
+          title: d.title || 'Worship Service',
+          scheduledDays: d.scheduledDays || [0, 3],
+          exactStartTime: d.exactStartTime || '09:00',
+          checkInWindowEnd: d.checkInWindowEnd || '11:00',
+          gracePeriodMinutes: d.gracePeriodMinutes || 10,
+          penaltyUnitMinutes: d.penaltyUnitMinutes || 5,
+          penaltyRatePerUnit: d.penaltyRatePerUnit || 2,
+          minPenalty: d.minPenalty || 5,
+          maxPenaltyCap: d.maxPenaltyCap || 50,
+          isActive: d.isActive !== false,
+        });
+      });
+      setSessions(sList);
+    });
+
+    const unsubLogs = onSnapshot(collection(db, 'attendance_logs'), (snap) => {
+      const logList: AttendanceLog[] = [];
+      snap.forEach((doc) => {
+        const d = doc.data();
+        logList.push({
+          id: doc.id,
+          sessionId: d.sessionId,
+          sessionTitle: d.sessionTitle,
+          userId: d.userId,
+          userDisplayName: d.userDisplayName,
+          checkInTimestamp: d.checkInTimestamp,
+          dateKey: d.dateKey,
+          status: d.status,
+          lateMinutes: d.lateMinutes || 0,
+          penaltyPointsApplied: d.penaltyPointsApplied || 0,
+          bonusPointsApplied: d.bonusPointsApplied || 0,
+        });
+      });
+      setAttendanceLogs(logList);
+    });
+
+    // 7. Notifications Collection
+    const unsubNotifications = onSnapshot(collection(db, 'notifications'), (snap) => {
+      const notifList: NotificationItem[] = [];
+      snap.forEach((doc) => {
+        const d = doc.data();
+        notifList.push({
+          id: doc.id,
+          targetUserId: d.targetUserId || 'all',
+          title: d.title || 'Notification',
+          body: d.body || '',
+          type: d.type || 'announcement',
+          createdAt: d.createdAt || '',
+          read: Boolean(d.read),
+          url: d.url,
+        });
+      });
+      setNotifications(notifList.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+    });
+
+    return () => {
+      unsubSettings();
+      unsubTasks();
+      unsubCategories();
+      unsubUsers();
+      unsubSubmissions();
+      unsubSessions();
+      unsubLogs();
+      unsubNotifications();
+    };
+  }, [user?.uid]);
+
+  // Handle Google Sign-In
+  const handleGoogleSignIn = async () => {
+    const result = await signInWithPopup(auth, googleProvider);
+    if (result.user) {
+      const userRef = doc(db, 'users', result.user.uid);
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) {
+        const newProf: UserProfile = {
+          uid: result.user.uid,
+          email: result.user.email || '',
+          displayName: result.user.displayName || 'Media Operator',
+          photoURL: result.user.photoURL || '',
+          points: 0,
+          totalPenalties: 0,
+          role: 'member',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+          streakDays: 1,
+        };
+        await setDoc(userRef, newProf);
+        setUser(newProf);
+      }
     }
   };
 
-  // Fetch CMS data using Vanilla JavaScript fetch()
-  const fetchData = useCallback(async (isSilent = false) => {
-    if (!isSilent) setIsRefreshing(true);
-    setApiError(null);
-
-    try {
-      // Vanilla JavaScript fetch to Google Apps Script Web App
-      const res = await fetch(API_URL, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-
-      if (!res.ok) {
-        throw new Error(`API returned HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      console.log('CMS data received:', data);
-
-      // Extract tasks array
-      let fetchedTasks: Task[] = [];
-      if (Array.isArray(data.tasks) && data.tasks.length > 0) {
-        fetchedTasks = data.tasks;
-      } else {
-        // Fallback to default production tasks if sheet has not added rows yet
-        // Check if user has saved custom tasks locally
-        const localTasksRaw = localStorage.getItem(STORAGE_KEYS.LOCAL_TASKS);
-        const localTasks = localTasksRaw ? JSON.parse(localTasksRaw) : [];
-        fetchedTasks = localTasks.length > 0 ? localTasks : DEFAULT_TASKS;
-      }
-      setTasks(fetchedTasks);
-
-      // Extract submissions array
-      let fetchedSubmissions: Submission[] = [];
-      if (Array.isArray(data.submissions) && data.submissions.length > 0) {
-        fetchedSubmissions = data.submissions;
-      } else {
-        // Fallback demo submissions to populate the leaderboard
-        const localSubRaw = localStorage.getItem(STORAGE_KEYS.LOCAL_SUBMISSIONS);
-        const localSub = localSubRaw ? JSON.parse(localSubRaw) : [];
-        fetchedSubmissions = [...DEFAULT_SUBMISSIONS, ...localSub];
-      }
-      setSubmissions(fetchedSubmissions);
-    } catch (err: unknown) {
-      console.warn('API fetch warning, loading cached/default CMS data:', err);
-      setApiError('Notice: Synchronized with local CMS cache.');
-      
-      // Load local tasks or defaults
-      const localTasksRaw = localStorage.getItem(STORAGE_KEYS.LOCAL_TASKS);
-      setTasks(localTasksRaw ? JSON.parse(localTasksRaw) : DEFAULT_TASKS);
-
-      const localSubRaw = localStorage.getItem(STORAGE_KEYS.LOCAL_SUBMISSIONS);
-      const localSub = localSubRaw ? JSON.parse(localSubRaw) : [];
-      setSubmissions([...DEFAULT_SUBMISSIONS, ...localSub]);
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // Handle Complete Task with POST request
-  const handleCompleteTask = async (task: Task) => {
-    const memberName = currentMember.trim() || 'Anonymous Crew';
-    const payload = {
-      memberName,
-      taskName: task.taskName,
-      points: task.points,
+  // Direct manual sign-in fallback (useful for preview/iframe environments)
+  const handleManualSignIn = async (name: string, email: string) => {
+    const demoId = `user_${Date.now()}`;
+    const demoProf: UserProfile = {
+      uid: demoId,
+      email,
+      displayName: name,
+      photoURL: '',
+      points: 0,
+      totalPenalties: 0,
+      role: 'member',
+      createdAt: new Date().toISOString(),
+      isActive: true,
+      streakDays: 1,
     };
-
-    console.log('Submitting task completion POST:', payload);
-
-    // 1. Optimistic local UI updates
-    const nextCompleted = new Set(completedTaskNames);
-    nextCompleted.add(task.taskName);
-    setCompletedTaskNames(nextCompleted);
-
-    // Save completed task IDs in localStorage
     try {
-      localStorage.setItem(STORAGE_KEYS.COMPLETED_TASKS, JSON.stringify(Array.from(nextCompleted)));
+      await setDoc(doc(db, 'users', demoId), demoProf);
+    } catch {}
+    setUser(demoProf);
+    localStorage.setItem('coc_demo_user', JSON.stringify(demoProf));
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await firebaseSignOut(auth);
+    } catch {}
+    setUser(null);
+    localStorage.removeItem('coc_demo_user');
+    setActiveTab('tasks');
+  };
+
+  // Profile Update
+  const handleUpdateProfile = async (displayName: string, photoURL: string) => {
+    if (!user) return;
+    const updated = { ...user, displayName, photoURL };
+    setUser(updated);
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { displayName, photoURL });
     } catch (e) {
-      console.warn('Error updating completed tasks in localStorage:', e);
+      console.warn('Update user doc warning:', e);
     }
+  };
 
-    // Add new submission locally
-    const newSubmission: Submission = {
-      memberName,
-      taskName: task.taskName,
-      points: task.points,
-      timestamp: new Date().toISOString(),
+  // Admin Verification & Persistent Unlock
+  const handleOpenAdminFromProfile = () => {
+    if (isAdminUnlocked) {
+      setActiveTab('admin');
+    } else {
+      setIsAdminPasswordModalOpen(true);
+    }
+  };
+
+  const handleAdminSuccess = () => {
+    setIsAdminUnlocked(true);
+    try {
+      localStorage.setItem('coc_admin_unlocked', 'true');
+    } catch {}
+    setIsAdminPasswordModalOpen(false);
+    setActiveTab('admin');
+  };
+
+  const handleLockAdmin = () => {
+    setIsAdminUnlocked(false);
+    try {
+      localStorage.removeItem('coc_admin_unlocked');
+    } catch {}
+    setActiveTab('profile');
+  };
+
+  // Task Execution Submission
+  const handleInitiateTaskComplete = (task: Task) => {
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    // If task requires comment, duration, or question, open modal
+    if (task.enableQuestion || task.isCommentRequired || task.enableComment) {
+      setSubmittingTask(task);
+    } else {
+      executeTaskSubmission(task, '', '');
+    }
+  };
+
+  const executeTaskSubmission = async (
+    task: Task, 
+    comment: string, 
+    questionAnswer: string, 
+    actualDurationMinutes?: number
+  ) => {
+    if (!user) return;
+    const todayKey = new Date().toISOString().split('T')[0];
+    const subId = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    const submissionDoc: TaskSubmission = {
+      id: subId,
+      taskId: task.id,
+      taskTitle: task.title,
+      userId: user.uid,
+      userDisplayName: user.displayName,
+      userPhotoURL: user.photoURL,
+      categoryId: task.categoryId,
+      pointsEarned: task.points,
+      comment,
+      questionAnswer,
+      completedAt: new Date().toISOString(),
+      actualDurationMinutes,
+      dateKey: todayKey,
     };
 
-    setSubmissions((prev) => {
-      const updated = [newSubmission, ...prev];
-      try {
-        const localSubRaw = localStorage.getItem(STORAGE_KEYS.LOCAL_SUBMISSIONS);
-        const currentLocals = localSubRaw ? JSON.parse(localSubRaw) : [];
-        localStorage.setItem(STORAGE_KEYS.LOCAL_SUBMISSIONS, JSON.stringify([newSubmission, ...currentLocals]));
-      } catch {}
-      return updated;
-    });
+    // Optimistic UI update
+    setSubmissions((prev) => [submissionDoc, ...prev]);
 
     // Show celebration confetti
     setCelebration({
       show: true,
       points: task.points,
-      title: task.taskName,
+      title: task.title,
     });
 
-    // 2. Send POST request to Google Apps Script Web App API using Vanilla JavaScript fetch()
     try {
-      // In browser, Google Apps Script web app POST requires text/plain and mode: 'no-cors' to avoid CORS preflight rejection
-      await fetch(API_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
-        },
-        body: JSON.stringify(payload),
+      // 1. Save submission to Firestore
+      await setDoc(doc(db, 'submissions', subId), submissionDoc);
+
+      // 2. Increment user points in Firestore
+      await updateDoc(doc(db, 'users', user.uid), {
+        points: increment(task.points),
       });
-      console.log('Task POST request successfully dispatched to Google Apps Script.');
-    } catch (postError) {
-      console.error('Error sending POST to Apps Script endpoint:', postError);
+
+      // 3. Dispatch system notification
+      const notifId = `notif_${Date.now()}`;
+      await setDoc(doc(db, 'notifications', notifId), {
+        targetUserId: user.uid,
+        title: 'Task Completed! 🎯',
+        body: `You earned +${task.points} pts for completing "${task.title}".`,
+        type: 'points',
+        createdAt: new Date().toISOString(),
+        read: false,
+      });
+    } catch (e) {
+      console.warn('Firestore task submission notice:', e);
     }
   };
 
-  // Handle adding new task locally and into CMS state
-  const handleAddTask = (newTask: Task) => {
-    setTasks((prev) => {
-      const updated = [newTask, ...prev];
-      try {
-        localStorage.setItem(STORAGE_KEYS.LOCAL_TASKS, JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-  };
+  // Attendance Check-In
+  const handleAttendanceCheckIn = async (
+    session: AttendanceSession, 
+    lateMinutes: number, 
+    penalty: number, 
+    bonus: number
+  ) => {
+    if (!user) return;
+    const todayKey = new Date().toISOString().split('T')[0];
+    const logId = `att_${session.id}_${user.uid}_${todayKey}`;
 
-  // Calculate Leaderboard rankings by aggregating submissions
-  const leaderboardMembers: LeaderboardMember[] = useMemo(() => {
-    const scoresMap = new Map<string, { points: number; count: number }>();
-
-    submissions.forEach((sub) => {
-      const name = (sub.memberName || 'Unknown').trim();
-      if (!name) return;
-      const pts = Number(sub.points) || 0;
-      const current = scoresMap.get(name) || { points: 0, count: 0 };
-      scoresMap.set(name, {
-        points: current.points + pts,
-        count: current.count + 1,
-      });
-    });
-
-    // Ensure current member is represented if logged in
-    if (currentMember && !scoresMap.has(currentMember)) {
-      scoresMap.set(currentMember, { points: 0, count: 0 });
-    }
-
-    const sorted = Array.from(scoresMap.entries())
-      .map(([name, data]) => ({
-        name,
-        points: data.points,
-        submissionsCount: data.count,
-        isCurrentUser: currentMember.toLowerCase() === name.toLowerCase(),
-      }))
-      .sort((a, b) => b.points - a.points);
-
-    return sorted.map((member, index) => {
-      let badge = undefined;
-      if (index === 0) badge = '🥇';
-      if (index === 1) badge = '🥈';
-      if (index === 2) badge = '🥉';
-
-      return {
-        rank: index + 1,
-        ...member,
-        badge,
-      };
-    });
-  }, [submissions, currentMember]);
-
-  // Current user's stats
-  const currentUserStats = useMemo(() => {
-    const found = leaderboardMembers.find((m) => m.isCurrentUser);
-    return {
-      points: found ? found.points : 0,
-      completedCount: completedTaskNames.size,
-      rank: found ? found.rank : leaderboardMembers.length + 1,
+    const newLog: AttendanceLog = {
+      id: logId,
+      sessionId: session.id,
+      sessionTitle: session.title,
+      userId: user.uid,
+      userDisplayName: user.displayName,
+      checkInTimestamp: new Date().toISOString(),
+      dateKey: todayKey,
+      status: penalty > 0 ? 'late' : 'on_time',
+      lateMinutes,
+      penaltyPointsApplied: penalty,
+      bonusPointsApplied: bonus,
     };
-  }, [leaderboardMembers, completedTaskNames]);
 
-  // Available categories
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    tasks.forEach((t) => {
-      if (t.category) set.add(t.category);
+    setAttendanceLogs((prev) => [newLog, ...prev]);
+
+    try {
+      await setDoc(doc(db, 'attendance_logs', logId), newLog);
+
+      const netDelta = bonus - penalty;
+      await updateDoc(doc(db, 'users', user.uid), {
+        points: increment(netDelta),
+        totalPenalties: increment(penalty),
+      });
+
+      // Dispatch notification
+      const notifId = `notif_${Date.now()}`;
+      await setDoc(doc(db, 'notifications', notifId), {
+        targetUserId: user.uid,
+        title: penalty > 0 ? 'Late Penalty Recorded ⚠️' : 'Checked In On Time! 🟢',
+        body: penalty > 0 
+          ? `Checked in ${lateMinutes}m late for ${session.title}. Applied -${penalty} pts penalty.`
+          : `On-time check-in recorded for ${session.title}. Awarded +${bonus} bonus pts!`,
+        type: 'attendance',
+        createdAt: new Date().toISOString(),
+        read: false,
+      });
+    } catch (e) {
+      console.warn('Attendance log write notice:', e);
+    }
+  };
+
+  // Request External Push Notification Permission
+  const handleRequestPushPermission = async () => {
+    if (typeof Notification !== 'undefined') {
+      const perm = await Notification.requestPermission();
+      setPushPermissionState(perm);
+      if (perm === 'granted' && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'SHOW_NOTIFICATION',
+          title: 'COC Media Team',
+          body: 'System notifications are now active on your device!',
+        });
+      }
+    }
+  };
+
+  // Admin Actions
+  const handleSaveTask = async (taskData: Partial<Task>) => {
+    const id = taskData.id || `task_${Date.now()}`;
+    await setDoc(doc(db, 'tasks', id), { ...taskData, id });
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    await deleteDoc(doc(db, 'tasks', taskId));
+  };
+
+  const handleSaveCategory = async (catData: Partial<Category>) => {
+    const id = catData.id || `cat_${Date.now()}`;
+    await setDoc(doc(db, 'categories', id), { ...catData, id });
+  };
+
+  const handleDeleteCategory = async (catId: string) => {
+    await deleteDoc(doc(db, 'categories', catId));
+  };
+
+  const handleAdjustUserPoints = async (userId: string, delta: number, reason: string) => {
+    await updateDoc(doc(db, 'users', userId), {
+      points: increment(delta),
     });
-    return ['All', ...Array.from(set)];
-  }, [tasks]);
 
-  // Filtered tasks
+    const notifId = `notif_${Date.now()}`;
+    await setDoc(doc(db, 'notifications', notifId), {
+      targetUserId: userId,
+      title: delta >= 0 ? 'Points Bonus Awarded! 🏆' : 'Points Adjustment',
+      body: `Admin adjusted your score by ${delta >= 0 ? `+${delta}` : delta} pts. Reason: ${reason}`,
+      type: 'points',
+      createdAt: new Date().toISOString(),
+      read: false,
+    });
+  };
+
+  const handleSendAdminNotification = async (
+    targetUserId: string, 
+    title: string, 
+    body: string, 
+    type: 'task' | 'attendance' | 'points' | 'announcement'
+  ) => {
+    const notifId = `notif_${Date.now()}`;
+    await setDoc(doc(db, 'notifications', notifId), {
+      targetUserId,
+      title,
+      body,
+      type,
+      createdAt: new Date().toISOString(),
+      read: false,
+    });
+  };
+
+  const handleSaveAttendanceSession = async (sessionData: Partial<AttendanceSession>) => {
+    const id = sessionData.id || `session_${Date.now()}`;
+    await setDoc(doc(db, 'attendance_sessions', id), { ...sessionData, id });
+  };
+
+  const handleDeleteAttendanceSession = async (sessionId: string) => {
+    await deleteDoc(doc(db, 'attendance_sessions', sessionId));
+  };
+
+  const handleDeleteSubmission = async (submission: TaskSubmission) => {
+    await deleteDoc(doc(db, 'submissions', submission.id));
+    // Reverse points
+    if (submission.userId && submission.pointsEarned) {
+      await updateDoc(doc(db, 'users', submission.userId), {
+        points: increment(-submission.pointsEarned),
+      });
+    }
+  };
+
+  const handleSaveSettings = async (newSettings: AppSettings) => {
+    await setDoc(doc(db, 'settings', 'global'), newSettings);
+    setSettings(newSettings);
+  };
+
+  // Filtered Notifications for current user
+  const userNotifications = useMemo(() => {
+    return notifications.filter((n) => n.targetUserId === 'all' || (user && n.targetUserId === user.uid));
+  }, [notifications, user]);
+
+  const unreadNotificationsCount = userNotifications.filter((n) => !n.read).length;
+
+  // Filtered Tasks
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {
-      // Category filter
-      if (selectedCategory !== 'All' && t.category !== selectedCategory) {
+      if (selectedCategoryFilter !== 'All' && t.categoryId !== selectedCategoryFilter) {
         return false;
       }
-      // Status filter
-      const isDone = completedTaskNames.has(t.taskName);
-      if (filterTab === 'pending' && isDone) return false;
-      if (filterTab === 'completed' && !isDone) return false;
-
-      // Search query
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase();
-        const matchTitle = t.taskName.toLowerCase().includes(query);
-        const matchDesc = (t.description || '').toLowerCase().includes(query);
-        const matchCat = (t.category || '').toLowerCase().includes(query);
-        return matchTitle || matchDesc || matchCat;
+      if (taskSearch.trim()) {
+        const q = taskSearch.toLowerCase();
+        return (
+          t.title.toLowerCase().includes(q) ||
+          t.description.toLowerCase().includes(q)
+        );
       }
-
       return true;
     });
-  }, [tasks, selectedCategory, filterTab, searchQuery, completedTaskNames]);
+  }, [tasks, selectedCategoryFilter, taskSearch]);
 
   return (
-    <div className="min-h-screen bg-[#080a0f] text-neutral-100 flex flex-col relative selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div className="min-h-screen bg-[#000000] text-neutral-100 flex flex-col relative selection:bg-[#0A84FF]/30 selection:text-white pb-safe">
       
-      {/* Background ambient lighting orbs (Apple design language) */}
-      <div className="ambient-glow -top-40 -left-40 w-[550px] h-[550px] bg-indigo-600/20" />
-      <div className="ambient-glow top-1/3 -right-40 w-[600px] h-[600px] bg-purple-600/15" />
-      <div className="ambient-glow -bottom-40 left-1/4 w-[500px] h-[500px] bg-blue-600/15" />
+      {/* Background ambient lighting */}
+      <div 
+        className="ambient-glow -top-40 -right-40 w-[600px] h-[600px]"
+        style={{ backgroundColor: settings.accentColor || '#0A84FF' }}
+      />
+      <div className="ambient-glow top-1/2 -left-40 w-[600px] h-[600px] bg-[#F59E0B]/15" />
+      <div className="ambient-glow -bottom-40 right-1/4 w-[500px] h-[500px] bg-blue-700/15" />
 
       {/* Main Header */}
       <Header
-        currentMember={currentMember}
-        userPoints={currentUserStats.points}
-        completedCount={currentUserStats.completedCount}
+        settings={settings}
+        user={user}
+        language={language}
+        onToggleLanguage={toggleLanguage}
+        unreadNotificationsCount={unreadNotificationsCount}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onOpenNameModal={() => setIsAuthModalOpen(true)}
-        onRefreshData={() => fetchData()}
-        isRefreshing={isRefreshing}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
       />
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
+      {/* Main Content Viewport */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 relative z-10">
         
-        {/* Personalized Welcome & Status Banner */}
-        <section className="mb-8">
-          <div className="relative rounded-3xl glass-panel p-6 sm:p-8 overflow-hidden border border-white/10">
-            <div className="relative z-10 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
-              
-              <div className="space-y-1.5">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
-                  <Flame className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Sunday Production Broadcast Hub</span>
-                </div>
-                
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                  Welcome back, {currentMember || 'Media Operator'} 🎬
-                </h2>
-
-                <p className="text-sm text-neutral-400 max-w-2xl leading-relaxed">
-                  Ready to serve? Complete your production assignments, synchronize livestreams with the Google Sheet CMS, and level up your crew standing.
-                </p>
-              </div>
-
-              {/* User Standing Stats Cards */}
-              <div className="grid grid-cols-3 gap-3 w-full lg:w-auto">
-                
-                <div className="px-4 py-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-                  <div className="text-xs text-neutral-400 font-medium">Your Score</div>
-                  <div className="text-xl sm:text-2xl font-black text-amber-300 mt-0.5">
-                    {currentUserStats.points}
-                  </div>
-                  <div className="text-[10px] text-amber-400/80 font-bold uppercase tracking-wider">Points</div>
-                </div>
-
-                <div className="px-4 py-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-                  <div className="text-xs text-neutral-400 font-medium">Rank</div>
-                  <div className="text-xl sm:text-2xl font-black text-indigo-300 mt-0.5">
-                    #{currentUserStats.rank}
-                  </div>
-                  <div className="text-[10px] text-indigo-400/80 font-bold uppercase tracking-wider">Overall</div>
-                </div>
-
-                <div className="px-4 py-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-                  <div className="text-xs text-neutral-400 font-medium">Completed</div>
-                  <div className="text-xl sm:text-2xl font-black text-emerald-300 mt-0.5">
-                    {currentUserStats.completedCount}
-                  </div>
-                  <div className="text-[10px] text-emerald-400/80 font-bold uppercase tracking-wider">Tasks</div>
-                </div>
-
-              </div>
-
-            </div>
-          </div>
-        </section>
-
-        {/* Tab 1: Tasks Grid */}
+        {/* VIEW 1: TASKS & QUOTAS */}
         {activeTab === 'tasks' && (
           <section className="space-y-6 animate-in fade-in duration-300">
             
-            {/* Control Bar: Filters, Search, Add Task */}
+            {/* Category Filter Pills & Search */}
             <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
               
               {/* Category Pills */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 no-scrollbar">
-                {categories.map((cat) => (
+                <button
+                  onClick={() => setSelectedCategoryFilter('All')}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+                    selectedCategoryFilter === 'All'
+                      ? 'bg-[#0A84FF] text-white shadow-lg shadow-[#0A84FF]/30'
+                      : 'bg-white/[0.05] hover:bg-white/[0.1] text-neutral-400 hover:text-white border border-white/10'
+                  }`}
+                >
+                  {t.allCategories}
+                </button>
+
+                {categories.map((c) => (
                   <button
-                    key={cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all whitespace-nowrap ${
-                      selectedCategory === cat
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                    key={c.id}
+                    onClick={() => setSelectedCategoryFilter(c.id)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+                      selectedCategoryFilter === c.id
+                        ? 'bg-[#0A84FF] text-white shadow-lg shadow-[#0A84FF]/30'
                         : 'bg-white/[0.05] hover:bg-white/[0.1] text-neutral-400 hover:text-white border border-white/10'
                     }`}
                   >
-                    {cat}
+                    {language === 'ar' ? c.nameAr : c.nameEn}
                   </button>
                 ))}
               </div>
 
-              {/* Search & Actions */}
-              <div className="flex items-center gap-3">
-                <div className="relative flex-1 md:w-64">
-                  <input
-                    type="text"
-                    placeholder="Search media tasks..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full px-3.5 py-2 pl-9 rounded-2xl bg-white/[0.06] border border-white/15 text-white placeholder-neutral-500 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                  />
-                  <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-neutral-400" />
-                </div>
-
-                {/* Filter Status (All / Available / Done) */}
-                <div className="flex items-center p-0.5 rounded-xl bg-white/[0.05] border border-white/10 text-xs">
-                  <button
-                    onClick={() => setFilterTab('all')}
-                    className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                      filterTab === 'all' ? 'bg-white/15 text-white' : 'text-neutral-400 hover:text-white'
-                    }`}
-                  >
-                    All
-                  </button>
-                  <button
-                    onClick={() => setFilterTab('pending')}
-                    className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                      filterTab === 'pending' ? 'bg-white/15 text-white' : 'text-neutral-400 hover:text-white'
-                    }`}
-                  >
-                    Available
-                  </button>
-                  <button
-                    onClick={() => setFilterTab('completed')}
-                    className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                      filterTab === 'completed' ? 'bg-emerald-500/20 text-emerald-300' : 'text-neutral-400 hover:text-white'
-                    }`}
-                  >
-                    Completed
-                  </button>
-                </div>
-
-                {/* Propose / Add Task Button */}
-                <button
-                  onClick={() => setIsAddTaskOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 hover:text-white text-xs font-semibold transition-all flex-shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Add Task</span>
-                </button>
+              {/* Task Search Bar */}
+              <div className="relative md:w-64">
+                <input
+                  type="text"
+                  placeholder={t.search}
+                  value={taskSearch}
+                  onChange={(e) => setTaskSearch(e.target.value)}
+                  className="w-full px-3.5 py-2 pl-9 rounded-2xl bg-white/[0.06] border border-white/15 text-white placeholder-neutral-500 text-xs focus:outline-none focus:ring-2 focus:ring-[#0A84FF]/50"
+                />
+                <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-neutral-400" />
               </div>
 
             </div>
 
-            {/* Task Cards Grid */}
-            {isLoading ? (
-              <div className="py-24 text-center">
-                <RefreshCw className="w-8 h-8 animate-spin mx-auto text-indigo-400 mb-3" />
-                <p className="text-sm text-neutral-400 font-medium">Fetching dynamic tasks from Google Apps Script CMS...</p>
-              </div>
-            ) : filteredTasks.length > 0 ? (
+            {/* Task Cards Grid or STRICT EMPTY STATE */}
+            {filteredTasks.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {filteredTasks.map((task, idx) => (
-                  <TaskCard
-                    key={task.id || `${task.taskName}-${idx}`}
-                    task={task}
-                    isCompleted={completedTaskNames.has(task.taskName)}
-                    onComplete={handleCompleteTask}
-                    memberName={currentMember}
-                  />
-                ))}
+                {filteredTasks.map((task) => {
+                  const cat = categories.find((c) => c.id === task.categoryId);
+                  const mySubs = submissions.filter((s) => s.taskId === task.id && s.userId === user?.uid);
+                  const allSubs = submissions.filter((s) => s.taskId === task.id);
+
+                  return (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      category={cat}
+                      userSubmissions={mySubs}
+                      allTaskSubmissions={allSubs}
+                      language={language}
+                      onInitiateComplete={handleInitiateTaskComplete}
+                      onOpenCompetition={(t) => setCompetitionTask(t)}
+                      accentColor={settings.accentColor}
+                    />
+                  );
+                })}
               </div>
             ) : (
-              <div className="rounded-3xl glass-panel p-12 text-center max-w-md mx-auto">
-                <Layers className="w-10 h-10 mx-auto text-neutral-500 mb-3" />
-                <h3 className="text-base font-bold text-white">No tasks matching your filter</h3>
-                <p className="text-xs text-neutral-400 mt-1 mb-4">
-                  Try adjusting the category or search query, or add a new task to the board.
+              /* STRICT EMPTY-STATE SECURITY RULE:
+                 Display clean message WITHOUT ANY BUTTON OR LINK to add tasks or open Admin Dashboard! */
+              <div className="rounded-3xl glass-panel-elevated p-12 text-center max-w-md mx-auto border border-white/10 my-8">
+                <div className="w-16 h-16 mx-auto rounded-3xl bg-white/[0.05] border border-white/10 flex items-center justify-center text-neutral-400 mb-4">
+                  <Inbox className="w-8 h-8 text-[#0A84FF]" />
+                </div>
+                <h3 className="text-lg font-bold text-white tracking-tight">
+                  {t.noActiveTasks}
+                </h3>
+                <p className="text-xs text-neutral-400 mt-1.5 leading-relaxed">
+                  {t.noActiveTasksSub}
                 </p>
-                <button
-                  onClick={() => {
-                    setSelectedCategory('All');
-                    setSearchQuery('');
-                    setFilterTab('all');
-                  }}
-                  className="px-4 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.12] text-xs font-semibold text-white transition-all"
-                >
-                  Reset Filters
-                </button>
               </div>
             )}
 
           </section>
         )}
 
-        {/* Tab 2: Leaderboard */}
-        {activeTab === 'leaderboard' && (
-          <Leaderboard
-            members={leaderboardMembers}
-            currentMember={currentMember}
+        {/* VIEW 2: ATTENDANCE */}
+        {activeTab === 'attendance' && (
+          <AttendanceView
+            sessions={sessions}
+            logs={attendanceLogs}
+            user={user}
+            language={language}
+            onCheckIn={handleAttendanceCheckIn}
           />
         )}
 
-        {/* Tab 3: Gemini AI Assistant */}
-        {activeTab === 'chat' && (
-          <section className="animate-in fade-in duration-300">
-            <GeminiChatbot currentMember={currentMember} />
-          </section>
+        {/* VIEW 3: LEADERBOARD */}
+        {activeTab === 'leaderboard' && (
+          <LeaderboardView
+            users={users}
+            submissions={submissions}
+            tasks={tasks}
+            categories={categories}
+            currentUserId={user?.uid || ''}
+            language={language}
+          />
+        )}
+
+        {/* VIEW 4: NOTIFICATIONS */}
+        {activeTab === 'notifications' && (
+          <NotificationsView
+            notifications={userNotifications}
+            language={language}
+            onMarkAllAsRead={() => {
+              userNotifications.forEach(async (n) => {
+                if (!n.read) {
+                  try {
+                    await updateDoc(doc(db, 'notifications', n.id), { read: true });
+                  } catch {}
+                }
+              });
+            }}
+            onRequestPushPermission={handleRequestPushPermission}
+            pushPermissionState={pushPermissionState}
+          />
+        )}
+
+        {/* VIEW 5: PROFILE & EXCLUSIVE ADMIN ENTRY */}
+        {activeTab === 'profile' && (
+          <ProfileView
+            user={user}
+            language={language}
+            onUpdateProfile={handleUpdateProfile}
+            onOpenAdmin={handleOpenAdminFromProfile}
+            isAdminUnlocked={isAdminUnlocked}
+            onSignOut={handleSignOut}
+            onOpenAuth={() => setIsAuthModalOpen(true)}
+          />
+        )}
+
+        {/* VIEW 6: ADMIN DASHBOARD (ACCESSIBLE ONLY VIA PROFILE) */}
+        {activeTab === 'admin' && (
+          <AdminDashboard
+            settings={settings}
+            tasks={tasks}
+            categories={categories}
+            users={users}
+            sessions={sessions}
+            logs={attendanceLogs}
+            submissions={submissions}
+            language={language}
+            onSaveTask={handleSaveTask}
+            onDeleteTask={handleDeleteTask}
+            onSaveCategory={handleSaveCategory}
+            onDeleteCategory={handleDeleteCategory}
+            onAdjustUserPoints={handleAdjustUserPoints}
+            onSendNotification={handleSendAdminNotification}
+            onSaveAttendanceSession={handleSaveAttendanceSession}
+            onDeleteAttendanceSession={handleDeleteAttendanceSession}
+            onDeleteSubmission={handleDeleteSubmission}
+            onSaveSettings={handleSaveSettings}
+            onLockAdmin={handleLockAdmin}
+          />
         )}
 
       </main>
 
-      {/* Footer */}
-      <footer className="mt-auto py-6 border-t border-white/[0.08] backdrop-blur-md bg-[#080a0f]/60 text-xs text-neutral-500 text-center relative z-10">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-neutral-400">COC Media Team</span>
-            <span>•</span>
-            <span>Dynamic CMS &amp; Gamification Platform</span>
-          </div>
-          <div className="flex items-center gap-4 text-[11px]">
-            <span>Google Apps Script Connected</span>
-            <span>•</span>
-            <span>Powered by Gemini 3.8 / 4 Argon</span>
-          </div>
-        </div>
-      </footer>
-
-      {/* Modals */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        currentName={currentMember}
-        onSaveName={handleSaveMemberName}
-        onClose={() => setIsAuthModalOpen(false)}
-        isFirstVisit={isFirstVisit}
+      {/* Footer strictly observing rules */}
+      <Footer
+        settings={settings}
+        language={language}
       />
 
-      <AddTaskModal
-        isOpen={isAddTaskOpen}
-        onClose={() => setIsAddTaskOpen(false)}
-        onAddTask={handleAddTask}
+      {/* Mobile Glass Bottom Nav */}
+      <BottomNav
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        language={language}
+        unreadNotificationsCount={unreadNotificationsCount}
+      />
+
+      {/* Interactive Modals */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        language={language}
+        onClose={() => setIsAuthModalOpen(false)}
+        onGoogleSignIn={handleGoogleSignIn}
+        onManualSignIn={handleManualSignIn}
+      />
+
+      <AdminPasswordModal
+        isOpen={isAdminPasswordModalOpen}
+        onSuccess={handleAdminSuccess}
+        onClose={() => setIsAdminPasswordModalOpen(false)}
+      />
+
+      <SubmitTaskModal
+        isOpen={Boolean(submittingTask)}
+        task={submittingTask}
+        language={language}
+        onClose={() => setSubmittingTask(null)}
+        onSubmit={executeTaskSubmission}
+        userName={user?.displayName || 'Member'}
+      />
+
+      <TaskCompetitionModal
+        isOpen={Boolean(competitionTask)}
+        task={competitionTask}
+        submissions={submissions}
+        language={language}
+        onClose={() => setCompetitionTask(null)}
+        currentUserId={user?.uid || ''}
       />
 
       <ConfettiEffect

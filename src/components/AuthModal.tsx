@@ -1,147 +1,169 @@
-import React, { useState, useEffect } from 'react';
-import { User, Sparkles, Film, ArrowRight, ShieldCheck } from 'lucide-react';
+import React, { useState } from 'react';
+import { Language } from '../types.ts';
+import { translations } from '../i18n.ts';
+import { Shield, LogIn, X, Loader2, User, Sparkles } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
-  currentName: string;
-  onSaveName: (name: string) => void;
+  language: Language;
   onClose: () => void;
-  isFirstVisit: boolean;
+  onGoogleSignIn: () => Promise<void>;
+  onManualSignIn: (name: string, email: string) => Promise<void>;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
-  currentName,
-  onSaveName,
+  language,
   onClose,
-  isFirstVisit,
+  onGoogleSignIn,
+  onManualSignIn,
 }) => {
-  const [nameInput, setNameInput] = useState(currentName);
+  const t = translations[language];
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    setNameInput(currentName);
-    setError('');
-  }, [currentName, isOpen]);
+  const [manualName, setManualName] = useState('');
+  const [manualEmail, setManualEmail] = useState('');
+  const [showManual, setShowManual] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = nameInput.trim();
-    if (!trimmed) {
-      setError('Please enter your name or media callsign.');
-      return;
+  const handleGoogleClick = async () => {
+    setIsLoading(true);
+    setError('');
+    try {
+      await onGoogleSignIn();
+      onClose();
+    } catch (err: unknown) {
+      console.warn('Google sign-in popup issue (possibly iframe popup blocker):', err);
+      setError(
+        language === 'ar'
+          ? 'تعذر فتح نافذة تسجيل الدخول (قد تكون محظورة داخل الإطار). يمكنك تسجيل الدخول المباشر أدناه.'
+          : 'Could not open Google popup (may be blocked in iframe). You can use direct sign-in below.'
+      );
+      setShowManual(true);
+    } finally {
+      setIsLoading(false);
     }
-    if (trimmed.length < 2) {
-      setError('Name must be at least 2 characters.');
-      return;
-    }
-    onSaveName(trimmed);
-    onClose();
   };
 
-  const sampleNames = ['Marcus Vance', 'Sarah Jenkins', 'David Kalu', 'Elena Rostova', 'Jordan Lee'];
+  const handleManualSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualName.trim()) return;
+    setIsLoading(true);
+    setError('');
+    try {
+      await onManualSignIn(
+        manualName.trim(),
+        manualEmail.trim() || `${manualName.toLowerCase().replace(/\s+/g, '')}@cocmedia.team`
+      );
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Sign in failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Dark blur backdrop */}
-      <div 
-        className="fixed inset-0 bg-black/75 backdrop-blur-md transition-opacity duration-300"
-        onClick={!isFirstVisit ? onClose : undefined}
-      />
+      <div className="fixed inset-0 bg-black/85 backdrop-blur-md" onClick={onClose} />
 
-      {/* Glass Card */}
       <div className="relative w-full max-w-md p-6 sm:p-8 rounded-3xl glass-panel-elevated border border-white/15 text-white shadow-2xl z-10 animate-in fade-in zoom-in-95 duration-200">
         
-        {/* Glow ambient background inside modal */}
-        <div className="absolute -top-16 -left-16 w-32 h-32 bg-indigo-500/30 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-16 -right-16 w-32 h-32 bg-purple-500/30 rounded-full blur-3xl pointer-events-none" />
+        <div className="flex justify-end mb-2">
+          <button onClick={onClose} className="p-1 rounded-lg text-neutral-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
         <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-600 to-pink-500 p-0.5 shadow-xl shadow-indigo-500/25 mb-4">
-            <div className="w-full h-full bg-[#0d111c] rounded-[14px] flex items-center justify-center">
-              <Film className="w-8 h-8 text-indigo-400" />
+          <div className="w-16 h-16 mx-auto rounded-3xl bg-gradient-to-tr from-[#0A84FF] to-blue-700 p-0.5 shadow-xl shadow-[#0A84FF]/30 flex items-center justify-center mb-4">
+            <div className="w-full h-full bg-[#0B0C10] rounded-[22px] flex items-center justify-center">
+              <Shield className="w-8 h-8 text-[#0A84FF]" />
             </div>
           </div>
 
-          <h2 className="text-2xl font-bold tracking-tight text-white">
-            {isFirstVisit ? 'Welcome to COC Media' : 'Edit Member Profile'}
+          <h2 className="text-2xl font-black text-white tracking-tight">
+            COC Media Team
           </h2>
-          <p className="text-sm text-neutral-400 mt-1.5 leading-relaxed">
-            {isFirstVisit
-              ? 'Enter your name to claim completed media tasks, track points, and climb the team leaderboard.'
-              : 'Update your display name for the COC Media Team leaderboard.'}
+          <p className="text-xs text-neutral-400 mt-1">
+            {language === 'ar' ? 'سجل دخولك لبدء تنفيذ المهام وجمع النقاط والمنافسة' : 'Sign in to access your tasks, record attendance, and climb the leaderboard'}
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">
-              Your Full Name or Callsign
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                autoFocus
-                placeholder="e.g. Alex Producer, Jordan Video"
-                value={nameInput}
-                onChange={(e) => {
-                  setNameInput(e.target.value);
-                  setError('');
-                }}
-                className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-white/[0.06] border border-white/15 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all text-sm"
-              />
-              <User className="absolute left-3.5 top-3.5 w-4 h-4 text-neutral-400" />
-            </div>
-            {error && <p className="text-xs text-rose-400 mt-2 font-medium">{error}</p>}
+        {error && (
+          <div className="mb-4 p-3 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-semibold">
+            {error}
           </div>
+        )}
 
-          {/* Quick select suggestions for demo / convenience */}
-          {isFirstVisit && (
-            <div>
-              <div className="text-[11px] font-medium text-neutral-400 mb-2 flex items-center gap-1.5">
-                <Sparkles className="w-3 h-3 text-indigo-400" />
-                Quick suggestions:
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {sampleNames.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setNameInput(s)}
-                    className="px-2.5 py-1 rounded-lg text-xs bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-neutral-300 hover:text-white transition-all"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="pt-2 flex items-center gap-3">
-            {!isFirstVisit && (
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex-1 py-3 rounded-2xl bg-white/[0.05] hover:bg-white/[0.1] text-neutral-300 text-sm font-semibold transition-all border border-white/10"
-              >
-                Cancel
-              </button>
+        <div className="space-y-4">
+          <button
+            type="button"
+            onClick={handleGoogleClick}
+            disabled={isLoading}
+            className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-neutral-100 text-black text-sm font-bold shadow-lg transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+          >
+            {isLoading && !showManual ? (
+              <Loader2 className="w-4 h-4 animate-spin text-black" />
+            ) : (
+              <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
             )}
-            <button
-              type="submit"
-              className="flex-1 py-3.5 px-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-sm font-semibold shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 group"
-            >
-              <span>{isFirstVisit ? 'Join Media Team' : 'Save Changes'}</span>
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
-            </button>
-          </div>
-        </form>
+            <span>{t.signInWithGoogle}</span>
+          </button>
 
-        <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-center gap-2 text-neutral-400 text-xs">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <span>Saved persistently on this device via localStorage</span>
+          {/* Fallback direct sign-in for preview environment */}
+          {showManual ? (
+            <form onSubmit={handleManualSubmit} className="space-y-3 pt-3 border-t border-white/10 animate-in fade-in">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                  {language === 'ar' ? 'الاسم بالكامل' : 'Full Name'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Steven Mario"
+                  value={manualName}
+                  onChange={(e) => setManualName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.06] border border-white/15 text-white text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                  {language === 'ar' ? 'البريد الإلكتروني (اختياري)' : 'Email (Optional)'}
+                </label>
+                <input
+                  type="email"
+                  placeholder="name@cocmedia.team"
+                  value={manualEmail}
+                  onChange={(e) => setManualEmail(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.06] border border-white/15 text-white text-xs"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-blue-600 text-white text-xs font-bold transition-all shadow-md shadow-[#0A84FF]/25"
+              >
+                {isLoading ? 'Signing in...' : 'Sign In Direct'}
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowManual(true)}
+              className="w-full text-center text-[11px] text-neutral-400 hover:text-white transition-colors pt-2"
+            >
+              {language === 'ar' ? 'أو الدخول المباشر بالاسم والبريد' : 'Or sign in directly with name & email'}
+            </button>
+          )}
         </div>
 
       </div>
