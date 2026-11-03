@@ -29,7 +29,8 @@ const sandbox = {
   Array,
   Object,
   Set,
-  Map
+  Map,
+  serverNow: () => Date.now()
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
@@ -424,6 +425,38 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   const resThu = computeAttendance(session, thuStartMs);
   assert.strictEqual(resThu.status, 'on_time');
   assert.strictEqual(resThu.occurrenceKey, '2026-05-07');
+}
+
+// ==========================================
+// TEST 6: REGRESSION TESTS FOR serverNow() NUMBER RETURN & DEFAULT nowMs
+// ==========================================
+{
+  const startMs = zonedDateToMs(2026, 5, 1, 10, 0, 0, 'Africa/Cairo');
+  const task = {
+    schedule: { type: 'once', startDateTime: startMs },
+    isPermanent: true
+  };
+  const session = {
+    schedule: { type: 'once', startDateTime: startMs },
+    earlyCheckInMinutes: 30,
+    lateCutoffMinutes: 60
+  };
+
+  // 6.1 Calling with plain number nowMs must not throw
+  assert.doesNotThrow(() => {
+    getOccurrenceFor(task, startMs);
+    getTaskWindow(task, startMs);
+    resolveSessionOccurrence(session, startMs);
+    computeAttendance(session, startMs);
+  }, 'Engine functions must accept a plain number timestamp without throwing now.getTime is not a function');
+
+  // 6.2 Calling without nowMs (relying on default serverNow()) must not throw
+  assert.doesNotThrow(() => {
+    getOccurrenceFor(task);
+    getTaskWindow(task);
+    resolveSessionOccurrence(session);
+    computeAttendance(session);
+  }, 'Engine functions must default to serverNow() without throwing now.getTime is not a function');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');

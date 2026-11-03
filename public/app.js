@@ -779,7 +779,7 @@ function getOccurrences(scheduleInput, fromMs, toMs) {
   return Array.from(new Set(results)).sort((a, b) => a - b);
 }
 
-function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const sched = normalizeScheduleObject(item?.schedule || item);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const earlyWindowMs = (item?.earlyWindowMinutes || 0) * 60000;
@@ -841,7 +841,7 @@ function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serve
   };
 }
 
-function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!task) return null;
   const sched = normalizeScheduleObject(task.schedule || task);
   const startMs = parseDateTimeToMs(sched.startDateTime);
@@ -943,7 +943,7 @@ function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNo
   };
 }
 
-function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const sched = normalizeScheduleObject(session?.schedule || session);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const lateCutoffMinutes = typeof session?.lateCutoffMinutes === 'number' ? session.lateCutoffMinutes : 120;
@@ -1007,7 +1007,7 @@ function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'functi
   };
 }
 
-function computeAttendance(session, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function computeAttendance(session, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!session) return { status: 'blocked', reason: 'no_session', message: 'No session provided' };
   const occ = resolveSessionOccurrence(session, nowMs);
   if (!occ) {
@@ -1422,7 +1422,29 @@ function initErrorBoundary() {
   const msgEl = document.getElementById('error-boundary-message');
   if (!boundary) return;
 
+  const isIgnoredError = (err) => {
+    if (!err) return false;
+    const msg = String(err?.message || err?.reason?.message || (typeof err === 'string' ? err : ''));
+    const stack = String(err?.stack || err?.reason?.stack || '');
+    const filename = String(err?.filename || '');
+    const target = err?.target?.constructor?.name || '';
+    const combined = `${msg} ${stack} ${filename} ${target}`.toLowerCase();
+
+    return (
+      combined.includes('websocket') ||
+      combined.includes('@vite/client') ||
+      combined.includes('ws://') ||
+      combined.includes('wss://') ||
+      combined.includes('closed without opened') ||
+      combined.includes('vite:ws')
+    );
+  };
+
   const handleError = (error) => {
+    if (isIgnoredError(error)) {
+      console.warn('Ignored transient dev-server/WebSocket error:', error?.message || error);
+      return;
+    }
     console.error('Captured by global error boundary:', error);
     if (msgEl) {
       msgEl.textContent = error?.message || 'An unexpected error occurred while executing the workspace.';
@@ -1430,8 +1452,20 @@ function initErrorBoundary() {
     boundary.classList.remove('hidden');
   };
 
-  window.addEventListener('error', (event) => handleError(event.error || event));
-  window.addEventListener('unhandledrejection', (event) => handleError(event.reason || event));
+  window.addEventListener('error', (event) => {
+    if (isIgnoredError(event) || isIgnoredError(event.error)) {
+      event.preventDefault?.();
+      return;
+    }
+    handleError(event.error || event);
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    if (isIgnoredError(event) || isIgnoredError(event.reason)) {
+      event.preventDefault?.();
+      return;
+    }
+    handleError(event.reason || event);
+  });
 }
 
 /**
@@ -1800,7 +1834,7 @@ async function renderSubmissionsTrendChart() {
   const daysData = [];
 
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86400000);
+    const d = new Date(now - i * 86400000);
     const dateStr = new Intl.DateTimeFormat('en-CA', {
       timeZone: APP_TIMEZONE,
       year: 'numeric',

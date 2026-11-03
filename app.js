@@ -779,7 +779,7 @@ function getOccurrences(scheduleInput, fromMs, toMs) {
   return Array.from(new Set(results)).sort((a, b) => a - b);
 }
 
-function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const sched = normalizeScheduleObject(item?.schedule || item);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const earlyWindowMs = (item?.earlyWindowMinutes || 0) * 60000;
@@ -841,7 +841,7 @@ function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serve
   };
 }
 
-function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!task) return null;
   const sched = normalizeScheduleObject(task.schedule || task);
   const startMs = parseDateTimeToMs(sched.startDateTime);
@@ -943,7 +943,7 @@ function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNo
   };
 }
 
-function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const sched = normalizeScheduleObject(session?.schedule || session);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const lateCutoffMinutes = typeof session?.lateCutoffMinutes === 'number' ? session.lateCutoffMinutes : 120;
@@ -1007,7 +1007,7 @@ function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'functi
   };
 }
 
-function computeAttendance(session, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function computeAttendance(session, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!session) return { status: 'blocked', reason: 'no_session', message: 'No session provided' };
   const occ = resolveSessionOccurrence(session, nowMs);
   if (!occ) {
@@ -1422,7 +1422,29 @@ function initErrorBoundary() {
   const msgEl = document.getElementById('error-boundary-message');
   if (!boundary) return;
 
+  const isIgnoredError = (err) => {
+    if (!err) return false;
+    const msg = String(err?.message || err?.reason?.message || (typeof err === 'string' ? err : ''));
+    const stack = String(err?.stack || err?.reason?.stack || '');
+    const filename = String(err?.filename || '');
+    const target = err?.target?.constructor?.name || '';
+    const combined = `${msg} ${stack} ${filename} ${target}`.toLowerCase();
+
+    return (
+      combined.includes('websocket') ||
+      combined.includes('@vite/client') ||
+      combined.includes('ws://') ||
+      combined.includes('wss://') ||
+      combined.includes('closed without opened') ||
+      combined.includes('vite:ws')
+    );
+  };
+
   const handleError = (error) => {
+    if (isIgnoredError(error)) {
+      console.warn('Ignored transient dev-server/WebSocket error:', error?.message || error);
+      return;
+    }
     console.error('Captured by global error boundary:', error);
     if (msgEl) {
       msgEl.textContent = error?.message || 'An unexpected error occurred while executing the workspace.';
@@ -1430,8 +1452,20 @@ function initErrorBoundary() {
     boundary.classList.remove('hidden');
   };
 
-  window.addEventListener('error', (event) => handleError(event.error || event));
-  window.addEventListener('unhandledrejection', (event) => handleError(event.reason || event));
+  window.addEventListener('error', (event) => {
+    if (isIgnoredError(event) || isIgnoredError(event.error)) {
+      event.preventDefault?.();
+      return;
+    }
+    handleError(event.error || event);
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    if (isIgnoredError(event) || isIgnoredError(event.reason)) {
+      event.preventDefault?.();
+      return;
+    }
+    handleError(event.reason || event);
+  });
 }
 
 /**
@@ -1517,11 +1551,28 @@ export function createPager(pagerEl, dockEl, pages) {
   }
 
   let activeIndex = 0;
+  let isProgrammatic = false;
+  let programmaticTimeout = null;
+  let scrollTimeout = null;
+
+  // Swipe gesture tracking state
+  let isTracking = false;
+  let startX = 0;
+  let startY = 0;
+  let currentX = 0;
+  let currentY = 0;
+  let startScrollLeft = 0;
+  let startTime = 0;
+  let swipeDirection = null; // 'horizontal' | 'vertical' | null
+  let isPointerDragging = false;
+
   const thumbEl = dockEl.querySelector('.dock-thumb');
   const dockItems = dockEl.querySelectorAll('.dock-item');
 
-  function updateDockThumb(index) {
+  function updateDockThumb(index, smooth = false) {
+    if (index < 0 || index >= pages.length) return;
     activeIndex = index;
+
     dockItems.forEach((btn, i) => {
       if (i === index) btn.classList.add('active');
       else btn.classList.remove('active');
@@ -1531,12 +1582,14 @@ export function createPager(pagerEl, dockEl, pages) {
       const targetBtn = dockItems[index];
       const offsetLeft = targetBtn.offsetLeft;
       const width = targetBtn.offsetWidth;
-      thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
-      thumbEl.style.width = `${width}px`;
+      if (width > 0) {
+        thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
+        thumbEl.style.width = `${width}px`;
+      }
 
       dockEl.scrollTo({
         left: offsetLeft - dockEl.clientWidth / 2 + width / 2,
-        behavior: 'smooth'
+        behavior: smooth ? 'smooth' : 'auto'
       });
     }
 
@@ -1549,12 +1602,22 @@ export function createPager(pagerEl, dockEl, pages) {
   function goTo(pageId) {
     const idx = pages.findIndex(p => p.id === pageId);
     if (idx !== -1) {
-      const pageWidth = pagerEl.clientWidth;
+      isProgrammatic = true;
+      if (programmaticTimeout) clearTimeout(programmaticTimeout);
+
+      if (thumbEl) thumbEl.style.transition = '';
+      updateDockThumb(idx, true);
+
+      const pageWidth = pagerEl.clientWidth || 1;
       pagerEl.scrollTo({
         left: idx * pageWidth,
         behavior: 'smooth'
       });
-      updateDockThumb(idx);
+
+      programmaticTimeout = setTimeout(() => {
+        isProgrammatic = false;
+        if (thumbEl) thumbEl.style.transition = '';
+      }, 420);
     }
   }
 
@@ -1566,32 +1629,356 @@ export function createPager(pagerEl, dockEl, pages) {
     };
   });
 
-  let scrollTimeout = null;
+  // Touch Swipe Gesture Handlers
+  function getTouchCoords(e) {
+    if (e.touches && e.touches.length > 0) {
+      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    if (e.changedTouches && e.changedTouches.length > 0) {
+      return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+    }
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  function onTouchStart(e) {
+    if (e.touches && e.touches.length > 1) return;
+    if (e.target && e.target.closest && e.target.closest('#category-filter-chips, input, textarea, select')) {
+      return;
+    }
+
+    const coords = getTouchCoords(e);
+    startX = coords.x;
+    startY = coords.y;
+    currentX = coords.x;
+    currentY = coords.y;
+    startScrollLeft = pagerEl.scrollLeft;
+    startTime = Date.now();
+    isTracking = true;
+    swipeDirection = null;
+    isProgrammatic = false;
+    if (programmaticTimeout) clearTimeout(programmaticTimeout);
+  }
+
+  function onTouchMove(e) {
+    if (!isTracking) return;
+
+    const coords = getTouchCoords(e);
+    currentX = coords.x;
+    currentY = coords.y;
+    const dx = currentX - startX;
+    const dy = currentY - startY;
+
+    if (!swipeDirection) {
+      if (Math.hypot(dx, dy) > 7) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          swipeDirection = 'horizontal';
+          pagerEl.style.scrollSnapType = 'none';
+          if (thumbEl) thumbEl.style.transition = 'none';
+        } else {
+          swipeDirection = 'vertical';
+        }
+      }
+    }
+
+    if (swipeDirection === 'horizontal') {
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+
+      let effectiveDx = dx;
+      const isAtFirst = activeIndex === 0 && dx > 0;
+      const isAtLast = activeIndex === pages.length - 1 && dx < 0;
+      if (isAtFirst || isAtLast) {
+        effectiveDx = dx * 0.35;
+      }
+
+      pagerEl.scrollLeft = startScrollLeft - effectiveDx;
+
+      const pageWidth = pagerEl.clientWidth || 1;
+      const progress = pagerEl.scrollLeft / pageWidth;
+      const clamped = Math.max(0, Math.min(pages.length - 1, progress));
+      const baseIdx = Math.floor(clamped);
+      const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
+      const ratio = clamped - baseIdx;
+
+      if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
+        const btnA = dockItems[baseIdx];
+        const btnB = dockItems[nextIdx];
+        const xA = btnA.offsetLeft - 4;
+        const xB = btnB.offsetLeft - 4;
+        const wA = btnA.offsetWidth;
+        const wB = btnB.offsetWidth;
+        thumbEl.style.transform = `translateX(${xA + (xB - xA) * ratio}px)`;
+        thumbEl.style.width = `${wA + (wB - wA) * ratio}px`;
+      }
+
+      const closestIdx = Math.round(clamped);
+      if (closestIdx !== activeIndex && closestIdx >= 0 && closestIdx < pages.length) {
+        activeIndex = closestIdx;
+        dockItems.forEach((btn, i) => {
+          btn.classList.toggle('active', i === closestIdx);
+        });
+      }
+    }
+  }
+
+  function onTouchEnd(e) {
+    if (!isTracking) return;
+    isTracking = false;
+
+    if (swipeDirection === 'horizontal') {
+      pagerEl.style.scrollSnapType = '';
+      if (thumbEl) thumbEl.style.transition = '';
+
+      const coords = getTouchCoords(e);
+      const dx = coords.x - startX;
+      const dt = Math.max(1, Date.now() - startTime);
+      const velocity = dx / dt;
+      const pageWidth = pagerEl.clientWidth || 1;
+
+      const isQuickFlick = dt < 320 && Math.abs(dx) > 30 && Math.abs(velocity) > 0.22;
+      const isSignificantDistance = Math.abs(dx) > pageWidth * 0.16;
+
+      let targetIdx = activeIndex;
+
+      if ((isQuickFlick && velocity < 0) || (isSignificantDistance && dx < 0)) {
+        targetIdx = Math.min(pages.length - 1, activeIndex + 1);
+      } else if ((isQuickFlick && velocity > 0) || (isSignificantDistance && dx > 0)) {
+        targetIdx = Math.max(0, activeIndex - 1);
+      } else {
+        targetIdx = Math.round((pagerEl.scrollLeft || 0) / pageWidth);
+        targetIdx = Math.max(0, Math.min(pages.length - 1, targetIdx));
+      }
+
+      goTo(pages[targetIdx].id);
+    } else {
+      pagerEl.style.scrollSnapType = '';
+    }
+
+    swipeDirection = null;
+  }
+
+  // Pointer / Mouse Drag Fallback for Desktop
+  function onPointerDown(e) {
+    if (e.pointerType === 'touch') return;
+    if (e.button !== 0) return;
+    if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, #category-filter-chips, .interactive')) {
+      return;
+    }
+
+    startX = e.clientX;
+    startY = e.clientY;
+    currentX = e.clientX;
+    currentY = e.clientY;
+    startScrollLeft = pagerEl.scrollLeft;
+    startTime = Date.now();
+    isPointerDragging = true;
+    swipeDirection = null;
+    isProgrammatic = false;
+    if (programmaticTimeout) clearTimeout(programmaticTimeout);
+  }
+
+  function onPointerMove(e) {
+    if (!isPointerDragging || e.pointerType === 'touch') return;
+    currentX = e.clientX;
+    currentY = e.clientY;
+    const dx = currentX - startX;
+    const dy = currentY - startY;
+
+    if (!swipeDirection) {
+      if (Math.hypot(dx, dy) > 8) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          swipeDirection = 'horizontal';
+          pagerEl.style.scrollSnapType = 'none';
+          if (thumbEl) thumbEl.style.transition = 'none';
+          pagerEl.style.cursor = 'grabbing';
+          pagerEl.style.userSelect = 'none';
+        } else {
+          swipeDirection = 'vertical';
+        }
+      }
+    }
+
+    if (swipeDirection === 'horizontal') {
+      pagerEl.scrollLeft = startScrollLeft - dx;
+
+      const pageWidth = pagerEl.clientWidth || 1;
+      const progress = pagerEl.scrollLeft / pageWidth;
+      const clamped = Math.max(0, Math.min(pages.length - 1, progress));
+      const baseIdx = Math.floor(clamped);
+      const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
+      const ratio = clamped - baseIdx;
+
+      if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
+        const btnA = dockItems[baseIdx];
+        const btnB = dockItems[nextIdx];
+        const xA = btnA.offsetLeft - 4;
+        const xB = btnB.offsetLeft - 4;
+        const wA = btnA.offsetWidth;
+        const wB = btnB.offsetWidth;
+        thumbEl.style.transform = `translateX(${xA + (xB - xA) * ratio}px)`;
+        thumbEl.style.width = `${wA + (wB - wA) * ratio}px`;
+      }
+    }
+  }
+
+  function onPointerUp(e) {
+    if (!isPointerDragging || e.pointerType === 'touch') return;
+    isPointerDragging = false;
+    pagerEl.style.cursor = '';
+    pagerEl.style.userSelect = '';
+
+    if (swipeDirection === 'horizontal') {
+      pagerEl.style.scrollSnapType = '';
+      if (thumbEl) thumbEl.style.transition = '';
+
+      const dx = e.clientX - startX;
+      const dt = Math.max(1, Date.now() - startTime);
+      const velocity = dx / dt;
+      const pageWidth = pagerEl.clientWidth || 1;
+
+      let targetIdx = activeIndex;
+      if ((dt < 300 && velocity < -0.22) || dx < -pageWidth * 0.16) {
+        targetIdx = Math.min(pages.length - 1, activeIndex + 1);
+      } else if ((dt < 300 && velocity > 0.22) || dx > pageWidth * 0.16) {
+        targetIdx = Math.max(0, activeIndex - 1);
+      } else {
+        targetIdx = Math.round((pagerEl.scrollLeft || 0) / pageWidth);
+        targetIdx = Math.max(0, Math.min(pages.length - 1, targetIdx));
+      }
+
+      goTo(pages[targetIdx].id);
+    } else {
+      pagerEl.style.scrollSnapType = '';
+    }
+    swipeDirection = null;
+  }
+
+  // Native scroll handler for trackpad gestures
   const onScroll = () => {
+    if (isProgrammatic || isTracking || isPointerDragging) {
+      if (isProgrammatic) {
+        const targetLeft = activeIndex * (pagerEl.clientWidth || 1);
+        if (Math.abs(pagerEl.scrollLeft - targetLeft) <= 2) {
+          isProgrammatic = false;
+        }
+      }
+      return;
+    }
+
+    const pageWidth = pagerEl.clientWidth || 1;
+    const scrollLeft = pagerEl.scrollLeft;
+    const progress = scrollLeft / pageWidth;
+    const clampedProgress = Math.max(0, Math.min(pages.length - 1, progress));
+    const baseIdx = Math.floor(clampedProgress);
+    const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
+    const ratio = clampedProgress - baseIdx;
+
+    if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
+      const btnA = dockItems[baseIdx];
+      const btnB = dockItems[nextIdx];
+      const xA = btnA.offsetLeft - 4;
+      const xB = btnB.offsetLeft - 4;
+      const wA = btnA.offsetWidth;
+      const wB = btnB.offsetWidth;
+      const curX = xA + (xB - xA) * ratio;
+      const curW = wA + (wB - wA) * ratio;
+
+      thumbEl.style.transition = 'none';
+      thumbEl.style.transform = `translateX(${curX}px)`;
+      thumbEl.style.width = `${curW}px`;
+    }
+
+    const closestIdx = Math.round(clampedProgress);
+    if (closestIdx !== activeIndex && closestIdx >= 0 && closestIdx < pages.length) {
+      activeIndex = closestIdx;
+      dockItems.forEach((btn, i) => {
+        btn.classList.toggle('active', i === closestIdx);
+      });
+    }
+
     if (scrollTimeout) clearTimeout(scrollTimeout);
     scrollTimeout = setTimeout(() => {
-      const scrollLeft = pagerEl.scrollLeft;
-      const width = pagerEl.clientWidth || 1;
-      const index = Math.round(scrollLeft / width);
-      if (index >= 0 && index < pages.length && index !== activeIndex) {
-        updateDockThumb(index);
+      if (!isProgrammatic && !isTracking && !isPointerDragging) {
+        if (thumbEl) thumbEl.style.transition = '';
+        const finalIdx = Math.round((pagerEl.scrollLeft || 0) / (pagerEl.clientWidth || 1));
+        if (finalIdx >= 0 && finalIdx < pages.length) {
+          updateDockThumb(finalIdx, false);
+        }
       }
-    }, 60);
+    }, 80);
   };
+
   pagerEl.addEventListener('scroll', onScroll, { passive: true });
 
+  const onScrollEnd = () => {
+    if (!isTracking && !isPointerDragging) {
+      isProgrammatic = false;
+      if (thumbEl) thumbEl.style.transition = '';
+      const finalIdx = Math.round((pagerEl.scrollLeft || 0) / (pagerEl.clientWidth || 1));
+      if (finalIdx >= 0 && finalIdx < pages.length) {
+        updateDockThumb(finalIdx, false);
+      }
+    }
+  };
+
+  pagerEl.addEventListener('scrollend', onScrollEnd, { passive: true });
+
+  pagerEl.addEventListener('touchstart', onTouchStart, { passive: true });
+  pagerEl.addEventListener('touchmove', onTouchMove, { passive: false });
+  pagerEl.addEventListener('touchend', onTouchEnd, { passive: true });
+  pagerEl.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+  pagerEl.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+
+  const onResize = () => {
+    const width = pagerEl.clientWidth || 1;
+    pagerEl.scrollLeft = activeIndex * width;
+    if (thumbEl) thumbEl.style.transition = 'none';
+    updateDockThumb(activeIndex, false);
+    requestAnimationFrame(() => {
+      if (thumbEl) thumbEl.style.transition = '';
+    });
+  };
+
+  window.addEventListener('resize', onResize);
+
+  // Initial load without animation jump
   const initialHash = window.location.hash;
   const matchedIdx = pages.findIndex(p => p.hash === initialHash);
-  if (matchedIdx !== -1) {
-    setTimeout(() => goTo(pages[matchedIdx].id), 50);
-  } else {
-    setTimeout(() => updateDockThumb(0), 50);
+  const startIdx = matchedIdx !== -1 ? matchedIdx : 0;
+
+  if (thumbEl) thumbEl.style.transition = 'none';
+  updateDockThumb(startIdx, false);
+  if (startIdx !== 0) {
+    const pageWidth = pagerEl.clientWidth || 1;
+    pagerEl.scrollLeft = startIdx * pageWidth;
   }
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      if (thumbEl) thumbEl.style.transition = '';
+    }, 60);
+  });
 
   return {
     goTo,
     getActive: () => pages[activeIndex]?.id || '',
-    destroy: () => pagerEl.removeEventListener('scroll', onScroll)
+    destroy: () => {
+      pagerEl.removeEventListener('scroll', onScroll);
+      pagerEl.removeEventListener('scrollend', onScrollEnd);
+      pagerEl.removeEventListener('touchstart', onTouchStart);
+      pagerEl.removeEventListener('touchmove', onTouchMove);
+      pagerEl.removeEventListener('touchend', onTouchEnd);
+      pagerEl.removeEventListener('touchcancel', onTouchEnd);
+      pagerEl.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+      window.removeEventListener('resize', onResize);
+    }
   };
 }
 
@@ -1800,7 +2187,7 @@ async function renderSubmissionsTrendChart() {
   const daysData = [];
 
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86400000);
+    const d = new Date(now - i * 86400000);
     const dateStr = new Intl.DateTimeFormat('en-CA', {
       timeZone: APP_TIMEZONE,
       year: 'numeric',

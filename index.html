@@ -17,6 +17,33 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192x192.png" />
     <link rel="icon" type="image/jpeg" href="./image_ad59c0.jpg" />
 
+    <!-- Dev environment WebSocket / HMR error filter -->
+    <script>
+      (function() {
+        function shouldIgnore(e) {
+          var msg = (e && (e.message || (e.error && e.error.message))) || '';
+          var src = (e && e.filename) || '';
+          var stack = (e && (e.stack || (e.reason && e.reason.stack))) || '';
+          var target = (e && e.target && e.target.constructor && e.target.constructor.name) || '';
+          var combined = (msg + ' ' + src + ' ' + stack + ' ' + target).toLowerCase();
+          return combined.indexOf('websocket') !== -1 || combined.indexOf('@vite/client') !== -1 || combined.indexOf('closed without opened') !== -1;
+        }
+        window.addEventListener('error', function(event) {
+          if (shouldIgnore(event) || shouldIgnore(event.error)) {
+            event.stopImmediatePropagation && event.stopImmediatePropagation();
+            event.preventDefault && event.preventDefault();
+            return true;
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(event) {
+          if (shouldIgnore(event) || shouldIgnore(event.reason)) {
+            event.stopImmediatePropagation && event.stopImmediatePropagation();
+            event.preventDefault && event.preventDefault();
+          }
+        }, true);
+      })();
+    </script>
+
     <!-- Tailwind CSS CDN for Zero-Build Utility Execution -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
