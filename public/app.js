@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.0)
+ * COC Media Team - Production Web App (v2.1.1)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.0';
+export const APP_VERSION = '2.1.1';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
