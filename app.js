@@ -2902,6 +2902,9 @@ function openModal({ title, body, onSave, onClose, isDirty, saveLabel, sheetClas
  * Deterministic avatar renderer with color hashed from uid and fallback initials.
  */
 export function renderAvatar(user, sizeClass = 'w-10 h-10') {
+  if (typeof sizeClass === 'number') {
+    sizeClass = sizeClass === 48 ? 'w-12 h-12' : `w-[${sizeClass}px] h-[${sizeClass}px]`;
+  }
   const name = user?.name || user?.displayName || user?.userName || 'Team Member';
   const uid = user?.uid || user?.userId || 'guest';
   const photo = user?.avatarUrl || user?.photoURL || user?.userAvatar || '';
@@ -4928,12 +4931,102 @@ function initNavigation() {
 /* ==========================================================================
    SIDE DRAWER CONTROLLER
    ========================================================================== */
-function openDrawer() {
+export function updateDrawerPushUI() {
+  const statusEl = document.getElementById('drawer-push-status');
+  const switchContainer = document.getElementById('drawer-push-switch-container');
+  if (!switchContainer) return;
+
+  const supported = ('Notification' in window) && Boolean(isFCMSupported);
+  const permission = supported ? Notification.permission : 'unsupported';
+  const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
+  const isPushActive = supported && permission === 'granted' && hasToken;
+
+  if (statusEl) {
+    if (!supported) statusEl.textContent = 'Not Supported';
+    else if (permission === 'denied') statusEl.textContent = 'Blocked';
+    else if (isPushActive) statusEl.textContent = 'On';
+    else statusEl.textContent = 'Off';
+  }
+
+  switchContainer.innerHTML = '';
+  switchContainer.appendChild(renderSwitch({
+    id: 'drawer-push-switch',
+    checked: isPushActive,
+    disabled: !supported || permission === 'denied' || !state.user,
+    onChange: async (checked) => {
+      if (!state.user) {
+        toast('Please sign in to enable push notifications', 'warning');
+        updateDrawerPushUI();
+        return;
+      }
+      if (checked) {
+        await enablePushNotifications();
+      } else {
+        await disablePushNotifications();
+      }
+      updateDrawerPushUI();
+    }
+  }));
+}
+
+export function renderSettingsDrawer() {
+  const userCard = document.getElementById('drawer-profile-card');
+  const guestCard = document.getElementById('drawer-guest-card');
+  const avatarEl = document.getElementById('drawer-profile-avatar');
+  const nameEl = document.getElementById('drawer-profile-name');
+  const emailEl = document.getElementById('drawer-profile-email');
+  const roleEl = document.getElementById('drawer-profile-role');
+  const signoutContainer = document.getElementById('drawer-signout-container');
+  const adminBtn = document.getElementById('drawer-btn-admin');
+
+  if (state.user) {
+    if (guestCard) guestCard.classList.add('hidden');
+    if (userCard) {
+      userCard.classList.remove('hidden');
+      const userDoc = usersMap.get(state.user.uid) || state.user;
+      const displayName = userDoc.displayName || userDoc.name || state.user.displayName || 'Member';
+      const email = state.userPrivate?.email || userDoc.email || state.user.email || 'Verified Member';
+      const isAdmin = Boolean(userDoc.role === 'admin' || userDoc.isAdmin || state.user.isAdmin || state.isAdminUnlocked);
+
+      if (avatarEl) avatarEl.innerHTML = renderAvatar(userDoc, 48);
+      if (nameEl) nameEl.textContent = displayName;
+      if (emailEl) emailEl.textContent = email;
+      if (roleEl) {
+        roleEl.textContent = isAdmin ? 'Admin' : 'Member';
+        roleEl.className = isAdmin
+          ? 'px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30'
+          : 'px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-neutral-300';
+      }
+
+      userCard.onclick = () => {
+        closeDrawer();
+        if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.goTo) {
+          userPagerInstance.goTo('profile');
+        }
+      };
+    }
+
+    if (signoutContainer) signoutContainer.classList.remove('hidden');
+    if (adminBtn) {
+      const isAdmin = Boolean(state.user.isAdmin || state.user.role === 'admin' || state.isAdminUnlocked);
+      adminBtn.classList.toggle('hidden', !isAdmin);
+    }
+  } else {
+    renderSettingsDrawer();
+    if (signoutContainer) signoutContainer.classList.add('hidden');
+    if (adminBtn) adminBtn.classList.add('hidden');
+  }
+
+  updateDrawerPushUI();
+}
+
+export function openDrawer() {
   const drawer = document.getElementById('side-drawer');
   const backdrop = document.getElementById('side-drawer-backdrop');
   if (drawer && backdrop) {
     drawer.classList.add('drawer-open');
     backdrop.classList.add('drawer-open');
+    renderSettingsDrawer();
   }
 }
 
@@ -8414,16 +8507,7 @@ function updateProfileUI() {
     const myRank = sorted.findIndex(m => m.uid === state.user.uid);
     if (rankEl) rankEl.textContent = myRank !== -1 ? `#${myRank + 1}` : '--';
 
-    if (guestCard) guestCard.classList.add('hidden');
-    if (userCard) {
-      userCard.classList.remove('hidden');
-      const uName = document.getElementById('drawer-user-name');
-      const uEmail = document.getElementById('drawer-user-email');
-      const uPts = document.getElementById('drawer-user-points');
-      if (uName) uName.textContent = state.user.displayName;
-      if (uEmail) uEmail.textContent = emailToDisplay;
-      if (uPts) uPts.textContent = `${state.user.points || 0} pts`;
-    }
+    renderSettingsDrawer();
 
     renderProfileSubmissions();
     renderProfileAttendance();
@@ -15645,5 +15729,7 @@ if (typeof window !== 'undefined') {
   window.editingCategoryId = editingCategoryId;
   window.editingSessionId = editingSessionId;
   window.editingBroadcastId = editingBroadcastId;
+  window.renderSettingsDrawer = renderSettingsDrawer;
+  window.updateDrawerPushUI = updateDrawerPushUI;
   window.openBadgePickerSheet = openBadgePickerSheet;
 }
