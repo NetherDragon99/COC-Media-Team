@@ -37,10 +37,10 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty } = exportsObj;
 
 assert.strictEqual(APP_TIMEZONE, 'Africa/Cairo', 'APP_TIMEZONE must be Africa/Cairo');
 assert.strictEqual(typeof getOccurrences, 'function', 'getOccurrences must be a function');
@@ -461,32 +461,32 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
 }
 
 // ==========================================
-// TEST 7: TIME-BUCKET HELPERS & LEADERBOARD PERIODS (v2.0.0)
+// TEST 7: TIME-BUCKET HELPERS & LEADERBOARD PERIODS
 // ==========================================
 {
   const may1Ms = zonedDateToMs(2026, 5, 1, 12, 0, 0, 'Africa/Cairo');
   const { curMonthKey, curWeekKey } = getTimeBucketKeys(may1Ms, 'Africa/Cairo');
   assert.strictEqual(curMonthKey, '2026-05', 'Month key for May 1 2026 should be 2026-05');
-  assert.strictEqual(curWeekKey, '2026-W18', 'Week key for May 1 2026 should be 2026-W18');
+  assert.strictEqual(curWeekKey, '2026-04-25', 'Week key for May 1 2026 (Friday) should be 2026-04-25 (Saturday start)');
 
   // buildPointsUpdate for new user or fresh month
-  const update1 = buildPointsUpdate({ points: 10, monthBucket: '2026-04', monthPoints: 5, weekBucket: '2026-W17', weekPoints: 5 }, 15, may1Ms);
-  assert.strictEqual(update1.monthBucket, '2026-05');
+  const update1 = buildPointsUpdate({ points: 10, monthKey: '2026-04', monthPoints: 5, weekKey: '2026-04-18', weekPoints: 5 }, 15, may1Ms);
+  assert.strictEqual(update1.monthKey, '2026-05');
   assert.strictEqual(update1.monthPoints, 15);
-  assert.strictEqual(update1.weekBucket, '2026-W18');
+  assert.strictEqual(update1.weekKey, '2026-04-25');
   assert.strictEqual(update1.weekPoints, 15);
 
   // buildPointsUpdate for existing bucket (accumulating)
-  const update2 = buildPointsUpdate({ points: 25, monthBucket: '2026-05', monthPoints: 15, weekBucket: '2026-W18', weekPoints: 15 }, 10, may1Ms);
+  const update2 = buildPointsUpdate({ points: 25, monthKey: '2026-05', monthPoints: 15, weekKey: '2026-04-25', weekPoints: 15 }, 10, may1Ms);
   assert.deepStrictEqual(update2.monthPoints, { __op: 'increment', n: 10 });
   assert.deepStrictEqual(update2.weekPoints, { __op: 'increment', n: 10 });
 
   // getMemberPeriodPoints
   const member = {
     points: 100,
-    monthBucket: '2026-05',
+    monthKey: '2026-05',
     monthPoints: 40,
-    weekBucket: '2026-W18',
+    weekKey: '2026-04-25',
     weekPoints: 20
   };
   assert.strictEqual(getMemberPeriodPoints(member, 'all', may1Ms), 100);
@@ -522,7 +522,7 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
     // 8.2 getTimeBucketKeys never throws and returns correct keys
     const keys = getTimeBucketKeys(val, 'Africa/Cairo');
     assert.strictEqual(keys.curMonthKey, '2026-05', `Month key should be 2026-05 for ${label}`);
-    assert.strictEqual(keys.curWeekKey, '2026-W18', `Week key should be 2026-W18 for ${label}`);
+    assert.strictEqual(keys.curWeekKey, '2026-04-25', `Week key should be 2026-04-25 for ${label}`);
 
     // 8.3 getOccurrenceFor / getTaskWindow / computeAttendance
     const task = { schedule: { type: 'once', startDateTime: val }, isPermanent: true };
@@ -539,6 +539,596 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
     buildPointsUpdate({ points: 10 }, 5);
     getMemberPeriodPoints({ points: 10 });
   }, 'Time bucket helpers must default safely to serverNow() without throwing');
+}
+
+
+// ==========================================
+// TEST 9: TIMEZONE CONVERSIONS, WHEEL PICKER HELPERS & DST TRANSITIONS
+// ==========================================
+{
+  const testZones = ['UTC', 'Africa/Cairo', 'America/Los_Angeles', 'Pacific/Auckland'];
+
+  for (const tz of testZones) {
+    // 9.1 msToZonedParts <-> zonedPartsToMs round trip
+    const baseMs = Date.UTC(2026, 4, 15, 14, 30, 0);
+    const parts = msToZonedParts(baseMs, tz);
+    assert.strictEqual(typeof parts.y, 'number');
+    assert.strictEqual(typeof parts.m, 'number');
+    assert.strictEqual(typeof parts.d, 'number');
+    assert.strictEqual(typeof parts.hh, 'number');
+    assert.strictEqual(typeof parts.mm, 'number');
+    
+    const roundMs = zonedPartsToMs(parts, tz);
+    assert.strictEqual(roundMs, baseMs, `Round trip ms <-> zonedParts must match exactly for ${tz}`);
+
+    // 9.2 startOfZonedDay returns midnight in the given timezone
+    const dayStartMs = startOfZonedDay(baseMs, tz);
+    const startParts = msToZonedParts(dayStartMs, tz);
+    assert.strictEqual(startParts.y, parts.y);
+    assert.strictEqual(startParts.m, parts.m);
+    assert.strictEqual(startParts.d, parts.d);
+    assert.strictEqual(startParts.hh, 0, `Hour must be 0 for startOfZonedDay in ${tz}`);
+    assert.strictEqual(startParts.mm, 0, `Minute must be 0 for startOfZonedDay in ${tz}`);
+    assert.strictEqual(startParts.ss, 0, `Second must be 0 for startOfZonedDay in ${tz}`);
+  }
+
+  // 9.3 DST Transition tests
+  // Africa/Cairo DST 2026: spring-forward on Friday April 24 (00:00 -> 01:00)
+  // Let's add 2 days from April 23 15:30 Cairo time across the DST boundary
+  const cairoBefore = zonedPartsToMs({ y: 2026, m: 4, d: 23, hh: 15, mm: 30 }, 'Africa/Cairo');
+  const cairoAfter = addDaysZoned(cairoBefore, 2, 'Africa/Cairo');
+  const cairoAfterParts = msToZonedParts(cairoAfter, 'Africa/Cairo');
+  assert.strictEqual(cairoAfterParts.y, 2026);
+  assert.strictEqual(cairoAfterParts.m, 4);
+  assert.strictEqual(cairoAfterParts.d, 25);
+  assert.strictEqual(cairoAfterParts.hh, 15, 'Hour must remain 15:30 across Cairo spring-forward DST transition');
+  assert.strictEqual(cairoAfterParts.mm, 30, 'Minute must remain 15:30 across Cairo spring-forward DST transition');
+
+  // America/Los_Angeles DST 2026: spring-forward on March 8 (02:00 -> 03:00)
+  // Add 2 days from March 7 10:15
+  const laBefore = zonedPartsToMs({ y: 2026, m: 3, d: 7, hh: 10, mm: 15 }, 'America/Los_Angeles');
+  const laAfter = addDaysZoned(laBefore, 2, 'America/Los_Angeles');
+  const laAfterParts = msToZonedParts(laAfter, 'America/Los_Angeles');
+  assert.strictEqual(laAfterParts.y, 2026);
+  assert.strictEqual(laAfterParts.m, 3);
+  assert.strictEqual(laAfterParts.d, 9);
+  assert.strictEqual(laAfterParts.hh, 10, 'Hour must remain 10:15 across Los Angeles spring-forward DST transition');
+  assert.strictEqual(laAfterParts.mm, 15, 'Minute must remain 10:15 across Los Angeles spring-forward DST transition');
+
+  // Pacific/Auckland DST 2026: fall-back on April 5 (03:00 -> 02:00)
+  // Add 2 days from April 4 09:45
+  const aucklandBefore = zonedPartsToMs({ y: 2026, m: 4, d: 4, hh: 9, mm: 45 }, 'Pacific/Auckland');
+  const aucklandAfter = addDaysZoned(aucklandBefore, 2, 'Pacific/Auckland');
+  const aucklandAfterParts = msToZonedParts(aucklandAfter, 'Pacific/Auckland');
+  assert.strictEqual(aucklandAfterParts.y, 2026);
+  assert.strictEqual(aucklandAfterParts.m, 4);
+  assert.strictEqual(aucklandAfterParts.d, 6);
+  assert.strictEqual(aucklandAfterParts.hh, 9, 'Hour must remain 09:45 across Auckland fall-back DST transition');
+  assert.strictEqual(aucklandAfterParts.mm, 45, 'Minute must remain 09:45 across Auckland fall-back DST transition');
+}
+
+
+// ==========================================
+// TEST 8: TASK 4/10 LEADERBOARD COUNTERS (weekKeyOf, monthKeyOf, buildPointsUpdate)
+// ==========================================
+
+// 8.1 weekKeyOf and monthKeyOf under APP_TIMEZONE ('Africa/Cairo')
+{
+  assert.strictEqual(typeof weekKeyOf, 'function', 'weekKeyOf must be a function');
+  assert.strictEqual(typeof monthKeyOf, 'function', 'monthKeyOf must be a function');
+
+  // Boundary 1: Friday 2026-11-06 23:59:59 Cairo vs Saturday 2026-11-07 00:00:00 Cairo
+  const friNightCairo = zonedDateToMs(2026, 11, 6, 23, 59, 59, 'Africa/Cairo');
+  const satMorningCairo = zonedDateToMs(2026, 11, 7, 0, 0, 0, 'Africa/Cairo');
+
+  // Friday belongs to Saturday 2026-10-31 week
+  assert.strictEqual(weekKeyOf(friNightCairo, 'Africa/Cairo'), '2026-10-31', 'Friday 23:59:59 Cairo must belong to Saturday 2026-10-31 week');
+  assert.strictEqual(monthKeyOf(friNightCairo, 'Africa/Cairo'), '2026-11', 'Friday 2026-11-06 must be in month 2026-11');
+
+  // Saturday 00:00:00 Cairo starts a new week!
+  assert.strictEqual(weekKeyOf(satMorningCairo, 'Africa/Cairo'), '2026-11-07', 'Saturday 00:00:00 Cairo starts Saturday 2026-11-07 week');
+  assert.strictEqual(monthKeyOf(satMorningCairo, 'Africa/Cairo'), '2026-11', 'Saturday 2026-11-07 must be in month 2026-11');
+
+  // Boundary 2: Month transition Oct 31 23:59:59 Cairo vs Nov 1 00:00:00 Cairo
+  const octEndCairo = zonedDateToMs(2026, 10, 31, 23, 59, 59, 'Africa/Cairo');
+  const novStartCairo = zonedDateToMs(2026, 11, 1, 0, 0, 0, 'Africa/Cairo');
+
+  assert.strictEqual(monthKeyOf(octEndCairo, 'Africa/Cairo'), '2026-10', 'Oct 31 23:59:59 must be 2026-10');
+  assert.strictEqual(monthKeyOf(novStartCairo, 'Africa/Cairo'), '2026-11', 'Nov 1 00:00:00 must be 2026-11');
+  // Both Oct 31 (Sat) and Nov 1 (Sun) belong to the Saturday 2026-10-31 week!
+  assert.strictEqual(weekKeyOf(octEndCairo, 'Africa/Cairo'), '2026-10-31');
+  assert.strictEqual(weekKeyOf(novStartCairo, 'Africa/Cairo'), '2026-10-31');
+}
+
+// 8.2 Testing weekKeyOf and monthKeyOf in UTC, America/Los_Angeles, and Pacific/Auckland
+{
+  const timezones = ['UTC', 'America/Los_Angeles', 'Pacific/Auckland'];
+
+  for (const tz of timezones) {
+    // Saturday morning in this timezone
+    const satNoon = zonedDateToMs(2026, 5, 2, 12, 0, 0, tz); // 2026-05-02 is a Saturday
+    const friEve = zonedDateToMs(2026, 5, 8, 23, 59, 0, tz); // 2026-05-08 is a Friday
+    const nextSat = zonedDateToMs(2026, 5, 9, 0, 0, 1, tz); // 2026-05-09 is next Saturday
+
+    assert.strictEqual(weekKeyOf(satNoon, tz), '2026-05-02', `Saturday in ${tz} must yield Saturday key`);
+    assert.strictEqual(weekKeyOf(friEve, tz), '2026-05-02', `Friday in ${tz} must yield start of that week Saturday key`);
+    assert.strictEqual(weekKeyOf(nextSat, tz), '2026-05-09', `Next Saturday in ${tz} must yield next Saturday key`);
+
+    // Month boundary in timezone
+    const lastSecMonth = zonedDateToMs(2026, 4, 30, 23, 59, 59, tz);
+    const firstSecMonth = zonedDateToMs(2026, 5, 1, 0, 0, 0, tz);
+    assert.strictEqual(monthKeyOf(lastSecMonth, tz), '2026-04', `Last second in ${tz} must be 2026-04`);
+    assert.strictEqual(monthKeyOf(firstSecMonth, tz), '2026-05', `First second in ${tz} must be 2026-05`);
+  }
+}
+
+// 8.3 DST Transitions (America/Los_Angeles March 8 spring forward, Nov 1 fall back)
+{
+  // Spring forward: 2026-03-08 in America/Los_Angeles
+  const springSun = zonedDateToMs(2026, 3, 8, 14, 0, 0, 'America/Los_Angeles');
+  assert.strictEqual(weekKeyOf(springSun, 'America/Los_Angeles'), '2026-03-07', 'Spring forward Sunday must map to Saturday 2026-03-07');
+  assert.strictEqual(monthKeyOf(springSun, 'America/Los_Angeles'), '2026-03');
+
+  // Fall back: 2026-11-01 in America/Los_Angeles
+  const fallSun = zonedDateToMs(2026, 11, 1, 14, 0, 0, 'America/Los_Angeles');
+  assert.strictEqual(weekKeyOf(fallSun, 'America/Los_Angeles'), '2026-10-31', 'Fall back Sunday must map to Saturday 2026-10-31');
+  assert.strictEqual(monthKeyOf(fallSun, 'America/Los_Angeles'), '2026-11');
+}
+
+// 8.4 buildPointsUpdate contract
+{
+  const refTime = zonedDateToMs(2026, 11, 7, 14, 0, 0, 'Africa/Cairo'); // Saturday week 2026-11-07, month 2026-11
+  const curWk = '2026-11-07';
+  const curMo = '2026-11';
+
+  // Positive: same week & month -> increment
+  const userSame = { weekKey: curWk, weekPoints: 10, monthKey: curMo, monthPoints: 20, points: 50 };
+  const upSame = buildPointsUpdate(userSame, 15, refTime);
+  assert.deepStrictEqual(upSame.points, { __op: 'increment', n: 15 });
+  assert.deepStrictEqual(upSame.weekPoints, { __op: 'increment', n: 15 });
+  assert.deepStrictEqual(upSame.monthPoints, { __op: 'increment', n: 15 });
+  assert.strictEqual(upSame.weekKey, undefined, 'weekKey should not be overwritten when already current');
+
+  // Positive: new week & month -> sets keys and points to delta
+  const userOld = { weekKey: '2026-10-10', weekPoints: 10, monthKey: '2026-10', monthPoints: 20, points: 50 };
+  const upNew = buildPointsUpdate(userOld, 15, refTime);
+  assert.deepStrictEqual(upNew.points, { __op: 'increment', n: 15 });
+  assert.strictEqual(upNew.weekKey, curWk);
+  assert.strictEqual(upNew.weekPoints, 15);
+  assert.strictEqual(upNew.monthKey, curMo);
+  assert.strictEqual(upNew.monthPoints, 15);
+
+  // Negative: same week & month -> decrements points, writes absolute Math.max(0, current + delta) for window counters
+  const upNegSame = buildPointsUpdate(userSame, -5, refTime);
+  assert.deepStrictEqual(upNegSame.points, { __op: 'increment', n: -5 });
+  assert.strictEqual(upNegSame.weekPoints, 5, 'weekPoints must be absolute Math.max(0, 10 - 5) = 5');
+  assert.strictEqual(upNegSame.monthPoints, 15, 'monthPoints must be absolute Math.max(0, 20 - 5) = 15');
+
+  // Negative: past week & month (e.g. revoking submission from last month) -> decrements points only!
+  const pastSubmissionTime = zonedDateToMs(2026, 9, 15, 12, 0, 0, 'Africa/Cairo');
+  const upNegPast = buildPointsUpdate(userSame, -10, pastSubmissionTime);
+  assert.deepStrictEqual(upNegPast.points, { __op: 'increment', n: -10 });
+  assert.strictEqual(upNegPast.weekPoints, undefined, 'Must not touch current weekPoints for past week submission');
+  assert.strictEqual(upNegPast.monthPoints, undefined, 'Must not touch current monthPoints for past month submission');
+
+  // getMemberPeriodPoints
+  assert.strictEqual(getMemberPeriodPoints(userSame, 'all', refTime), 50);
+  assert.strictEqual(getMemberPeriodPoints(userSame, 'month', refTime), 20);
+  assert.strictEqual(getMemberPeriodPoints(userSame, 'week', refTime), 10);
+  assert.strictEqual(getMemberPeriodPoints(userOld, 'month', refTime), 0, 'Expired month bucket yields 0');
+  assert.strictEqual(getMemberPeriodPoints(userOld, 'week', refTime), 0, 'Expired week bucket yields 0');
+}
+
+
+// ==========================================
+// TEST 9: TASK MODAL, PICKERS & TIERS (TASK 5)
+// ==========================================
+
+// 9.1 offsetFromPickers & pickersFromOffset
+{
+  // Once: absolute start and deadline ms
+  const sMs = zonedDateToMs(2026, 6, 1, 10, 0, 0, 'Africa/Cairo');
+  const dMs = zonedDateToMs(2026, 6, 1, 12, 30, 0, 'Africa/Cairo');
+  const durOnce = offsetFromPickers({ isOnce: true, startMs: sMs, deadlineMs: dMs });
+  assert.strictEqual(durOnce, 150, 'Once duration 10:00 to 12:30 must be 150 min');
+
+  const pOnce = pickersFromOffset({ isOnce: true, startMs: sMs, durationMinutes: 150 });
+  assert.strictEqual(pOnce.deadlineMs, dMs, 'pickersFromOffset must recover deadlineMs for once task');
+
+  // Recurring: daysAfter + start/deadline times
+  const durRec = offsetFromPickers({ isOnce: false, startTime: '10:00', deadlineTime: '12:30', daysAfter: 1 });
+  assert.strictEqual(durRec, 1440 + 150, '1 day after + 2.5 hours must be 1590 min');
+
+  const pRec = pickersFromOffset({ isOnce: false, startTime: '10:00', durationMinutes: 1590 });
+  assert.strictEqual(pRec.daysAfter, 1);
+  assert.strictEqual(pRec.deadlineTime, '12:30');
+
+  // Same day earlier time -> invalid without daysAfter > 0
+  assert.throws(() => offsetFromPickers({ isOnce: false, startTime: '14:00', deadlineTime: '10:00', daysAfter: 0 }), /Deadline must be after start/);
+}
+
+// 9.2 normalizeTaskTiers: legacy vs modern
+{
+  // Modern format
+  const modern = {
+    points: 10,
+    durationMinutes: 120,
+    earlyBonus: { enabled: true, untilMinutes: 30, points: 15 },
+    grace: { enabled: true, untilMinutes: 180 },
+    missedPenalty: { enabled: true, points: 5 }
+  };
+  const normModern = normalizeTaskTiers(modern);
+  assert.strictEqual(normModern.points, 10);
+  assert.strictEqual(normModern.earlyBonus.enabled, true);
+  assert.strictEqual(normModern.earlyBonus.untilMinutes, 30);
+  assert.strictEqual(normModern.earlyBonus.points, 15);
+  assert.strictEqual(normModern.grace.enabled, true);
+  assert.strictEqual(normModern.grace.untilMinutes, 180);
+  assert.strictEqual(normModern.missedPenalty.enabled, true);
+  assert.strictEqual(normModern.missedPenalty.points, 5);
+
+  // Legacy format (tieredRewards)
+  const legacy = {
+    points: 8,
+    durationMinutes: 120,
+    tieredRewards: {
+      earlyBonusMinutes: 40,
+      earlyPoints: 12,
+      onTimePoints: 8,
+      graceMinutes: 60,
+      gracePoints: 4,
+      missedPenaltyPoints: 3
+    }
+  };
+  const normLegacy = normalizeTaskTiers(legacy);
+  assert.strictEqual(normLegacy.points, 8);
+  assert.strictEqual(normLegacy.earlyBonus.enabled, true);
+  assert.strictEqual(normLegacy.earlyBonus.untilMinutes, 40);
+  assert.strictEqual(normLegacy.earlyBonus.points, 12);
+  assert.strictEqual(normLegacy.grace.enabled, true);
+  assert.strictEqual(normLegacy.grace.untilMinutes, 180, 'Legacy grace: duration (120) + graceMinutes (60) = 180 min');
+  assert.strictEqual(normLegacy.missedPenalty.enabled, true);
+  assert.strictEqual(normLegacy.missedPenalty.points, 3);
+}
+
+// 9.3 getTaskWindow states
+{
+  const start = zonedDateToMs(2026, 6, 1, 10, 0, 0, 'Africa/Cairo');
+  const task = {
+    id: 'task-test-1',
+    isPermanent: false,
+    durationMinutes: 120, // closes at 12:00
+    points: 5,
+    earlyBonus: { enabled: true, untilMinutes: 30, points: 10 }, // until 10:30
+    grace: { enabled: true, untilMinutes: 180 }, // until 13:00
+    missedPenalty: { enabled: true, points: 2 },
+    schedule: { type: 'once', startDateTime: start }
+  };
+
+  // 1. Upcoming (before start)
+  const wUpcoming = getTaskWindow(task, start - 10000);
+  assert.strictEqual(wUpcoming.state, 'upcoming');
+  assert.strictEqual(wUpcoming.pointsForNow, 10);
+  assert.strictEqual(wUpcoming.inGrace, false);
+
+  // 2. Open - Early Bonus (at start + 15 min = 10:15)
+  const wEarly = getTaskWindow(task, start + 15 * 60000);
+  assert.strictEqual(wEarly.state, 'open');
+  assert.strictEqual(wEarly.pointsForNow, 10);
+  assert.strictEqual(wEarly.inGrace, false);
+  assert.strictEqual(wEarly.isEarlyBonus, true);
+
+  // 3. Open - Standard On-Time (at start + 45 min = 10:45)
+  const wStandard = getTaskWindow(task, start + 45 * 60000);
+  assert.strictEqual(wStandard.state, 'open');
+  assert.strictEqual(wStandard.pointsForNow, 5);
+  assert.strictEqual(wStandard.inGrace, false);
+  assert.strictEqual(wStandard.isEarlyBonus, false);
+
+  // 4. Grace (at start + 150 min = 12:30, after closesAt 12:00, before graceEndsAt 13:00)
+  const wGrace = getTaskWindow(task, start + 150 * 60000);
+  assert.strictEqual(wGrace.state, 'grace');
+  assert.strictEqual(wGrace.pointsForNow, 5, 'Grace submissions earn on-time points');
+  assert.strictEqual(wGrace.inGrace, true);
+
+  // 5. Closed (at start + 200 min = 13:20, after graceEndsAt)
+  const wClosed = getTaskWindow(task, start + 200 * 60000);
+  assert.strictEqual(wClosed.state, 'closed');
+  assert.strictEqual(wClosed.pointsForNow, 0);
+
+  // 6. Permanent task -> always open, on-time points
+  const permTask = { id: 'p1', isPermanent: true, points: 7 };
+  const wPerm = getTaskWindow(permTask, start + 9999999);
+  assert.strictEqual(wPerm.state, 'open');
+  assert.strictEqual(wPerm.pointsForNow, 7);
+  assert.strictEqual(wPerm.isPermanent, true);
+  assert.strictEqual(wPerm.inGrace, false);
+}
+
+// 9.4 computeTieredTaskPoints
+{
+  const start = zonedDateToMs(2026, 6, 1, 10, 0, 0, 'Africa/Cairo');
+  const task = {
+    points: 10,
+    durationMinutes: 60,
+    earlyBonus: { enabled: true, untilMinutes: 15, points: 20 },
+    grace: { enabled: true, untilMinutes: 90 },
+    schedule: { type: 'once', startDateTime: start }
+  };
+  assert.strictEqual(computeTieredTaskPoints(task, start + 10 * 60000).points, 20); // within early bonus
+  assert.strictEqual(computeTieredTaskPoints(task, start + 30 * 60000).points, 10); // standard on-time
+  assert.strictEqual(computeTieredTaskPoints(task, start + 75 * 60000).points, 10); // grace earns standard points
+  assert.strictEqual(computeTieredTaskPoints(task, start + 75 * 60000).inGrace, true);
+  assert.strictEqual(computeTieredTaskPoints(task, start + 100 * 60000).canSubmit, false); // after grace
+}
+
+
+// =========================================================================
+// TEST 10: ATTENDANCE OVERHAUL: MIRRORED PENALTIES & EGP MODEL (TASK 6)
+// =========================================================================
+
+// 10.1 normalizeSession: Legacy vs Modern
+{
+  // Legacy session
+  const legacy = {
+    id: 's_legacy',
+    penaltyPointsEnabled: true,
+    penaltyFinesEnabled: false,
+    penaltyUnit: 'minutes',
+    stepDuration: 5,
+    penaltyPerStep: 2,
+    minPenalty: 4,
+    maxPenalty: 20,
+    absencePenalty: 15,
+    absenceFineEGP: 50,
+    earlyCheckInMinutes: 20,
+    lateCutoffMinutes: 90
+  };
+  const normLeg = normalizeSession(legacy);
+  assert.strictEqual(normLeg.pointsPenalty.enabled, true);
+  assert.strictEqual(normLeg.pointsPenalty.mode, 'stepped');
+  assert.strictEqual(normLeg.pointsPenalty.stepUnit, 'minutes');
+  assert.strictEqual(normLeg.pointsPenalty.stepSize, 5);
+  assert.strictEqual(normLeg.pointsPenalty.perStep, 2);
+  assert.strictEqual(normLeg.pointsPenalty.min, 4);
+  assert.strictEqual(normLeg.pointsPenalty.max, 20);
+  assert.strictEqual(normLeg.pointsPenalty.absence, 15);
+
+  assert.strictEqual(normLeg.finePenalty.enabled, false);
+  assert.strictEqual(normLeg.finePenalty.absence, 50);
+
+  // Modern session
+  const modern = {
+    id: 's_modern',
+    pointsPenalty: {
+      enabled: true,
+      mode: 'fixed',
+      fixed: 7,
+      min: 0,
+      max: 10,
+      absence: 12
+    },
+    finePenalty: {
+      enabled: true,
+      mode: 'stepped',
+      stepUnit: 'seconds',
+      stepSize: 30,
+      perStep: 5,
+      min: 10,
+      max: 50,
+      absence: 100
+    }
+  };
+  const normMod = normalizeSession(modern);
+  assert.strictEqual(normMod.pointsPenalty.enabled, true);
+  assert.strictEqual(normMod.pointsPenalty.mode, 'fixed');
+  assert.strictEqual(normMod.pointsPenalty.fixed, 7);
+  assert.strictEqual(normMod.pointsPenalty.absence, 12);
+
+  assert.strictEqual(normMod.finePenalty.enabled, true);
+  assert.strictEqual(normMod.finePenalty.mode, 'stepped');
+  assert.strictEqual(normMod.finePenalty.stepUnit, 'seconds');
+  assert.strictEqual(normMod.finePenalty.stepSize, 30);
+  assert.strictEqual(normMod.finePenalty.perStep, 5);
+  assert.strictEqual(normMod.finePenalty.min, 10);
+  assert.strictEqual(normMod.finePenalty.max, 50);
+  assert.strictEqual(normMod.finePenalty.absence, 100);
+}
+
+// 10.2 computeAttendance: Fixed penalty mode
+{
+  const start = zonedDateToMs(2026, 7, 1, 10, 0, 0, 'Africa/Cairo');
+  const session = {
+    id: 's_fixed',
+    schedule: { type: 'once', startDateTime: start },
+    earlyCheckInMinutes: 30,
+    lateCutoffMinutes: 60,
+    pointsPenalty: { enabled: true, mode: 'fixed', fixed: 8, min: 0, max: 20, absence: 15 },
+    finePenalty: { enabled: true, mode: 'fixed', fixed: 25, min: 0, max: 100, absence: 50 }
+  };
+
+  // On time
+  const onTime = computeAttendance(session, start - 5000);
+  assert.strictEqual(onTime.status, 'on_time');
+  assert.strictEqual(onTime.pointsPenalty, 0);
+  assert.strictEqual(onTime.finePenalty, 0);
+  assert.strictEqual(onTime.fineEGP, 0);
+
+  // Late
+  const late = computeAttendance(session, start + 60000); // 1m late
+  assert.strictEqual(late.status, 'late');
+  assert.strictEqual(late.pointsPenalty, 8);
+  assert.strictEqual(late.finePenalty, 25);
+  assert.strictEqual(late.fineEGP, 25);
+  assert.strictEqual(late.penalty, 8); // legacy compatibility
+}
+
+// 10.3 computeAttendance: Stepped in seconds & in minutes
+{
+  const start = zonedDateToMs(2026, 7, 1, 10, 0, 0, 'Africa/Cairo');
+  const session = {
+    id: 's_stepped',
+    schedule: { type: 'once', startDateTime: start },
+    earlyCheckInMinutes: 30,
+    lateCutoffMinutes: 60,
+    pointsPenalty: {
+      enabled: true,
+      mode: 'stepped',
+      stepUnit: 'seconds',
+      stepSize: 15,
+      perStep: 2,
+      min: 0,
+      max: 999999,
+      absence: 20
+    },
+    finePenalty: {
+      enabled: true,
+      mode: 'stepped',
+      stepUnit: 'minutes',
+      stepSize: 5,
+      perStep: 10,
+      min: 0,
+      max: 999999,
+      absence: 50
+    }
+  };
+
+  // 10s late:
+  // Points (15s steps): ceil(10 / 15) = 1 step * 2 = 2 pts
+  // Fines (5m steps): ceil(10 / 300) = 1 step * 10 = 10 EGP
+  const late10s = computeAttendance(session, start + 10000);
+  assert.strictEqual(late10s.pointsPenalty, 2);
+  assert.strictEqual(late10s.finePenalty, 10);
+
+  // 35s late:
+  // Points: ceil(35 / 15) = 3 steps * 2 = 6 pts
+  // Fines: ceil(35 / 300) = 1 step * 10 = 10 EGP
+  const late35s = computeAttendance(session, start + 35000);
+  assert.strictEqual(late35s.pointsPenalty, 6);
+  assert.strictEqual(late35s.finePenalty, 10);
+
+  // 360s (6m) late:
+  // Points: ceil(360 / 15) = 24 steps * 2 = 48 pts
+  // Fines: ceil(360 / 300) = 2 steps * 10 = 20 EGP
+  const late6m = computeAttendance(session, start + 360000);
+  assert.strictEqual(late6m.pointsPenalty, 48);
+  assert.strictEqual(late6m.finePenalty, 20);
+}
+
+// 10.4 Min and Max Clamps
+{
+  const start = zonedDateToMs(2026, 7, 1, 10, 0, 0, 'Africa/Cairo');
+  const session = {
+    id: 's_clamps',
+    schedule: { type: 'once', startDateTime: start },
+    earlyCheckInMinutes: 30,
+    lateCutoffMinutes: 60,
+    pointsPenalty: {
+      enabled: true,
+      mode: 'stepped',
+      stepUnit: 'minutes',
+      stepSize: 1,
+      perStep: 1,
+      min: 5, // minimum 5
+      max: 15, // maximum 15
+      absence: 20
+    },
+    finePenalty: {
+      enabled: true,
+      mode: 'fixed',
+      fixed: 2,
+      min: 10, // minimum 10
+      max: 50,
+      absence: 30
+    }
+  };
+
+  // 1 min late: raw points = 1 -> clamped to min 5; fixed fine = 2 -> clamped to min 10
+  const late1m = computeAttendance(session, start + 60000);
+  assert.strictEqual(late1m.pointsPenalty, 5);
+  assert.strictEqual(late1m.finePenalty, 10);
+
+  // 30 min late: raw points = 30 -> clamped to max 15
+  const late30m = computeAttendance(session, start + 30 * 60000);
+  assert.strictEqual(late30m.pointsPenalty, 15);
+  assert.strictEqual(late30m.finePenalty, 10);
+}
+
+// 10.5 Independent Enablement: Points Only, Fines Only, Both Off
+{
+  const start = zonedDateToMs(2026, 7, 1, 10, 0, 0, 'Africa/Cairo');
+
+  // Points on, Fines off
+  const sPtsOnly = {
+    schedule: { type: 'once', startDateTime: start },
+    pointsPenalty: { enabled: true, mode: 'fixed', fixed: 10, min: 0, max: 20 },
+    finePenalty: { enabled: false, mode: 'fixed', fixed: 50, min: 0, max: 100 }
+  };
+  const resPts = computeAttendance(sPtsOnly, start + 60000);
+  assert.strictEqual(resPts.pointsPenalty, 10);
+  assert.strictEqual(resPts.finePenalty, 0);
+
+  // Points off, Fines on
+  const sFinesOnly = {
+    schedule: { type: 'once', startDateTime: start },
+    pointsPenalty: { enabled: false, mode: 'fixed', fixed: 10, min: 0, max: 20 },
+    finePenalty: { enabled: true, mode: 'fixed', fixed: 50, min: 0, max: 100 }
+  };
+  const resFines = computeAttendance(sFinesOnly, start + 60000);
+  assert.strictEqual(resFines.pointsPenalty, 0);
+  assert.strictEqual(resFines.finePenalty, 50);
+
+  // Both off
+  const sNone = {
+    schedule: { type: 'once', startDateTime: start },
+    pointsPenalty: { enabled: false },
+    finePenalty: { enabled: false }
+  };
+  const resNone = computeAttendance(sNone, start + 60000);
+  assert.strictEqual(resNone.pointsPenalty, 0);
+  assert.strictEqual(resNone.finePenalty, 0);
+}
+
+// 10.6 Absence calculation
+{
+  const session = {
+    id: 's_abs',
+    pointsPenalty: { enabled: true, absence: 25 },
+    finePenalty: { enabled: true, absence: 75 }
+  };
+  const absRes = computeAttendance(session, 'absent');
+  assert.strictEqual(absRes.status, 'absent');
+  assert.strictEqual(absRes.pointsPenalty, 25);
+  assert.strictEqual(absRes.finePenalty, 75);
+  assert.strictEqual(absRes.fineEGP, 75);
+
+  // With fines disabled for absence
+  const sessionNoFine = {
+    id: 's_abs_nofine',
+    pointsPenalty: { enabled: true, absence: 30 },
+    finePenalty: { enabled: false, absence: 100 }
+  };
+  const absNoFineRes = computeAttendance(sessionNoFine, 'absent');
+  assert.strictEqual(absNoFineRes.pointsPenalty, 30);
+  assert.strictEqual(absNoFineRes.finePenalty, 0);
+}
+
+// 10.7 Early & Closed window checks
+{
+  const start = zonedDateToMs(2026, 7, 1, 10, 0, 0, 'Africa/Cairo');
+  const session = {
+    schedule: { type: 'once', startDateTime: start },
+    earlyCheckInMinutes: 30, // opens at 09:30
+    lateCutoffMinutes: 60    // closes at 11:00
+  };
+
+  const tooEarly = computeAttendance(session, start - 35 * 60000); // 09:25
+  assert.strictEqual(tooEarly.status, 'blocked');
+  assert.strictEqual(tooEarly.reason, 'early');
+
+  const tooLate = computeAttendance(session, start + 65 * 60000); // 11:05
+  assert.strictEqual(tooLate.status, 'blocked');
+  assert.strictEqual(tooLate.reason, 'closed');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');

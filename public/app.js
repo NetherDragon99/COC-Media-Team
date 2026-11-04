@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.0.1)
+ * COC Media Team - Production Web App (v2.1.0)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.0.1';
+export const APP_VERSION = '2.1.0';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -205,6 +205,86 @@ export const listeners = {
 };
 
 /* ==========================================================================
+   SHARED TICKER SERVICE (Task 2 - Performance & Overheating)
+   ========================================================================== */
+export const ticker = {
+  _subscribers: new Map(),
+  _timer: null,
+  _baseInterval: 1000,
+  _isPaused: false,
+
+  subscribe(idOrFn, fnOrInterval = 1000, intervalMs = 1000) {
+    let id, fn, interval;
+    if (typeof idOrFn === 'function') {
+      id = 'sub_' + Math.random().toString(36).slice(2, 9);
+      fn = idOrFn;
+      interval = typeof fnOrInterval === 'number' ? fnOrInterval : 1000;
+    } else {
+      id = String(idOrFn);
+      fn = fnOrInterval;
+      interval = typeof intervalMs === 'number' ? intervalMs : 1000;
+    }
+    this._subscribers.set(id, {
+      fn,
+      intervalMs: Math.max(250, interval),
+      lastRun: Date.now()
+    });
+    this._ensureRunning();
+    return () => this.unsubscribe(id);
+  },
+
+  unsubscribe(id) {
+    this._subscribers.delete(id);
+    if (this._subscribers.size === 0) {
+      this._stop();
+    }
+  },
+
+  _ensureRunning() {
+    if (this._timer || this._isPaused) return;
+    this._timer = setInterval(() => this._tick(), this._baseInterval);
+  },
+
+  _stop() {
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
+    }
+  },
+
+  _tick() {
+    if (this._isPaused || (typeof document !== 'undefined' && document.hidden)) return;
+    const now = Date.now();
+    for (const [id, sub] of this._subscribers.entries()) {
+      if (now - sub.lastRun >= sub.intervalMs) {
+        sub.lastRun = now;
+        try {
+          sub.fn(serverNow());
+        } catch (e) {
+          console.warn('Ticker error in ' + id + ':', e);
+        }
+      }
+    }
+  },
+
+  initVisibility() {
+    if (typeof document === 'undefined') return;
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this._isPaused = true;
+        this._stop();
+      } else {
+        this._isPaused = false;
+        this._tick();
+        this._ensureRunning();
+      }
+    });
+  }
+};
+ticker.initVisibility();
+
+
+/* ==========================================================================
    SERVER CLOCK & OFFSET SYNCHRONIZATION
    ========================================================================== */
 let serverOffsetMs = 0;
@@ -218,9 +298,10 @@ export async function initServerClock() {
   if (!auth?.currentUser || !navigator.onLine) return;
   try {
     const uid = auth.currentUser.uid;
-    const userRef = doc(db, 'users', uid);
-    await updateDoc(userRef, { lastSeenAt: serverTimestamp() });
-    const snap = await getDocFromServer(userRef);
+    const privRef = doc(db, 'users_private', uid);
+    // Write lastSeenAt to private doc to eliminate public push storms
+    await setDoc(privRef, { lastSeenAt: serverTimestamp() }, { merge: true });
+    const snap = await getDocFromServer(privRef);
     if (snap.exists()) {
       const serverTime = snap.data()?.lastSeenAt?.toMillis ? snap.data().lastSeenAt.toMillis() : Date.now();
       serverOffsetMs = serverTime - Date.now();
@@ -428,52 +509,6 @@ function normalizeTask(raw) {
   };
 }
 
-// Assumption: Early window is submission at least earlyBonusMinutes before closesAt (or within earlyBonusMinutes of start if no closesAt or duration is short).
-function computeTieredTaskPoints(task, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
-  if (!task) {
-    return { points: 5, tier: 'flat', canSubmit: true, statusText: '' };
-  }
-  const nowMs = parseDateTimeToMs(nowInput);
-  if (!task.tieredRewards || !task.tieredRewards.enabled) {
-    return { points: typeof task.points === 'number' ? task.points : 5, tier: 'flat', canSubmit: true, statusText: '' };
-  }
-  const tiered = task.tieredRewards;
-  const earlyPts = typeof tiered.earlyPoints === 'number' ? tiered.earlyPoints : 15;
-  const onTimePts = typeof tiered.onTimePoints === 'number' ? tiered.onTimePoints : 10;
-  const gracePts = typeof tiered.gracePoints === 'number' ? tiered.gracePoints : 5;
-  const earlyBonusMs = (Number(tiered.earlyBonusMinutes) || 1440) * 60000;
-  const graceMs = (Number(tiered.graceMinutes) || 120) * 60000;
-
-  const win = getTaskWindow(task, nowMs);
-  if (!win) {
-    return { points: onTimePts, tier: 'onTime', canSubmit: true, statusText: '' };
-  }
-
-  if (!win.closesAt) {
-    const isEarly = nowMs <= (win.start + earlyBonusMs);
-    return {
-      points: isEarly ? earlyPts : onTimePts,
-      tier: isEarly ? 'early' : 'onTime',
-      canSubmit: true,
-      statusText: isEarly ? 'Early Bonus' : 'Standard'
-    };
-  }
-
-  const deadline = win.closesAt;
-  const earlyCutoff = (deadline - earlyBonusMs > win.start) ? (deadline - earlyBonusMs) : (win.start + earlyBonusMs);
-
-  if (nowMs <= earlyCutoff && nowMs <= deadline) {
-    return { points: earlyPts, tier: 'early', canSubmit: true, statusText: 'Early Bonus' };
-  }
-  if (nowMs <= deadline) {
-    return { points: onTimePts, tier: 'onTime', canSubmit: true, statusText: 'On Time' };
-  }
-  if (nowMs <= deadline + graceMs) {
-    return { points: gracePts, tier: 'grace', canSubmit: true, statusText: 'Grace Period' };
-  }
-  return { points: 0, tier: 'closed', canSubmit: false, statusText: 'Deadline Passed' };
-}
-
 export const usersMap = new Map();
 export const usersPrivate = new Map();
 
@@ -549,34 +584,6 @@ export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = ''
     weekPoints: 0,
     badges: [],
     badgeIds: []
-  };
-}
-
-function normalizeSession(raw) {
-  if (!raw) return null;
-  const schedule = raw.schedule || { type: 'once', startDateTime: raw.startTime || raw.startDateTime || Date.now() };
-  return {
-    id: raw.id || '',
-    title: raw.title || 'Attendance Session',
-    schedule,
-    earlyCheckInMinutes: typeof raw.earlyCheckInMinutes === 'number' ? raw.earlyCheckInMinutes : (typeof raw.earlyWindowMinutes === 'number' ? raw.earlyWindowMinutes : 30),
-    earlyWindowMinutes: typeof raw.earlyCheckInMinutes === 'number' ? raw.earlyCheckInMinutes : (typeof raw.earlyWindowMinutes === 'number' ? raw.earlyWindowMinutes : 30),
-    lateCutoffMinutes: typeof raw.lateCutoffMinutes === 'number' ? raw.lateCutoffMinutes : (typeof raw.penaltyThresholdMinutes === 'number' ? raw.penaltyThresholdMinutes : 120),
-    penaltyUnit: raw.penaltyUnit === 'seconds' ? 'seconds' : 'minutes',
-    stepDuration: typeof raw.stepDuration === 'number' && raw.stepDuration >= 1 ? raw.stepDuration : (typeof raw.everyNMinutes === 'number' ? raw.everyNMinutes : 5),
-    penaltyPerStep: typeof raw.penaltyPerStep === 'number' ? raw.penaltyPerStep : (typeof raw.penaltyAmountPerStep === 'number' ? raw.penaltyAmountPerStep : (typeof raw.penaltyPoints === 'number' ? raw.penaltyPoints : 1)),
-    minPenalty: typeof raw.minPenalty === 'number' ? raw.minPenalty : 5,
-    maxPenalty: typeof raw.maxPenalty === 'number' ? raw.maxPenalty : 30,
-    assignedUids: Array.isArray(raw.assignedUids) ? raw.assignedUids : [],
-    penaltyPointsEnabled: raw.penaltyPointsEnabled !== false,
-    penaltyFinesEnabled: Boolean(raw.penaltyFinesEnabled),
-    absencePenalty: typeof raw.absencePenalty === 'number' ? raw.absencePenalty : (typeof raw.maxPenalty === 'number' ? raw.maxPenalty : 20),
-    absenceFineEGP: typeof raw.absenceFineEGP === 'number' ? raw.absenceFineEGP : (typeof raw.maxPenalty === 'number' ? raw.maxPenalty : 50),
-    active: raw.active !== false && raw.status !== 'closed' && raw.status !== 'archived',
-    archived: Boolean(raw.archived || raw.status === 'archived'),
-    status: raw.status || (raw.archived ? 'archived' : (raw.active === false ? 'inactive' : 'active')),
-    createdAt: raw.createdAt || null,
-    updatedAt: raw.updatedAt || null
   };
 }
 
@@ -668,18 +675,45 @@ function normalizeNotification(raw) {
   };
 }
 
-function normalizeBroadcast(raw) {
+// PRESET_BADGES hoisted above
+
+export function getAllAvailableBadges() {
+  const badgeMap = new Map();
+  PRESET_BADGES.forEach(b => badgeMap.set(b.id, { ...b }));
+  (state.members || []).forEach(m => {
+    (m.badges || []).forEach(b => {
+      const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
+      if (norm && norm.id && !badgeMap.has(norm.id)) {
+        badgeMap.set(norm.id, { id: norm.id, label: norm.label || norm.id, color: norm.color || '#3A3A3C', icon: norm.icon || 'star' });
+      }
+    });
+  });
+  return Array.from(badgeMap.values());
+}
+
+export function normalizeBroadcast(raw) {
   if (!raw) return null;
   const startMs = raw.startDateTime?.toMillis ? raw.startDateTime.toMillis() : (raw.startDateTime?.seconds ? raw.startDateTime.seconds * 1000 : (typeof raw.startDateTime === 'number' ? raw.startDateTime : new Date(raw.startDateTime || 0).getTime()));
   const endMs = raw.endDateTime?.toMillis ? raw.endDateTime.toMillis() : (raw.endDateTime?.seconds ? raw.endDateTime.seconds * 1000 : (typeof raw.endDateTime === 'number' ? raw.endDateTime : new Date(raw.endDateTime || 0).getTime()));
+
+  const icon = raw.icon || raw.iconKey || 'megaphone';
+  const targetType = (raw.targetType === 'badge') ? 'badge' : 'all';
+  const badgeIds = Array.isArray(raw.badgeIds) ? raw.badgeIds : [];
+  const customFooter = typeof raw.customFooter === 'string' ? raw.customFooter.trim() : '';
+  const archived = Boolean(raw.archived);
 
   return {
     id: raw.id || '',
     title: raw.title || '',
     description: raw.description || '',
-    durationSeconds: typeof raw.durationSeconds === 'number' && raw.durationSeconds > 0 ? raw.durationSeconds : 5,
+    durationSeconds: typeof raw.durationSeconds === 'number' && raw.durationSeconds >= 3 && raw.durationSeconds <= 30 ? raw.durationSeconds : (typeof raw.durationSeconds === 'number' && raw.durationSeconds > 0 ? raw.durationSeconds : 5),
     startDateTime: isNaN(startMs) ? 0 : startMs,
     endDateTime: isNaN(endMs) ? 0 : endMs,
+    icon,
+    targetType,
+    badgeIds,
+    customFooter,
+    archived,
     createdAt: raw.createdAt || null,
     updatedAt: raw.updatedAt || null
   };
@@ -742,41 +776,183 @@ function formatZonedDateKey(dateOrMs, timeZone = APP_TIMEZONE) {
   return `${y}-${m}-${d}`;
 }
 
-function getTimeBucketKeys(nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now()), timeZone = APP_TIMEZONE) {
-  const nowMs = parseDateTimeToMs(nowInput);
-  const p = getZonedParts(nowMs, timeZone);
-  const curMonthKey = `${p.year}-${String(p.month).padStart(2, '0')}`;
-  
-  const dt = new Date(Date.UTC(p.year, p.month - 1, p.day));
-  const dayNum = dt.getUTCDay() || 7;
-  dt.setUTCDate(dt.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil((((dt - yearStart) / 86400000) + 1) / 7);
-  const curWeekKey = `${dt.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+const SAT_OFFSET = { Sat: 0, Sun: 1, Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6 };
 
+function offsetFromPickers(daysAfter = 0, startMinuteOfDay = 0, endMinuteOfDay = 0) {
+  if (typeof daysAfter === 'object' && daysAfter !== null) {
+    const o = daysAfter;
+    if (o.isOnce) {
+      const s = Number(o.startMs) || 0;
+      const d = Number(o.deadlineMs) || 0;
+      return Math.round((d - s) / 60000);
+    }
+    const days = Number(o.daysAfter) || 0;
+    let sMin = Number(o.startMinuteOfDay);
+    let eMin = Number(o.endMinuteOfDay);
+    if (o.startTime && typeof o.startTime === 'string') {
+      const [sh, sm] = o.startTime.split(':').map(Number);
+      sMin = (sh || 0) * 60 + (sm || 0);
+    }
+    if (o.deadlineTime && typeof o.deadlineTime === 'string') {
+      const [eh, em] = o.deadlineTime.split(':').map(Number);
+      eMin = (eh || 0) * 60 + (em || 0);
+    }
+    const dur = days * 1440 + ((Number(eMin) || 0) - (Number(sMin) || 0));
+    if (dur <= 0) {
+      throw new Error('Deadline must be after start');
+    }
+    return dur;
+  }
+  return (Number(daysAfter) || 0) * 1440 + ((Number(endMinuteOfDay) || 0) - (Number(startMinuteOfDay) || 0));
+}
+
+function pickersFromOffset(durationMinutes = 0, startMinuteOfDay = 0) {
+  if (typeof durationMinutes === 'object' && durationMinutes !== null) {
+    const o = durationMinutes;
+    if (o.isOnce) {
+      const s = Number(o.startMs) || 0;
+      const dur = Number(o.durationMinutes) || 0;
+      return { deadlineMs: s + dur * 60000 };
+    }
+    const dur = Number(o.durationMinutes) || 0;
+    let sMin = Number(o.startMinuteOfDay) || 0;
+    if (o.startTime && typeof o.startTime === 'string') {
+      const [sh, sm] = o.startTime.split(':').map(Number);
+      sMin = (sh || 0) * 60 + (sm || 0);
+    }
+    const total = sMin + dur;
+    const daysAfter = Math.floor(total / 1440);
+    const endMinuteOfDay = ((total % 1440) + 1440) % 1440;
+    const hh = String(Math.floor(endMinuteOfDay / 60)).padStart(2, '0');
+    const mm = String(endMinuteOfDay % 60).padStart(2, '0');
+    return { daysAfter, endMinuteOfDay, deadlineTime: `${hh}:${mm}` };
+  }
+  const dur = Number(durationMinutes) || 0;
+  const startMin = Number(startMinuteOfDay) || 0;
+  const total = startMin + dur;
+  const daysAfter = Math.floor(total / 1440);
+  const endMinuteOfDay = ((total % 1440) + 1440) % 1440;
+  return { daysAfter, endMinuteOfDay };
+}
+
+function normalizeTaskTiers(task) {
+  if (!task) return { points: 5, onTimePoints: 5, durationMinutes: null, earlyBonus: { enabled: false, untilMinutes: 0, points: 5 }, grace: { enabled: false, untilMinutes: 0 }, missedPenalty: { enabled: false, points: 0 } };
+  const onTimePoints = typeof task.points === 'number' ? task.points : (typeof task.tieredRewards?.onTimePoints === 'number' ? task.tieredRewards.onTimePoints : 5);
+  const durationMinutes = (typeof task.durationMinutes === 'number' && task.durationMinutes > 0) ? task.durationMinutes : null;
+
+  // Early Bonus: switch; picker defines when window ends (untilMinutes > 0 and < durationMinutes)
+  let earlyBonus = { enabled: false, untilMinutes: 0, points: onTimePoints };
+  if (task.earlyBonus && typeof task.earlyBonus === 'object') {
+    earlyBonus = {
+      enabled: Boolean(task.earlyBonus.enabled),
+      untilMinutes: Number(task.earlyBonus.untilMinutes) || 0,
+      points: typeof task.earlyBonus.points === 'number' ? task.earlyBonus.points : onTimePoints
+    };
+  } else if (task.tieredRewards) {
+    const ebMin = Number(task.tieredRewards.earlyBonusMinutes) || 0;
+    if (ebMin > 0 && (task.tieredRewards.enabled !== false)) {
+      earlyBonus = {
+        enabled: true,
+        untilMinutes: ebMin,
+        points: typeof task.tieredRewards.earlyPoints === 'number' ? task.tieredRewards.earlyPoints : onTimePoints
+      };
+    }
+  }
+
+  // Grace Period: switch; picker defines cutoff (untilMinutes > durationMinutes). NO grace points!
+  let grace = { enabled: false, untilMinutes: 0 };
+  if (task.grace && typeof task.grace === 'object') {
+    grace = {
+      enabled: Boolean(task.grace.enabled),
+      untilMinutes: Number(task.grace.untilMinutes) || 0
+    };
+  } else if (task.tieredRewards && task.tieredRewards.graceMinutes) {
+    const gMin = Number(task.tieredRewards.graceMinutes) || 0;
+    if (gMin > 0 && durationMinutes && (task.tieredRewards.enabled !== false)) {
+      grace = {
+        enabled: true,
+        untilMinutes: durationMinutes + gMin
+      };
+    }
+  }
+
+  // Missed Penalty: switch + missedPenalty: { enabled, points }
+  let missedPenalty = { enabled: false, points: 0 };
+  if (task.missedPenalty && typeof task.missedPenalty === 'object') {
+    missedPenalty = {
+      enabled: Boolean(task.missedPenalty.enabled),
+      points: Number(task.missedPenalty.points) || 0
+    };
+  } else if (task.tieredRewards) {
+    const p = Number(task.tieredRewards.missedPenaltyPoints || task.tieredRewards.missedPenalty?.penaltyPoints || task.tieredRewards.missedPenalty?.points) || 0;
+    if (p > 0 && (task.tieredRewards.enabled !== false)) {
+      missedPenalty = {
+        enabled: true,
+        points: p
+      };
+    }
+  }
+
+  return { points: onTimePoints, onTimePoints, durationMinutes, earlyBonus, grace, missedPenalty };
+}
+
+function weekKeyOf(ms, tz = APP_TIMEZONE) {
+  const validMs = parseDateTimeToMs(ms, tz);
+  const p = getZonedParts(validMs, tz);
+  const offset = SAT_OFFSET[p.weekday] ?? 0;
+  const satMs = zonedDateToMs(p.year, p.month, p.day - offset, 12, 0, 0, tz);
+  const satParts = getZonedParts(satMs, tz);
+  return `${String(satParts.year).padStart(4, '0')}-${String(satParts.month).padStart(2, '0')}-${String(satParts.day).padStart(2, '0')}`;
+}
+
+function monthKeyOf(ms, tz = APP_TIMEZONE) {
+  const validMs = parseDateTimeToMs(ms, tz);
+  const p = getZonedParts(validMs, tz);
+  return `${String(p.year).padStart(4, '0')}-${String(p.month).padStart(2, '0')}`;
+}
+
+function getTimeBucketKeys(nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now()), timeZone = APP_TIMEZONE) {
+  const nowMs = parseDateTimeToMs(nowInput, timeZone);
+  const curMonthKey = monthKeyOf(nowMs, timeZone);
+  const curWeekKey = weekKeyOf(nowMs, timeZone);
   return { curMonthKey, curWeekKey, monthKey: curMonthKey, weekKey: curWeekKey };
 }
 
 function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const user = userDocOrMapEntry || {};
-  const nowMs = parseDateTimeToMs(nowInput);
-  const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
+  const atMs = parseDateTimeToMs(nowInput);
+  const wk = weekKeyOf(atMs, APP_TIMEZONE);
+  const mo = monthKeyOf(atMs, APP_TIMEZONE);
+  const delta = Number(deltaPoints) || 0;
+
   const update = {
-    points: increment(deltaPoints)
+    points: increment(delta)
   };
 
-  if (user.monthBucket === curMonthKey) {
-    update.monthPoints = increment(deltaPoints);
-  } else {
-    update.monthBucket = curMonthKey;
-    update.monthPoints = Math.max(0, deltaPoints);
-  }
+  if (delta >= 0) {
+    if ((user.weekKey || user.weekBucket || '') === wk) {
+      update.weekPoints = increment(delta);
+    } else {
+      update.weekKey = wk;
+      update.weekPoints = delta;
+    }
 
-  if (user.weekBucket === curWeekKey) {
-    update.weekPoints = increment(deltaPoints);
+    if ((user.monthKey || user.monthBucket || '') === mo) {
+      update.monthPoints = increment(delta);
+    } else {
+      update.monthKey = mo;
+      update.monthPoints = delta;
+    }
   } else {
-    update.weekBucket = curWeekKey;
-    update.weekPoints = Math.max(0, deltaPoints);
+    // Negative delta (revoke / edit down / bulk delete of submission): use original submittedAt (atMs)
+    if ((user.weekKey || user.weekBucket || '') === wk) {
+      const curWk = Number(user.weekPoints) || 0;
+      update.weekPoints = Math.max(0, curWk + delta);
+    }
+    if ((user.monthKey || user.monthBucket || '') === mo) {
+      const curMo = Number(user.monthPoints) || 0;
+      update.monthPoints = Math.max(0, curMo + delta);
+    }
   }
 
   return update;
@@ -788,12 +964,13 @@ function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serve
     return typeof userObj.points === 'number' ? userObj.points : 0;
   }
   const nowMs = parseDateTimeToMs(nowInput);
-  const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
   if (period === 'month') {
-    return userObj.monthBucket === curMonthKey ? (userObj.monthPoints || 0) : 0;
+    const curMonthKey = monthKeyOf(nowMs, APP_TIMEZONE);
+    return (userObj.monthKey === curMonthKey || userObj.monthBucket === curMonthKey) ? (userObj.monthPoints || 0) : 0;
   }
   if (period === 'week') {
-    return userObj.weekBucket === curWeekKey ? (userObj.weekPoints || 0) : 0;
+    const curWeekKey = weekKeyOf(nowMs, APP_TIMEZONE);
+    return (userObj.weekKey === curWeekKey || userObj.weekBucket === curWeekKey) ? (userObj.weekPoints || 0) : 0;
   }
   return typeof userObj.points === 'number' ? userObj.points : 0;
 }
@@ -1078,50 +1255,94 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
   const sched = normalizeScheduleObject(task.schedule || task);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const isPermanent = Boolean(task.isPermanent);
-  const durationMinutes = (typeof task.durationMinutes === 'number' && task.durationMinutes > 0) ? task.durationMinutes : null;
   const nowMs = parseDateTimeToMs(nowInput);
+  const { onTimePoints, durationMinutes, earlyBonus, grace } = normalizeTaskTiers(task);
 
-  if (sched.type === 'once') {
-    const occurrenceKey = 'once';
-    const start = startMs;
-    if (nowMs < startMs) {
-      const closesAt = isPermanent ? null : (durationMinutes ? startMs + durationMinutes * 60000 : (() => {
-        const p = getZonedParts(startMs, APP_TIMEZONE);
-        return zonedDateToMs(p.year, p.month, p.day, 23, 59, 59, APP_TIMEZONE) + 999;
-      })());
-      return { state: 'upcoming', occurrenceKey, start, closesAt };
-    }
-    if (isPermanent) {
-      return { state: 'open', occurrenceKey, start, closesAt: null };
-    }
-    if (durationMinutes) {
-      const closesAt = startMs + durationMinutes * 60000;
+
+
+  function evaluateOccurrence(occurrenceKey, start) {
+    const closesAt = isPermanent ? null : (durationMinutes ? start + durationMinutes * 60000 : (() => {
+      const p = getZonedParts(start, APP_TIMEZONE);
+      return zonedDateToMs(p.year, p.month, p.day, 23, 59, 59, APP_TIMEZONE) + 999;
+    })());
+
+    const graceEndsAt = (!isPermanent && grace.enabled && grace.untilMinutes > 0)
+      ? start + grace.untilMinutes * 60000
+      : null;
+
+    if (nowMs < start) {
       return {
-        state: nowMs < closesAt ? 'open' : 'closed',
+        state: 'upcoming',
+        pointsForNow: (earlyBonus.enabled && earlyBonus.untilMinutes > 0) ? earlyBonus.points : onTimePoints,
+        inGrace: false,
         occurrenceKey,
         start,
-        closesAt
+        closesAt,
+        graceEndsAt
       };
     }
-    // No duration: open for the occurrence day
-    const p = getZonedParts(startMs, APP_TIMEZONE);
-    const endOfDay = zonedDateToMs(p.year, p.month, p.day, 23, 59, 59, APP_TIMEZONE) + 999;
+
+    if (isPermanent) {
+      return {
+        state: 'open',
+        pointsForNow: onTimePoints,
+        inGrace: false,
+        isPermanent: true,
+        occurrenceKey,
+        start,
+        closesAt: null,
+        graceEndsAt: null
+      };
+    }
+
+    // Before deadline
+    if (nowMs < closesAt) {
+      const isEarly = earlyBonus.enabled && earlyBonus.untilMinutes > 0 && nowMs < (start + earlyBonus.untilMinutes * 60000);
+      return {
+        state: 'open',
+        pointsForNow: isEarly ? earlyBonus.points : onTimePoints,
+        inGrace: false,
+        isEarlyBonus: isEarly,
+        occurrenceKey,
+        start,
+        closesAt,
+        graceEndsAt
+      };
+    }
+
+    // Grace window
+    if (graceEndsAt && nowMs < graceEndsAt) {
+      return {
+        state: 'grace',
+        pointsForNow: onTimePoints,
+        inGrace: true,
+        occurrenceKey,
+        start,
+        closesAt,
+        graceEndsAt
+      };
+    }
+
+    // Closed
     return {
-      state: nowMs <= endOfDay ? 'open' : 'closed',
+      state: 'closed',
+      pointsForNow: 0,
+      inGrace: false,
       occurrenceKey,
       start,
-      closesAt: endOfDay
+      closesAt,
+      graceEndsAt
     };
   }
 
-  // Recurring schedules (daily, weekly, monthlyDates, monthlyWeekdays)
+  if (sched.type === 'once') {
+    return evaluateOccurrence('once', startMs);
+  }
+
+  // Recurring
   if (nowMs < startMs) {
     const occurrenceKey = formatZonedDateKey(startMs, APP_TIMEZONE);
-    const closesAt = isPermanent ? null : (durationMinutes ? startMs + durationMinutes * 60000 : (() => {
-      const p = getZonedParts(startMs, APP_TIMEZONE);
-      return zonedDateToMs(p.year, p.month, p.day, 23, 59, 59, APP_TIMEZONE) + 999;
-    })());
-    return { state: 'upcoming', occurrenceKey, start: startMs, closesAt };
+    return evaluateOccurrence(occurrenceKey, startMs);
   }
 
   const fromMs = Math.max(startMs, nowMs - 35 * 86400000);
@@ -1129,51 +1350,28 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
   const occs = getOccurrences(sched, fromMs, toMs);
 
   if (occs.length === 0) {
-    return {
-      state: isPermanent ? 'open' : 'closed',
-      occurrenceKey: formatZonedDateKey(startMs, APP_TIMEZONE),
-      start: startMs,
-      closesAt: isPermanent ? null : startMs
-    };
+    return evaluateOccurrence(formatZonedDateKey(startMs, APP_TIMEZONE), startMs);
   }
 
   const pastOccs = occs.filter(o => o <= nowMs);
   if (pastOccs.length === 0) {
     const firstOcc = occs[0];
-    return {
-      state: 'upcoming',
-      occurrenceKey: formatZonedDateKey(firstOcc, APP_TIMEZONE),
-      start: firstOcc,
-      closesAt: isPermanent ? null : (durationMinutes ? firstOcc + durationMinutes * 60000 : null)
-    };
+    return evaluateOccurrence(formatZonedDateKey(firstOcc, APP_TIMEZONE), firstOcc);
   }
 
   const currStart = pastOccs[pastOccs.length - 1];
-  const occurrenceKey = formatZonedDateKey(currStart, APP_TIMEZONE);
+  return evaluateOccurrence(formatZonedDateKey(currStart, APP_TIMEZONE), currStart);
+}
 
-  if (isPermanent) {
-    return { state: 'open', occurrenceKey, start: currStart, closesAt: null };
+function computeTieredTaskPoints(task, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
+  const win = getTaskWindow(task, nowInput);
+  if (!win) {
+    return { points: Number(task?.points) || 5, tier: 'flat', canSubmit: true, inGrace: false, statusText: '' };
   }
-
-  if (durationMinutes) {
-    const closesAt = currStart + durationMinutes * 60000;
-    return {
-      state: nowMs < closesAt ? 'open' : 'closed',
-      occurrenceKey,
-      start: currStart,
-      closesAt
-    };
-  }
-
-  // No duration: open for the occurrence day
-  const p = getZonedParts(currStart, APP_TIMEZONE);
-  const endOfDay = zonedDateToMs(p.year, p.month, p.day, 23, 59, 59, APP_TIMEZONE) + 999;
-  return {
-    state: nowMs <= endOfDay ? 'open' : 'closed',
-    occurrenceKey,
-    start: currStart,
-    closesAt: endOfDay
-  };
+  const canSubmit = win.state === 'open' || win.state === 'grace';
+  const tier = (win.state === 'open' && win.pointsForNow !== (Number(task?.points) || 5)) ? 'early' : (win.state === 'grace' ? 'grace' : 'onTime');
+  const statusText = tier === 'early' ? 'Early Bonus' : (tier === 'grace' ? 'Grace Period' : 'On Time');
+  return { points: win.pointsForNow, tier, canSubmit, inGrace: win.inGrace, statusText };
 }
 
 function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
@@ -1241,17 +1439,132 @@ function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'fun
   };
 }
 
+function normalizeSession(s) {
+  if (!s) return null;
+  const legacyUnit = s.penaltyUnit === 'seconds' ? 'seconds' : 'minutes';
+  const legacyStepSize = (typeof s.stepDuration === 'number' && s.stepDuration >= 1) ? s.stepDuration : 1;
+  const legacyPerStep = typeof s.penaltyPerStep === 'number' ? s.penaltyPerStep : (typeof s.penaltyPoints === 'number' ? s.penaltyPoints : 1);
+  const legacyMin = typeof s.minPenalty === 'number' ? s.minPenalty : 0;
+  const legacyMax = typeof s.maxPenalty === 'number' ? s.maxPenalty : 999999;
+  const legacyAbsencePts = typeof s.absencePenalty === 'number' ? s.absencePenalty : (typeof s.maxPenalty === 'number' ? s.maxPenalty : 20);
+  const legacyAbsenceFine = typeof s.absenceFineEGP === 'number' ? s.absenceFineEGP : (typeof s.maxPenalty === 'number' ? s.maxPenalty : 50);
+
+  let pointsPenalty = {
+    enabled: s.penaltyPointsEnabled !== false,
+    mode: 'stepped',
+    fixed: legacyPerStep,
+    stepUnit: legacyUnit,
+    stepSize: legacyStepSize,
+    perStep: legacyPerStep,
+    min: legacyMin,
+    max: legacyMax,
+    absence: legacyAbsencePts
+  };
+  if (s.pointsPenalty && typeof s.pointsPenalty === 'object') {
+    pointsPenalty = {
+      enabled: Boolean(s.pointsPenalty.enabled),
+      mode: s.pointsPenalty.mode === 'fixed' ? 'fixed' : 'stepped',
+      fixed: Number(s.pointsPenalty.fixed) || 0,
+      stepUnit: s.pointsPenalty.stepUnit === 'seconds' ? 'seconds' : 'minutes',
+      stepSize: Math.max(1, Number(s.pointsPenalty.stepSize) || 1),
+      perStep: Number(s.pointsPenalty.perStep) || 0,
+      min: Math.max(0, Number(s.pointsPenalty.min) || 0),
+      max: typeof s.pointsPenalty.max === 'number' ? s.pointsPenalty.max : 999999,
+      absence: Math.max(0, Number(s.pointsPenalty.absence) || 0)
+    };
+  }
+
+  let finePenalty = {
+    enabled: Boolean(s.penaltyFinesEnabled),
+    mode: 'stepped',
+    fixed: legacyPerStep,
+    stepUnit: legacyUnit,
+    stepSize: legacyStepSize,
+    perStep: legacyPerStep,
+    min: legacyMin,
+    max: legacyMax,
+    absence: legacyAbsenceFine
+  };
+  if (s.finePenalty && typeof s.finePenalty === 'object') {
+    finePenalty = {
+      enabled: Boolean(s.finePenalty.enabled),
+      mode: s.finePenalty.mode === 'fixed' ? 'fixed' : 'stepped',
+      fixed: Number(s.finePenalty.fixed) || 0,
+      stepUnit: s.finePenalty.stepUnit === 'seconds' ? 'seconds' : 'minutes',
+      stepSize: Math.max(1, Number(s.finePenalty.stepSize) || 1),
+      perStep: Number(s.finePenalty.perStep) || 0,
+      min: Math.max(0, Number(s.finePenalty.min) || 0),
+      max: typeof s.finePenalty.max === 'number' ? s.finePenalty.max : 999999,
+      absence: Math.max(0, Number(s.finePenalty.absence) || 0)
+    };
+  }
+
+  return {
+    ...s,
+    id: s.id || '',
+    title: s.title || 'Attendance Session',
+    schedule: s.schedule || { type: 'once', startDateTime: s.startTime || s.startDateTime || Date.now() },
+    assignedUids: Array.isArray(s.assignedUids) ? s.assignedUids : [],
+    active: s.active !== false && s.status !== 'closed' && s.status !== 'archived',
+    archived: Boolean(s.archived || s.status === 'archived'),
+    status: s.status || (s.archived ? 'archived' : (s.active === false ? 'inactive' : 'active')),
+    createdAt: s.createdAt || null,
+    updatedAt: s.updatedAt || null,
+    pointsPenalty,
+    finePenalty,
+    earlyCheckInMinutes: typeof s.earlyCheckInMinutes === 'number' ? s.earlyCheckInMinutes : (typeof s.earlyWindowMinutes === 'number' ? s.earlyWindowMinutes : 30),
+    lateCutoffMinutes: typeof s.lateCutoffMinutes === 'number' ? s.lateCutoffMinutes : 120
+  };
+}
+
+function calculateSystemPenalty(sys, delaySeconds, isAbsent = false) {
+  if (!sys || !sys.enabled) return 0;
+  if (isAbsent) return Math.max(0, Number(sys.absence) || 0);
+  if (delaySeconds <= 0) return 0;
+
+  if (sys.mode === 'fixed') {
+    const fixedVal = Math.max(0, Number(sys.fixed) || 0);
+    const minVal = Math.max(0, Number(sys.min) || 0);
+    const maxVal = typeof sys.max === 'number' ? sys.max : 999999;
+    return Math.min(maxVal, Math.max(minVal, fixedVal));
+  }
+
+  const stepSec = sys.stepUnit === 'seconds' ? Math.max(1, Number(sys.stepSize) || 1) : Math.max(1, Number(sys.stepSize) || 1) * 60;
+  const steps = Math.ceil(delaySeconds / stepSec);
+  const raw = steps * (Number(sys.perStep) || 0);
+  const minVal = Math.max(0, Number(sys.min) || 0);
+  const maxVal = typeof sys.max === 'number' ? sys.max : 999999;
+  return Math.min(maxVal, Math.max(minVal, raw));
+}
+
 function computeAttendance(session, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!session) return { status: 'blocked', reason: 'no_session', message: 'No session provided' };
+  const norm = normalizeSession(session);
+
+  // Support explicit absent status calculation
+  if (nowInput === 'absent' || (typeof nowInput === 'object' && nowInput !== null && nowInput.status === 'absent')) {
+    const ptsAbsence = calculateSystemPenalty(norm.pointsPenalty, 0, true);
+    const fineAbsence = calculateSystemPenalty(norm.finePenalty, 0, true);
+    return {
+      status: 'absent',
+      penalty: ptsAbsence,
+      pointsPenalty: ptsAbsence,
+      finePenalty: fineAbsence,
+      fineEGP: fineAbsence,
+      delaySeconds: 0,
+      message: `Absent penalty (-${ptsAbsence} pts, ${fineAbsence} EGP)`
+    };
+  }
+
   const nowMs = parseDateTimeToMs(nowInput);
-  const occ = resolveSessionOccurrence(session, nowMs);
+  const occ = resolveSessionOccurrence(norm, nowMs);
   if (!occ) {
     return { status: 'blocked', reason: 'no_occurrence', message: 'No active session occurrence' };
   }
   const S = occ.start;
   const occurrenceKey = occ.key;
-  const earlyCheckInMinutes = typeof session.earlyCheckInMinutes === 'number' ? session.earlyCheckInMinutes : (typeof session.earlyWindowMinutes === 'number' ? session.earlyWindowMinutes : 0);
-  const lateCutoffMinutes = typeof session.lateCutoffMinutes === 'number' ? session.lateCutoffMinutes : 120;
+  const earlyCheckInMinutes = norm.earlyCheckInMinutes;
+  const lateCutoffMinutes = norm.lateCutoffMinutes;
   const opensAt = S - earlyCheckInMinutes * 60000;
   const closedAt = S + lateCutoffMinutes * 60000;
 
@@ -1284,6 +1597,9 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
     return {
       status: 'on_time',
       penalty: 0,
+      pointsPenalty: 0,
+      finePenalty: 0,
+      fineEGP: 0,
       delaySeconds: 0,
       occurrenceKey,
       occurrenceStart: S,
@@ -1292,26 +1608,78 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   }
 
   const delaySeconds = Math.floor((nowMs - S) / 1000);
-  const penaltyUnit = session.penaltyUnit === 'seconds' ? 'seconds' : 'minutes';
-  const stepDuration = (typeof session.stepDuration === 'number' && session.stepDuration >= 1) ? session.stepDuration : 1;
-  const stepSec = penaltyUnit === 'seconds' ? stepDuration : stepDuration * 60;
-  const steps = Math.ceil(delaySeconds / stepSec);
-  const penaltyPerStep = typeof session.penaltyPerStep === 'number' ? session.penaltyPerStep : (typeof session.penaltyPoints === 'number' ? session.penaltyPoints : 1);
-  const rawPenalty = steps * penaltyPerStep;
-  const minPenalty = typeof session.minPenalty === 'number' ? session.minPenalty : 0;
-  const maxPenalty = typeof session.maxPenalty === 'number' ? session.maxPenalty : 999999;
-  const penalty = Math.min(maxPenalty, Math.max(minPenalty, rawPenalty));
+  const pointsPenalty = calculateSystemPenalty(norm.pointsPenalty, delaySeconds, false);
+  const finePenalty = calculateSystemPenalty(norm.finePenalty, delaySeconds, false);
   const m = Math.floor(delaySeconds / 60);
   const s = delaySeconds % 60;
 
+  let feeStr = '';
+  if (finePenalty > 0 && pointsPenalty > 0) {
+    feeStr = ` (-${pointsPenalty} pts, -${finePenalty} EGP)`;
+  } else if (finePenalty > 0) {
+    feeStr = ` (-${finePenalty} EGP)`;
+  } else if (pointsPenalty > 0) {
+    // If it was a legacy session without explicit pointsPenalty, legacy message format was EGP
+    if (!session.pointsPenalty && !session.finePenalty) {
+      feeStr = ` (-${pointsPenalty} EGP)`;
+    } else {
+      feeStr = ` (-${pointsPenalty} pts)`;
+    }
+  } else {
+    feeStr = ' (0 penalty)';
+  }
+
   return {
     status: 'late',
-    penalty,
+    penalty: pointsPenalty,
+    pointsPenalty,
+    finePenalty,
+    fineEGP: finePenalty,
     delaySeconds,
     occurrenceKey,
     occurrenceStart: S,
-    message: `Late by ${m}m ${s}s (-${penalty} EGP)`
+    message: `Late by ${m}m ${s}s${feeStr}`
   };
+}
+
+function msToZonedParts(dateOrMs, tz = APP_TIMEZONE) {
+  const p = getZonedParts(dateOrMs, tz);
+  return {
+    y: p.year,
+    m: p.month,
+    d: p.day,
+    hh: p.hour,
+    mm: p.minute,
+    ss: p.second,
+    year: p.year,
+    month: p.month,
+    day: p.day,
+    hour: p.hour,
+    minute: p.minute,
+    second: p.second,
+    weekday: p.weekday
+  };
+}
+
+function zonedPartsToMs(parts, tz = APP_TIMEZONE) {
+  if (!parts) return 0;
+  const yr = parts.y ?? parts.year ?? 1970;
+  const mo = parts.m ?? parts.month ?? 1;
+  const dy = parts.d ?? parts.day ?? 1;
+  const hr = parts.hh ?? parts.hour ?? 0;
+  const mi = parts.mm ?? parts.minute ?? 0;
+  const se = parts.ss ?? parts.second ?? 0;
+  return zonedDateToMs(yr, mo, dy, hr, mi, se, tz);
+}
+
+function startOfZonedDay(dateOrMs, tz = APP_TIMEZONE) {
+  const p = getZonedParts(dateOrMs, tz);
+  return zonedDateToMs(p.year, p.month, p.day, 0, 0, 0, tz);
+}
+
+function addDaysZoned(dateOrMs, n = 0, tz = APP_TIMEZONE) {
+  const p = getZonedParts(dateOrMs, tz);
+  return zonedDateToMs(p.year, p.month, p.day + n, p.hour, p.minute, p.second, tz);
 }
 
 if (typeof globalThis !== 'undefined') {
@@ -1321,19 +1689,31 @@ if (typeof globalThis !== 'undefined') {
   globalThis.formatZonedDateKey = formatZonedDateKey;
   globalThis.zonedDateToMs = zonedDateToMs;
   globalThis.getZonedParts = getZonedParts;
+  globalThis.offsetFromPickers = offsetFromPickers;
+  globalThis.pickersFromOffset = pickersFromOffset;
+  globalThis.normalizeTaskTiers = normalizeTaskTiers;
   globalThis.getTaskWindow = getTaskWindow;
+  globalThis.computeTieredTaskPoints = computeTieredTaskPoints;
   globalThis.resolveSessionOccurrence = resolveSessionOccurrence;
+  globalThis.normalizeSession = normalizeSession;
+  globalThis.calculateSystemPenalty = calculateSystemPenalty;
   globalThis.computeAttendance = computeAttendance;
+  globalThis.weekKeyOf = weekKeyOf;
+  globalThis.monthKeyOf = monthKeyOf;
   globalThis.getTimeBucketKeys = getTimeBucketKeys;
   globalThis.buildPointsUpdate = buildPointsUpdate;
   globalThis.getMemberPeriodPoints = getMemberPeriodPoints;
   globalThis.parseDateTimeToMs = parseDateTimeToMs;
+  globalThis.msToZonedParts = msToZonedParts;
+  globalThis.zonedPartsToMs = zonedPartsToMs;
+  globalThis.startOfZonedDay = startOfZonedDay;
+  globalThis.addDaysZoned = addDaysZoned;
   if (typeof usersMap !== 'undefined') globalThis.usersMap = usersMap;
   if (typeof getUserProfile !== 'undefined') globalThis.getUserProfile = getUserProfile;
 }
 // ==== ENGINE END
 
-export { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs };
+export { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned };
 
 /* ==========================================================================
    SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
@@ -1342,6 +1722,904 @@ export { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, get
 /**
  * Escapes HTML characters safely.
  */
+
+/* ==========================================================================
+   v2.1.0 SHARED iOS COMPONENTS (Task 1)
+   ========================================================================== */
+
+// Prototype getter/setter for .checked on <button role="switch">
+if (typeof HTMLButtonElement !== 'undefined' && !Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype, 'checked')) {
+  Object.defineProperty(HTMLButtonElement.prototype, 'checked', {
+    get() {
+      if (this.getAttribute('role') === 'switch') {
+        return this.getAttribute('aria-checked') === 'true';
+      }
+      return undefined;
+    },
+    set(v) {
+      if (this.getAttribute('role') === 'switch') {
+        const bool = Boolean(v);
+        this.setAttribute('aria-checked', bool ? 'true' : 'false');
+        this.classList.toggle('active', bool);
+      }
+    },
+    configurable: true
+  });
+}
+
+// Global delegated toggle for role="switch"
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[role="switch"]');
+    if (btn && !btn.disabled) {
+      e.preventDefault();
+      const current = btn.getAttribute('aria-checked') === 'true';
+      const next = !current;
+      btn.setAttribute('aria-checked', next ? 'true' : 'false');
+      btn.classList.toggle('active', next);
+      btn.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === ' ' || e.key === 'Enter') && e.target?.getAttribute?.('role') === 'switch' && !e.target.disabled) {
+      e.preventDefault();
+      const current = e.target.getAttribute('aria-checked') === 'true';
+      const next = !current;
+      e.target.setAttribute('aria-checked', next ? 'true' : 'false');
+      e.target.classList.toggle('active', next);
+      e.target.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+}
+
+/**
+ * Returns HTML string for an iOS Switch.
+ */
+export function renderSwitchHTML({ id = '', checked = false, disabled = false, label = '', className = '' } = {}) {
+  const isChecked = Boolean(checked);
+  return `
+    <label class="ios-switch-wrapper ${className}" ${id ? `data-switch-for="${esc(id)}"` : ''}>
+      ${label ? `<span class="ios-switch-label text-sm font-medium text-neutral-200">${esc(label)}</span>` : ''}
+      <button type="button" role="switch" aria-checked="${isChecked ? 'true' : 'false'}" ${id ? `id="${esc(id)}"` : ''} class="ios-switch ${isChecked ? 'active' : ''}" ${disabled ? 'disabled' : ''} tabindex="${disabled ? '-1' : '0'}">
+        <span class="ios-switch-thumb"></span>
+      </button>
+    </label>
+  `.trim();
+}
+
+/**
+ * DOM creator for iOS Switch.
+ */
+export function renderSwitch({ checked = false, onChange = null, label = '', disabled = false, id = '', className = '' } = {}) {
+  const wrapper = document.createElement('label');
+  wrapper.className = `ios-switch-wrapper ${className}`.trim();
+  if (disabled) wrapper.style.pointerEvents = 'none';
+
+  let isChecked = Boolean(checked);
+
+  if (label) {
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'ios-switch-label text-sm font-medium text-neutral-200';
+    labelSpan.textContent = label;
+    wrapper.appendChild(labelSpan);
+  }
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.setAttribute('role', 'switch');
+  btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
+  btn.className = `ios-switch ${isChecked ? 'active' : ''}`.trim();
+  if (id) btn.id = id;
+  if (disabled) btn.disabled = true;
+  btn.tabIndex = disabled ? -1 : 0;
+
+  const thumb = document.createElement('span');
+  thumb.className = 'ios-switch-thumb';
+  btn.appendChild(thumb);
+  wrapper.appendChild(btn);
+
+  wrapper.setChecked = (val, trigger = false) => {
+    isChecked = Boolean(val);
+    btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
+    btn.classList.toggle('active', isChecked);
+    if (trigger) {
+      btn.dispatchEvent(new Event('change', { bubbles: true }));
+      if (typeof onChange === 'function') onChange(isChecked);
+    }
+  };
+
+  btn.setChecked = wrapper.setChecked;
+
+  Object.defineProperty(wrapper, 'checked', {
+    get: () => isChecked,
+    set: (v) => wrapper.setChecked(v, false)
+  });
+
+  if (onChange) {
+    btn.addEventListener('change', () => onChange(btn.checked));
+  }
+
+  return wrapper;
+}
+
+/**
+ * Renders an iOS Segmented Control with sliding thumb.
+ */
+export function renderSegmented({ options = [], value = '', onChange = null, className = '', id = '' } = {}) {
+  const container = document.createElement('div');
+  container.className = `ios-segmented ${className}`.trim();
+  if (id) container.id = id;
+  container.setAttribute('role', 'tablist');
+
+  const thumb = document.createElement('div');
+  thumb.className = 'ios-segmented-thumb';
+  container.appendChild(thumb);
+
+  let currentValue = value !== undefined && value !== null ? value : (options[0]?.value ?? '');
+
+  const buttons = options.map((opt) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `ios-segmented-item ${opt.value === currentValue ? 'active' : ''}`.trim();
+    btn.dataset.value = String(opt.value);
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', opt.value === currentValue ? 'true' : 'false');
+    btn.textContent = opt.label;
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (currentValue === opt.value) return;
+      setValue(opt.value, true);
+    });
+    container.appendChild(btn);
+    return btn;
+  });
+
+  function updateThumb(immediate = false) {
+    const activeBtn = container.querySelector(`.ios-segmented-item[data-value="${currentValue}"]`);
+    if (!activeBtn) {
+      thumb.style.opacity = '0';
+      return;
+    }
+    thumb.style.opacity = '1';
+    const left = activeBtn.offsetLeft;
+    const width = activeBtn.offsetWidth;
+    if (immediate) {
+      thumb.style.transition = 'none';
+      thumb.style.transform = `translateX(${left}px)`;
+      thumb.style.width = `${width}px`;
+      void thumb.offsetWidth;
+      thumb.style.transition = '';
+    } else {
+      thumb.style.transform = `translateX(${left}px)`;
+      thumb.style.width = `${width}px`;
+    }
+  }
+
+  function setValue(v, trigger = false) {
+    currentValue = v;
+    buttons.forEach((btn) => {
+      const match = btn.dataset.value === String(v);
+      btn.classList.toggle('active', match);
+      btn.setAttribute('aria-selected', match ? 'true' : 'false');
+    });
+    updateThumb(false);
+    if (trigger && typeof onChange === 'function') {
+      onChange(v);
+    }
+  }
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => {
+      if (container.offsetWidth > 0) updateThumb(true);
+    });
+    ro.observe(container);
+  }
+
+  if (typeof document !== 'undefined' && document.fonts?.ready) {
+    document.fonts.ready.then(() => updateThumb(true)).catch(() => {});
+  }
+
+  setTimeout(() => updateThumb(true), 10);
+
+  container.setValue = setValue;
+  container.getValue = () => currentValue;
+
+  return container;
+}
+
+/**
+ * Renders an iOS Stepper with press-and-hold repeating.
+ */
+export function renderStepper({ value = 0, min = 0, max = 9999, step = 1, unit = '', onChange = null, id = '', className = '' } = {}) {
+  const container = document.createElement('div');
+  container.className = `ios-stepper ${className}`.trim();
+  if (id) container.id = id;
+
+  let currentVal = Math.min(Math.max(Number(value) || 0, min), max);
+
+  const minusBtn = document.createElement('button');
+  minusBtn.type = 'button';
+  minusBtn.className = 'ios-stepper-btn';
+  minusBtn.setAttribute('aria-label', 'Decrease');
+  minusBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14"/></svg>';
+
+  const valDisplay = document.createElement('span');
+  valDisplay.className = 'ios-stepper-val';
+
+  const plusBtn = document.createElement('button');
+  plusBtn.type = 'button';
+  plusBtn.className = 'ios-stepper-btn';
+  plusBtn.setAttribute('aria-label', 'Increase');
+  plusBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>';
+
+  function update() {
+    valDisplay.textContent = unit ? `${currentVal} ${unit}` : `${currentVal}`;
+    minusBtn.disabled = currentVal <= min;
+    plusBtn.disabled = currentVal >= max;
+  }
+
+  function adjust(delta, trigger = true) {
+    const next = Math.min(Math.max(currentVal + delta, min), max);
+    if (next !== currentVal) {
+      currentVal = next;
+      update();
+      if (trigger && typeof onChange === 'function') onChange(currentVal);
+    }
+  }
+
+  function attachHold(btn, delta) {
+    let timeout = null;
+    let interval = null;
+
+    const start = (e) => {
+      e.preventDefault();
+      adjust(delta, true);
+      timeout = setTimeout(() => {
+        interval = setInterval(() => {
+          adjust(delta, true);
+        }, 80);
+      }, 300);
+    };
+
+    const stop = () => {
+      if (timeout) clearTimeout(timeout);
+      if (interval) clearInterval(interval);
+      timeout = null;
+      interval = null;
+    };
+
+    btn.addEventListener('pointerdown', start);
+    btn.addEventListener('pointerup', stop);
+    btn.addEventListener('pointercancel', stop);
+    btn.addEventListener('pointerleave', stop);
+  }
+
+  attachHold(minusBtn, -step);
+  attachHold(plusBtn, step);
+
+  container.appendChild(minusBtn);
+  container.appendChild(valDisplay);
+  container.appendChild(plusBtn);
+
+  update();
+
+  container.setValue = (v, trigger = false) => {
+    currentVal = Math.min(Math.max(Number(v) || 0, min), max);
+    update();
+    if (trigger && typeof onChange === 'function') onChange(currentVal);
+  };
+  container.getValue = () => currentVal;
+
+  return container;
+}
+
+/**
+ * Open iOS Wheel Date/Time Picker bottom sheet.
+ * Returns Promise<epochMs | minutesSinceMidnight | null>
+ */
+export function openDateTimePicker({ title = 'Select Date & Time', valueMs = null, mode = 'datetime', minMs = null, maxMs = null } = {}) {
+  return new Promise((resolve) => {
+    const baseMs = valueMs ? parseDateTimeToMs(valueMs) : serverNow();
+    const parts = msToZonedParts(baseMs, APP_TIMEZONE);
+
+    // Selected state
+    let selYear = parts.year;
+    let selMonth = parts.month;
+    let selDay = parts.day;
+    let selHour = parts.hour % 12 || 12;
+    let selMinute = parts.minute;
+    let selAmPm = parts.hour >= 12 ? 'PM' : 'AM';
+    let selDayMs = startOfZonedDay(baseMs, APP_TIMEZONE);
+
+    let modalRef = null;
+
+    // Build wheel columns HTML
+    let wheelsHtml = '';
+
+    if (mode === 'datetime') {
+      const days = [];
+      const curStart = startOfZonedDay(serverNow(), APP_TIMEZONE);
+      const selStart = startOfZonedDay(baseMs, APP_TIMEZONE);
+      for (let i = -366; i <= 366; i++) {
+        const dMs = addDaysZoned(curStart, i, APP_TIMEZONE);
+        const p = msToZonedParts(dMs, APP_TIMEZONE);
+        const isToday = dMs === curStart;
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const label = isToday ? `Today, ${monthNames[p.m - 1]} ${p.d}` : `${p.weekday}, ${monthNames[p.m - 1]} ${p.d}`;
+        days.push({ ms: dMs, label, isSel: dMs === selStart, p });
+      }
+
+      wheelsHtml = `
+        <div class="ios-wheel-container">
+          <div class="ios-wheel-highlight"></div>
+          <div class="ios-wheel-mask-top"></div>
+          <div class="ios-wheel-mask-bottom"></div>
+
+          <div class="ios-wheel-col col-date" style="flex: 2.2;">
+            ${days.map(d => `<div class="ios-wheel-item ${d.isSel ? 'active' : ''}" data-ms="${d.ms}" data-y="${d.p.y}" data-m="${d.p.m}" data-d="${d.p.d}">${d.label}</div>`).join('')}
+          </div>
+          <div class="ios-wheel-col col-hour" style="flex: 1;">
+            ${Array.from({ length: 12 }, (_, i) => i + 1).map(h => `<div class="ios-wheel-item ${h === selHour ? 'active' : ''}" data-val="${h}">${h}</div>`).join('')}
+          </div>
+          <div class="ios-wheel-col col-min" style="flex: 1;">
+            ${Array.from({ length: 60 }, (_, i) => i).map(m => `<div class="ios-wheel-item ${m === selMinute ? 'active' : ''}" data-val="${m}">${String(m).padStart(2, '0')}</div>`).join('')}
+          </div>
+          <div class="ios-wheel-col col-ampm" style="flex: 1;">
+            <div class="ios-wheel-item ${selAmPm === 'AM' ? 'active' : ''}" data-val="AM">AM</div>
+            <div class="ios-wheel-item ${selAmPm === 'PM' ? 'active' : ''}" data-val="PM">PM</div>
+          </div>
+        </div>
+      `;
+    } else if (mode === 'date') {
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const curYear = parts.year;
+      const years = Array.from({ length: 15 }, (_, i) => curYear - 2 + i);
+
+      wheelsHtml = `
+        <div class="ios-wheel-container">
+          <div class="ios-wheel-highlight"></div>
+          <div class="ios-wheel-mask-top"></div>
+          <div class="ios-wheel-mask-bottom"></div>
+
+          <div class="ios-wheel-col col-month" style="flex: 1.5;">
+            ${monthNames.map((name, i) => `<div class="ios-wheel-item ${i + 1 === selMonth ? 'active' : ''}" data-val="${i + 1}">${name}</div>`).join('')}
+          </div>
+          <div class="ios-wheel-col col-day" style="flex: 1;">
+            ${Array.from({ length: 31 }, (_, i) => i + 1).map(d => `<div class="ios-wheel-item ${d === selDay ? 'active' : ''}" data-val="${d}">${d}</div>`).join('')}
+          </div>
+          <div class="ios-wheel-col col-year" style="flex: 1.2;">
+            ${years.map(y => `<div class="ios-wheel-item ${y === selYear ? 'active' : ''}" data-val="${y}">${y}</div>`).join('')}
+          </div>
+        </div>
+      `;
+    } else { // mode === 'time'
+      wheelsHtml = `
+        <div class="ios-wheel-container">
+          <div class="ios-wheel-highlight"></div>
+          <div class="ios-wheel-mask-top"></div>
+          <div class="ios-wheel-mask-bottom"></div>
+
+          <div class="ios-wheel-col col-hour" style="flex: 1;">
+            ${Array.from({ length: 12 }, (_, i) => i + 1).map(h => `<div class="ios-wheel-item ${h === selHour ? 'active' : ''}" data-val="${h}">${h}</div>`).join('')}
+          </div>
+          <div class="ios-wheel-col col-min" style="flex: 1;">
+            ${Array.from({ length: 60 }, (_, i) => i).map(m => `<div class="ios-wheel-item ${m === selMinute ? 'active' : ''}" data-val="${m}">${String(m).padStart(2, '0')}</div>`).join('')}
+          </div>
+          <div class="ios-wheel-col col-ampm" style="flex: 1;">
+            <div class="ios-wheel-item ${selAmPm === 'AM' ? 'active' : ''}" data-val="AM">AM</div>
+            <div class="ios-wheel-item ${selAmPm === 'PM' ? 'active' : ''}" data-val="PM">PM</div>
+          </div>
+        </div>
+      `;
+    }
+
+    modalRef = openModal({
+      title: esc(title),
+      bodyHtml: `
+        <div class="space-y-3">
+          <div class="text-[11px] font-mono text-neutral-400 text-center tracking-wide">Interpret &amp; Display: ${APP_TIMEZONE}</div>
+          ${wheelsHtml}
+        </div>
+      `,
+      saveLabel: 'Done',
+      cancelLabel: 'Cancel',
+      onClose: () => resolve(null),
+      onSave: () => {
+        let result = null;
+        if (mode === 'datetime') {
+          const hr24 = (selHour % 12) + (selAmPm === 'PM' ? 12 : 0);
+          result = zonedPartsToMs({ y: selYear, m: selMonth, d: selDay, hh: hr24, mm: selMinute, ss: 0 }, APP_TIMEZONE);
+        } else if (mode === 'date') {
+          result = zonedPartsToMs({ y: selYear, m: selMonth, d: selDay, hh: 0, mm: 0, ss: 0 }, APP_TIMEZONE);
+        } else {
+          result = (selHour % 12 + (selAmPm === 'PM' ? 12 : 0)) * 60 + selMinute;
+        }
+
+        if (typeof minMs === 'number' && typeof result === 'number') result = Math.max(minMs, result);
+        if (typeof maxMs === 'number' && typeof result === 'number') result = Math.min(maxMs, result);
+        resolve(result);
+      }
+    });
+
+    // Wire wheel columns scroll and selection
+    setTimeout(() => {
+      const modalEl = document.getElementById('shared-modal');
+      if (!modalEl) return;
+
+      const cols = modalEl.querySelectorAll('.ios-wheel-col');
+      cols.forEach((col) => {
+        const items = col.querySelectorAll('.ios-wheel-item');
+        const activeIdx = Array.from(items).findIndex(el => el.classList.contains('active'));
+        if (activeIdx !== -1) {
+          col.scrollTop = activeIdx * 36;
+        }
+
+        let scrollTimeout = null;
+        const onWheelScroll = () => {
+          if (scrollTimeout) clearTimeout(scrollTimeout);
+          scrollTimeout = setTimeout(() => {
+            const idx = Math.round(col.scrollTop / 36);
+            items.forEach((item, i) => {
+              const isActive = i === idx;
+              item.classList.toggle('active', isActive);
+              if (isActive) {
+                if (col.classList.contains('col-date')) {
+                  selDayMs = Number(item.dataset.ms);
+                  selYear = Number(item.dataset.y);
+                  selMonth = Number(item.dataset.m);
+                  selDay = Number(item.dataset.d);
+                } else if (col.classList.contains('col-hour')) {
+                  selHour = Number(item.dataset.val);
+                } else if (col.classList.contains('col-min')) {
+                  selMinute = Number(item.dataset.val);
+                } else if (col.classList.contains('col-ampm')) {
+                  selAmPm = item.dataset.val;
+                } else if (col.classList.contains('col-month')) {
+                  selMonth = Number(item.dataset.val);
+                } else if (col.classList.contains('col-day')) {
+                  selDay = Number(item.dataset.val);
+                } else if (col.classList.contains('col-year')) {
+                  selYear = Number(item.dataset.val);
+                }
+              }
+            });
+          }, 40);
+        };
+
+        col.addEventListener('scroll', onWheelScroll, { passive: true });
+
+        items.forEach((item, i) => {
+          item.addEventListener('click', () => {
+            col.scrollTo({ top: i * 36, behavior: 'smooth' });
+          });
+        });
+      });
+    }, 50);
+  });
+}
+
+/**
+ * Format timestamp into display string for date/time field chip.
+ */
+function formatDateTimeDisplay(val, mode = 'datetime') {
+  if (val === null || val === undefined || val === '') return 'Select';
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  if (mode === 'time') {
+    const totalMinutes = typeof val === 'number' ? val : 0;
+    const h = Math.floor(totalMinutes / 60) % 24;
+    const m = totalMinutes % 60;
+    const hr12 = h % 12 || 12;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    return `${hr12}:${String(m).padStart(2, '0')} ${ampm}`;
+  }
+  const ms = parseDateTimeToMs(val);
+  const p = msToZonedParts(ms, APP_TIMEZONE);
+  const hr12 = p.hour % 12 || 12;
+  const ampm = p.hour >= 12 ? 'PM' : 'AM';
+  const minPad = String(p.minute).padStart(2, '0');
+  if (mode === 'date') {
+    return `${p.weekday}, ${monthNames[p.month - 1]} ${p.day}, ${p.year}`;
+  }
+  return `${p.weekday}, ${monthNames[p.month - 1]} ${p.day} - ${hr12}:${minPad} ${ampm}`;
+}
+
+/**
+ * Renders an inset-grouped row for selecting Date/Time via the wheel picker.
+ */
+export function renderDateTimeField({ label = 'Date & Time', valueMs = null, mode = 'datetime', onChange = null, placeholder = 'Select', id = '', className = '' } = {}) {
+  const container = document.createElement('div');
+  container.className = `ios-datetime-field ${className}`.trim();
+  if (id) container.id = id;
+  container.setAttribute('role', 'button');
+  container.tabIndex = 0;
+
+  let currentVal = valueMs ? parseDateTimeToMs(valueMs) : (mode === 'time' ? 12 * 60 : serverNow());
+
+  const labelBox = document.createElement('div');
+  labelBox.className = 'flex flex-col text-left';
+  labelBox.innerHTML = `
+    <span class="text-xs font-semibold text-neutral-200">${esc(label)}</span>
+    <span class="text-[10px] text-neutral-400 font-mono">Cairo time (${APP_TIMEZONE})</span>
+  `;
+
+  const chip = document.createElement('div');
+  chip.className = 'ios-datetime-chip font-mono';
+  chip.textContent = formatDateTimeDisplay(currentVal, mode);
+
+  container.appendChild(labelBox);
+  container.appendChild(chip);
+
+  async function open() {
+    const res = await openDateTimePicker({ title: label, valueMs: currentVal, mode });
+    if (res !== null && res !== undefined) {
+      currentVal = res;
+      chip.textContent = formatDateTimeDisplay(currentVal, mode);
+      if (typeof onChange === 'function') onChange(currentVal);
+    }
+  }
+
+  container.addEventListener('click', (e) => {
+    e.preventDefault();
+    open();
+  });
+
+  container.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      open();
+    }
+  });
+
+  container.setValue = (v) => {
+    currentVal = mode === 'time' ? Number(v) : parseDateTimeToMs(v);
+    chip.textContent = formatDateTimeDisplay(currentVal, mode);
+  };
+  container.getValue = () => currentVal;
+
+  return container;
+}
+
+/**
+ * Opens an iOS Item Picker Half-Sheet modal with optional search and icons.
+ * Returns Promise<selectedId | null>
+ */
+export function openItemPicker({ title = 'Select Item', items = [], selectedId = null, searchable = false, emptyText = 'No items found' } = {}) {
+  return new Promise((resolve) => {
+    let curSel = selectedId;
+    let filterQuery = '';
+
+    function buildListHtml(query = '') {
+      const q = query.trim().toLowerCase();
+      const filtered = q ? items.filter(it => (it.label || '').toLowerCase().includes(q) || (it.sublabel || '').toLowerCase().includes(q)) : items;
+
+      if (filtered.length === 0) {
+        return `<div class="p-8 text-center text-xs text-neutral-400">${esc(emptyText)}</div>`;
+      }
+
+      return filtered.map((it) => {
+        const isSelected = it.id === curSel;
+        const iconSvg = it.iconKey && ICON_LIBRARY[it.iconKey] ? ICON_LIBRARY[it.iconKey] : '';
+        return `
+          <button type="button" class="item-picker-row w-full p-3 rounded-xl flex items-center justify-between text-left transition hover:bg-white/5 active:bg-white/10 ${isSelected ? 'bg-white/[0.08]' : ''}" data-id="${esc(it.id)}">
+            <div class="flex items-center gap-3 min-w-0 pr-2">
+              ${iconSvg ? `<span class="w-7 h-7 rounded-lg bg-white/10 text-[#0A84FF] flex items-center justify-center shrink-0">${iconSvg}</span>` : ''}
+              <div class="min-w-0 flex-1 break-words">
+                <div class="text-sm font-semibold text-white break-words">${esc(it.label)}</div>
+                ${it.sublabel ? `<div class="text-xs text-neutral-400 break-words mt-0.5">${esc(it.sublabel)}</div>` : ''}
+              </div>
+            </div>
+            ${isSelected ? `
+              <svg class="w-5 h-5 text-[#0A84FF] shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+              </svg>
+            ` : ''}
+          </button>
+        `;
+      }).join('');
+    }
+
+    const showSearch = searchable || items.length > 7;
+
+    const modal = openModal({
+      title: esc(title),
+      bodyHtml: `
+        <div class="space-y-3">
+          ${showSearch ? `
+            <div class="relative">
+              <input type="search" id="item-picker-search" class="ios-input w-full pl-9 pr-3 py-2 text-xs text-white" placeholder="Search..." autocomplete="off" />
+              <svg class="w-4 h-4 text-neutral-400 absolute left-3 top-2.5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+              </svg>
+            </div>
+          ` : ''}
+          <div id="item-picker-list" class="max-h-[320px] overflow-y-auto space-y-1 divide-y divide-white/5">
+            ${buildListHtml('')}
+          </div>
+        </div>
+      `,
+      cancelLabel: 'Cancel',
+      onClose: () => resolve(null)
+    });
+
+    setTimeout(() => {
+      const modalEl = document.getElementById('shared-modal');
+      if (!modalEl) return;
+
+      const searchInp = modalEl.querySelector('#item-picker-search');
+      const listEl = modalEl.querySelector('#item-picker-list');
+
+      function wireRows() {
+        listEl.querySelectorAll('.item-picker-row').forEach((row) => {
+          row.onclick = () => {
+            const id = row.dataset.id;
+            modal.close();
+            resolve(id);
+          };
+        });
+      }
+
+      if (searchInp) {
+        searchInp.oninput = (e) => {
+          filterQuery = e.target.value;
+          listEl.innerHTML = buildListHtml(filterQuery);
+          wireRows();
+        };
+        searchInp.focus();
+      }
+
+      wireRows();
+    }, 30);
+  });
+}
+
+/**
+ * Pick image file, crop in interactive 280px sheet, compress to Base64 data URI.
+ * Returns Promise<dataURI | null>
+ */
+export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 30000 } = {}) {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (!file) {
+        resolve(null);
+        return;
+      }
+
+      if (!file.type || !file.type.startsWith('image/')) {
+        toast('Please select a valid image file', 'error');
+        resolve(null);
+        return;
+      }
+
+      if (file.size > 15 * 1024 * 1024) {
+        toast('Image must be under 15MB', 'error');
+        resolve(null);
+        return;
+      }
+
+      try {
+        let bmp;
+        if (typeof createImageBitmap === 'function') {
+          bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => null);
+        }
+        if (!bmp) {
+          bmp = await new Promise((res, rej) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+            img.onload = () => { URL.revokeObjectURL(url); res(img); };
+            img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Image decode error')); };
+            img.src = url;
+          });
+        }
+
+        // Downscale source to max 1024px for mobile memory safety
+        let srcW = bmp.width;
+        let srcH = bmp.height;
+        const maxDim = 1024;
+        if (srcW > maxDim || srcH > maxDim) {
+          if (srcW > srcH) {
+            srcH = Math.round((srcH * maxDim) / srcW);
+            srcW = maxDim;
+          } else {
+            srcW = Math.round((srcW * maxDim) / srcH);
+            srcH = maxDim;
+          }
+        }
+
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = srcW;
+        offCanvas.height = srcH;
+        const offCtx = offCanvas.getContext('2d');
+        offCtx.drawImage(bmp, 0, 0, srcW, srcH);
+
+        // Open 280px cropper modal
+        const minScale = Math.max(280 / srcW, 280 / srcH);
+        let scale = minScale;
+        const maxScale = minScale * 3.5;
+        let panX = (280 - srcW * scale) / 2;
+        let panY = (280 - srcH * scale) / 2;
+
+        function clamp() {
+          scale = Math.max(minScale, Math.min(scale, maxScale));
+          const curW = srcW * scale;
+          const curH = srcH * scale;
+          panX = Math.min(0, Math.max(panX, 280 - curW));
+          panY = Math.min(0, Math.max(panY, 280 - curH));
+        }
+
+        clamp();
+
+        const maskClass = shape === 'circle' ? 'ios-cropper-mask-circle' : 'ios-cropper-mask-rounded';
+
+        const cropModal = openModal({
+          title: shape === 'circle' ? 'Crop Profile Avatar' : 'Crop App Logo',
+          bodyHtml: `
+            <div class="space-y-4">
+              <div class="ios-cropper-viewport" id="cropper-viewport">
+                <canvas id="cropper-canvas" width="280" height="280" class="block w-[280px] h-[280px] pointer-events-none"></canvas>
+                <div class="${maskClass}"></div>
+              </div>
+              <div class="px-2 space-y-1">
+                <div class="flex items-center justify-between text-[11px] text-neutral-400">
+                  <span>Zoom</span>
+                  <span id="cropper-zoom-text">1.0x</span>
+                </div>
+                <input id="cropper-zoom-slider" type="range" min="1" max="3.5" step="0.05" value="1" class="w-full accent-[#0A84FF]" />
+              </div>
+            </div>
+          `,
+          saveLabel: 'Save Image',
+          cancelLabel: 'Cancel',
+          onClose: () => resolve(null),
+          onSave: () => {
+            // Render cropped area to outSize x outSize canvas
+            const outCanvas = document.createElement('canvas');
+            outCanvas.width = outSize;
+            outCanvas.height = outSize;
+            const outCtx = outCanvas.getContext('2d');
+
+            const cropX = -panX / scale;
+            const cropY = -panY / scale;
+            const cropW = 280 / scale;
+            const cropH = 280 / scale;
+
+            outCtx.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, outSize, outSize);
+
+            let dataUri = '';
+            // Try webp first
+            dataUri = outCanvas.toDataURL('image/webp', 0.82);
+            if (!dataUri.startsWith('data:image/webp')) {
+              dataUri = outCanvas.toDataURL('image/jpeg', 0.82);
+            }
+
+            // Stepwise compression if over maxChars
+            const qualities = [0.72, 0.62, 0.52, 0.42];
+            let qIdx = 0;
+            while (dataUri.length > maxChars && qIdx < qualities.length) {
+              const mime = dataUri.startsWith('data:image/webp') ? 'image/webp' : 'image/jpeg';
+              dataUri = outCanvas.toDataURL(mime, qualities[qIdx]);
+              qIdx++;
+            }
+
+            // Downscale dimension if still too large
+            if (dataUri.length > maxChars) {
+              const smallerDim = Math.round(outSize * 0.8);
+              outCanvas.width = smallerDim;
+              outCanvas.height = smallerDim;
+              outCtx.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, smallerDim, smallerDim);
+              dataUri = outCanvas.toDataURL('image/jpeg', 0.6);
+            }
+
+            if (dataUri.length > maxChars) {
+              toast('Image could not be compressed under character limit', 'error');
+              resolve(null);
+              return;
+            }
+
+            resolve(dataUri);
+          }
+        });
+
+        // Wire canvas drawing and viewport pointer events
+        setTimeout(() => {
+          const viewport = document.getElementById('cropper-viewport');
+          const canvas = document.getElementById('cropper-canvas');
+          const zoomSlider = document.getElementById('cropper-zoom-slider');
+          const zoomText = document.getElementById('cropper-zoom-text');
+          if (!viewport || !canvas) return;
+
+          const ctx = canvas.getContext('2d');
+
+          function draw() {
+            ctx.clearRect(0, 0, 280, 280);
+            ctx.drawImage(offCanvas, panX, panY, srcW * scale, srcH * scale);
+            if (zoomText) zoomText.textContent = `${(scale / minScale).toFixed(1)}x`;
+            if (zoomSlider) zoomSlider.value = (scale / minScale).toFixed(2);
+          }
+
+          draw();
+
+          // Pointer tracking for drag & pinch
+          const pointers = new Map();
+          let prevDiff = -1;
+
+          viewport.onpointerdown = (e) => {
+            viewport.setPointerCapture(e.pointerId);
+            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          };
+
+          viewport.onpointermove = (e) => {
+            if (!pointers.has(e.pointerId)) return;
+            const prev = pointers.get(e.pointerId);
+            const dx = e.clientX - prev.x;
+            const dy = e.clientY - prev.y;
+            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            if (pointers.size === 1) {
+              panX += dx;
+              panY += dy;
+              clamp();
+              draw();
+            } else if (pointers.size === 2) {
+              const pts = Array.from(pointers.values());
+              const curDiff = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+              if (prevDiff > 0) {
+                const ratio = curDiff / prevDiff;
+                scale *= ratio;
+                clamp();
+                draw();
+              }
+              prevDiff = curDiff;
+            }
+          };
+
+          const onPointerEnd = (e) => {
+            pointers.delete(e.pointerId);
+            if (pointers.size < 2) prevDiff = -1;
+          };
+
+          viewport.onpointerup = onPointerEnd;
+          viewport.onpointercancel = onPointerEnd;
+
+          // Mouse wheel zoom
+          viewport.onwheel = (e) => {
+            e.preventDefault();
+            const delta = e.deltaY < 0 ? 1.08 : 0.92;
+            scale *= delta;
+            clamp();
+            draw();
+          };
+
+          // Slider zoom
+          if (zoomSlider) {
+            zoomSlider.oninput = (e) => {
+              scale = minScale * Number(e.target.value);
+              clamp();
+              draw();
+            };
+          }
+        }, 50);
+
+      } catch (err) {
+        console.error('Error preparing image:', err);
+        toast('Failed to load image', 'error');
+        resolve(null);
+      }
+    };
+
+    input.click();
+  });
+}
+
+
 export function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -1593,6 +2871,7 @@ export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   const name = user?.name || user?.displayName || user?.userName || 'Team Member';
   const uid = user?.uid || user?.userId || 'guest';
   const photo = user?.avatarUrl || user?.photoURL || user?.userAvatar || '';
+  const isSafe = /^data:image\/(webp|jpeg|png);base64,/i.test(photo) || /^https?:\/\//i.test(photo);
 
   const initials = name
     .split(' ')
@@ -1609,7 +2888,7 @@ export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   }
   const color = palette[Math.abs(hash) % palette.length];
 
-  if (photo) {
+  if (isSafe && photo) {
     return `
       <div class="${sizeClass} rounded-full overflow-hidden border border-white/20 flex-shrink-0 bg-white/5 relative">
         <img src="${esc(photo)}" alt="${esc(name)}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
@@ -2413,6 +3692,48 @@ function getVisibleCardsForType(type) {
   return Array.from(container.querySelectorAll('.bulk-select-card[data-bulk-id]'));
 }
 
+export function getBulkActions(listType) {
+  const isArchivedView = (
+    (listType === 'tasks' || listType === 'admin_tasks') && state.adminTasksFilter === 'archived'
+  ) || (
+    listType === 'categories' && state.adminCatsFilter === 'archived'
+  ) || (
+    listType === 'sessions' && adminSessionsFilter === 'archived'
+  ) || (
+    listType === 'broadcasts' && adminBroadcastsFilter === 'archived'
+  );
+
+  if (listType === 'tasks' || listType === 'admin_tasks' || listType === 'categories' || listType === 'sessions' || listType === 'broadcasts') {
+    return [
+      { id: 'btn-bulk-archive', label: isArchivedView ? 'Restore' : 'Archive', type: 'archive', isRestore: isArchivedView, class: 'bg-white/10 hover:bg-white/20 text-white' },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10' }
+    ];
+  }
+
+  if (listType === 'submissions' || listType === 'attendance_logs' || listType === 'notifications_admin' || listType === 'waivers') {
+    return [
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10' }
+    ];
+  }
+
+  if (listType === 'members') {
+    return [
+      { id: 'btn-bulk-add-badge', label: 'Add Badge', type: 'add_badge', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white' },
+      { id: 'btn-bulk-remove-badge', label: 'Remove Badge', type: 'remove_badge', class: 'bg-white/10 hover:bg-white/20 text-white' }
+    ];
+  }
+
+  if (listType === 'notifications' || listType === 'updates') {
+    return [
+      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white' }
+    ];
+  }
+
+  return [
+    { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A]' }
+  ];
+}
+
 export function enterSelectionMode(type, initialSelectedId = null) {
   selectionState.active = true;
   selectionState.type = type;
@@ -2423,7 +3744,6 @@ export function enterSelectionMode(type, initialSelectedId = null) {
 
   document.body.classList.add('selection-mode-active');
 
-  // Freeze horizontal scroll on both pagers while leaving vertical scroll untouched
   const userPagerEl = document.getElementById('user-pager');
   const adminPagerEl = document.getElementById('admin-pager');
   if (userPagerEl) {
@@ -2451,7 +3771,6 @@ export function exitSelectionMode() {
 
   document.body.classList.remove('selection-mode-active');
 
-  // Restore horizontal scroll on both pagers
   const userPagerEl = document.getElementById('user-pager');
   const adminPagerEl = document.getElementById('admin-pager');
   if (userPagerEl) {
@@ -2495,11 +3814,43 @@ export function updateSelectionUI() {
     const allSelected = selectionState.visibleIds.length > 0 &&
       selectionState.visibleIds.every(id => selectionState.selectedIds.has(id));
     selectAllBtn.textContent = allSelected ? 'Deselect All' : 'Select All';
+    selectAllBtn.onclick = toggleSelectAll;
   }
 
-  const deleteBtn = document.getElementById('btn-bulk-delete');
-  if (deleteBtn) {
-    deleteBtn.disabled = (count === 0);
+  const actionsContainer = document.getElementById('bulk-actions-container');
+  if (actionsContainer) {
+    const actions = getBulkActions(selectionState.type);
+    actionsContainer.innerHTML = '';
+    actions.forEach(act => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = act.id;
+      btn.className = `text-xs font-semibold px-2.5 py-1 rounded-full transition disabled:opacity-40 disabled:cursor-not-allowed ${act.class || ''}`;
+      btn.textContent = act.label;
+      btn.disabled = (count === 0);
+      btn.onclick = () => {
+        if (act.type === 'archive') {
+          handleBulkArchive(act.isRestore);
+        } else if (act.type === 'delete') {
+          handleBulkDelete();
+        } else if (act.type === 'add_badge') {
+          handleBulkBadge(true);
+        } else if (act.type === 'remove_badge') {
+          handleBulkBadge(false);
+        } else if (act.type === 'mark_read') {
+          handleBulkMarkRead();
+        }
+      };
+      actionsContainer.appendChild(btn);
+    });
+
+    const doneBtn = document.createElement('button');
+    doneBtn.type = 'button';
+    doneBtn.id = 'btn-bulk-done';
+    doneBtn.className = 'text-xs font-semibold px-3 py-1 rounded-full bg-white/10 text-white hover:bg-white/20 transition';
+    doneBtn.textContent = 'Done';
+    doneBtn.onclick = exitSelectionMode;
+    actionsContainer.appendChild(doneBtn);
   }
 }
 
@@ -2527,67 +3878,354 @@ export function toggleSelectAll() {
   updateSelectionUI();
 }
 
+export async function handleBulkArchive(isRestore = false) {
+  const ids = Array.from(selectionState.selectedIds);
+  const count = ids.length;
+  if (count === 0) return;
+
+  const type = selectionState.type;
+  const newArchived = !isRestore;
+  const actionLabel = isRestore ? 'Restore' : 'Archive';
+
+  const confirmed = await confirmSheet({
+    title: `${actionLabel} ${count} Item(s)?`,
+    message: `${actionLabel} ${count} selected item(s)?`,
+    confirmLabel: `${actionLabel} ${count}`,
+    destructive: false
+  });
+  if (!confirmed) return;
+
+  try {
+    const CHUNK_SIZE = 450;
+    let colName = 'tasks';
+    if (type === 'categories') colName = 'categories';
+    else if (type === 'sessions') colName = 'attendance_sessions';
+    else if (type === 'broadcasts') colName = 'notifications_broadcast';
+
+    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach(id => {
+        const ref = doc(db, colName, id);
+        batch.update(ref, { archived: newArchived, updatedAt: serverTimestamp() });
+      });
+      await batch.commit();
+    }
+
+    // In-memory update immediately
+    if (type === 'tasks' || type === 'admin_tasks') {
+      ids.forEach(id => {
+        const t = state.tasks.find(x => x.id === id);
+        if (t) t.archived = newArchived;
+      });
+      renderTasksView();
+      renderAdminTasks();
+    } else if (type === 'categories') {
+      ids.forEach(id => {
+        const c = state.categories.find(x => x.id === id);
+        if (c) c.archived = newArchived;
+      });
+      renderAdminCategories();
+    } else if (type === 'sessions') {
+      ids.forEach(id => {
+        const s = state.attendanceSessions.find(x => x.id === id);
+        if (s) s.archived = newArchived;
+      });
+      renderAdminSessions();
+      renderAttendanceView();
+    } else if (type === 'broadcasts') {
+      ids.forEach(id => {
+        const b = state.broadcasts.find(x => x.id === id);
+        if (b) b.archived = newArchived;
+      });
+      renderAdminBroadcasts();
+      renderBroadcastBanner();
+    }
+
+    toast(`${count} item(s) ${isRestore ? 'restored' : 'archived'} successfully`, 'success');
+    exitSelectionMode();
+  } catch (err) {
+    console.error(`Bulk ${actionLabel} error:`, err);
+    toast(`Failed to ${actionLabel.toLowerCase()} items: ` + err.message, 'error');
+  }
+}
+
 export async function handleBulkDelete() {
   const ids = Array.from(selectionState.selectedIds);
   const count = ids.length;
   if (count === 0) return;
 
   const type = selectionState.type;
-  let isArchiveOperation = false;
-  let confirmTitle = 'Delete Items';
-  let confirmMessage = `Delete ${count} item(s)?`;
-  let confirmBtnText = `Delete ${count}`;
-
-  if (type === 'tasks' || type === 'admin_tasks') {
-    const isArchived = (type === 'admin_tasks' && state.adminTasksFilter === 'archived');
-    isArchiveOperation = !isArchived;
-    confirmTitle = isArchiveOperation ? 'Archive Tasks' : 'Permanently Delete Tasks';
-    confirmMessage = isArchiveOperation 
-      ? `Archive ${count} selected task(s)? They will be hidden from members.`
-      : `Permanently delete ${count} selected task(s)? This cannot be undone.`;
-    confirmBtnText = isArchiveOperation ? `Archive ${count}` : `Delete ${count}`;
-  } else if (type === 'categories') {
-    const isArchived = (state.adminCatsFilter === 'archived');
-    isArchiveOperation = !isArchived;
-    confirmTitle = isArchiveOperation ? 'Archive Categories' : 'Permanently Delete Categories';
-    confirmMessage = isArchiveOperation 
-      ? `Archive ${count} selected category(ies)?`
-      : `Permanently delete ${count} selected category(ies)? This cannot be undone.`;
-    confirmBtnText = isArchiveOperation ? `Archive ${count}` : `Delete ${count}`;
-  } else if (type === 'sessions') {
-    const isArchived = (adminSessionsFilter === 'archived');
-    isArchiveOperation = !isArchived;
-    confirmTitle = isArchiveOperation ? 'Archive Sessions' : 'Permanently Delete Sessions';
-    confirmMessage = isArchiveOperation 
-      ? `Archive ${count} selected session(s)?`
-      : `Permanently delete ${count} selected session(s)? This cannot be undone.`;
-    confirmBtnText = isArchiveOperation ? `Archive ${count}` : `Delete ${count}`;
-  } else if (type === 'notifications') {
-    confirmTitle = 'Delete Notifications';
-    confirmMessage = `Delete ${count} selected notification(s)?`;
-    confirmBtnText = `Delete ${count}`;
-  } else if (type === 'submissions') {
-    confirmTitle = 'Revoke Submissions';
-    confirmMessage = `Revoke and delete ${count} selected submission(s)? Member points balances will be adjusted.`;
-    confirmBtnText = `Revoke ${count}`;
-  } else if (type === 'members') {
-    confirmTitle = 'Delete Members';
-    confirmMessage = `Delete ${count} selected member profile(s)? This will remove their user records.`;
-    confirmBtnText = `Delete ${count}`;
-  } else if (type === 'broadcasts') {
-    confirmTitle = 'Delete Broadcasts';
-    confirmMessage = `Delete ${count} selected broadcast(s)?`;
-    confirmBtnText = `Delete ${count}`;
+  if (type === 'members') {
+    toast('Members cannot be deleted.', 'error');
+    return;
   }
 
+  const consequence = {
+    tasks: 'Submissions will keep their history.',
+    admin_tasks: 'Submissions will keep their history.',
+    categories: 'Tasks in this category will become "Uncategorized".',
+    sessions: 'Attendance history will remain preserved.',
+    broadcasts: 'This broadcast announcement will be permanently removed.',
+    submissions: 'Awarded points will be revoked from members.',
+    attendance_logs: 'Penalties will be reversed from members.',
+    notifications_admin: 'These notifications will be permanently deleted.',
+    waivers: 'These waiver requests will be permanently deleted.'
+  }[type] || 'This action cannot be undone.';
+
   const confirmed = await confirmSheet({
-    title: confirmTitle,
-    message: confirmMessage,
-    confirmLabel: confirmBtnText,
+    title: `Permanently Delete ${count} Item(s)?`,
+    message: `Permanently delete ${count} selected item(s)? This cannot be undone.\n\n${consequence}`,
+    confirmLabel: `Delete ${count}`,
     destructive: true
   });
-
   if (!confirmed) return;
+
+  try {
+    const CHUNK_SIZE = 450;
+
+    if (type === 'submissions') {
+      const subMap = new Map();
+      ids.forEach(id => {
+        const s = state.submissions.find(sub => sub.id === id);
+        if (s) {
+          const uid = s.userId || s.uid;
+          if (uid) {
+            if (!subMap.has(uid)) subMap.set(uid, { totalPoints: 0, submissions: [] });
+            const entry = subMap.get(uid);
+            entry.totalPoints += (Number(s.pointsAwarded) || 0);
+            entry.submissions.push(s);
+          }
+        }
+      });
+
+      for (const [uid, entry] of subMap.entries()) {
+        const memberUser = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+        const batch = writeBatch(db);
+
+        entry.submissions.forEach(s => {
+          batch.delete(doc(db, 'submissions', s.id));
+        });
+
+        if (memberUser && entry.totalPoints > 0) {
+          const latestTime = entry.submissions[0]?.submittedAt || Date.now();
+          const pointsUpdate = buildPointsUpdate(memberUser, -entry.totalPoints, latestTime);
+          batch.update(doc(db, 'users', uid), pointsUpdate);
+
+          createNotification(batch, {
+            uid,
+            title: 'Points Revoked',
+            message: `${entry.totalPoints} points have been revoked due to deleted submissions.`,
+            type: 'task',
+            targetAction: { route: 'home' }
+          });
+
+          logAdminAction(batch, {
+            action: 'submissions_bulk_deleted',
+            targetUid: uid,
+            details: { count: entry.submissions.length, pointsRevoked: entry.totalPoints }
+          });
+        }
+        await batch.commit();
+
+        if (memberUser && entry.totalPoints > 0) {
+          memberUser.points = Math.max(0, (memberUser.points || 0) - entry.totalPoints);
+          if (state.user && state.user.uid === uid) {
+            state.user.points = memberUser.points;
+            updateProfileUI();
+          }
+        }
+      }
+
+      state.submissions = state.submissions.filter(s => !selectionState.selectedIds.has(s.id));
+      renderSubmissionsInspector();
+    } else if (type === 'attendance_logs') {
+      const logMap = new Map();
+      ids.forEach(id => {
+        const l = state.attendanceLogs.find(log => log.id === id) || state.myAttendanceLogs.find(log => log.id === id);
+        if (l) {
+          const uid = l.uid;
+          if (uid) {
+            if (!logMap.has(uid)) logMap.set(uid, { totalPenalty: 0, logs: [] });
+            const entry = logMap.get(uid);
+            entry.totalPenalty += (Number(l.penalty) || 0);
+            entry.logs.push(l);
+          }
+        }
+      });
+
+      for (const [uid, entry] of logMap.entries()) {
+        const memberUser = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+        const batch = writeBatch(db);
+
+        entry.logs.forEach(l => {
+          batch.delete(doc(db, 'attendance_logs', l.id));
+        });
+
+        if (memberUser && entry.totalPenalty > 0) {
+          batch.update(doc(db, 'users', uid), {
+            penalties: increment(-entry.totalPenalty),
+            updatedAt: serverTimestamp()
+          });
+        }
+        await batch.commit();
+
+        invalidateEgpCache(uid);
+        if (memberUser && entry.totalPenalty > 0) {
+          memberUser.penalties = Math.max(0, (memberUser.penalties || 0) - entry.totalPenalty);
+          if (state.user && state.user.uid === uid) {
+            state.user.penalties = memberUser.penalties;
+            updateProfileUI();
+          }
+        }
+      }
+
+      state.attendanceLogs = state.attendanceLogs.filter(l => !selectionState.selectedIds.has(l.id));
+      state.myAttendanceLogs = state.myAttendanceLogs.filter(l => !selectionState.selectedIds.has(l.id));
+      renderAttendanceLogs();
+    } else {
+      let colName = 'tasks';
+      if (type === 'categories') colName = 'categories';
+      else if (type === 'sessions') colName = 'attendance_sessions';
+      else if (type === 'broadcasts') colName = 'notifications_broadcast';
+      else if (type === 'notifications' || type === 'notifications_admin') colName = 'notifications';
+      else if (type === 'waivers') colName = 'waiver_requests';
+
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach(id => {
+          batch.delete(doc(db, colName, id));
+        });
+        await batch.commit();
+      }
+
+      if (type === 'tasks' || type === 'admin_tasks') {
+        state.tasks = state.tasks.filter(t => !selectionState.selectedIds.has(t.id));
+        renderTasksView();
+        renderAdminTasks();
+      } else if (type === 'categories') {
+        state.categories = state.categories.filter(c => !selectionState.selectedIds.has(c.id));
+        renderAdminCategories();
+        renderTasksView();
+      } else if (type === 'sessions') {
+        state.attendanceSessions = state.attendanceSessions.filter(s => !selectionState.selectedIds.has(s.id));
+        renderAdminSessions();
+        renderAttendanceView();
+      } else if (type === 'broadcasts') {
+        state.broadcasts = state.broadcasts.filter(b => !selectionState.selectedIds.has(b.id));
+        renderAdminBroadcasts();
+        renderBroadcastBanner();
+      } else if (type === 'notifications' || type === 'notifications_admin') {
+        state.notifications = state.notifications.filter(n => !selectionState.selectedIds.has(n.id));
+        renderNotifications();
+      } else if (type === 'waivers') {
+        state.waiverRequests = state.waiverRequests.filter(w => !selectionState.selectedIds.has(w.id));
+        renderAdminWaivers();
+      }
+    }
+
+    toast(`${count} item(s) permanently deleted`, 'info');
+    exitSelectionMode();
+  } catch (err) {
+    console.error('Bulk delete error:', err);
+    toast('Bulk delete failed: ' + err.message, 'error');
+  }
+}
+
+export function handleBulkBadge(isAdd = true) {
+  const ids = Array.from(selectionState.selectedIds);
+  const count = ids.length;
+  if (count === 0) return;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-3';
+  bodyEl.innerHTML = `
+    <p class="text-xs text-neutral-300">
+      ${isAdd ? 'Select a badge to assign to' : 'Select a badge to remove from'} <strong>${count}</strong> member(s):
+    </p>
+    <div class="grid grid-cols-2 gap-2 pt-2 max-h-60 overflow-y-auto">
+      ${PRESET_BADGES.map(preset => `
+        <button type="button" class="btn-bulk-badge-pick p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-left transition flex items-center gap-2" data-preset-id="${esc(preset.id)}">
+          <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${preset.color}"></span>
+          <span class="font-bold text-white text-xs">${esc(preset.label)}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+
+  openModal({
+    title: isAdd ? 'Assign Badge in Bulk' : 'Remove Badge in Bulk',
+    body: bodyEl,
+    saveLabel: 'Cancel',
+    onSave: async () => true
+  });
+
+  bodyEl.querySelectorAll('.btn-bulk-badge-pick').forEach(btn => {
+    btn.onclick = async () => {
+      const presetId = btn.dataset.presetId;
+      const preset = PRESET_BADGES.find(p => p.id === presetId);
+      if (!preset) return;
+
+      closeModal();
+      try {
+        const CHUNK_SIZE = 450;
+        for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+          const chunk = ids.slice(i, i + CHUNK_SIZE);
+          const batch = writeBatch(db);
+
+          chunk.forEach(uid => {
+            const member = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+            let curBadges = Array.isArray(member?.badges) ? [...member.badges] : [];
+            let curBadgeIds = Array.isArray(member?.badgeIds) ? [...member.badgeIds] : curBadges.map(b => (b.id || b.label || b));
+
+            if (isAdd) {
+              if (!curBadgeIds.includes(preset.id)) {
+                curBadges.push(preset);
+                curBadgeIds.push(preset.id);
+              }
+            } else {
+              curBadges = curBadges.filter(b => (b.id || b.label || b) !== preset.id);
+              curBadgeIds = curBadgeIds.filter(id => id !== preset.id);
+            }
+
+            batch.update(doc(db, 'users', uid), {
+              badges: curBadges,
+              badgeIds: curBadgeIds,
+              updatedAt: serverTimestamp()
+            });
+
+            createNotification(batch, {
+              uid,
+              title: isAdd ? 'Badge Awarded!' : 'Badge Removed',
+              message: isAdd ? `You have been awarded the "${preset.label}" badge!` : `The "${preset.label}" badge was removed from your profile.`,
+              type: 'badge'
+            });
+
+            if (member) {
+              member.badges = curBadges;
+              member.badgeIds = curBadgeIds;
+            }
+          });
+
+          await batch.commit();
+        }
+
+        renderMembersAdmin();
+        toast(`Badge "${preset.label}" ${isAdd ? 'added to' : 'removed from'} ${count} member(s)`, 'success');
+        exitSelectionMode();
+      } catch (err) {
+        console.error('Bulk badge error:', err);
+        toast('Failed to update badges: ' + err.message, 'error');
+      }
+    };
+  });
+}
+
+export async function handleBulkMarkRead() {
+  const ids = Array.from(selectionState.selectedIds);
+  const count = ids.length;
+  if (count === 0) return;
 
   try {
     const CHUNK_SIZE = 450;
@@ -2596,105 +4234,31 @@ export async function handleBulkDelete() {
       const batch = writeBatch(db);
 
       chunk.forEach(id => {
-        if (type === 'tasks' || type === 'admin_tasks') {
-          const ref = doc(db, 'tasks', id);
-          if (isArchiveOperation) {
-            batch.update(ref, { archived: true, updatedAt: serverTimestamp() });
-          } else {
-            batch.delete(ref);
-          }
-        } else if (type === 'categories') {
-          const ref = doc(db, 'categories', id);
-          if (isArchiveOperation) {
-            batch.update(ref, { archived: true, updatedAt: serverTimestamp() });
-          } else {
-            batch.delete(ref);
-          }
-        } else if (type === 'sessions') {
-          const ref = doc(db, 'attendance_sessions', id);
-          if (isArchiveOperation) {
-            batch.update(ref, { archived: true, updatedAt: serverTimestamp() });
-          } else {
-            batch.delete(ref);
-          }
-        } else if (type === 'notifications') {
-          const notif = state.notifications.find(n => n.id === id);
-          if (notif && notif.isBroadcast) {
-            batch.update(doc(db, 'notifications', id), { read: true, dismissed: true });
-          } else {
-            batch.delete(doc(db, 'notifications', id));
-          }
-        } else if (type === 'submissions') {
-          const sub = state.submissions.find(s => s.id === id);
-          batch.delete(doc(db, 'submissions', id));
-          if (sub && sub.uid && sub.pointsAwarded) {
-            const pointsUpdate = buildPointsUpdate(usersMap.get(sub.uid) || { points: 0 }, -sub.pointsAwarded);
-            batch.update(doc(db, 'users', sub.uid), {
-              ...pointsUpdate,
-              updatedAt: serverTimestamp()
-            });
-          }
-        } else if (type === 'members') {
-          if (id === state.user?.uid) return; // safeguard: never delete self
-          batch.delete(doc(db, 'users', id));
-          batch.delete(doc(db, 'users_private', id));
-        } else if (type === 'broadcasts') {
-          batch.delete(doc(db, 'broadcasts', id));
+        const notif = state.notifications.find(n => n.id === id);
+        if (notif?.isBroadcast) {
+          batch.update(doc(db, 'notifications_broadcast', id), {
+            readBy: arrayUnion(state.user.uid)
+          });
+        } else {
+          batch.update(doc(db, 'notifications', id), {
+            read: true
+          });
         }
       });
-
       await batch.commit();
     }
 
-    // In-memory immediate state update
-    const idSet = new Set(ids);
-    if (type === 'tasks' || type === 'admin_tasks') {
-      if (isArchiveOperation) {
-        state.tasks.forEach(t => { if (idSet.has(t.id)) t.archived = true; });
-      } else {
-        state.tasks = state.tasks.filter(t => !idSet.has(t.id));
-      }
-      renderTasks();
-      renderAdminTasks();
-    } else if (type === 'categories') {
-      if (isArchiveOperation) {
-        state.categories.forEach(c => { if (idSet.has(c.id)) c.archived = true; });
-      } else {
-        state.categories = state.categories.filter(c => !idSet.has(c.id));
-      }
-      renderAdminCategories();
-      renderTasks();
-    } else if (type === 'sessions') {
-      if (isArchiveOperation) {
-        state.attendanceSessions.forEach(s => { if (idSet.has(s.id)) s.archived = true; });
-      } else {
-        state.attendanceSessions = state.attendanceSessions.filter(s => !idSet.has(s.id));
-      }
-      renderAdminSessions();
-      if (typeof renderAttendance === 'function') renderAttendance();
-    } else if (type === 'notifications') {
-      state.notifications = state.notifications.filter(n => !idSet.has(n.id));
-      renderNotifications();
-      updateNotificationBadges();
-    } else if (type === 'submissions') {
-      state.submissions = state.submissions.filter(s => !idSet.has(s.id));
-      renderAdminSubmissions();
-      updateAdminOverviewStats();
-    } else if (type === 'members') {
-      state.members = state.members.filter(m => !idSet.has(m.uid));
-      renderAdminMembers();
-      updateAdminOverviewStats();
-    } else if (type === 'broadcasts') {
-      state.broadcasts = state.broadcasts.filter(b => !idSet.has(b.id));
-      renderAdminBroadcasts();
-      if (typeof renderBroadcastCarousel === 'function') renderBroadcastCarousel();
-    }
+    ids.forEach(id => {
+      const notif = state.notifications.find(n => n.id === id);
+      if (notif) notif.read = true;
+    });
 
-    toast(`${isArchiveOperation ? 'Archived' : 'Deleted'} ${count} item(s)`, 'success');
+    renderNotifications();
+    toast(`Marked ${count} notification(s) as read`, 'success');
     exitSelectionMode();
   } catch (err) {
-    console.error('Batch operation error:', err);
-    toast(err.message || 'Batch operation failed', 'error');
+    console.error('Bulk mark read error:', err);
+    toast('Failed to mark notifications as read: ' + err.message, 'error');
   }
 }
 
@@ -2791,7 +4355,7 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
 /* ==========================================================================
    PAGE NAVIGATION PAGER CONTROLLER
    ========================================================================== */
-function createPager(pagerEl, dockEl, pages, defaultPageId = 'home') {
+function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChange = null) {
   if (!pagerEl || !dockEl || !Array.isArray(pages) || pages.length === 0) {
     return { goTo: () => {}, getActive: () => '', destroy: () => {} };
   }
@@ -3274,17 +4838,19 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home') {
 let userPagerInstance = null;
 let adminPagerInstance = null;
 
+export const PAGE_ORDER = [
+  { id: 'notifications', label: 'Updates', hash: '#notifications', sectionId: 'page-notifications' },
+  { id: 'tasks', label: 'Tasks', hash: '#tasks', sectionId: 'page-tasks' },
+  { id: 'home', label: 'Home', hash: '#home', sectionId: 'page-home' },
+  { id: 'attendance', label: 'Attendance', hash: '#attendance', sectionId: 'page-attendance' },
+  { id: 'profile', label: 'Profile', hash: '#profile', sectionId: 'page-profile' }
+];
+
 function initNavigation() {
   const userPagerEl = document.getElementById('user-pager');
   const userDockEl = document.getElementById('user-dock');
 
-  const userPages = [
-    { id: 'tasks', hash: '#tasks' },
-    { id: 'attendance', hash: '#attendance' },
-    { id: 'home', hash: '#home' },
-    { id: 'notifications', hash: '#notifications' },
-    { id: 'profile', hash: '#profile' }
-  ];
+  const userPages = PAGE_ORDER.map(p => ({ id: p.id, hash: p.hash }));
 
   if (userPagerEl && userDockEl) {
     userPagerInstance = createPager(userPagerEl, userDockEl, userPages, 'home');
@@ -3947,6 +5513,44 @@ function setupMembersListeners() {
  * Regular members listen to their own users_private/{uid} document.
  * Admins listen to collection('users_private') limit(500) so email and finesEGP are always live.
  */
+
+// ============================================================================
+// DERIVED EGP BALANCE CACHE & HELPERS (TASK 6)
+// Balance = users_private.finesEGP (admin adjustments) + sum(attendance_logs.fineEGP)
+// ============================================================================
+const egpAggregateCache = new Map(); // uid -> { fineSum, timestamp }
+
+function invalidateEgpCache(uid) {
+  if (uid) {
+    egpAggregateCache.delete(uid);
+  } else {
+    egpAggregateCache.clear();
+  }
+}
+
+async function getMemberDerivedEgpBalance(uid, forceRefresh = false) {
+  if (!uid || !db) return 0;
+  const privDoc = usersPrivate.get(uid);
+  const adminAdj = (privDoc && typeof privDoc.finesEGP === 'number') ? privDoc.finesEGP : 0;
+
+  let cached = egpAggregateCache.get(uid);
+  if (forceRefresh || !cached || (Date.now() - cached.timestamp > 30000)) {
+    try {
+      const aggSnap = await getAggregateFromServer(
+        query(collection(db, 'attendance_logs'), where('uid', '==', uid)),
+        { total: sum('fineEGP') }
+      );
+      const fineSum = Number(aggSnap?.data()?.total) || 0;
+      cached = { fineSum, timestamp: Date.now() };
+      egpAggregateCache.set(uid, cached);
+    } catch (err) {
+      console.warn('Failed to fetch attendance fine aggregate for', uid, err);
+      cached = cached || { fineSum: 0, timestamp: Date.now() };
+    }
+  }
+  return adminAdj + (cached?.fineSum || 0);
+}
+
 function setupUsersPrivateListener() {
   if (!db || !state.user?.uid) {
     listeners.clear('users_private');
@@ -4121,6 +5725,63 @@ function mergeAndRenderNotifications() {
   renderNotifications();
 }
 
+
+export function showLiveNotificationToast({ title, message, icon = 'bell', onClick = null } = {}) {
+  const toastEl = document.getElementById('live-notification-toast');
+  if (!toastEl) return;
+
+  const iconEl = document.getElementById('live-toast-icon');
+  const titleEl = document.getElementById('live-toast-title');
+  const bodyEl = document.getElementById('live-toast-body');
+  const closeBtn = document.getElementById('btn-close-live-toast');
+
+  if (iconEl) iconEl.innerHTML = getIconSvg(icon || 'bell', 'w-5 h-5');
+  if (titleEl) titleEl.textContent = title || 'Announcement';
+  if (bodyEl) bodyEl.textContent = message || '';
+
+  toastEl.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    toastEl.classList.remove('-translate-y-12', 'opacity-0');
+    toastEl.classList.add('translate-y-0', 'opacity-100');
+  });
+
+  let dismissTimer = setTimeout(dismiss, 5000);
+
+  function dismiss() {
+    clearTimeout(dismissTimer);
+    toastEl.classList.remove('translate-y-0', 'opacity-100');
+    toastEl.classList.add('-translate-y-12', 'opacity-0');
+    setTimeout(() => {
+      toastEl.classList.add('hidden');
+    }, 300);
+  }
+
+  toastEl.onclick = (e) => {
+    if (e.target.closest('#btn-close-live-toast')) {
+      e.stopPropagation();
+      dismiss();
+      return;
+    }
+    dismiss();
+    if (typeof onClick === 'function') {
+      onClick();
+    } else {
+      window.location.hash = '#notifications';
+    }
+  };
+
+  if (closeBtn) {
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismiss();
+    };
+  }
+}
+
+let isPersonalInitialLoad = true;
+let isBroadcastAllInitialLoad = true;
+let isBroadcastBadgeInitialLoad = true;
+
 function setupNotificationsListener() {
   if (!db) return;
   if (!state.user) {
@@ -4131,6 +5792,9 @@ function setupNotificationsListener() {
     state.personalNotifications = [];
     state.broadcastNotificationsAll = [];
     state.broadcastNotificationsBadge = [];
+    isPersonalInitialLoad = true;
+    isBroadcastAllInitialLoad = true;
+    isBroadcastBadgeInitialLoad = true;
     renderNotifications();
     updateNotificationBadges();
     return;
@@ -4146,6 +5810,19 @@ function setupNotificationsListener() {
       limit(100)
     );
     const unsubPersonal = onSnapshot(qPersonal, (snapshot) => {
+      if (!isPersonalInitialLoad) {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            showLiveNotificationToast({
+              title: data.title || 'Personal Notification',
+              message: data.message || data.body || '',
+              icon: data.icon || 'bell'
+            });
+          }
+        });
+      }
+      isPersonalInitialLoad = false;
       state.personalNotifications = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
       mergeAndRenderNotifications();
     }, (err) => console.warn('Personal notifications listener:', err));
@@ -4164,7 +5841,22 @@ function setupNotificationsListener() {
       limit(50)
     );
     const unsubBroadcastAll = onSnapshot(qBroadcastAll, (snapshot) => {
-      state.broadcastNotificationsAll = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
+      if (!isBroadcastAllInitialLoad) {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            if (!data.readBy || !data.readBy.includes(state.user?.uid)) {
+              showLiveNotificationToast({
+                title: data.title || 'Team Broadcast',
+                message: data.message || data.body || '',
+                icon: data.icon || 'megaphone'
+              });
+            }
+          }
+        });
+      }
+      isBroadcastAllInitialLoad = false;
+      state.broadcastNotificationsAll = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() })).filter(b => b.archived !== true);
       mergeAndRenderNotifications();
     }, (err) => console.warn('Broadcast "all" notifications listener:', err));
     listeners.add('notifications_broadcast_all', unsubBroadcastAll);
@@ -4185,7 +5877,22 @@ function setupNotificationsListener() {
         limit(50)
       );
       const unsubBroadcastBadge = onSnapshot(qBroadcastBadge, (snapshot) => {
-        state.broadcastNotificationsBadge = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
+        if (!isBroadcastBadgeInitialLoad) {
+          snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+              const data = change.doc.data();
+              if (!data.readBy || !data.readBy.includes(state.user?.uid)) {
+                showLiveNotificationToast({
+                  title: data.title || 'Badge Announcement',
+                  message: data.message || data.body || '',
+                  icon: data.icon || 'star'
+                });
+              }
+            }
+          });
+        }
+        isBroadcastBadgeInitialLoad = false;
+        state.broadcastNotificationsBadge = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() })).filter(b => b.archived !== true);
         mergeAndRenderNotifications();
       }, (err) => console.warn('Broadcast badge notifications listener:', err));
       listeners.add('notifications_broadcast_badge', unsubBroadcastBadge);
@@ -4820,7 +6527,6 @@ function openTaskDetailsModal(taskId) {
 
   const now = serverNow();
   const win = getTaskWindow(task, now);
-  const tieredInfo = computeTieredTaskPoints(task, now);
   const cat = state.categories.find(c => c.id === task.categoryId || c.id === task.category) || { name: 'General', color: '#0A84FF', iconKey: 'film' };
 
   const isDone = Boolean(state.user && state.mySubmissions?.some(s =>
@@ -4829,19 +6535,22 @@ function openTaskDetailsModal(taskId) {
 
   let statusBadge = '';
   if (isDone) {
-    statusBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Done</span>`;
+    statusBadge = '<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Done</span>';
   } else if (win?.state === 'open') {
     if (task.isPermanent) {
-      statusBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30">No Deadline</span>`;
+      statusBadge = '<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30">No Deadline</span>';
     } else {
       const closeTimeStr = win.closesAt ? `Closes ${formatDateTime(win.closesAt)}` : 'Due now';
       statusBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">${closeTimeStr}</span>`;
     }
+  } else if (win?.state === 'grace') {
+    const graceTimeStr = win.graceEndsAt ? `Grace cutoff ${formatDateTime(win.graceEndsAt)}` : 'Grace period';
+    statusBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">${graceTimeStr}</span>`;
   } else if (win?.state === 'upcoming') {
     const startTimeStr = `Starts ${formatDateTime(win.start)}`;
     statusBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">${startTimeStr}</span>`;
   } else {
-    statusBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-white/10 text-neutral-400 border border-white/15">Closed</span>`;
+    statusBadge = '<span class="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-white/10 text-neutral-400 border border-white/15">Closed</span>';
   }
 
   const linkBtnHtml = task.link ? `
@@ -4853,37 +6562,83 @@ function openTaskDetailsModal(taskId) {
 
   const questions = Array.isArray(task.questions) ? task.questions : [];
   const questionsHtml = questions.length > 0 ? `
-    <div class="space-y-3 pt-3 border-t border-white/10">
+    <div class="space-y-3.5 pt-3 border-t border-white/10" id="task-detail-questions-container">
       <h4 class="text-xs font-bold text-white uppercase tracking-wider">Required Questions</h4>
-      ${questions.map((q) => `
-        <div class="space-y-1">
-          <label class="block text-xs font-medium text-neutral-300">
-            ${esc(q.questionText)}
-            ${q.isRequired ? '<span class="text-rose-400">*</span>' : '<span class="text-neutral-500 font-normal">(Optional)</span>'}
-          </label>
-          <input type="text" class="task-detail-q-input w-full glass-input text-xs" data-q-id="${esc(q.id)}" data-is-required="${Boolean(q.isRequired)}" placeholder="Your answer..." ${isDone || win?.state === 'closed' ? 'disabled' : ''} />
-          <div class="task-detail-q-error text-[11px] text-rose-400 hidden">This question is required</div>
-        </div>
-      `).join('')}
+      ${questions.map((q) => {
+        const qType = q.type || 'short';
+        const isReq = Boolean(q.isRequired);
+        const reqBadge = isReq ? '<span class="text-rose-400">*</span>' : '<span class="text-neutral-500 font-normal">(Optional)</span>';
+
+        if (qType === 'long') {
+          return `
+            <div class="task-q-card space-y-1.5" data-q-id="${esc(q.id)}" data-q-type="long" data-is-required="${isReq}">
+              <label class="block text-xs font-semibold text-neutral-200">
+                ${esc(q.questionText)} ${reqBadge}
+              </label>
+              <textarea class="task-q-input w-full glass-input text-xs leading-relaxed" rows="3" placeholder="Write your detailed answer..." ${isDone || win?.state === 'closed' ? 'disabled' : ''}></textarea>
+              <div class="task-q-error text-[11px] text-rose-400 hidden">This question is required</div>
+            </div>
+          `;
+        }
+
+        if (qType === 'mcq') {
+          const opts = Array.isArray(q.options) ? q.options : [];
+          return `
+            <div class="task-q-card space-y-2" data-q-id="${esc(q.id)}" data-q-type="mcq" data-is-required="${isReq}">
+              <label class="block text-xs font-semibold text-neutral-200">
+                ${esc(q.questionText)} ${reqBadge}
+              </label>
+              <div class="space-y-1.5 mcq-options-group">
+                ${opts.map((opt) => `
+                  <label class="flex items-center gap-3 p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 cursor-pointer transition">
+                    <input type="radio" name="mcq_${esc(q.id)}" value="${esc(opt.label)}" class="text-[#0A84FF] focus:ring-0" ${isDone || win?.state === 'closed' ? 'disabled' : ''} />
+                    <span class="text-xs text-white">${esc(opt.label)}</span>
+                  </label>
+                `).join('')}
+                ${q.allowOther ? `
+                  <label class="flex items-center gap-3 p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 cursor-pointer transition">
+                    <input type="radio" name="mcq_${esc(q.id)}" value="Other" class="text-[#0A84FF] focus:ring-0 mcq-radio-other" ${isDone || win?.state === 'closed' ? 'disabled' : ''} />
+                    <span class="text-xs text-white">Other</span>
+                  </label>
+                  <input type="text" class="mcq-other-input w-full glass-input text-xs hidden mt-1.5" placeholder="Please specify your answer..." ${isDone || win?.state === 'closed' ? 'disabled' : ''} />
+                ` : ''}
+              </div>
+              <div class="task-q-error text-[11px] text-rose-400 hidden">Please select an answer</div>
+            </div>
+          `;
+        }
+
+        // Default: short text
+        return `
+          <div class="task-q-card space-y-1.5" data-q-id="${esc(q.id)}" data-q-type="short" data-is-required="${isReq}">
+            <label class="block text-xs font-semibold text-neutral-200">
+              ${esc(q.questionText)} ${reqBadge}
+            </label>
+            <input type="text" class="task-q-input w-full glass-input text-xs" placeholder="Your answer..." ${isDone || win?.state === 'closed' ? 'disabled' : ''} />
+            <div class="task-q-error text-[11px] text-rose-400 hidden">This question is required</div>
+          </div>
+        `;
+      }).join('')}
     </div>
   ` : '';
 
+  // Banner status with countdown
   let bannerHtml = '';
   if (isDone) {
-    bannerHtml = `<div class="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium text-center flex items-center justify-center gap-2">✓ You have completed this occurrence.</div>`;
-  } else if (task.tieredRewards?.enabled && !tieredInfo.canSubmit) {
-    bannerHtml = `<div class="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-medium text-center">Submission closed: deadline and grace period have expired.</div>`;
+    bannerHtml = '<div class="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium text-center flex items-center justify-center gap-2">✓ You have completed this occurrence.</div>';
   } else if (win?.state === 'closed') {
-    bannerHtml = `<div class="p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-400 text-xs font-medium text-center">This task is closed for submissions.</div>`;
+    bannerHtml = '<div class="p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-400 text-xs font-medium text-center">This task is closed for submissions.</div>';
   } else if (win?.state === 'upcoming') {
-    bannerHtml = `<div class="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium text-center">This task occurrence has not started yet.</div>`;
+    bannerHtml = `<div class="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium text-center">Starts ${formatDateTime(win.start)}</div>`;
   } else if (!state.user) {
-    bannerHtml = `<div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-medium text-center">Sign in from the Profile tab to submit proof and claim points.</div>`;
+    bannerHtml = '<div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-medium text-center">Sign in from the Profile tab to submit proof and claim points.</div>';
+  } else if (win?.state === 'grace') {
+    bannerHtml = '<div class="p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium text-center">Deadline passed: in grace period. Submissions earn standard points.</div>';
   }
 
   const commentHtml = `
     <div class="space-y-1 pt-3 border-t border-white/10">
-      <label class="block text-xs font-medium text-neutral-300">Comment (Optional)</label>
+      <label class="block text-xs font-medium text-neutral-300">Comment / Proof Notes (Optional)</label>
       <textarea id="task-detail-comment" rows="2" class="w-full glass-input text-xs" placeholder="Add submission notes..." ${isDone || win?.state === 'closed' ? 'disabled' : ''}></textarea>
     </div>
   `;
@@ -4899,8 +6654,8 @@ function openTaskDetailsModal(taskId) {
         </span>
         ${statusBadge}
       </div>
-      <span class="text-sm font-bold font-mono text-amber-400 bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20">
-        +${task.tieredRewards?.enabled ? tieredInfo.points : task.points} pts${task.tieredRewards?.enabled && tieredInfo.statusText ? ` <span class="text-xs text-amber-300 font-normal">(${esc(tieredInfo.statusText)})</span>` : ''}
+      <span class="text-sm font-bold font-mono text-amber-400 bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20" id="task-detail-points-badge">
+        +${win ? win.pointsForNow : (task.points || 5)} pts
       </span>
     </div>
 
@@ -4915,57 +6670,105 @@ function openTaskDetailsModal(taskId) {
     ${commentHtml}
   `;
 
-  const canSubmit = state.user && !isDone && (task.tieredRewards?.enabled ? tieredInfo.canSubmit : (win?.state === 'open'));
+  // Wire MCQ Other toggle
+  bodyEl.querySelectorAll('.task-q-card[data-q-type="mcq"]').forEach(card => {
+    const radios = card.querySelectorAll('input[type="radio"]');
+    const otherInp = card.querySelector('.mcq-other-input');
+    radios.forEach(r => {
+      r.onchange = () => {
+        if (otherInp) {
+          if (r.value === 'Other' && r.checked) {
+            otherInp.classList.remove('hidden');
+            otherInp.focus();
+          } else {
+            otherInp.classList.add('hidden');
+          }
+        }
+      };
+    });
+  });
+
+  const canSubmit = state.user && !isDone && (win?.state === 'open' || win?.state === 'grace');
 
   openModal({
     title: 'Task Details',
     body: bodyEl,
     saveLabel: canSubmit ? 'Submit Proof' : null,
     onSave: canSubmit ? async () => {
-      // Validate questions
       let hasError = false;
-      const qInputs = bodyEl.querySelectorAll('.task-detail-q-input');
       const answers = [];
-      qInputs.forEach(input => {
-        const qId = input.dataset.qId;
-        const isReq = input.dataset.isRequired === 'true';
-        const val = input.value.trim();
-        const errEl = input.nextElementSibling;
+
+      bodyEl.querySelectorAll('.task-q-card').forEach(card => {
+        const qId = card.dataset.qId;
+        const qType = card.dataset.qType || 'short';
+        const isReq = card.dataset.isRequired === 'true';
+        const errEl = card.querySelector('.task-q-error');
         const originalQ = questions.find(q => q.id === qId);
+        const qText = originalQ ? originalQ.questionText : '';
 
-        if (isReq && !val) {
-          hasError = true;
-          if (errEl) errEl.classList.remove('hidden');
-          input.classList.add('border-rose-500');
-        } else {
-          if (errEl) errEl.classList.add('hidden');
-          input.classList.remove('border-rose-500');
+        if (qType === 'short' || qType === 'long') {
+          const inp = card.querySelector('.task-q-input');
+          const val = inp?.value.trim() || '';
+          if (isReq && !val) {
+            hasError = true;
+            if (errEl) errEl.classList.remove('hidden');
+            if (inp) inp.classList.add('border-rose-500');
+          } else {
+            if (errEl) errEl.classList.add('hidden');
+            if (inp) inp.classList.remove('border-rose-500');
+          }
+          answers.push({
+            questionId: qId,
+            questionText: qText,
+            type: qType,
+            answer: val,
+            otherText: null
+          });
+        } else if (qType === 'mcq') {
+          const checkedRadio = card.querySelector('input[type="radio"]:checked');
+          const otherInp = card.querySelector('.mcq-other-input');
+          const isOther = checkedRadio?.value === 'Other';
+          const otherVal = otherInp?.value.trim() || '';
+
+          if (isReq && !checkedRadio) {
+            hasError = true;
+            if (errEl) { errEl.textContent = 'Please select an option'; errEl.classList.remove('hidden'); }
+          } else if (isOther && !otherVal) {
+            hasError = true;
+            if (errEl) { errEl.textContent = 'Please specify your other answer'; errEl.classList.remove('hidden'); }
+            if (otherInp) otherInp.classList.add('border-rose-500');
+          } else {
+            if (errEl) errEl.classList.add('hidden');
+            if (otherInp) otherInp.classList.remove('border-rose-500');
+          }
+
+          answers.push({
+            questionId: qId,
+            questionText: qText,
+            type: 'mcq',
+            answer: checkedRadio ? checkedRadio.value : '',
+            otherText: isOther ? otherVal : null
+          });
         }
-
-        answers.push({
-          questionId: qId,
-          questionText: originalQ ? originalQ.questionText : '',
-          answer: val
-        });
       });
 
       if (hasError) return false;
 
       try {
-        const occurrenceKey = (task.schedule?.type === 'once') ? 'once' : (win?.occurrenceKey || 'once');
+        const currentWin = getTaskWindow(task, serverNow());
+        if (currentWin?.state !== 'open' && currentWin?.state !== 'grace') {
+          toast('Submission closed: deadline and grace period have expired.', 'error');
+          return false;
+        }
+
+        const occurrenceKey = (task.schedule?.type === 'once') ? 'once' : (currentWin?.occurrenceKey || 'once');
         const subId = `${task.id}_${state.user.uid}_${occurrenceKey}`;
         const comment = bodyEl.querySelector('#task-detail-comment')?.value || '';
+        const pointsAwarded = currentWin.pointsForNow;
 
         const batch = writeBatch(db);
         const subRef = doc(db, 'submissions', subId);
         const userRef = doc(db, 'users', state.user.uid);
-
-        const currentPtsInfo = computeTieredTaskPoints(task, serverNow());
-        if (!currentPtsInfo.canSubmit) {
-          toast('Submission closed: deadline and grace period have expired.', 'error');
-          return false;
-        }
-        const pointsAwarded = currentPtsInfo.points;
 
         batch.set(subRef, {
           taskId: task.id,
@@ -4975,12 +6778,13 @@ function openTaskDetailsModal(taskId) {
           userAvatar: state.user.avatarUrl || state.user.photoURL || '',
           occurrenceKey,
           answers,
+          inGrace: Boolean(currentWin.inGrace),
           comment: comment.trim(),
           pointsAwarded,
           submittedAt: serverTimestamp()
         });
 
-        const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, pointsAwarded);
+        const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, pointsAwarded, serverNow());
         batch.update(userRef, {
           ...pointsUpdate,
           lastOpId: subId,
@@ -4988,7 +6792,8 @@ function openTaskDetailsModal(taskId) {
         });
 
         await batch.commit();
-        toast(`Task submitted! +${pointsAwarded} pts awarded${currentPtsInfo.statusText ? ` (${currentPtsInfo.statusText})` : ''}`, 'success');
+        toast(`Task submitted! +${pointsAwarded} pts awarded${currentWin.inGrace ? ' (Grace Period)' : ''}`, 'success');
+        renderContent();
         return true;
       } catch (err) {
         console.error('Submission error:', err);
@@ -5390,6 +7195,7 @@ async function handleAttendanceCheckIn(sessionId) {
     renderProfileAttendance();
     updateUserTodayAttendanceBadge();
 
+    getMemberDerivedEgpBalance(state.user.uid, true).then(() => { updateProfileUI(); });
     toast(calc.status === 'on_time' ? 'Checked in successfully! (0 penalty)' : `Checked in late. -${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} applied.`, 'success');
   } catch (err) {
     console.error('Attendance check-in error:', err);
@@ -5511,20 +7317,35 @@ function updateUserTodayAttendanceBadge() {
 /* ==========================================================================
    UI RENDERING: LEADERBOARD
    ========================================================================== */
+let leaderboardSegmentedInstance = null;
+
+function setupLeaderboardSegmented() {
+  const mount = document.getElementById('leaderboard-period-segmented-mount');
+  if (!mount) return;
+  if (!leaderboardSegmentedInstance || !mount.contains(leaderboardSegmentedInstance)) {
+    mount.innerHTML = '';
+    leaderboardSegmentedInstance = renderSegmented({
+      id: 'leaderboard-period-segmented',
+      options: [
+        { value: 'all', label: 'All' },
+        { value: 'month', label: 'Month' },
+        { value: 'week', label: 'Week' }
+      ],
+      value: state.leaderboardPeriod || 'all',
+      onChange: (val) => {
+        state.leaderboardPeriod = val;
+        state.leaderboardPeriodUserOverridden = true;
+        renderLeaderboard();
+      }
+    });
+    mount.appendChild(leaderboardSegmentedInstance);
+  } else if (leaderboardSegmentedInstance.getValue && leaderboardSegmentedInstance.getValue() !== (state.leaderboardPeriod || 'all')) {
+    leaderboardSegmentedInstance.setValue(state.leaderboardPeriod || 'all', false);
+  }
+}
+
 function updateLeaderboardPeriodButtons() {
-  const current = state.leaderboardPeriod || 'all';
-  document.querySelectorAll('.leader-period-btn').forEach(b => {
-    const period = b.dataset.period || 'all';
-    const isActive = period === current;
-    b.classList.toggle('active', isActive);
-    if (isActive) {
-      b.classList.add('text-white');
-      b.classList.remove('text-neutral-400');
-    } else {
-      b.classList.remove('text-white');
-      b.classList.add('text-neutral-400');
-    }
-  });
+  setupLeaderboardSegmented();
 }
 
 function renderLeaderboard() {
@@ -6450,7 +8271,9 @@ function updateActivityRings() {
   if (centerPts) centerPts.textContent = userPts;
   if (legPts) legPts.textContent = `${userPts} pts`;
   if (legQuotas) legQuotas.textContent = `${completedToday}/${activeCount}`;
-  const userFines = state.user?.uid ? (usersPrivate.get(state.user.uid)?.finesEGP ?? userPen) : userPen;
+  const cachedFineSum = (state.user?.uid && egpAggregateCache.get(state.user.uid)?.fineSum) || 0;
+  const adminAdj = state.user?.uid ? (usersPrivate.get(state.user.uid)?.finesEGP || 0) : 0;
+  const userFines = adminAdj + cachedFineSum;
   if (legPen) legPen.textContent = `${userFines} EGP`;
 }
 
@@ -6820,250 +8643,538 @@ function openAdminTaskModal(taskId = null) {
   let currentTitle = task ? task.title : '';
   let currentDesc = task ? task.description : '';
   let currentCategoryId = task ? (task.categoryId || task.category || (state.categories[0]?.id || '')) : (state.categories[0]?.id || '');
-  let currentPoints = task ? String(task.points) : '';
+  let currentPoints = task ? (task.points !== undefined ? String(task.points) : '') : '';
   let currentLink = task ? (task.link || '') : '';
   let currentIsPermanent = task ? Boolean(task.isPermanent) : false;
-  let currentDurationMinutes = task && task.durationMinutes ? String(task.durationMinutes) : '';
-  let currentQuestions = task && Array.isArray(task.questions)
-    ? JSON.parse(JSON.stringify(task.questions))
-    : [];
 
-  let tieredRewardsEnabled = Boolean(task?.tieredRewards?.enabled);
-  let earlyBonusMinutes = task?.tieredRewards?.earlyBonusMinutes !== undefined ? task.tieredRewards.earlyBonusMinutes : 1440;
-  let earlyPoints = task?.tieredRewards?.earlyPoints !== undefined ? task.tieredRewards.earlyPoints : 15;
-  let onTimePoints = task?.tieredRewards?.onTimePoints !== undefined ? task.tieredRewards.onTimePoints : 10;
-  let graceMinutes = task?.tieredRewards?.graceMinutes !== undefined ? task.tieredRewards.graceMinutes : 120;
-  let gracePoints = task?.tieredRewards?.gracePoints !== undefined ? task.tieredRewards.gracePoints : 5;
-
-  let missedPenaltyEnabled = Boolean(task?.missedPenalty?.enabled);
-  let missedPenaltyPoints = task?.missedPenalty?.points !== undefined ? task.missedPenalty.points : 5;
-
+  // Normalized tiers & schedule
+  const normTiers = normalizeTaskTiers(task || {});
   let sched = normalizeScheduleObject(task?.schedule || task || { type: 'once', startDateTime: Date.now() });
   let schedType = sched.type || 'once';
   let schedStartMs = parseDateTimeToMs(sched.startDateTime) || Date.now();
   let schedParts = getZonedParts(schedStartMs, APP_TIMEZONE);
 
+  const pad2 = n => String(n).padStart(2, '0');
+  let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
+  let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
+
+  // Deadline state
+  let currentDurationMinutes = normTiers.durationMinutes || (schedType === 'once' ? 1440 : 1440);
+  let deadlineDaysAfter = 1;
+  let deadlineTimeStr = selectedTimeStr;
+  let deadlineDateStr = selectedDateStr;
+
+  if (schedType === 'once') {
+    const dlMs = schedStartMs + currentDurationMinutes * 60000;
+    const dlParts = getZonedParts(dlMs, APP_TIMEZONE);
+    deadlineDateStr = `${dlParts.year}-${pad2(dlParts.month)}-${pad2(dlParts.day)}`;
+    deadlineTimeStr = `${pad2(dlParts.hour)}:${pad2(dlParts.minute)}`;
+  } else {
+    const startMin = schedParts.hour * 60 + schedParts.minute;
+    const { daysAfter, endMinuteOfDay } = pickersFromOffset(currentDurationMinutes, startMin);
+    deadlineDaysAfter = daysAfter;
+    deadlineTimeStr = `${pad2(Math.floor(endMinuteOfDay / 60))}:${pad2(endMinuteOfDay % 60)}`;
+  }
+
+  // Tier 1: Early Bonus
+  let earlyBonusEnabled = Boolean(normTiers.earlyBonus.enabled);
+  let earlyBonusPoints = normTiers.earlyBonus.points || 15;
+  let earlyBonusDaysAfter = 0;
+  let earlyBonusTimeStr = selectedTimeStr;
+  let earlyBonusDateStr = selectedDateStr;
+
+  if (normTiers.earlyBonus.untilMinutes > 0) {
+    if (schedType === 'once') {
+      const ebMs = schedStartMs + normTiers.earlyBonus.untilMinutes * 60000;
+      const ebParts = getZonedParts(ebMs, APP_TIMEZONE);
+      earlyBonusDateStr = `${ebParts.year}-${pad2(ebParts.month)}-${pad2(ebParts.day)}`;
+      earlyBonusTimeStr = `${pad2(ebParts.hour)}:${pad2(ebParts.minute)}`;
+    } else {
+      const startMin = schedParts.hour * 60 + schedParts.minute;
+      const { daysAfter, endMinuteOfDay } = pickersFromOffset(normTiers.earlyBonus.untilMinutes, startMin);
+      earlyBonusDaysAfter = daysAfter;
+      earlyBonusTimeStr = `${pad2(Math.floor(endMinuteOfDay / 60))}:${pad2(endMinuteOfDay % 60)}`;
+    }
+  }
+
+  // Tier 2: Grace Period (NO grace points)
+  let graceEnabled = Boolean(normTiers.grace.enabled);
+  let graceDaysAfter = deadlineDaysAfter;
+  let graceTimeStr = deadlineTimeStr;
+  let graceDateStr = deadlineDateStr;
+
+  if (normTiers.grace.untilMinutes > 0) {
+    if (schedType === 'once') {
+      const grMs = schedStartMs + normTiers.grace.untilMinutes * 60000;
+      const grParts = getZonedParts(grMs, APP_TIMEZONE);
+      graceDateStr = `${grParts.year}-${pad2(grParts.month)}-${pad2(grParts.day)}`;
+      graceTimeStr = `${pad2(grParts.hour)}:${pad2(grParts.minute)}`;
+    } else {
+      const startMin = schedParts.hour * 60 + schedParts.minute;
+      const { daysAfter, endMinuteOfDay } = pickersFromOffset(normTiers.grace.untilMinutes, startMin);
+      graceDaysAfter = daysAfter;
+      graceTimeStr = `${pad2(Math.floor(endMinuteOfDay / 60))}:${pad2(endMinuteOfDay % 60)}`;
+    }
+  }
+
+  // Tier 3: Missed Penalty
+  let missedPenaltyEnabled = Boolean(normTiers.missedPenalty.enabled);
+  let missedPenaltyPoints = normTiers.missedPenalty.points || 5;
+
+  // Recurrence schedule sets
   let weeklyDays = new Set(Array.isArray(sched.days) ? sched.days : ['Sat', 'Sun']);
   let monthlyDates = new Set(Array.isArray(sched.dates) ? sched.dates : [1]);
   let monthlyWeeks = new Set(Array.isArray(sched.weeks) ? sched.weeks : ['1st']);
   let monthlyWeekdays = new Set(Array.isArray(sched.weekdays) ? sched.weekdays : ['Sat']);
 
-  const pad2 = n => String(n).padStart(2, '0');
-  let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
-  let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
+  // Questions with type ('short' | 'long' | 'mcq'), options, allowOther
+  let currentQuestions = (Array.isArray(task?.questions) ? task.questions : []).map(q => ({
+    id: q.id || ('q_' + Math.random().toString(36).slice(2, 7)),
+    questionText: q.questionText || '',
+    type: q.type || 'short',
+    isRequired: Boolean(q.isRequired),
+    options: Array.isArray(q.options) && q.options.length >= 2 ? JSON.parse(JSON.stringify(q.options)) : [
+      { id: 'opt_1', label: 'Option 1' },
+      { id: 'opt_2', label: 'Option 2' }
+    ],
+    allowOther: Boolean(q.allowOther)
+  }));
 
-  let isDirty = false;
   const bodyEl = document.createElement('div');
-  bodyEl.className = 'space-y-4';
+  bodyEl.className = 'space-y-4 text-xs';
 
-  function renderAdminTaskModalContent() {
+  function formatTimeDisplayWords(hour, min) {
+    const h12 = hour % 12 || 12;
+    const ampm = hour < 12 ? 'AM' : 'PM';
+    return `${h12}:${pad2(min)} ${ampm}`;
+  }
+
+  function renderContent() {
     bodyEl.innerHTML = `
-      <div>
-        <label class="block text-xs font-semibold text-neutral-200 mb-1">Task Title *</label>
-        <input id="adm-task-title" type="text" class="w-full glass-input text-xs" placeholder="e.g. Sunday Service Video Edit" value="${esc(currentTitle)}" />
-      </div>
-
-      <div>
-        <label class="block text-xs font-semibold text-neutral-200 mb-1">Description *</label>
-        <textarea id="adm-task-desc" rows="3" class="w-full glass-input text-xs leading-relaxed" placeholder="Detailed requirements and deliverables...">${esc(currentDesc)}</textarea>
-      </div>
-
-      <div class="grid grid-cols-2 gap-3">
+      <div class="space-y-3.5">
         <div>
-          <label class="block text-xs font-semibold text-neutral-200 mb-1">Category</label>
-          <select id="adm-task-category" class="w-full glass-input text-xs bg-[#1C1C1E]">
-            ${state.categories.filter(c => !c.archived).map(c => `
-              <option value="${esc(c.id)}" ${c.id === currentCategoryId ? 'selected' : ''}>${esc(c.name)}</option>
-            `).join('')}
-          </select>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Task Title *</label>
+          <input id="adm-task-title" type="text" class="w-full glass-input text-xs" placeholder="e.g. Sunday Service Video Edit" value="${esc(currentTitle)}" />
         </div>
+
         <div>
-          <label class="block text-xs font-semibold text-neutral-200 mb-1">Points</label>
-          <input id="adm-task-points" type="number" min="1" placeholder="5" class="w-full glass-input text-xs font-mono" value="${esc(currentPoints)}" />
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Description *</label>
+          <textarea id="adm-task-desc" rows="3" class="w-full glass-input text-xs leading-relaxed" placeholder="Detailed requirements and deliverables...">${esc(currentDesc)}</textarea>
         </div>
-      </div>
 
-      <div>
-        <label class="block text-xs font-semibold text-neutral-200 mb-1">Task Link URL (Optional)</label>
-        <input id="adm-task-link" type="url" class="w-full glass-input text-xs font-mono" placeholder="https://..." value="${esc(currentLink)}" />
-      </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-neutral-200 mb-1">Category</label>
+            <div id="adm-task-category-picker-wrap">
+     <button type="button" id="btn-pick-task-category" class="w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-between text-xs hover:bg-white/10 transition">
+       <span id="btn-pick-task-category-label">Select Category</span>
+       <svg class="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+     </button>
+     <input type="hidden" id="adm-task-category" value="" />
+   </div>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-neutral-200 mb-1">On-Time Points</label>
+            <input id="adm-task-points" type="number" min="1" placeholder="5" class="w-full glass-input text-xs font-mono" value="${esc(currentPoints)}" />
+          </div>
+        </div>
 
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence & Schedule</label>
         <div>
-          <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
-          <select id="adm-task-sched-type" class="w-full glass-input text-xs bg-[#1C1C1E]">
-            <option value="once" ${schedType === 'once' ? 'selected' : ''}>Once (Single Date & Time)</option>
-            <option value="daily" ${schedType === 'daily' ? 'selected' : ''}>Daily</option>
-            <option value="weekly" ${schedType === 'weekly' ? 'selected' : ''}>Weekly (Specific Days)</option>
-            <option value="monthlyDates" ${schedType === 'monthlyDates' ? 'selected' : ''}>Monthly - Dates (1..31)</option>
-            <option value="monthlyWeekdays" ${schedType === 'monthlyWeekdays' ? 'selected' : ''}>Monthly - Specific Weeks & Days</option>
-          </select>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Task Link URL (Optional)</label>
+          <input id="adm-task-link" type="url" class="w-full glass-input text-xs font-mono" placeholder="https://..." value="${esc(currentLink)}" />
         </div>
 
-        <div id="adm-sched-subform" class="space-y-3 pt-1"></div>
-      </div>
-
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <label class="flex items-center justify-between cursor-pointer">
-          <span class="text-xs font-bold text-white">Permanent Task (No Expiration)</span>
-          <input id="adm-task-is-permanent" type="checkbox" class="accent-[#0A84FF] w-4 h-4" ${currentIsPermanent ? 'checked' : ''} />
-        </label>
-        <p class="text-[11px] text-neutral-400">Permanent tasks show a "No Deadline" badge and never lock submissions.</p>
-
-        <div id="adm-duration-container" class="${currentIsPermanent ? 'hidden' : ''} pt-1">
-          <label class="block text-xs text-neutral-300 mb-1">Duration (Minutes)</label>
-          <input id="adm-task-duration" type="number" min="5" placeholder="e.g. 60 (blank = open for occurrence day)" class="w-full glass-input text-xs font-mono" value="${esc(currentDurationMinutes)}" />
-        </div>
-      </div>
-
-      <!-- Tiered Point Rewards -->
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <label class="flex items-center justify-between cursor-pointer">
+        <!-- Schedule / Recurrence Card -->
+        <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+          <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</label>
           <div>
-            <span class="text-xs font-bold text-white">Tiered Point Rewards</span>
-            <p class="text-[11px] text-neutral-400">Early bonus, on-time, and grace period scoring</p>
+            <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
+            <div id="adm-task-sched-type-wrap"></div><input type="hidden" id="adm-task-sched-type" value="once" />
           </div>
-          <input id="adm-task-tiered-enabled" type="checkbox" class="accent-amber-400 w-4 h-4" ${tieredRewardsEnabled ? 'checked' : ''} />
-        </label>
 
-        <div id="adm-tiered-container" class="${tieredRewardsEnabled ? '' : 'hidden'} space-y-3 pt-2 border-t border-white/10">
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block text-[11px] text-neutral-300 mb-1">Early Bonus Minutes</label>
-              <input id="adm-tiered-early-mins" type="number" min="1" class="w-full glass-input text-xs font-mono" value="${earlyBonusMinutes}" placeholder="1440" />
-            </div>
-            <div>
-              <label class="block text-[11px] text-neutral-300 mb-1">Early Points</label>
-              <input id="adm-tiered-early-pts" type="number" min="1" class="w-full glass-input text-xs font-mono text-emerald-400 font-bold" value="${earlyPoints}" placeholder="15" />
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block text-[11px] text-neutral-300 mb-1">On-Time Points</label>
-              <input id="adm-tiered-ontime-pts" type="number" min="1" class="w-full glass-input text-xs font-mono text-amber-400 font-bold" value="${onTimePoints}" placeholder="10" />
-            </div>
-            <div>
-              <label class="block text-[11px] text-neutral-300 mb-1">Grace Period (Minutes)</label>
-              <input id="adm-tiered-grace-mins" type="number" min="0" class="w-full glass-input text-xs font-mono" value="${graceMinutes}" placeholder="120" />
-            </div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Grace Points</label>
-            <input id="adm-tiered-grace-pts" type="number" min="0" class="w-full glass-input text-xs font-mono text-neutral-300" value="${gracePoints}" placeholder="5" />
-          </div>
-        </div>
-      </div>
-
-      <!-- Missed-Deadline Penalty -->
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <label class="flex items-center justify-between cursor-pointer">
-          <div>
-            <span class="text-xs font-bold text-white">Missed-Deadline Penalty</span>
-            <p class="text-[11px] text-neutral-400">Penalize unexcused missed tasks after grace period</p>
-          </div>
-          <input id="adm-task-missed-enabled" type="checkbox" class="accent-rose-500 w-4 h-4" ${missedPenaltyEnabled ? 'checked' : ''} />
-        </label>
-
-        <div id="adm-missed-container" class="${missedPenaltyEnabled ? '' : 'hidden'} pt-2 border-t border-white/10">
-          <label class="block text-[11px] text-neutral-300 mb-1">Penalty Points</label>
-          <input id="adm-task-missed-pts" type="number" min="1" class="w-full glass-input text-xs font-mono text-rose-400 font-bold" value="${missedPenaltyPoints}" placeholder="5" />
-        </div>
-      </div>
-
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-xs font-bold text-white uppercase tracking-wider">Submission Questions</div>
-            <div class="text-[11px] text-neutral-400">Prompt members for proofs, links or answers</div>
-          </div>
-          <button type="button" id="btn-add-question" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
-            + Add Question
-          </button>
+          <div id="adm-sched-subform" class="space-y-3 pt-1"></div>
         </div>
 
-        <div id="adm-questions-list" class="space-y-2"></div>
+        <!-- Permanent Task Switch Card -->
+        <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-2">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-xs font-bold text-white">Permanent Task</span>
+              <p class="text-[11px] text-neutral-400">Permanent tasks never close and have no deadlines or tiers</p>
+            </div>
+            <div id="mount-switch-permanent"></div>
+          </div>
+        </div>
+
+        <!-- Deadlines & Tiers Container (Hidden if Permanent Task is ON) -->
+        <div id="adm-nonpermanent-container" class="${currentIsPermanent ? 'hidden' : ''} space-y-3.5">
+          <!-- Deadline Card (Pickers) -->
+          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+              <span>Task Deadline</span>
+              <span class="text-[10px] text-[#0A84FF] font-mono">APP_TIMEZONE: ${APP_TIMEZONE}</span>
+            </div>
+
+            ${schedType === 'once' ? `
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Deadline Date</label>
+                  <div id="field-adm-dl-date"></div>
+                </div>
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
+                  <div id="field-adm-dl-time"></div>
+                </div>
+              </div>
+            ` : `
+              <div class="space-y-2.5">
+                <div class="grid grid-cols-2 gap-2">
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
+                    <div id="field-adm-dl-time"></div>
+                  </div>
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Days After Start</label>
+                    <div id="mount-dl-days-stepper"></div>
+                  </div>
+                </div>
+              </div>
+            `}
+
+            <div id="adm-deadline-words" class="p-2 rounded-xl bg-white/5 border border-white/10 text-[11px] text-[#0A84FF] font-medium"></div>
+          </div>
+
+          <!-- Tier 1: Early Bonus Card -->
+          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-white">Early Bonus</span>
+                <p class="text-[11px] text-neutral-400">Award extra points for finishing before deadline</p>
+              </div>
+              <div id="mount-switch-early"></div>
+            </div>
+
+            <div id="adm-early-container" class="${earlyBonusEnabled ? '' : 'hidden'} space-y-2.5 pt-2 border-t border-white/10">
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Early Points</label>
+                  <input id="adm-early-pts" type="number" min="1" class="w-full glass-input text-xs font-mono text-emerald-400 font-bold" value="${earlyBonusPoints}" placeholder="15" />
+                </div>
+                ${schedType === 'once' ? `
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Bonus Window Ends Date</label>
+                    <div id="field-adm-early-date"></div>
+                  </div>
+                ` : `
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Days After Start</label>
+                    <div id="mount-early-days-stepper"></div>
+                  </div>
+                `}
+              </div>
+
+              <div>
+                <label class="block text-[11px] text-neutral-300 mb-1">Bonus Window Ends Time</label>
+                <div id="field-adm-early-time"></div>
+              </div>
+
+              <div id="adm-early-words" class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-400 font-medium"></div>
+            </div>
+          </div>
+
+          <!-- Tier 2: Grace Period Card (NO grace points) -->
+          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-white">Grace Period</span>
+                <p class="text-[11px] text-neutral-400">Allow standard submissions past deadline (marked in grace)</p>
+              </div>
+              <div id="mount-switch-grace"></div>
+            </div>
+
+            <div id="adm-grace-container" class="${graceEnabled ? '' : 'hidden'} space-y-2.5 pt-2 border-t border-white/10">
+              ${schedType === 'once' ? `
+                <div class="grid grid-cols-2 gap-2">
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Date</label>
+                    <div id="field-adm-grace-date"></div>
+                  </div>
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Time</label>
+                    <div id="field-adm-grace-time"></div>
+                  </div>
+                </div>
+              ` : `
+                <div class="grid grid-cols-2 gap-2">
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Time</label>
+                    <div id="field-adm-grace-time"></div>
+                  </div>
+                  <div>
+                    <label class="block text-[11px] text-neutral-300 mb-1">Days After Start</label>
+                    <div id="mount-grace-days-stepper"></div>
+                  </div>
+                </div>
+              `}
+
+              <div id="adm-grace-words" class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-400 font-medium"></div>
+            </div>
+          </div>
+
+          <!-- Tier 3: Missed-Deadline Penalty Card -->
+          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-white">Missed-Deadline Penalty</span>
+                <p class="text-[11px] text-neutral-400">Penalize unexcused members after grace period</p>
+              </div>
+              <div id="mount-switch-missed"></div>
+            </div>
+
+            <div id="adm-missed-container" class="${missedPenaltyEnabled ? '' : 'hidden'} pt-2 border-t border-white/10">
+              <label class="block text-[11px] text-neutral-300 mb-1">Penalty Points</label>
+              <input id="adm-task-missed-pts" type="number" min="1" class="w-full glass-input text-xs font-mono text-rose-400 font-bold" value="${missedPenaltyPoints}" placeholder="5" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Question Builder Card -->
+        <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs font-bold text-white uppercase tracking-wider">Submission Questions</div>
+              <div class="text-[11px] text-neutral-400">Short text, paragraph or multiple choice questions</div>
+            </div>
+            <button type="button" id="btn-add-question" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition">
+              + Add Question
+            </button>
+          </div>
+
+          <div id="adm-questions-list" class="space-y-3 pt-1"></div>
+        </div>
       </div>
     `;
 
-    const titleInp = bodyEl.querySelector('#adm-task-title');
-    titleInp.oninput = (e) => { currentTitle = e.target.value; isDirty = true; };
-
-    const descInp = bodyEl.querySelector('#adm-task-desc');
-    descInp.oninput = (e) => { currentDesc = e.target.value; isDirty = true; };
-
-    const catSelect = bodyEl.querySelector('#adm-task-category');
-    catSelect.onchange = (e) => { currentCategoryId = e.target.value; isDirty = true; };
-
-    const ptsInp = bodyEl.querySelector('#adm-task-points');
-    ptsInp.oninput = (e) => { currentPoints = e.target.value; isDirty = true; };
-
-    const linkInp = bodyEl.querySelector('#adm-task-link');
-    linkInp.oninput = (e) => { currentLink = e.target.value; isDirty = true; };
-
-    const permCheck = bodyEl.querySelector('#adm-task-is-permanent');
-    const durContainer = bodyEl.querySelector('#adm-duration-container');
-    permCheck.onchange = (e) => {
-      currentIsPermanent = e.target.checked;
-      isDirty = true;
-      if (currentIsPermanent) {
-        durContainer.classList.add('hidden');
-      } else {
-        durContainer.classList.remove('hidden');
-      }
-    };
-
-    const durInp = bodyEl.querySelector('#adm-task-duration');
-    durInp.oninput = (e) => { currentDurationMinutes = e.target.value; isDirty = true; };
+    // Wire inputs
+    bodyEl.querySelector('#adm-task-title').oninput = e => { currentTitle = e.target.value; };
+    bodyEl.querySelector('#adm-task-desc').oninput = e => { currentDesc = e.target.value; };
+    bodyEl.querySelector('#adm-task-category').onchange = e => { currentCategoryId = e.target.value; };
+    bodyEl.querySelector('#adm-task-points').oninput = e => { currentPoints = e.target.value; };
+    bodyEl.querySelector('#adm-task-link').oninput = e => { currentLink = e.target.value; };
 
     const schedTypeSelect = bodyEl.querySelector('#adm-task-sched-type');
-    schedTypeSelect.onchange = (e) => {
+    schedTypeSelect.onchange = e => {
       schedType = e.target.value;
-      isDirty = true;
-      renderSchedSubform();
+      renderContent();
     };
 
-    const tieredCheck = bodyEl.querySelector('#adm-task-tiered-enabled');
-    const tieredContainer = bodyEl.querySelector('#adm-tiered-container');
-    if (tieredCheck && tieredContainer) {
-      tieredCheck.onchange = (e) => {
-        tieredRewardsEnabled = e.target.checked;
-        isDirty = true;
-        if (tieredRewardsEnabled) tieredContainer.classList.remove('hidden');
-        else tieredContainer.classList.add('hidden');
-      };
-      bodyEl.querySelector('#adm-tiered-early-mins').oninput = (e) => { earlyBonusMinutes = Number(e.target.value) || 1440; isDirty = true; };
-      bodyEl.querySelector('#adm-tiered-early-pts').oninput = (e) => { earlyPoints = Number(e.target.value) || 15; isDirty = true; };
-      bodyEl.querySelector('#adm-tiered-ontime-pts').oninput = (e) => { onTimePoints = Number(e.target.value) || 10; isDirty = true; };
-      bodyEl.querySelector('#adm-tiered-grace-mins').oninput = (e) => { graceMinutes = Number(e.target.value) || 120; isDirty = true; };
-      bodyEl.querySelector('#adm-tiered-grace-pts').oninput = (e) => { gracePoints = Number(e.target.value) || 5; isDirty = true; };
+    // Mount Permanent Switch
+    const mountPerm = bodyEl.querySelector('#mount-switch-permanent');
+    if (mountPerm) {
+      mountPerm.appendChild(renderSwitch({
+        id: 'adm-task-is-permanent-sw',
+        checked: currentIsPermanent,
+        onChange: (chk) => {
+          currentIsPermanent = chk;
+          const nonperm = bodyEl.querySelector('#adm-nonpermanent-container');
+          if (nonperm) nonperm.classList.toggle('hidden', currentIsPermanent);
+        }
+      }));
     }
 
-    const missedCheck = bodyEl.querySelector('#adm-task-missed-enabled');
-    const missedContainer = bodyEl.querySelector('#adm-missed-container');
-    if (missedCheck && missedContainer) {
-      missedCheck.onchange = (e) => {
-        missedPenaltyEnabled = e.target.checked;
-        isDirty = true;
-        if (missedPenaltyEnabled) missedContainer.classList.remove('hidden');
-        else missedContainer.classList.add('hidden');
-      };
-      bodyEl.querySelector('#adm-task-missed-pts').oninput = (e) => { missedPenaltyPoints = Number(e.target.value) || 5; isDirty = true; };
+    // Mount Early Switch
+    const mountEarly = bodyEl.querySelector('#mount-switch-early');
+    if (mountEarly) {
+      mountEarly.appendChild(renderSwitch({
+        id: 'adm-task-early-sw',
+        checked: earlyBonusEnabled,
+        onChange: (chk) => {
+          earlyBonusEnabled = chk;
+          const c = bodyEl.querySelector('#adm-early-container');
+          if (c) c.classList.toggle('hidden', !earlyBonusEnabled);
+          updateAllWords();
+        }
+      }));
     }
+
+    // Mount Grace Switch
+    const mountGrace = bodyEl.querySelector('#mount-switch-grace');
+    if (mountGrace) {
+      mountGrace.appendChild(renderSwitch({
+        id: 'adm-task-grace-sw',
+        checked: graceEnabled,
+        onChange: (chk) => {
+          graceEnabled = chk;
+          const c = bodyEl.querySelector('#adm-grace-container');
+          if (c) c.classList.toggle('hidden', !graceEnabled);
+          updateAllWords();
+        }
+      }));
+    }
+
+    // Mount Missed Penalty Switch
+    const mountMissed = bodyEl.querySelector('#mount-switch-missed');
+    if (mountMissed) {
+      mountMissed.appendChild(renderSwitch({
+        id: 'adm-task-missed-sw',
+        checked: missedPenaltyEnabled,
+        onChange: (chk) => {
+          missedPenaltyEnabled = chk;
+          const c = bodyEl.querySelector('#adm-missed-container');
+          if (c) c.classList.toggle('hidden', !missedPenaltyEnabled);
+        }
+      }));
+    }
+
+    // Mount Deadline Days Stepper (for recurring)
+    const mountDlStepper = bodyEl.querySelector('#mount-dl-days-stepper');
+    if (mountDlStepper) {
+      mountDlStepper.appendChild(renderStepper({
+        value: deadlineDaysAfter,
+        min: 0,
+        max: 30,
+        unit: 'd',
+        onChange: (val) => {
+          deadlineDaysAfter = val;
+          updateAllWords();
+        }
+      }));
+    }
+
+    // Mount Early Days Stepper
+    const mountEarlyStepper = bodyEl.querySelector('#mount-early-days-stepper');
+    if (mountEarlyStepper) {
+      mountEarlyStepper.appendChild(renderStepper({
+        value: earlyBonusDaysAfter,
+        min: 0,
+        max: 30,
+        unit: 'd',
+        onChange: (val) => {
+          earlyBonusDaysAfter = val;
+          updateAllWords();
+        }
+      }));
+    }
+
+    // Mount Grace Days Stepper
+    const mountGraceStepper = bodyEl.querySelector('#mount-grace-days-stepper');
+    if (mountGraceStepper) {
+      mountGraceStepper.appendChild(renderStepper({
+        value: graceDaysAfter,
+        min: 0,
+        max: 30,
+        unit: 'd',
+        onChange: (val) => {
+          graceDaysAfter = val;
+          updateAllWords();
+        }
+      }));
+    }
+
+    // Wire deadline inputs
+    const dlDateInp = bodyEl.querySelector('#adm-dl-date');
+    if (dlDateInp) dlDateInp.onchange = e => { deadlineDateStr = e.target.value; updateAllWords(); };
+    const dlTimeInp = bodyEl.querySelector('#adm-dl-time');
+    if (dlTimeInp) dlTimeInp.onchange = e => { deadlineTimeStr = e.target.value; updateAllWords(); };
+
+    // Wire early inputs
+    const earlyPtsInp = bodyEl.querySelector('#adm-early-pts');
+    if (earlyPtsInp) earlyPtsInp.oninput = e => { earlyBonusPoints = Number(e.target.value) || 15; updateAllWords(); };
+    const earlyDateInp = bodyEl.querySelector('#adm-early-date');
+    if (earlyDateInp) earlyDateInp.onchange = e => { earlyBonusDateStr = e.target.value; updateAllWords(); };
+    const earlyTimeInp = bodyEl.querySelector('#adm-early-time');
+    if (earlyTimeInp) earlyTimeInp.onchange = e => { earlyBonusTimeStr = e.target.value; updateAllWords(); };
+
+    // Wire grace inputs
+    const graceDateInp = bodyEl.querySelector('#adm-grace-date');
+    if (graceDateInp) graceDateInp.onchange = e => { graceDateStr = e.target.value; updateAllWords(); };
+    const graceTimeInp = bodyEl.querySelector('#adm-grace-time');
+    if (graceTimeInp) graceTimeInp.onchange = e => { graceTimeStr = e.target.value; updateAllWords(); };
+
+    // Wire missed inputs
+    const missedPtsInp = bodyEl.querySelector('#adm-task-missed-pts');
+    if (missedPtsInp) missedPtsInp.oninput = e => { missedPenaltyPoints = Number(e.target.value) || 5; };
 
     renderSchedSubform();
     renderQuestionsList();
+    updateAllWords();
 
     const addQBtn = bodyEl.querySelector('#btn-add-question');
-    addQBtn.onclick = () => {
-      currentQuestions.push({
-        id: 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        questionText: '',
-        isRequired: true
-      });
-      isDirty = true;
-      renderQuestionsList();
-    };
+    if (addQBtn) {
+      addQBtn.onclick = () => {
+        currentQuestions.push({
+          id: 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          questionText: '',
+          type: 'short',
+          isRequired: true,
+          options: [
+            { id: 'opt_1', label: 'Option 1' },
+            { id: 'opt_2', label: 'Option 2' }
+          ],
+          allowOther: false
+        });
+        renderQuestionsList();
+      };
+    }
+  }
+
+  function updateAllWords() {
+    const dlWords = bodyEl.querySelector('#adm-deadline-words');
+    const earlyWords = bodyEl.querySelector('#adm-early-words');
+    const graceWords = bodyEl.querySelector('#adm-grace-words');
+
+    const [sh, sm] = selectedTimeStr.split(':').map(Number);
+    const startMin = (sh || 0) * 60 + (sm || 0);
+
+    // 1. Deadline words
+    if (dlWords) {
+      if (schedType === 'once') {
+        const [sy, smo, sd] = selectedDateStr.split('-').map(Number);
+        const [dy, dmo, dd] = deadlineDateStr.split('-').map(Number);
+        const [dh, dm] = deadlineTimeStr.split(':').map(Number);
+        const startMs = zonedDateToMs(sy, smo, sd, sh, sm, 0, APP_TIMEZONE);
+        const dlMs = zonedDateToMs(dy, dmo, dd, dh, dm, 0, APP_TIMEZONE);
+        const diffMins = Math.round((dlMs - startMs) / 60000);
+        if (diffMins > 0) {
+          dlWords.textContent = `Closes ${Math.floor(diffMins / 1440)}d ${Math.floor((diffMins % 1440) / 60)}h after start, at ${formatTimeDisplayWords(dh, dm)} (${deadlineDateStr})`;
+          dlWords.className = 'p-2 rounded-xl bg-white/5 border border-white/10 text-[11px] text-[#0A84FF] font-medium';
+        } else {
+          dlWords.textContent = '⚠ Deadline must be strictly after the start date & time';
+          dlWords.className = 'p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-400 font-medium';
+        }
+      } else {
+        const [dh, dm] = deadlineTimeStr.split(':').map(Number);
+        const dlMin = (dh || 0) * 60 + (dm || 0);
+        const dur = offsetFromPickers(deadlineDaysAfter, startMin, dlMin);
+        if (dur > 0) {
+          dlWords.textContent = `Closes ${deadlineDaysAfter === 0 ? 'same day' : `${deadlineDaysAfter} day${deadlineDaysAfter > 1 ? 's' : ''} after start`}, at ${formatTimeDisplayWords(dh, dm)} (${dur} mins duration)`;
+          dlWords.className = 'p-2 rounded-xl bg-white/5 border border-white/10 text-[11px] text-[#0A84FF] font-medium';
+        } else {
+          dlWords.textContent = '⚠ Deadline time must be strictly after the start time';
+          dlWords.className = 'p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-400 font-medium';
+        }
+      }
+    }
+
+    // 2. Early words
+    if (earlyWords && earlyBonusEnabled) {
+      const [eh, em] = earlyBonusTimeStr.split(':').map(Number);
+      if (schedType === 'once') {
+        earlyWords.textContent = `Early bonus window (+${earlyBonusPoints} pts) ends ${earlyBonusDateStr} at ${formatTimeDisplayWords(eh, em)}`;
+      } else {
+        earlyWords.textContent = `Early bonus window (+${earlyBonusPoints} pts) ends ${earlyBonusDaysAfter === 0 ? 'same day' : `${earlyBonusDaysAfter}d after start`} at ${formatTimeDisplayWords(eh, em)}`;
+      }
+    }
+
+    // 3. Grace words
+    if (graceWords && graceEnabled) {
+      const [gh, gm] = graceTimeStr.split(':').map(Number);
+      if (schedType === 'once') {
+        graceWords.textContent = `Grace period cutoff is ${graceDateStr} at ${formatTimeDisplayWords(gh, gm)} (standard points, stored with inGrace: true)`;
+      } else {
+        graceWords.textContent = `Grace period cutoff is ${graceDaysAfter === 0 ? 'same day' : `${graceDaysAfter}d after start`} at ${formatTimeDisplayWords(gh, gm)} (standard points, stored with inGrace: true)`;
+      }
+    }
   }
 
   function renderSchedSubform() {
@@ -7074,40 +9185,40 @@ function openAdminTaskModal(taskId = null) {
       subContainer.innerHTML = `
         <div class="grid grid-cols-2 gap-2">
           <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Date</label>
-            <input id="sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
+            <div id="field-sched-inp-date"></div>
           </div>
           <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <label class="block text-[11px] text-neutral-400 mb-1">Start Time (${APP_TIMEZONE})</label>
+            <div id="field-sched-inp-time"></div>
           </div>
         </div>
       `;
-      subContainer.querySelector('#sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; isDirty = true; };
-      subContainer.querySelector('#sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; isDirty = true; };
+      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
+      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
     } else if (schedType === 'daily') {
       subContainer.innerHTML = `
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <div id="field-sched-inp-date"></div>
           </div>
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Daily Time (${APP_TIMEZONE})</label>
-            <input id="sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <div id="field-sched-inp-time"></div>
           </div>
         </div>
       `;
-      subContainer.querySelector('#sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; isDirty = true; };
-      subContainer.querySelector('#sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; isDirty = true; };
+      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
+      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
     } else if (schedType === 'weekly') {
       subContainer.innerHTML = `
         <div>
           <label class="block text-[11px] text-neutral-400 mb-1.5">Select Weekdays</label>
           <div class="flex flex-wrap gap-1.5" id="weekly-days-picker">
-            ${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(wd => `
-              <button type="button" class="btn-wd-pill px-2.5 py-1 rounded-lg text-xs font-semibold transition ${weeklyDays.has(wd) ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400'}" data-wd="${wd}">
-                ${wd}
+            ${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(day => `
+              <button type="button" class="btn-day-chip px-2.5 py-1 rounded-lg border text-xs font-semibold transition ${weeklyDays.has(day) ? 'bg-[#0A84FF] border-[#0A84FF] text-white' : 'bg-white/5 border-white/10 text-neutral-400'}" data-day="${day}">
+                ${day}
               </button>
             `).join('')}
           </div>
@@ -7115,124 +9226,39 @@ function openAdminTaskModal(taskId = null) {
         <div class="grid grid-cols-2 gap-2 pt-1">
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <div id="field-sched-inp-date"></div>
           </div>
           <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <label class="block text-[11px] text-neutral-400 mb-1">Event Time (${APP_TIMEZONE})</label>
+            <div id="field-sched-inp-time"></div>
           </div>
         </div>
       `;
-      subContainer.querySelector('#sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; isDirty = true; };
-      subContainer.querySelector('#sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; isDirty = true; };
-      subContainer.querySelectorAll('.btn-wd-pill').forEach(btn => {
+      subContainer.querySelectorAll('.btn-day-chip').forEach(btn => {
         btn.onclick = () => {
-          const wd = btn.dataset.wd;
-          if (weeklyDays.has(wd)) {
-            if (weeklyDays.size > 1) weeklyDays.delete(wd);
-          } else {
-            weeklyDays.add(wd);
-          }
-          isDirty = true;
+          const d = btn.dataset.day;
+          if (weeklyDays.has(d)) weeklyDays.delete(d);
+          else weeklyDays.add(d);
           renderSchedSubform();
         };
       });
-    } else if (schedType === 'monthlyDates') {
+      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
+      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
+    } else {
       subContainer.innerHTML = `
-        <div>
-          <label class="block text-[11px] text-neutral-400 mb-1.5">Select Month Dates (1..31)</label>
-          <div class="grid grid-cols-7 gap-1" id="monthly-dates-picker">
-            ${Array.from({ length: 31 }, (_, i) => i + 1).map(d => `
-              <button type="button" class="btn-mdate-pill p-1 rounded text-xs font-mono text-center transition ${monthlyDates.has(d) ? 'bg-[#0A84FF] text-white font-bold' : 'bg-white/5 text-neutral-400'}" data-date="${d}">
-                ${d}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-2 pt-1">
+        <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <div id="field-sched-inp-date"></div>
           </div>
           <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <label class="block text-[11px] text-neutral-400 mb-1">Event Time (${APP_TIMEZONE})</label>
+            <div id="field-sched-inp-time"></div>
           </div>
         </div>
       `;
-      subContainer.querySelector('#sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; isDirty = true; };
-      subContainer.querySelector('#sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; isDirty = true; };
-      subContainer.querySelectorAll('.btn-mdate-pill').forEach(btn => {
-        btn.onclick = () => {
-          const d = parseInt(btn.dataset.date, 10);
-          if (monthlyDates.has(d)) {
-            if (monthlyDates.size > 1) monthlyDates.delete(d);
-          } else {
-            monthlyDates.add(d);
-          }
-          isDirty = true;
-          renderSchedSubform();
-        };
-      });
-    } else if (schedType === 'monthlyWeekdays') {
-      subContainer.innerHTML = `
-        <div>
-          <label class="block text-[11px] text-neutral-400 mb-1.5">Select Weeks of Month</label>
-          <div class="flex flex-wrap gap-1.5">
-            ${['1st', '2nd', '3rd', '4th', 'Last'].map(w => `
-              <button type="button" class="btn-mweek-pill px-2.5 py-1 rounded-lg text-xs font-semibold transition ${monthlyWeeks.has(w) ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400'}" data-week="${w}">
-                ${w}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-        <div class="pt-1">
-          <label class="block text-[11px] text-neutral-400 mb-1.5">Select Weekdays</label>
-          <div class="flex flex-wrap gap-1.5">
-            ${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(wd => `
-              <button type="button" class="btn-mwd-pill px-2.5 py-1 rounded-lg text-xs font-semibold transition ${monthlyWeekdays.has(wd) ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400'}" data-mwd="${wd}">
-                ${wd}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-2 pt-1">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
-          </div>
-        </div>
-      `;
-      subContainer.querySelector('#sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; isDirty = true; };
-      subContainer.querySelector('#sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; isDirty = true; };
-      subContainer.querySelectorAll('.btn-mweek-pill').forEach(btn => {
-        btn.onclick = () => {
-          const w = btn.dataset.week;
-          if (monthlyWeeks.has(w)) {
-            if (monthlyWeeks.size > 1) monthlyWeeks.delete(w);
-          } else {
-            monthlyWeeks.add(w);
-          }
-          isDirty = true;
-          renderSchedSubform();
-        };
-      });
-      subContainer.querySelectorAll('.btn-mwd-pill').forEach(btn => {
-        btn.onclick = () => {
-          const wd = btn.dataset.mwd;
-          if (monthlyWeekdays.has(wd)) {
-            if (monthlyWeekdays.size > 1) monthlyWeekdays.delete(wd);
-          } else {
-            monthlyWeekdays.add(wd);
-          }
-          isDirty = true;
-          renderSchedSubform();
-        };
-      });
+      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
+      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
     }
   }
 
@@ -7241,88 +9267,171 @@ function openAdminTaskModal(taskId = null) {
     if (!qListEl) return;
 
     if (currentQuestions.length === 0) {
-      qListEl.innerHTML = '<div class="text-[11px] text-neutral-400 italic py-2">No custom questions added yet.</div>';
+      qListEl.innerHTML = '<div class="text-[11px] text-neutral-400 italic py-2 text-center border border-dashed border-white/10 rounded-xl">No custom questions added. Click + Add Question above.</div>';
       return;
     }
 
-    qListEl.innerHTML = currentQuestions.map((q, idx) => `
-      <div class="flex items-center gap-2 p-2 rounded-xl bg-white/[0.04] border border-white/10" data-idx="${idx}">
-        <div class="flex flex-col gap-1">
-          <button type="button" class="btn-q-up text-[10px] text-neutral-400 hover:text-white px-1 py-0.5 rounded bg-white/5" ${idx === 0 ? 'disabled opacity-30' : ''}>▲</button>
-          <button type="button" class="btn-q-down text-[10px] text-neutral-400 hover:text-white px-1 py-0.5 rounded bg-white/5" ${idx === currentQuestions.length - 1 ? 'disabled opacity-30' : ''}>▼</button>
-        </div>
-        <div class="flex-1 space-y-1">
-          <input type="text" class="inp-q-text w-full glass-input text-xs" placeholder="Question prompt..." value="${esc(q.questionText)}" />
-          <div class="flex items-center gap-2">
-            <button type="button" class="btn-q-req px-2 py-0.5 rounded text-[10px] font-mono font-semibold transition ${q.isRequired ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-white/10 text-neutral-400'}">
-              ${q.isRequired ? 'Required' : 'Optional'}
-            </button>
-          </div>
-        </div>
-        <button type="button" class="btn-q-del p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10" title="Delete Question">
-          <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-        </button>
-      </div>
-    `).join('');
+    qListEl.innerHTML = '';
+    currentQuestions.forEach((q, idx) => {
+      const qCard = document.createElement('div');
+      qCard.className = 'p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-3 text-xs';
+      qCard.dataset.idx = idx;
 
-    qListEl.querySelectorAll('.inp-q-text').forEach((inp, idx) => {
-      inp.oninput = (e) => {
-        currentQuestions[idx].questionText = e.target.value;
-        isDirty = true;
-      };
-    });
+      // Card Header: Reorder buttons, Prompt Input, Delete
+      const headerRow = document.createElement('div');
+      headerRow.className = 'flex items-start gap-2';
 
-    qListEl.querySelectorAll('.btn-q-req').forEach((btn, idx) => {
-      btn.onclick = () => {
-        currentQuestions[idx].isRequired = !currentQuestions[idx].isRequired;
-        isDirty = true;
-        renderQuestionsList();
-      };
-    });
-
-    qListEl.querySelectorAll('.btn-q-up').forEach((btn, idx) => {
-      btn.onclick = () => {
+      const reorderBtns = document.createElement('div');
+      reorderBtns.className = 'flex flex-col gap-1 pt-1';
+      reorderBtns.innerHTML = `
+        <button type="button" class="btn-q-up text-[10px] text-neutral-400 hover:text-white px-1.5 py-0.5 rounded bg-white/5 ${idx === 0 ? 'disabled opacity-30 cursor-not-allowed' : ''}">▲</button>
+        <button type="button" class="btn-q-down text-[10px] text-neutral-400 hover:text-white px-1.5 py-0.5 rounded bg-white/5 ${idx === currentQuestions.length - 1 ? 'disabled opacity-30 cursor-not-allowed' : ''}">▼</button>
+      `;
+      reorderBtns.querySelector('.btn-q-up').onclick = () => {
         if (idx > 0) {
-          const temp = currentQuestions[idx];
-          currentQuestions[idx] = currentQuestions[idx - 1];
-          currentQuestions[idx - 1] = temp;
-          isDirty = true;
+          const item = currentQuestions.splice(idx, 1)[0];
+          currentQuestions.splice(idx - 1, 0, item);
           renderQuestionsList();
         }
       };
-    });
-
-    qListEl.querySelectorAll('.btn-q-down').forEach((btn, idx) => {
-      btn.onclick = () => {
+      reorderBtns.querySelector('.btn-q-down').onclick = () => {
         if (idx < currentQuestions.length - 1) {
-          const temp = currentQuestions[idx];
-          currentQuestions[idx] = currentQuestions[idx + 1];
-          currentQuestions[idx + 1] = temp;
-          isDirty = true;
+          const item = currentQuestions.splice(idx, 1)[0];
+          currentQuestions.splice(idx + 1, 0, item);
           renderQuestionsList();
         }
       };
-    });
 
-    qListEl.querySelectorAll('.btn-q-del').forEach((btn, idx) => {
-      btn.onclick = () => {
+      const promptInp = document.createElement('input');
+      promptInp.type = 'text';
+      promptInp.className = 'inp-q-text flex-1 glass-input text-xs font-semibold';
+      promptInp.placeholder = `Question ${idx + 1} prompt...`;
+      promptInp.value = q.questionText || '';
+      promptInp.oninput = e => { q.questionText = e.target.value; };
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition shrink-0';
+      delBtn.title = 'Remove Question';
+      delBtn.innerHTML = '<svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
+      delBtn.onclick = () => {
         currentQuestions.splice(idx, 1);
-        isDirty = true;
         renderQuestionsList();
       };
+
+      headerRow.appendChild(reorderBtns);
+      headerRow.appendChild(promptInp);
+      headerRow.appendChild(delBtn);
+      qCard.appendChild(headerRow);
+
+      // Card Controls: Type Segmented Control + Required iOS Switch
+      const controlsRow = document.createElement('div');
+      controlsRow.className = 'flex items-center justify-between gap-3 pt-1 border-t border-white/5';
+
+      const segMount = document.createElement('div');
+      segMount.className = 'flex-1';
+      const seg = renderSegmented({
+        options: [
+          { value: 'short', label: 'Short Text' },
+          { value: 'long', label: 'Paragraph' },
+          { value: 'mcq', label: 'Multiple Choice' }
+        ],
+        value: q.type || 'short',
+        onChange: (val) => {
+          q.type = val;
+          if (val === 'mcq' && (!q.options || q.options.length < 2)) {
+            q.options = [
+              { id: 'opt_1', label: 'Option 1' },
+              { id: 'opt_2', label: 'Option 2' }
+            ];
+          }
+          renderQuestionsList();
+        }
+      });
+      segMount.appendChild(seg);
+
+      const reqBox = document.createElement('div');
+      reqBox.className = 'flex items-center gap-2 shrink-0';
+      reqBox.innerHTML = '<span class="text-[11px] text-neutral-300 font-medium">Required</span>';
+      reqBox.appendChild(renderSwitch({
+        id: `q-req-sw-${q.id}`,
+        checked: Boolean(q.isRequired),
+        onChange: (chk) => { q.isRequired = chk; }
+      }));
+
+      controlsRow.appendChild(segMount);
+      controlsRow.appendChild(reqBox);
+      qCard.appendChild(controlsRow);
+
+      // MCQ Options Builder (if type === 'mcq')
+      if (q.type === 'mcq') {
+        const mcqBox = document.createElement('div');
+        mcqBox.className = 'p-2.5 rounded-xl bg-black/20 border border-white/5 space-y-2 pt-2';
+
+        const optList = document.createElement('div');
+        optList.className = 'space-y-1.5';
+
+        (q.options || []).forEach((opt, optIdx) => {
+          const optRow = document.createElement('div');
+          optRow.className = 'flex items-center gap-2';
+
+          const optInp = document.createElement('input');
+          optInp.type = 'text';
+          optInp.className = 'flex-1 glass-input text-xs py-1 px-2.5';
+          optInp.placeholder = `Option ${optIdx + 1}`;
+          optInp.value = opt.label || '';
+          optInp.oninput = e => { opt.label = e.target.value; };
+
+          const optDel = document.createElement('button');
+          optDel.type = 'button';
+          optDel.className = `p-1 text-rose-400 hover:bg-rose-500/10 rounded ${q.options.length <= 2 ? 'opacity-30 cursor-not-allowed' : ''}`;
+          optDel.innerHTML = '✕';
+          optDel.onclick = () => {
+            if (q.options.length > 2) {
+              q.options.splice(optIdx, 1);
+              renderQuestionsList();
+            }
+          };
+
+          optRow.appendChild(optInp);
+          optRow.appendChild(optDel);
+          optList.appendChild(optRow);
+        });
+
+        const addOptBtn = document.createElement('button');
+        addOptBtn.type = 'button';
+        addOptBtn.className = 'px-2 py-1 text-[11px] text-[#0A84FF] hover:underline font-semibold';
+        addOptBtn.textContent = '+ Add Option';
+        addOptBtn.onclick = () => {
+          q.options.push({ id: 'opt_' + Date.now(), label: `Option ${q.options.length + 1}` });
+          renderQuestionsList();
+        };
+
+        const otherSwitchBox = document.createElement('div');
+        otherSwitchBox.className = 'flex items-center justify-between pt-1 border-t border-white/5';
+        otherSwitchBox.innerHTML = '<span class="text-[11px] text-neutral-400">Allow \'Other\' (custom answer)</span>';
+        otherSwitchBox.appendChild(renderSwitch({
+          id: `q-other-sw-${q.id}`,
+          checked: Boolean(q.allowOther),
+          onChange: (chk) => { q.allowOther = chk; }
+        }));
+
+        mcqBox.appendChild(optList);
+        mcqBox.appendChild(addOptBtn);
+        mcqBox.appendChild(otherSwitchBox);
+        qCard.appendChild(mcqBox);
+      }
+
+      qListEl.appendChild(qCard);
     });
   }
 
-  renderAdminTaskModalContent();
+  renderContent();
 
   openModal({
-    title: task ? 'Edit Task' : 'New Task',
+    title: taskId ? 'Edit Task' : 'New Task',
     body: bodyEl,
-    saveLabel: task ? 'Save Changes' : 'Create Task',
-    isDirty: () => isDirty,
-    onClose: () => {
-      state.editingTaskId = null;
-    },
+    saveLabel: 'Save Task',
     onSave: async () => {
       const trimmedTitle = currentTitle.trim();
       const trimmedDesc = currentDesc.trim();
@@ -7347,11 +9456,97 @@ function openAdminTaskModal(taskId = null) {
         APP_TIMEZONE
       );
 
+      const startMinuteOfDay = (parseInt(hourStr, 10) || 0) * 60 + (parseInt(minStr, 10) || 0);
+
+      // Validate & compute durationMinutes
+      let finalDurationMinutes = null;
+      if (!currentIsPermanent) {
+        if (schedType === 'once') {
+          const [dy, dmo, dd] = deadlineDateStr.split('-').map(Number);
+          const [dh, dm] = deadlineTimeStr.split(':').map(Number);
+          const deadlineMs = zonedDateToMs(dy, dmo, dd, dh, dm, 0, APP_TIMEZONE);
+          finalDurationMinutes = Math.round((deadlineMs - startDateTimeMs) / 60000);
+          if (finalDurationMinutes <= 0) {
+            toast('Deadline date & time must be strictly after the start time', 'error');
+            return false;
+          }
+        } else {
+          const [dh, dm] = deadlineTimeStr.split(':').map(Number);
+          const dlMinute = (dh || 0) * 60 + (dm || 0);
+          finalDurationMinutes = offsetFromPickers(deadlineDaysAfter, startMinuteOfDay, dlMinute);
+          if (finalDurationMinutes <= 0) {
+            toast('Deadline time must be strictly after the start time', 'error');
+            return false;
+          }
+        }
+      }
+
+      // Early Bonus validation
+      let finalEarlyBonus = { enabled: false, untilMinutes: 0, points: Number(currentPoints) || 5 };
+      if (!currentIsPermanent && earlyBonusEnabled) {
+        let ebUntilMinutes = 0;
+        if (schedType === 'once') {
+          const [ey, emo, ed] = earlyBonusDateStr.split('-').map(Number);
+          const [eh, em] = earlyBonusTimeStr.split(':').map(Number);
+          const ebMs = zonedDateToMs(ey, emo, ed, eh, em, 0, APP_TIMEZONE);
+          ebUntilMinutes = Math.round((ebMs - startDateTimeMs) / 60000);
+        } else {
+          const [eh, em] = earlyBonusTimeStr.split(':').map(Number);
+          const ebMin = (eh || 0) * 60 + (em || 0);
+          ebUntilMinutes = offsetFromPickers(earlyBonusDaysAfter, startMinuteOfDay, ebMin);
+        }
+
+        if (ebUntilMinutes <= 0 || (finalDurationMinutes && ebUntilMinutes >= finalDurationMinutes)) {
+          toast('Early bonus window must end after start and strictly before the deadline', 'error');
+          return false;
+        }
+
+        finalEarlyBonus = {
+          enabled: true,
+          untilMinutes: ebUntilMinutes,
+          points: Number(earlyBonusPoints) || 15
+        };
+      }
+
+      // Grace Period validation (NO grace points)
+      let finalGrace = { enabled: false, untilMinutes: 0 };
+      if (!currentIsPermanent && graceEnabled) {
+        let grUntilMinutes = 0;
+        if (schedType === 'once') {
+          const [gy, gmo, gd] = graceDateStr.split('-').map(Number);
+          const [gh, gm] = graceTimeStr.split(':').map(Number);
+          const grMs = zonedDateToMs(gy, gmo, gd, gh, gm, 0, APP_TIMEZONE);
+          grUntilMinutes = Math.round((grMs - startDateTimeMs) / 60000);
+        } else {
+          const [gh, gm] = graceTimeStr.split(':').map(Number);
+          const grMin = (gh || 0) * 60 + (gm || 0);
+          grUntilMinutes = offsetFromPickers(graceDaysAfter, startMinuteOfDay, grMin);
+        }
+
+        if (finalDurationMinutes && grUntilMinutes <= finalDurationMinutes) {
+          toast('Grace period cutoff must be strictly after the deadline', 'error');
+          return false;
+        }
+
+        finalGrace = {
+          enabled: true,
+          untilMinutes: grUntilMinutes
+        };
+      }
+
+      // Missed Penalty
+      let finalMissedPenalty = { enabled: false, points: 0 };
+      if (!currentIsPermanent && missedPenaltyEnabled) {
+        finalMissedPenalty = {
+          enabled: true,
+          points: Number(missedPenaltyPoints) || 5
+        };
+      }
+
       let finalSchedule = {
         type: schedType,
         startDateTime: startDateTimeMs
       };
-
       if (schedType === 'weekly') {
         finalSchedule.days = Array.from(weeklyDays);
       } else if (schedType === 'monthlyDates') {
@@ -7362,11 +9557,28 @@ function openAdminTaskModal(taskId = null) {
       }
 
       const validQuestions = currentQuestions
-        .map(q => ({
-          id: q.id || ('q_' + Math.random().toString(36).slice(2, 6)),
-          questionText: (q.questionText || '').trim(),
-          isRequired: Boolean(q.isRequired)
-        }))
+        .map(q => {
+          const qText = (q.questionText || '').trim();
+          const cleanQ = {
+            id: q.id || ('q_' + Math.random().toString(36).slice(2, 7)),
+            questionText: qText,
+            type: q.type || 'short',
+            isRequired: Boolean(q.isRequired)
+          };
+          if (cleanQ.type === 'mcq') {
+            cleanQ.options = (q.options || [])
+              .map(o => ({ id: o.id || ('opt_' + Math.random().toString(36).slice(2, 6)), label: (o.label || '').trim() }))
+              .filter(o => o.label.length > 0);
+            if (cleanQ.options.length < 2) {
+              cleanQ.options = [
+                { id: 'opt_1', label: 'Option 1' },
+                { id: 'opt_2', label: 'Option 2' }
+              ];
+            }
+            cleanQ.allowOther = Boolean(q.allowOther);
+          }
+          return cleanQ;
+        })
         .filter(q => q.questionText.length > 0);
 
       const payload = {
@@ -7376,21 +9588,12 @@ function openAdminTaskModal(taskId = null) {
         categoryId: currentCategoryId || 'general',
         category: currentCategoryId || 'general',
         points: Number(currentPoints) || 5,
-        tieredRewards: {
-          enabled: tieredRewardsEnabled,
-          earlyBonusMinutes: Number(earlyBonusMinutes) || 1440,
-          earlyPoints: Number(earlyPoints) || 15,
-          onTimePoints: Number(onTimePoints) || 10,
-          graceMinutes: Number(graceMinutes) || 120,
-          gracePoints: Number(gracePoints) || 5
-        },
-        missedPenalty: {
-          enabled: missedPenaltyEnabled,
-          points: Number(missedPenaltyPoints) || 5
-        },
+        earlyBonus: finalEarlyBonus,
+        grace: finalGrace,
+        missedPenalty: finalMissedPenalty,
         schedule: finalSchedule,
         isPermanent: currentIsPermanent,
-        durationMinutes: currentIsPermanent ? null : (Number(currentDurationMinutes) || null),
+        durationMinutes: currentIsPermanent ? null : finalDurationMinutes,
         questions: validQuestions,
         active: true,
         archived: false
@@ -7410,159 +9613,15 @@ function openAdminTaskModal(taskId = null) {
           });
           toast('Task created', 'success');
         }
-        state.editingTaskId = null;
         return true;
       } catch (err) {
-        console.error('Failed to save task:', err);
+        console.error('Task save error:', err);
         toast(err.message || 'Failed to save task', 'error');
         return false;
       }
     }
   });
 }
-
-function renderAdminTasks() {
-  const tbody = document.getElementById('admin-tasks-tbody');
-  if (!tbody) return;
-
-  const isArchivedView = state.adminTasksFilter === 'archived';
-  const filtered = state.tasks.filter(t => isArchivedView ? t.archived : !t.archived);
-
-  if (filtered.length === 0) {
-    tbody.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No ${isArchivedView ? 'archived' : 'active'} tasks found.</div>`;
-    return;
-  }
-
-  tbody.innerHTML = filtered.map(t => {
-    const cat = state.categories.find(c => c.id === t.categoryId || c.id === t.category) || { name: 'General', color: '#0A84FF', iconKey: 'film' };
-    const isSelected = selectionState.active && selectionState.type === 'admin_tasks' && selectionState.selectedIds.has(t.id);
-    return `
-      <div class="inset-row bulk-select-card flex items-center justify-between py-2 text-xs${isSelected ? ' selected' : ''}" data-task-id="${esc(t.id)}" data-bulk-id="${esc(t.id)}">
-        ${BULK_INDICATOR_HTML}
-        <div class="bulk-card-content flex items-center justify-between w-full">
-          <div class="min-w-0 flex-1 pr-2">
-            <div class="font-semibold text-white truncate">${esc(t.title)}</div>
-            <div class="text-[10px] text-neutral-400 flex items-center gap-1.5 mt-0.5">
-              <span class="inline-flex items-center gap-1" style="color: ${cat.color};">
-                ${getCategorySvg(cat.iconKey, 'w-3 h-3')}
-                <span>${esc(cat.name)}</span>
-              </span>
-              <span>•</span>
-              <span class="font-mono text-amber-400 font-bold">${t.points} pts</span>
-              <span>•</span>
-              <span>${t.isPermanent ? 'Permanent' : (t.schedule?.type || 'once')}</span>
-            </div>
-          </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            ${isArchivedView ? `
-              <button type="button" class="btn-admin-restore-task text-xs text-emerald-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Restore</button>
-              <button type="button" class="btn-admin-delete-task text-xs text-rose-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Delete permanently</button>
-            ` : `
-              <button type="button" class="btn-admin-edit-task text-xs text-[#0A84FF] px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Edit</button>
-              <button type="button" class="btn-admin-archive-task text-xs text-amber-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Archive</button>
-            `}
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  tbody.querySelectorAll('.inset-row').forEach(row => {
-    row.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-    };
-
-    attachLongPress(row, () => {
-      enterSelectionMode('admin_tasks', row.dataset.bulkId);
-    });
-  });
-
-  tbody.querySelectorAll('.btn-admin-edit-task').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      openAdminTaskModal(btn.dataset.taskId);
-    };
-  });
-
-  tbody.querySelectorAll('.btn-admin-archive-task').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const task = state.tasks.find(t => t.id === btn.dataset.taskId);
-      if (!task) return;
-      const confirm = await confirmSheet({
-        title: 'Archive Task',
-        message: `Are you sure you want to archive "${task.title}"? It will be hidden from members.`,
-        confirmLabel: 'Archive',
-        destructive: true
-      });
-      if (confirm) {
-        await updateDoc(doc(db, 'tasks', task.id), { archived: true, updatedAt: serverTimestamp() });
-        toast('Task archived', 'info');
-      }
-    };
-  });
-
-  tbody.querySelectorAll('.btn-admin-restore-task').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      await updateDoc(doc(db, 'tasks', btn.dataset.taskId), { archived: false, updatedAt: serverTimestamp() });
-      toast('Task restored', 'success');
-    };
-  });
-
-  tbody.querySelectorAll('.btn-admin-delete-task').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const task = state.tasks.find(t => t.id === btn.dataset.taskId);
-      const confirm = await confirmSheet({
-        title: 'Delete Task Permanently',
-        message: `Are you sure you want to permanently delete "${task ? task.title : 'this task'}"? This action cannot be undone.`,
-        confirmLabel: 'Delete Permanently',
-        destructive: true
-      });
-      if (confirm) {
-        await deleteDoc(doc(db, 'tasks', btn.dataset.taskId));
-        toast('Task permanently deleted', 'info');
-      }
-    };
-  });
-}
-
-let adminSessionsFilter = 'active';
-let editingSessionId = null;
 
 function renderAdminSessions() {
   const list = document.getElementById('admin-sessions-list');
@@ -7730,7 +9789,8 @@ function renderAdminSessions() {
 
 function openAdminSessionModal(sessionId = null) {
   editingSessionId = sessionId;
-  const session = sessionId ? state.attendanceSessions.find(s => s.id === sessionId) : null;
+  const rawSession = sessionId ? state.attendanceSessions.find(s => s.id === sessionId) : null;
+  const session = rawSession ? normalizeSession(rawSession) : null;
 
   let currentTitle = session ? session.title : '';
   let sched = normalizeScheduleObject(session?.schedule || session || { type: 'once', startDateTime: Date.now() });
@@ -7747,20 +9807,39 @@ function openAdminSessionModal(sessionId = null) {
   let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
   let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
 
+  // Window boundaries via time pickers
   let earlyCheckInMinutes = session ? session.earlyCheckInMinutes : 30;
   let lateCutoffMinutes = session ? session.lateCutoffMinutes : 120;
-  let penaltyUnit = session ? session.penaltyUnit : 'minutes';
-  let stepDuration = session ? session.stepDuration : 5;
-  let penaltyPerStep = session ? session.penaltyPerStep : 1;
-  let minPenalty = session ? session.minPenalty : 5;
-  let maxPenalty = session ? session.maxPenalty : 30;
 
+  // Attendees
   let assignedUids = Array.isArray(session?.assignedUids) ? [...session.assignedUids] : [];
   let assignSpecific = assignedUids.length > 0;
-  let penaltyPointsEnabled = session ? session.penaltyPointsEnabled !== false : true;
-  let penaltyFinesEnabled = session ? Boolean(session.penaltyFinesEnabled) : false;
-  let absencePenalty = session ? (session.absencePenalty || session.maxPenalty || 20) : 20;
-  let absenceFineEGP = session ? (session.absenceFineEGP || session.maxPenalty || 50) : 50;
+
+  // SYSTEM 1: Points Deductions (mirrored)
+  let pointsPenalty = {
+    enabled: session ? session.pointsPenalty.enabled : true,
+    mode: session ? session.pointsPenalty.mode : 'stepped',
+    fixed: session ? session.pointsPenalty.fixed : 5,
+    stepUnit: session ? session.pointsPenalty.stepUnit : 'minutes',
+    stepSize: session ? session.pointsPenalty.stepSize : 5,
+    perStep: session ? session.pointsPenalty.perStep : 1,
+    min: session ? session.pointsPenalty.min : 5,
+    max: session ? session.pointsPenalty.max : 30,
+    absence: session ? session.pointsPenalty.absence : 20
+  };
+
+  // SYSTEM 2: Financial Fines (EGP) (mirrored)
+  let finePenalty = {
+    enabled: session ? session.finePenalty.enabled : false,
+    mode: session ? session.finePenalty.mode : 'stepped',
+    fixed: session ? session.finePenalty.fixed : 10,
+    stepUnit: session ? session.finePenalty.stepUnit : 'minutes',
+    stepSize: session ? session.finePenalty.stepSize : 5,
+    perStep: session ? session.finePenalty.perStep : 2,
+    min: session ? session.finePenalty.min : 10,
+    max: session ? session.finePenalty.max : 100,
+    absence: session ? session.finePenalty.absence : 50
+  };
 
   let active = session ? session.active !== false : true;
 
@@ -7768,163 +9847,134 @@ function openAdminSessionModal(sessionId = null) {
   bodyEl.className = 'space-y-4';
 
   function renderModalBody() {
-    bodyEl.innerHTML = `
+    bodyEl.innerHTML = '';
+
+    // Title
+    const titleBox = document.createElement('div');
+    titleBox.innerHTML = `
+      <label class="block text-xs font-semibold text-neutral-200 mb-1">Session Title *</label>
+      <input id="adm-session-title" type="text" class="w-full glass-input text-xs" placeholder="e.g. Sunday Production Service" value="${esc(currentTitle)}" />
+    `;
+    const titleInp = titleBox.querySelector('#adm-session-title');
+    titleInp.oninput = (e) => { currentTitle = e.target.value; };
+    bodyEl.appendChild(titleBox);
+
+    // Recurrence & Schedule
+    const schedBox = document.createElement('div');
+    schedBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
+    schedBox.innerHTML = `
+      <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</label>
       <div>
-        <label class="block text-xs font-semibold text-neutral-200 mb-1">Session Title *</label>
-        <input id="adm-session-title" type="text" class="w-full glass-input text-xs" placeholder="e.g. Sunday Production Service" value="${esc(currentTitle)}" />
+        <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
+        <div id="adm-session-sched-type-wrap"></div><input type="hidden" id="adm-session-sched-type" value="once" />
       </div>
+      <div id="adm-session-sched-subform" class="space-y-3 pt-1"></div>
+    `;
+    const schedSelect = schedBox.querySelector('#adm-session-sched-type');
+    schedSelect.onchange = (e) => {
+      schedType = e.target.value;
+      renderSchedSubform();
+    };
+    bodyEl.appendChild(schedBox);
 
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</label>
+    // Window Boundaries via Time Pickers
+    const windowBox = document.createElement('div');
+    windowBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
+    windowBox.innerHTML = `
+      <label class="block text-xs font-bold text-white uppercase tracking-wider">Window Boundaries</label>
+      <div class="grid grid-cols-2 gap-3">
+        <div id="box-picker-opens"></div>
+        <div id="box-picker-closes"></div>
+      </div>
+      <div id="session-window-words" class="text-[11px] text-[#0A84FF] font-medium pt-0.5"></div>
+    `;
+
+    const [sh, sm] = selectedTimeStr.split(':').map(Number);
+    const startMinsOfDay = (sh || 0) * 60 + (sm || 0);
+
+    const opensBox = windowBox.querySelector('#box-picker-opens');
+    const closesBox = windowBox.querySelector('#box-picker-closes');
+    const wordsEl = windowBox.querySelector('#session-window-words');
+
+    function updateWords() {
+      if (wordsEl) {
+        wordsEl.textContent = `Opens ${earlyCheckInMinutes}m before start, closes ${lateCutoffMinutes}m after start.`;
+      }
+    }
+    updateWords();
+
+    const opensMins = ((startMinsOfDay - earlyCheckInMinutes) % 1440 + 1440) % 1440;
+    const closesMins = (startMinsOfDay + lateCutoffMinutes) % 1440;
+
+    opensBox.appendChild(renderDateTimeField({
+      label: 'Check-in opens at',
+      valueMs: opensMins,
+      mode: 'time',
+      onChange: (newOpensMins) => {
+        let diff = startMinsOfDay - newOpensMins;
+        if (diff < 0) diff += 1440;
+        earlyCheckInMinutes = Math.min(720, Math.max(0, diff));
+        updateWords();
+      }
+    }));
+
+    closesBox.appendChild(renderDateTimeField({
+      label: 'Check-in closes at',
+      valueMs: closesMins,
+      mode: 'time',
+      onChange: (newClosesMins) => {
+        let diff = newClosesMins - startMinsOfDay;
+        if (diff < 0) diff += 1440;
+        lateCutoffMinutes = Math.min(720, Math.max(0, diff));
+        updateWords();
+      }
+    }));
+
+    bodyEl.appendChild(windowBox);
+
+    // Attendee Assignment Switch
+    const assignBox = document.createElement('div');
+    assignBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
+    assignBox.innerHTML = `
+      <div class="flex items-center justify-between">
         <div>
-          <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
-          <select id="adm-session-sched-type" class="w-full glass-input text-xs bg-[#1C1C1E]">
-            <option value="once" ${schedType === 'once' ? 'selected' : ''}>Once (Single Date &amp; Time)</option>
-            <option value="daily" ${schedType === 'daily' ? 'selected' : ''}>Daily</option>
-            <option value="weekly" ${schedType === 'weekly' ? 'selected' : ''}>Weekly (Specific Days)</option>
-            <option value="monthlyDates" ${schedType === 'monthlyDates' ? 'selected' : ''}>Monthly - Dates (1..31)</option>
-            <option value="monthlyWeekdays" ${schedType === 'monthlyWeekdays' ? 'selected' : ''}>Monthly - Specific Weeks &amp; Days</option>
-          </select>
+          <span class="text-xs font-bold text-white block uppercase tracking-wider">Attendee Assignment</span>
+          <span class="text-[11px] text-neutral-400">Limit check-in &amp; roster to specific members</span>
         </div>
-
-        <div id="adm-session-sched-subform" class="space-y-3 pt-1"></div>
+        <div id="switch-assign-wrapper"></div>
       </div>
-
-      <!-- Attendee Assignment -->
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <div class="flex items-center justify-between">
-          <div>
-            <span class="text-xs font-bold text-white block uppercase tracking-wider">Attendee Assignment</span>
-            <span class="text-[11px] text-neutral-400">Limit check-in &amp; roster to specific members</span>
+      <div id="adm-session-assign-box" class="${assignSpecific ? '' : 'hidden'} space-y-2 pt-1 border-t border-white/5">
+        <button type="button" id="btn-pick-session-members" class="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-white flex items-center justify-between transition">
+          <span class="font-medium">Selected Members: <strong class="text-[#0A84FF] font-mono">${assignedUids.length}</strong></span>
+          <span class="text-neutral-400 text-[11px] flex items-center gap-1">Change &rarr;</span>
+        </button>
+        ${assignedUids.length > 0 ? `
+          <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1.5 rounded-lg bg-black/20">
+            ${assignedUids.map(uid => {
+              const u = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+              return `<span class="px-2 py-0.5 rounded-md bg-white/10 text-[10px] text-neutral-200">${esc(u?.displayName || uid)}</span>`;
+            }).join('')}
           </div>
-          <input id="adm-session-assign-toggle" type="checkbox" class="accent-[#0A84FF] w-4 h-4 cursor-pointer" ${assignSpecific ? 'checked' : ''} />
-        </div>
-
-        <div id="adm-session-assign-box" class="${assignSpecific ? '' : 'hidden'} space-y-2 pt-1 border-t border-white/5">
-          <button type="button" id="btn-pick-session-members" class="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-white flex items-center justify-between transition">
-            <span class="font-medium">Selected Members: <strong class="text-[#0A84FF] font-mono">${assignedUids.length}</strong></span>
-            <span class="text-neutral-400 text-[11px] flex items-center gap-1">Change &rarr;</span>
-          </button>
-          ${assignedUids.length > 0 ? `
-            <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1.5 rounded-lg bg-black/20">
-              ${assignedUids.map(uid => {
-                const u = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-                return `<span class="px-2 py-0.5 rounded-md bg-white/10 text-[10px] text-neutral-200">${esc(u?.displayName || uid)}</span>`;
-              }).join('')}
-            </div>
-          ` : `
-            <p class="text-[10px] text-amber-400/80 italic">No specific members selected. Toggle off to include all active members.</p>
-          `}
-        </div>
-      </div>
-
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <label class="block text-xs font-bold text-white uppercase tracking-wider">Window Boundaries</label>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Max Early Window (Mins)</label>
-            <input id="adm-session-early" type="number" min="0" class="w-full glass-input text-xs font-mono" value="${earlyCheckInMinutes}" />
-            <span class="text-[10px] text-neutral-500">Opens this many mins before</span>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Late Cutoff Window (Mins)</label>
-            <input id="adm-session-cutoff" type="number" min="1" class="w-full glass-input text-xs font-mono" value="${lateCutoffMinutes}" />
-            <span class="text-[10px] text-neutral-500">Check-in locks after cutoff</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10 space-y-3">
-        <label class="block text-xs font-bold text-white uppercase tracking-wider">Penalty Matrix &amp; Absence Rules</label>
-        
-        <!-- Points & Fines Toggles -->
-        <div class="grid grid-cols-2 gap-3 pb-2 border-b border-white/5">
-          <label class="flex items-center gap-2 cursor-pointer p-2 rounded-lg bg-white/[0.02]">
-            <input id="adm-session-pen-pts" type="checkbox" class="accent-[#0A84FF] w-4 h-4" ${penaltyPointsEnabled ? 'checked' : ''} />
-            <div>
-              <span class="text-xs font-semibold text-white block">Points Deductions</span>
-              <span class="text-[10px] text-neutral-400">Subtract penalty points</span>
-            </div>
-          </label>
-          <label class="flex items-center gap-2 cursor-pointer p-2 rounded-lg bg-white/[0.02]">
-            <input id="adm-session-pen-fines" type="checkbox" class="accent-[#0A84FF] w-4 h-4" ${penaltyFinesEnabled ? 'checked' : ''} />
-            <div>
-              <span class="text-xs font-semibold text-white block">Financial Fines (EGP)</span>
-              <span class="text-[10px] text-neutral-400">Issue EGP fine charges</span>
-            </div>
-          </label>
-        </div>
-
-        <div class="grid grid-cols-3 gap-2">
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Penalty Unit</label>
-            <select id="adm-session-unit" class="w-full glass-input text-xs bg-[#1C1C1E]">
-              <option value="minutes" ${penaltyUnit === 'minutes' ? 'selected' : ''}>Minutes</option>
-              <option value="seconds" ${penaltyUnit === 'seconds' ? 'selected' : ''}>Seconds</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Step Duration</label>
-            <input id="adm-session-step-dur" type="number" min="1" class="w-full glass-input text-xs font-mono" value="${stepDuration}" />
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Fee / Step</label>
-            <input id="adm-session-fee-step" type="number" min="0" class="w-full glass-input text-xs font-mono" value="${penaltyPerStep}" />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3 pt-1">
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Min Penalty</label>
-            <input id="adm-session-min-penalty" type="number" min="0" class="w-full glass-input text-xs font-mono" value="${minPenalty}" />
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Max Penalty</label>
-            <input id="adm-session-max-penalty" type="number" min="0" class="w-full glass-input text-xs font-mono" value="${maxPenalty}" />
-          </div>
-        </div>
-
-        <!-- Full Absence Penalties -->
-        <div class="grid grid-cols-2 gap-3 pt-2 border-t border-white/5">
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Absence Penalty (pts)</label>
-            <input id="adm-session-absence-pts" type="number" min="0" class="w-full glass-input text-xs font-mono" value="${absencePenalty}" />
-            <span class="text-[10px] text-neutral-500">Unexcused absence pts</span>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1">Absence Fine (EGP)</label>
-            <input id="adm-session-absence-egp" type="number" min="0" class="w-full glass-input text-xs font-mono" value="${absenceFineEGP}" />
-            <span class="text-[10px] text-neutral-500">Unexcused absence fine</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="p-3 rounded-xl bg-black/20 border border-white/10">
-        <label class="flex items-center justify-between cursor-pointer">
-          <div>
-            <span class="text-xs font-bold text-white block">Active for Check-In</span>
-            <span class="text-[11px] text-neutral-400">Members can only check in while active</span>
-          </div>
-          <input id="adm-session-active" type="checkbox" class="accent-[#0A84FF] w-4 h-4" ${active ? 'checked' : ''} />
-        </label>
+        ` : `
+          <p class="text-[10px] text-amber-400/80 italic">No specific members selected. Toggle off to include all active members.</p>
+        `}
       </div>
     `;
 
-    const titleInp = bodyEl.querySelector('#adm-session-title');
-    titleInp.oninput = (e) => { currentTitle = e.target.value; };
-
-    const assignToggle = bodyEl.querySelector('#adm-session-assign-toggle');
-    if (assignToggle) {
-      assignToggle.onchange = (e) => {
-        assignSpecific = e.target.checked;
+    const assignSwitchWrap = assignBox.querySelector('#switch-assign-wrapper');
+    assignSwitchWrap.appendChild(renderSwitch({
+      id: 'adm-session-assign-toggle',
+      checked: assignSpecific,
+      onChange: (chk) => {
+        assignSpecific = chk;
         if (!assignSpecific) assignedUids = [];
         renderModalBody();
-      };
-    }
+      }
+    }));
 
-    const pickMembersBtn = bodyEl.querySelector('#btn-pick-session-members');
-    if (pickMembersBtn) {
-      pickMembersBtn.onclick = () => {
+    const pickBtn = assignBox.querySelector('#btn-pick-session-members');
+    if (pickBtn) {
+      pickBtn.onclick = () => {
         openMemberPicker({
           multi: true,
           includeAllOption: false,
@@ -7936,56 +9986,190 @@ function openAdminSessionModal(sessionId = null) {
         });
       };
     }
+    bodyEl.appendChild(assignBox);
 
-    const penPtsCheck = bodyEl.querySelector('#adm-session-pen-pts');
-    if (penPtsCheck) {
-      penPtsCheck.onchange = (e) => { penaltyPointsEnabled = e.target.checked; };
+    // =======================================================================
+    // HELPER: RENDER PENALTY SYSTEM MATRIX (POINTS & FINES IDENTICAL)
+    // =======================================================================
+    function renderSystemSection(sysKey, title, subtitle, unitLabel, sysObj) {
+      const card = document.createElement('div');
+      card.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
+
+      const header = document.createElement('div');
+      header.className = 'flex items-center justify-between';
+      header.innerHTML = `
+        <div>
+          <span class="text-xs font-bold text-white block uppercase tracking-wider">${esc(title)}</span>
+          <span class="text-[11px] text-neutral-400">${esc(subtitle)}</span>
+        </div>
+        <div id="switch-${sysKey}-wrap"></div>
+      `;
+
+      const switchWrap = header.querySelector(`#switch-${sysKey}-wrap`);
+      switchWrap.appendChild(renderSwitch({
+        id: `adm-session-${sysKey}-toggle`,
+        checked: sysObj.enabled,
+        onChange: (chk) => {
+          sysObj.enabled = chk;
+          renderModalBody();
+        }
+      }));
+      card.appendChild(header);
+
+      const matrixBox = document.createElement('div');
+      matrixBox.className = 'space-y-3 pt-2 border-t border-white/5';
+
+      // If disabled: completely unmount/clear the container (no lingering inputs!)
+      if (!sysObj.enabled) {
+        matrixBox.innerHTML = '';
+        return card;
+      }
+
+      // Mode Segmented: Fixed vs Stepped
+      const modeWrap = document.createElement('div');
+      modeWrap.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-semibold">Penalty Calculation Mode</label>`;
+      modeWrap.appendChild(renderSegmented({
+        id: `seg-${sysKey}-mode`,
+        options: [
+          { value: 'fixed', label: 'Fixed Amount' },
+          { value: 'stepped', label: 'Stepped Rate' }
+        ],
+        value: sysObj.mode,
+        onChange: (mVal) => {
+          sysObj.mode = mVal;
+          renderModalBody();
+        }
+      }));
+      matrixBox.appendChild(modeWrap);
+
+      if (sysObj.mode === 'fixed') {
+        const fixedDiv = document.createElement('div');
+        fixedDiv.innerHTML = `
+          <label class="block text-[11px] text-neutral-300 mb-1">Fixed Late Amount (${unitLabel})</label>
+          <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.fixed}" />
+        `;
+        fixedDiv.querySelector('input').oninput = (e) => {
+          sysObj.fixed = Math.max(0, Number(e.target.value) || 0);
+        };
+        matrixBox.appendChild(fixedDiv);
+      } else {
+        // Stepped: Unit (Seconds|Minutes), Step Size stepper, Amount per Step
+        const steppedGrid = document.createElement('div');
+        steppedGrid.className = 'grid grid-cols-3 gap-2';
+
+        const unitCol = document.createElement('div');
+        unitCol.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1">Step Unit</label>`;
+        unitCol.appendChild(renderSegmented({
+          id: `seg-${sysKey}-unit`,
+          options: [
+            { value: 'minutes', label: 'Minutes' },
+            { value: 'seconds', label: 'Seconds' }
+          ],
+          value: sysObj.stepUnit,
+          onChange: (uVal) => {
+            sysObj.stepUnit = uVal;
+          }
+        }));
+
+        const sizeCol = document.createElement('div');
+        sizeCol.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1">Step Size</label>`;
+        sizeCol.appendChild(renderStepper({
+          id: `step-${sysKey}-size`,
+          value: sysObj.stepSize,
+          min: 1,
+          max: 3600,
+          onChange: (newSize) => {
+            sysObj.stepSize = newSize;
+          }
+        }));
+
+        const perStepCol = document.createElement('div');
+        perStepCol.innerHTML = `
+          <label class="block text-[11px] text-neutral-300 mb-1">Fee / Step (${unitLabel})</label>
+          <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.perStep}" />
+        `;
+        perStepCol.querySelector('input').oninput = (e) => {
+          sysObj.perStep = Math.max(0, Number(e.target.value) || 0);
+        };
+
+        steppedGrid.appendChild(unitCol);
+        steppedGrid.appendChild(sizeCol);
+        steppedGrid.appendChild(perStepCol);
+        matrixBox.appendChild(steppedGrid);
+      }
+
+      // Min & Max Bounds
+      const boundsGrid = document.createElement('div');
+      boundsGrid.className = 'grid grid-cols-2 gap-3 pt-1';
+      boundsGrid.innerHTML = `
+        <div>
+          <label class="block text-[11px] text-neutral-300 mb-1">Minimum Late (${unitLabel})</label>
+          <input type="number" min="0" class="w-full glass-input text-xs font-mono inp-min" value="${sysObj.min}" />
+        </div>
+        <div>
+          <label class="block text-[11px] text-neutral-300 mb-1">Maximum Late (${unitLabel})</label>
+          <input type="number" min="0" class="w-full glass-input text-xs font-mono inp-max" value="${sysObj.max}" />
+        </div>
+      `;
+      boundsGrid.querySelector('.inp-min').oninput = (e) => {
+        sysObj.min = Math.max(0, Number(e.target.value) || 0);
+      };
+      boundsGrid.querySelector('.inp-max').oninput = (e) => {
+        sysObj.max = Math.max(0, Number(e.target.value) || 0);
+      };
+      matrixBox.appendChild(boundsGrid);
+
+      // Unexcused Absence
+      const absenceBox = document.createElement('div');
+      absenceBox.className = 'pt-2 border-t border-white/5';
+      absenceBox.innerHTML = `
+        <label class="block text-[11px] text-neutral-300 mb-1">Unexcused Absence Amount (${unitLabel})</label>
+        <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.absence}" />
+        <span class="text-[10px] text-neutral-500">Applied when member is marked absent</span>
+      `;
+      absenceBox.querySelector('input').oninput = (e) => {
+        sysObj.absence = Math.max(0, Number(e.target.value) || 0);
+      };
+      matrixBox.appendChild(absenceBox);
+
+      card.appendChild(matrixBox);
+      return card;
     }
 
-    const penFinesCheck = bodyEl.querySelector('#adm-session-pen-fines');
-    if (penFinesCheck) {
-      penFinesCheck.onchange = (e) => { penaltyFinesEnabled = e.target.checked; };
-    }
+    // SYSTEM 1: Points Deductions
+    bodyEl.appendChild(renderSystemSection(
+      'pts',
+      'Points Penalty Matrix',
+      'Subtract penalty points for late check-in & unexcused absence',
+      'pts',
+      pointsPenalty
+    ));
 
-    const absPtsInp = bodyEl.querySelector('#adm-session-absence-pts');
-    if (absPtsInp) {
-      absPtsInp.oninput = (e) => { absencePenalty = Math.max(0, Number(e.target.value) || 0); };
-    }
+    // SYSTEM 2: Financial Fines (EGP)
+    bodyEl.appendChild(renderSystemSection(
+      'fines',
+      'Financial Fines (EGP)',
+      'Issue EGP fine charges for late check-in & unexcused absence',
+      'EGP',
+      finePenalty
+    ));
 
-    const absEgpInp = bodyEl.querySelector('#adm-session-absence-egp');
-    if (absEgpInp) {
-      absEgpInp.oninput = (e) => { absenceFineEGP = Math.max(0, Number(e.target.value) || 0); };
-    }
-
-    const schedTypeSelect = bodyEl.querySelector('#adm-session-sched-type');
-    schedTypeSelect.onchange = (e) => {
-      schedType = e.target.value;
-      renderSchedSubform();
-    };
-
-    const earlyInp = bodyEl.querySelector('#adm-session-early');
-    earlyInp.oninput = (e) => { earlyCheckInMinutes = Number(e.target.value) || 0; };
-
-    const cutoffInp = bodyEl.querySelector('#adm-session-cutoff');
-    cutoffInp.oninput = (e) => { lateCutoffMinutes = Number(e.target.value) || 120; };
-
-    const unitSelect = bodyEl.querySelector('#adm-session-unit');
-    unitSelect.onchange = (e) => { penaltyUnit = e.target.value; };
-
-    const stepInp = bodyEl.querySelector('#adm-session-step-dur');
-    stepInp.oninput = (e) => { stepDuration = Math.max(1, Number(e.target.value) || 1); };
-
-    const feeInp = bodyEl.querySelector('#adm-session-fee-step');
-    feeInp.oninput = (e) => { penaltyPerStep = Math.max(0, Number(e.target.value) || 0); };
-
-    const minInp = bodyEl.querySelector('#adm-session-min-penalty');
-    minInp.oninput = (e) => { minPenalty = Math.max(0, Number(e.target.value) || 0); };
-
-    const maxInp = bodyEl.querySelector('#adm-session-max-penalty');
-    maxInp.oninput = (e) => { maxPenalty = Math.max(0, Number(e.target.value) || 0); };
-
-    const activeCheck = bodyEl.querySelector('#adm-session-active');
-    activeCheck.onchange = (e) => { active = e.target.checked; };
+    // Active Switch
+    const activeBox = document.createElement('div');
+    activeBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 flex items-center justify-between';
+    activeBox.innerHTML = `
+      <div>
+        <span class="text-xs font-bold text-white block">Active for Check-In</span>
+        <span class="text-[11px] text-neutral-400">Members can only check in while active</span>
+      </div>
+      <div id="switch-active-wrap"></div>
+    `;
+    activeBox.querySelector('#switch-active-wrap').appendChild(renderSwitch({
+      id: 'adm-session-active',
+      checked: active,
+      onChange: (chk) => { active = chk; }
+    }));
+    bodyEl.appendChild(activeBox);
 
     renderSchedSubform();
   }
@@ -7996,29 +10180,44 @@ function openAdminSessionModal(sessionId = null) {
 
     if (schedType === 'once') {
       subContainer.innerHTML = `
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Date</label>
-            <input id="session-sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="session-sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
-          </div>
+        <div class="space-y-2">
+          <div id="field-sched-session-date"></div>
+          <div id="field-sched-session-time"></div>
         </div>
       `;
-      subContainer.querySelector('#session-sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; };
-      subContainer.querySelector('#session-sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; };
+      const dBox = subContainer.querySelector('#field-sched-session-date');
+      const tBox = subContainer.querySelector('#field-sched-session-time');
+      if (dBox) {
+        dBox.replaceWith(renderDateTimeField({
+          label: 'Session Date',
+          valueMs: parseDateTimeToMs(selectedDateStr),
+          mode: 'date',
+          onChange: (ms) => { selectedDateStr = formatZonedDateKey(ms, APP_TIMEZONE); }
+        }));
+      }
+      if (tBox) {
+        const [th, tm] = selectedTimeStr.split(':').map(Number);
+        tBox.replaceWith(renderDateTimeField({
+          label: 'Session Time',
+          valueMs: (th || 0) * 60 + (tm || 0),
+          mode: 'time',
+          onChange: (mins) => {
+            const h = Math.floor(mins / 60) % 24;
+            const m = mins % 60;
+            selectedTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+          }
+        }));
+      }
     } else if (schedType === 'daily') {
       subContainer.innerHTML = `
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="session-sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <div id="field-session-sched-inp-date"></div>
           </div>
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Daily Time (${APP_TIMEZONE})</label>
-            <input id="session-sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <div id="field-session-sched-inp-time"></div>
           </div>
         </div>
       `;
@@ -8039,11 +10238,11 @@ function openAdminSessionModal(sessionId = null) {
         <div class="grid grid-cols-2 gap-2 pt-1">
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="session-sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <div id="field-session-sched-inp-date"></div>
           </div>
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="session-sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <div id="field-session-sched-inp-time"></div>
           </div>
         </div>
       `;
@@ -8075,11 +10274,11 @@ function openAdminSessionModal(sessionId = null) {
         <div class="grid grid-cols-2 gap-2 pt-1">
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="session-sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <div id="field-session-sched-inp-date"></div>
           </div>
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="session-sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <div id="field-session-sched-inp-time"></div>
           </div>
         </div>
       `;
@@ -8123,11 +10322,11 @@ function openAdminSessionModal(sessionId = null) {
         <div class="grid grid-cols-2 gap-2 pt-1">
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <input id="session-sched-inp-date" type="date" class="w-full glass-input text-xs" value="${selectedDateStr}" />
+            <div id="field-session-sched-inp-date"></div>
           </div>
           <div>
             <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <input id="session-sched-inp-time" type="time" class="w-full glass-input text-xs" value="${selectedTimeStr}" />
+            <div id="field-session-sched-inp-time"></div>
           </div>
         </div>
       `;
@@ -8170,13 +10369,25 @@ function openAdminSessionModal(sessionId = null) {
         toast('Session title is required', 'error');
         return false;
       }
-      if (stepDuration < 1) {
-        toast('Step duration must be at least 1', 'error');
-        return false;
+      if (pointsPenalty.enabled) {
+        if (pointsPenalty.mode === 'stepped' && pointsPenalty.stepSize < 1) {
+          toast('Points step size must be at least 1', 'error');
+          return false;
+        }
+        if (pointsPenalty.min > pointsPenalty.max) {
+          toast('Points min penalty cannot exceed max penalty', 'error');
+          return false;
+        }
       }
-      if (minPenalty > maxPenalty) {
-        toast('Min penalty cannot exceed max penalty', 'error');
-        return false;
+      if (finePenalty.enabled) {
+        if (finePenalty.mode === 'stepped' && finePenalty.stepSize < 1) {
+          toast('Fines step size must be at least 1', 'error');
+          return false;
+        }
+        if (finePenalty.min > finePenalty.max) {
+          toast('Fines min fine cannot exceed max fine', 'error');
+          return false;
+        }
       }
 
       const dateParts = selectedDateStr.split('-').map(Number);
@@ -8210,17 +10421,41 @@ function openAdminSessionModal(sessionId = null) {
         schedule: finalSchedule,
         earlyCheckInMinutes,
         lateCutoffMinutes,
-        penaltyUnit,
-        stepDuration,
-        penaltyPerStep,
-        minPenalty,
-        maxPenalty,
+        pointsPenalty: {
+          enabled: Boolean(pointsPenalty.enabled),
+          mode: pointsPenalty.mode,
+          fixed: Number(pointsPenalty.fixed) || 0,
+          stepUnit: pointsPenalty.stepUnit,
+          stepSize: Number(pointsPenalty.stepSize) || 1,
+          perStep: Number(pointsPenalty.perStep) || 0,
+          min: Number(pointsPenalty.min) || 0,
+          max: Number(pointsPenalty.max) || 999999,
+          absence: Number(pointsPenalty.absence) || 0
+        },
+        finePenalty: {
+          enabled: Boolean(finePenalty.enabled),
+          mode: finePenalty.mode,
+          fixed: Number(finePenalty.fixed) || 0,
+          stepUnit: finePenalty.stepUnit,
+          stepSize: Number(finePenalty.stepSize) || 1,
+          perStep: Number(finePenalty.perStep) || 0,
+          min: Number(finePenalty.min) || 0,
+          max: Number(finePenalty.max) || 999999,
+          absence: Number(finePenalty.absence) || 0
+        },
         assignedUids: assignSpecific ? assignedUids : [],
-        penaltyPointsEnabled: Boolean(penaltyPointsEnabled),
-        penaltyFinesEnabled: Boolean(penaltyFinesEnabled),
-        absencePenalty: Number(absencePenalty) || 0,
-        absenceFineEGP: Number(absenceFineEGP) || 0,
-        active: Boolean(active)
+        active: Boolean(active),
+
+        // Legacy compatibility
+        penaltyPointsEnabled: Boolean(pointsPenalty.enabled),
+        penaltyFinesEnabled: Boolean(finePenalty.enabled),
+        penaltyUnit: pointsPenalty.stepUnit || 'minutes',
+        stepDuration: pointsPenalty.stepSize || 1,
+        penaltyPerStep: pointsPenalty.perStep || 1,
+        minPenalty: pointsPenalty.min || 0,
+        maxPenalty: pointsPenalty.max || 999999,
+        absencePenalty: pointsPenalty.absence || 20,
+        absenceFineEGP: finePenalty.absence || 50
       };
 
       try {
@@ -8957,22 +11192,34 @@ function renderAdminSubmissions() {
     // Build question/answer elements
     let qaHtml = '';
     if (task && Array.isArray(task.questions) && task.questions.length > 0) {
-      qaHtml = task.questions.map((q, idx) => {
-        const ans = Array.isArray(s.answers) ? s.answers[idx] : null;
-        return `
+      qaHtml = (Array.isArray(s.answers) && s.answers.length > 0)
+      ? s.answers.map((a, idx) => {
+          let prompt = '';
+          let ansText = '';
+          if (typeof a === 'string') {
+            prompt = task?.questions?.[idx]?.questionText || `Question ${idx + 1}`;
+            ansText = a;
+          } else if (a && typeof a === 'object') {
+            prompt = a.questionText || task?.questions?.[idx]?.questionText || `Question ${idx + 1}`;
+            if (a.type === 'mcq') {
+              ansText = a.answer === 'Other' ? `Other: ${a.otherText || ''}` : (a.answer || '');
+            } else {
+              ansText = a.answer || '';
+            }
+          }
+          return `
+            <div class="p-2 rounded-lg bg-black/20 border border-white/5 space-y-1">
+              <div class="font-semibold text-neutral-300 text-[11px]">${esc(prompt)}</div>
+              <div class="text-white text-xs">${ansText ? esc(ansText) : '<span class="text-neutral-500 italic">No answer</span>'}</div>
+            </div>
+          `;
+        }).join('')
+      : (task?.questions ? task.questions.map((q, idx) => `
           <div class="p-2 rounded-lg bg-black/20 border border-white/5 space-y-1">
             <div class="font-semibold text-neutral-300 text-[11px]">${esc(q.questionText || `Question ${idx + 1}`)}</div>
-            <div class="text-white text-xs">${ans ? esc(ans) : '<span class="text-neutral-500 italic">No answer</span>'}</div>
+            <div class="text-neutral-500 italic text-xs">No answer</div>
           </div>
-        `;
-      }).join('');
-    } else if (Array.isArray(s.answers) && s.answers.length > 0) {
-      qaHtml = s.answers.map((ans, idx) => `
-        <div class="p-2 rounded-lg bg-black/20 border border-white/5 space-y-1">
-          <div class="font-semibold text-neutral-300 text-[11px]">Response ${idx + 1}</div>
-          <div class="text-white text-xs">${esc(ans)}</div>
-        </div>
-      `).join('');
+        `).join('') : '');
     }
 
     const comment = s.comment || s.notes || '';
@@ -9099,68 +11346,128 @@ export function openRequestWaiverModal() {
   const nowMs = serverNow();
   const endWindowMs = nowMs + 14 * 86400000; // Next 14 days
 
-  // Find upcoming sessions in next 14 days assigned to member
-  const upcomingOccurrences = [];
-  (state.attendanceSessions || []).filter(s => s.active && !s.archived).forEach(session => {
-    // Check member assignment
+  // Compute eligible sessions:
+  // 1. Next 14 days via getOccurrences
+  // 2. assignedUids contains user OR assignedUids is empty/missing
+  // 3. active and not archived
+  // 4. Exclude occurrences already past late cutoff, already checked in, or having pending/approved waiver
+  const eligibleOccurrences = [];
+  (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived).forEach(session => {
     if (Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
       if (!session.assignedUids.includes(state.user.uid)) return;
     }
     const occs = getOccurrences(session.schedule, nowMs, endWindowMs, APP_TIMEZONE);
     occs.forEach(occ => {
-      const alreadyCheckedIn = state.myAttendanceLogs?.some(l => l.sessionId === session.id && (l.occurrenceKey === occ.key || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
-      const existingWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occ.key || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')));
-      upcomingOccurrences.push({
-        session,
-        occ,
-        alreadyCheckedIn,
-        existingWaiver
-      });
+      const lateCutoffMinutes = typeof session.lateCutoffMinutes === 'number' ? session.lateCutoffMinutes : 120;
+      const cutoffMs = occ.start + lateCutoffMinutes * 60000;
+      if (nowMs > cutoffMs) return; // past late cutoff
+
+      const alreadyCheckedIn = (state.myAttendanceLogs || []).some(l =>
+        l.sessionId === session.id && (l.occurrenceKey === occ.key || (session.schedule?.type === 'once' && l.occurrenceKey === 'once'))
+      );
+      if (alreadyCheckedIn) return;
+
+      const existingWaiver = (state.myWaiverRequests || []).find(w =>
+        w.sessionId === session.id &&
+        (w.occurrenceKey === occ.key || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) &&
+        (w.status === 'pending' || w.status === 'approved')
+      );
+      if (existingWaiver) return;
+
+      eligibleOccurrences.push({ session, occ });
     });
   });
 
-  upcomingOccurrences.sort((a, b) => a.occ.start - b.occ.start);
+  eligibleOccurrences.sort((a, b) => a.occ.start - b.occ.start);
 
-  let selectedIndex = upcomingOccurrences.findIndex(o => !o.alreadyCheckedIn && !o.existingWaiver);
-  if (selectedIndex === -1) selectedIndex = 0;
+  let selectedIndex = 0;
+  let selectedCategory = 'Exams / Study';
+  const WAIVER_REASON_CATEGORIES = [
+    { id: 'Exams / Study', label: 'Exams / Study', icon: 'clipboard', prefill: 'Exams and academic study preparation.' },
+    { id: 'Medical', label: 'Medical', icon: 'heart', prefill: 'Medical appointment or health condition.' },
+    { id: 'Other Service', label: 'Other Service', icon: 'users', prefill: 'Serving in another church service / ministry.' },
+    { id: 'Travel', label: 'Travel', icon: 'compass', prefill: 'Traveling out of town during session hours.' },
+    { id: 'Other', label: 'Other', icon: 'info', prefill: '' }
+  ];
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4 text-xs';
 
   function renderModal() {
     const myWaivers = state.myWaiverRequests || [];
+    const hasEligible = eligibleOccurrences.length > 0;
 
     bodyEl.innerHTML = `
       <div class="space-y-4">
-        <!-- New Waiver Request Form -->
+        <!-- New Excuse / Waiver Request Card -->
         <div class="ios-inset-group">
           <div class="ios-inset-header">NEW EXCUSE / WAIVER REQUEST</div>
-          <div class="p-3.5 space-y-3">
-            ${upcomingOccurrences.length === 0 ? `
-              <div class="p-3 text-center text-neutral-400 text-xs italic">
-                No upcoming sessions scheduled for you in the next 14 days.
+          <div class="p-3.5 space-y-3.5">
+            ${!hasEligible ? `
+              <div class="glass-card p-6 text-center space-y-2 border border-dashed border-white/10 rounded-2xl">
+                <div class="w-12 h-12 mx-auto rounded-full bg-white/[0.05] flex items-center justify-center text-neutral-400">
+                  <svg class="w-6 h-6 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                  </svg>
+                </div>
+                <div class="font-bold text-white text-sm">No Upcoming Assigned Duties</div>
+                <p class="text-xs text-neutral-400 leading-relaxed max-w-xs mx-auto">
+                  You have no scheduled attendance sessions requiring an excuse right now.
+                </p>
               </div>
             ` : `
               <div>
-                <label class="block text-neutral-300 font-semibold mb-1">Select Upcoming Session</label>
-                <select id="waiver-session-select" class="ios-input text-white text-xs">
-                  ${upcomingOccurrences.map((item, idx) => {
+                <label class="block text-neutral-300 font-semibold mb-2">Select Upcoming Duty Session</label>
+                <div id="waiver-session-cards" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  ${eligibleOccurrences.map((item, idx) => {
+                    const isSelected = idx === selectedIndex;
                     const dateFormatted = formatDateTime(item.occ.start);
-                    let suffix = '';
-                    if (item.alreadyCheckedIn) suffix = ' (Already Checked In)';
-                    else if (item.existingWaiver) suffix = ` (${item.existingWaiver.status.toUpperCase()})`;
                     return `
-                      <option value="${idx}" ${idx === selectedIndex ? 'selected' : ''} ${item.alreadyCheckedIn || item.existingWaiver ? 'disabled' : ''}>
-                        ${esc(item.session.title)} — ${dateFormatted}${suffix}
-                      </option>
+                      <button type="button" class="waiver-session-card w-full p-3 rounded-xl border text-left transition flex items-center justify-between gap-3 ${isSelected ? 'bg-[#0A84FF]/15 border-[#0A84FF] shadow-sm' : 'bg-white/5 border-white/10 hover:bg-white/[0.08]'}" data-idx="${idx}">
+                        <div class="min-w-0 flex-1">
+                          <div class="font-bold text-white text-xs truncate">${esc(item.session.title)}</div>
+                          <div class="flex items-center gap-2 mt-1">
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-[#0A84FF]">
+                              ${esc(dateFormatted)}
+                            </span>
+                          </div>
+                        </div>
+                        <div class="w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF] text-white' : 'border-white/30 text-transparent'}">
+                          <svg class="w-3 h-3 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        </div>
+                      </button>
                     `;
                   }).join('')}
-                </select>
+                </div>
               </div>
 
+              <!-- Quick Reason Chips with SVG Icons -->
               <div>
-                <label class="block text-neutral-300 font-semibold mb-1">Reason / Explanation <span class="text-rose-400">*</span></label>
-                <textarea id="waiver-reason-input" class="ios-input text-white text-xs leading-relaxed" rows="3" placeholder="Explain why you cannot attend this session..." required></textarea>
+                <label class="block text-neutral-300 font-semibold mb-1.5">Reason Category</label>
+                <div class="flex flex-wrap gap-1.5" id="waiver-reason-chips">
+                  ${WAIVER_REASON_CATEGORIES.map(cat => {
+                    const isSelected = cat.id === selectedCategory;
+                    const iconSvg = typeof getIconSvg === 'function' ? getIconSvg(cat.icon, 'w-3.5 h-3.5') : '';
+                    return `
+                      <button type="button" class="waiver-reason-chip px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition inline-flex items-center gap-1.5 ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF] text-white shadow-sm' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-category="${esc(cat.id)}">
+                        ${iconSvg}
+                        <span>${esc(cat.label)}</span>
+                      </button>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+
+              <!-- Dark Glass Textarea -->
+              <div>
+                <label class="block text-neutral-300 font-semibold mb-1">
+                  Reason Explanation <span class="text-rose-400">*</span>
+                </label>
+                <textarea id="waiver-reason-input" class="w-full p-3 rounded-xl bg-black/40 border border-white/10 text-white placeholder-neutral-500 text-xs leading-relaxed focus:outline-none focus:border-[#0A84FF] transition" rows="3" placeholder="Explain why you cannot attend this session..." required></textarea>
               </div>
 
               <div class="pt-1">
@@ -9199,6 +11506,11 @@ export function openRequestWaiverModal() {
                     <span class="font-bold text-white text-[12px] truncate">${esc(w.sessionTitle)}</span>
                     ${statusBadge}
                   </div>
+                  ${w.reasonCategory ? `
+                    <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-white/10 text-neutral-300">
+                      ${esc(w.reasonCategory)}
+                    </div>
+                  ` : ''}
                   <p class="text-neutral-300 text-[11px] leading-relaxed">"${esc(w.reason)}"</p>
                   ${w.adminNote ? `
                     <div class="p-2 rounded-lg bg-black/30 border border-white/5 text-[11px] text-neutral-300">
@@ -9217,19 +11529,34 @@ export function openRequestWaiverModal() {
       </div>
     `;
 
-    const selectEl = bodyEl.querySelector('#waiver-session-select');
-    if (selectEl) {
-      selectEl.onchange = (e) => {
-        selectedIndex = Number(e.target.value);
+    // Wire session card selection
+    bodyEl.querySelectorAll('.waiver-session-card').forEach(btn => {
+      btn.onclick = () => {
+        selectedIndex = Number(btn.dataset.idx);
+        renderModal();
       };
-    }
+    });
 
+    // Wire reason category chips
+    bodyEl.querySelectorAll('.waiver-reason-chip').forEach(chip => {
+      chip.onclick = () => {
+        selectedCategory = chip.dataset.category;
+        const cat = WAIVER_REASON_CATEGORIES.find(c => c.id === selectedCategory);
+        const reasonInput = bodyEl.querySelector('#waiver-reason-input');
+        if (reasonInput && cat && cat.prefill) {
+          reasonInput.value = cat.prefill;
+        }
+        renderModal();
+      };
+    });
+
+    // Wire submit
     const submitBtn = bodyEl.querySelector('#btn-submit-waiver');
     if (submitBtn) {
       submitBtn.onclick = async () => {
-        const item = upcomingOccurrences[selectedIndex];
+        const item = eligibleOccurrences[selectedIndex];
         if (!item) {
-          toast('Please select a valid upcoming session', 'error');
+          toast('Please select an upcoming duty session', 'error');
           return;
         }
 
@@ -9254,6 +11581,7 @@ export function openRequestWaiverModal() {
             userName: state.user.name || state.user.displayName || 'Member',
             userAvatar: state.user.avatarUrl || state.user.photoURL || '',
             reason: reasonVal,
+            reasonCategory: selectedCategory || 'Other',
             status: 'pending',
             adminNote: '',
             createdAt: serverTimestamp(),
@@ -9267,17 +11595,20 @@ export function openRequestWaiverModal() {
             sessionId: item.session.id,
             sessionTitle: item.session.title,
             occurrenceKey: item.occ.key,
-            occurrenceStart: { toMillis: () => item.occ.start },
+            occurrenceStart: Timestamp.fromMillis(item.occ.start),
             uid: state.user.uid,
-            userName: state.user.displayName,
+            userName: state.user.name || state.user.displayName || 'Member',
+            userAvatar: state.user.avatarUrl || state.user.photoURL || '',
             reason: reasonVal,
+            reasonCategory: selectedCategory || 'Other',
             status: 'pending',
-            createdAt: { toMillis: () => Date.now() }
+            createdAt: new Date()
           });
           state.myWaiverRequests = [newWaiver, ...(state.myWaiverRequests || [])];
-          renderModal();
+          renderAttendance();
+          closeAllModals();
         } catch (err) {
-          console.error('Error submitting waiver:', err);
+          console.error('Error submitting waiver request:', err);
           toast(err.message || 'Failed to submit excuse request', 'error');
           submitBtn.disabled = false;
           submitBtn.textContent = 'Submit Excuse Request';
@@ -9289,12 +11620,12 @@ export function openRequestWaiverModal() {
   renderModal();
 
   openModal({
-    title: 'Attendance Excuse / Waiver',
+    title: 'Attendance Excuse Request',
     body: bodyEl
   });
 }
 
-export function renderAdminWaivers() {
+function renderAdminWaivers() {
   const container = document.getElementById('admin-waivers-list');
   const countEl = document.getElementById('admin-waiver-count');
   if (!container) return;
@@ -9625,7 +11956,16 @@ function exportSubmissionsCSV() {
 
   const rows = list.map(s => {
     const dateStr = formatDateTime(s.submittedAt);
-    const answersStr = Array.isArray(s.answers) ? s.answers.join(' | ') : '';
+    const answersStr = Array.isArray(s.answers)
+      ? s.answers.map(a => {
+          if (typeof a === 'string') return a;
+          if (!a) return '';
+          if (a.type === 'mcq') {
+            return a.answer === 'Other' ? `Other: ${a.otherText || ''}` : (a.answer || '');
+          }
+          return a.answer || '';
+        }).filter(Boolean).join(' | ')
+      : '';
     return [
       escCsv(s.id),
       escCsv(s.userName),
@@ -9796,6 +12136,14 @@ const PRESET_BADGES = [
 
 export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
   if (!containerEl) return;
+  // Security check: only self or admin can view financial ledger
+  const isSelf = state.user?.uid === uid;
+  const isAdminUser = state.user?.role === 'admin';
+  if (!isSelf && !isAdminUser) {
+    containerEl.innerHTML = '<div class="p-4 text-center text-xs text-neutral-500">Access restricted.</div>';
+    return;
+  }
+
   containerEl.innerHTML = `
     <div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
       <div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
@@ -9804,14 +12152,48 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
   `;
 
   try {
-    const q = query(
+    // 1. Fetch manual admin transactions
+    const qTxs = query(
       collection(db, 'users', uid, 'transactions'),
       orderBy('createdAt', 'desc'),
       limit(50)
     );
-    const snap = await getDocs(q);
+    const snapTxs = await getDocs(qTxs);
     const txs = [];
-    snap.forEach(d => txs.push({ id: d.id, ...d.data() }));
+    snapTxs.forEach(d => {
+      const data = d.data();
+      const ms = parseDateTimeToMs(data.createdAt);
+      txs.push({ id: d.id, ...data, sortTime: ms });
+    });
+
+    // 2. Fetch member attendance logs with fineEGP > 0
+    const qLogs = query(
+      collection(db, 'attendance_logs'),
+      where('uid', '==', uid),
+      limit(50)
+    );
+    const snapLogs = await getDocs(qLogs);
+    snapLogs.forEach(d => {
+      const l = d.data();
+      const fine = Number(l.fineEGP) || 0;
+      if (fine > 0) {
+        const ms = parseDateTimeToMs(l.checkedInAt || l.occurrenceStart);
+        txs.push({
+          id: 'att_fine_' + d.id,
+          type: 'fine',
+          category: 'financial',
+          amount: fine,
+          reason: 'Attendance fine - ' + (l.sessionTitle || 'Session'),
+          adminName: l.status === 'absent' ? 'Admin' : 'System Check-In',
+          createdAt: l.checkedInAt || l.occurrenceStart,
+          sortTime: ms,
+          isAttendanceLog: true
+        });
+      }
+    });
+
+    // Sort merged ledger descending
+    txs.sort((a, b) => (b.sortTime || 0) - (a.sortTime || 0));
 
     if (countBadgeEl) {
       countBadgeEl.textContent = txs.length;
@@ -9883,99 +12265,113 @@ function openMemberControlModal(member) {
   let activeTab = 'profile';
   let adjusterCategory = 'points'; // 'points' | 'financial'
   let adjusterType = 'bonus'; // 'bonus' | 'penalty' | 'fine' | 'payment' | 'waive'
+  let hasPendingChanges = false;
+  let editedName = member.displayName || '';
+  let selectedRole = member.role || (member.isAdmin ? 'admin' : 'member');
+
+  function markDirty() {
+    hasPendingChanges = true;
+    updateSaveButtonState();
+  }
+
+  function updateSaveButtonState() {
+    const saveBtn = document.getElementById('btn-modal-save');
+    if (saveBtn) {
+      saveBtn.disabled = !hasPendingChanges;
+      saveBtn.classList.toggle('opacity-40', !hasPendingChanges);
+      saveBtn.classList.toggle('cursor-not-allowed', !hasPendingChanges);
+    }
+  }
 
   const renderContent = () => {
     const currentMember = state.members.find(m => m.uid === member.uid) || member;
-    const isAdmin = Boolean(currentMember.isAdmin || currentMember.role === 'admin');
+    const isAdmin = Boolean(selectedRole === 'admin' || currentMember.role === 'admin' || currentMember.isAdmin);
     const privateData = usersPrivate.get(currentMember.uid) || {};
     const memberEmail = privateData.email || currentMember.email || 'No email on record';
-    const finesBalance = privateData.finesEGP || 0;
+    const cachedFineSum = egpAggregateCache.get(currentMember.uid)?.fineSum || 0;
+    const finesBalance = (privateData.finesEGP || 0) + cachedFineSum;
 
     const modalBody = document.getElementById('member-ctrl-body');
     if (!modalBody) return;
 
     modalBody.innerHTML = `
       <div class="space-y-4 text-xs">
-        <!-- Navigation Pills -->
-        <div class="flex items-center gap-1.5 p-1 rounded-xl bg-white/5 border border-white/10 overflow-x-auto">
-          <button class="member-tab-btn flex-1 py-1.5 px-2 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'profile' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="profile">
+        <!-- Navigation Tab Bar (Flexible, non-wrapping, horizontal scroll) -->
+        <div id="member-ctrl-tab-bar" class="flex items-center gap-2 p-1.5 rounded-xl bg-white/5 border border-white/10 overflow-x-auto whitespace-nowrap scrollbar-none">
+          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'profile' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="profile">
             Profile &amp; Role
           </button>
-          <button class="member-tab-btn flex-1 py-1.5 px-2 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'adjuster' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="adjuster">
+          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'adjuster' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="adjuster">
             Adjuster
           </button>
-          <button class="member-tab-btn flex-1 py-1.5 px-2 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'ledger' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="ledger">
+          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'ledger' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="ledger">
             Ledger
           </button>
-          <button class="member-tab-btn flex-1 py-1.5 px-2 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'tasks' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="tasks">
+          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'tasks' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="tasks">
             Tasks
           </button>
-          <button class="member-tab-btn flex-1 py-1.5 px-2 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'attendance' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="attendance">
+          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'attendance' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="attendance">
             Attendance
           </button>
-          <button class="member-tab-btn flex-1 py-1.5 px-2 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'submissions' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="submissions">
+          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'submissions' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="submissions">
             Submissions
           </button>
         </div>
 
         <!-- TAB 1: Profile & Role -->
         <div id="tab-sec-profile" class="${activeTab === 'profile' ? '' : 'hidden'} space-y-4">
-          <!-- Identity Summary -->
+          <!-- Identity Summary (NO raw UID text, avatar is tap-to-crop) -->
           <div class="flex items-center gap-3 p-3 rounded-2xl bg-white/5 border border-white/10">
-            ${renderAvatar(currentMember, 'w-12 h-12')}
+            <div id="btn-crop-member-avatar" class="cursor-pointer relative group flex-shrink-0" title="Tap to change avatar">
+              ${renderAvatar(currentMember, 'w-12 h-12')}
+              <div class="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition text-[9px] text-white font-bold">Edit</div>
+            </div>
             <div class="min-w-0 flex-1">
               <div class="font-bold text-white text-base truncate">${esc(currentMember.displayName)}</div>
               <div class="text-[12px] text-neutral-400 truncate">${esc(memberEmail)}</div>
-              <div class="text-[10px] text-neutral-500 font-mono mt-0.5 truncate">${esc(currentMember.uid)}</div>
+              <div class="mt-1">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}">
+                  ${isAdmin ? 'ADMIN' : 'MEMBER'}
+                </span>
+              </div>
             </div>
           </div>
 
           <!-- Inset Group: Edit Identity & Role -->
           <div class="ios-inset-group">
             <div class="ios-inset-header">IDENTITY &amp; ROLE</div>
-            <form id="form-member-profile" class="p-3.5 space-y-3">
+            <div class="p-3.5 space-y-3.5">
               <div>
                 <label class="block text-neutral-300 font-semibold mb-1">Display Name</label>
-                <input id="ctrl-member-name" type="text" class="ios-input text-white" value="${esc(currentMember.displayName)}" required />
+                <input id="ctrl-member-name" type="text" class="ios-input text-white" value="${esc(editedName)}" required />
               </div>
 
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-1">Avatar Image URL</label>
-                <input id="ctrl-member-avatar" type="url" class="ios-input text-white" value="${esc(currentMember.avatarUrl || '')}" placeholder="https://..." />
-              </div>
-
+              <!-- Role Selector (2-Option Segmented) -->
               <div>
                 <label class="block text-neutral-300 font-semibold mb-1">Role &amp; Permissions</label>
-                <select id="ctrl-member-role" class="ios-input text-white">
-                  <option value="member" ${!isAdmin ? 'selected' : ''}>Member</option>
-                  <option value="admin" ${isAdmin ? 'selected' : ''}>Admin (Full Access)</option>
-                </select>
+                <div id="ctrl-role-seg-wrap"></div>
+                <p class="text-[11px] text-neutral-400 mt-1">Admin has full access</p>
               </div>
-
-              <div class="pt-1">
-                <button type="submit" id="btn-save-member-profile" class="w-full py-2.5 rounded-xl bg-[#0A84FF] text-white font-bold hover:bg-[#0071E3] transition">
-                  Save Changes
-                </button>
-              </div>
-            </form>
+            </div>
           </div>
 
-          <!-- Inset Group: Badges Management -->
+          <!-- Inset Group: Badges Management (Separated from Role) -->
           <div class="ios-inset-group">
             <div class="ios-inset-header flex items-center justify-between">
               <span>MEMBER BADGES</span>
-              <span class="text-[10px] text-neutral-400 font-normal">${(currentMember.badges || []).length} assigned</span>
+              <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline">
+                + Add Custom Badge
+              </button>
             </div>
             <div class="p-3.5 space-y-3">
-              <!-- Current Badges -->
-              <div class="flex flex-wrap gap-1.5 min-h-[32px] p-2 rounded-xl bg-black/20 border border-white/5">
-                ${(currentMember.badges && currentMember.badges.length > 0) ? currentMember.badges.map(b => {
-                  const norm = normalizeBadgeItem(b);
+              <div id="ctrl-badges-list" class="flex flex-wrap gap-1.5 min-h-8 items-center">
+                ${Array.isArray(currentMember.badges) && currentMember.badges.length > 0 ? currentMember.badges.map(b => {
+                  const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
                   return `
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-white/10 text-white border border-white/10">
-                      <span class="w-2 h-2 rounded-full" style="background-color: ${norm.color}"></span>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${norm.color || '#3A3A3C'}40">
+                      <span class="w-2 h-2 rounded-full" style="background-color: ${norm.color || '#3A3A3C'}"></span>
                       <span>${esc(norm.label)}</span>
-                      <button type="button" class="btn-remove-badge hover:text-rose-400 transition ml-0.5 text-neutral-400" data-badge-id="${esc(norm.id)}" aria-label="Remove badge">&times;</button>
+                      <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(norm.id)}" aria-label="Remove badge">&times;</button>
                     </span>
                   `;
                 }).join('') : `
@@ -10024,67 +12420,73 @@ function openMemberControlModal(member) {
           <div class="ios-inset-group">
             <div class="ios-inset-header">ADJUSTMENT TYPE</div>
             <div class="p-3.5 space-y-3.5">
-              <!-- Category Toggle: Points vs Financial -->
-              <div class="flex items-center gap-1.5 p-1 rounded-xl bg-black/20 border border-white/10">
-                <button type="button" id="btn-adj-cat-points" class="flex-1 py-1.5 px-2 rounded-lg font-bold text-xs transition text-center ${adjusterCategory === 'points' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}">
-                  Points &amp; Penalties
-                </button>
-                <button type="button" id="btn-adj-cat-financial" class="flex-1 py-1.5 px-2 rounded-lg font-bold text-xs transition text-center ${adjusterCategory === 'financial' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}">
-                  Financials (EGP)
-                </button>
-              </div>
+              <!-- Category Toggle via renderSegmented -->
+              <div id="ctrl-adj-cat-wrap"></div>
 
-              <!-- Specific Type Selection -->
+              <!-- Action Pills with Semantic Tints -->
               ${adjusterCategory === 'points' ? `
                 <div class="grid grid-cols-2 gap-2">
                   <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${adjusterType === 'bonus' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="bonus">
-                    + Add Bonus Points
+                    + Add Bonus
                   </button>
                   <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${adjusterType === 'penalty' ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="penalty">
-                    - Deduct Penalty Points
+                    - Deduct Penalty
                   </button>
                 </div>
               ` : `
-                <div class="grid grid-cols-3 gap-2">
-                  <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'fine' ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="fine">
-                    + Add Fine
-                  </button>
-                  <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'payment' ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="payment">
-                    - Record Pay
-                  </button>
-                  <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'waive' ? 'bg-amber-500/20 border-amber-500/50 text-amber-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="waive">
-                    ~ Waive Fine
-                  </button>
+                <div class="space-y-2">
+                  <div class="flex items-center justify-between px-1">
+                    <span class="text-[11px] text-neutral-400">Current Balance:</span>
+                    <span class="text-xs font-mono text-[#0A84FF] font-bold">${finesBalance} EGP</span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-2">
+                    <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'fine' ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="fine">
+                      + Add Fine
+                    </button>
+                    <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'payment' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="payment">
+                      - Record Pay
+                    </button>
+                    <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'waive' ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="waive">
+                      ~ Waive Fine
+                    </button>
+                  </div>
                 </div>
               `}
 
-              <!-- Amount Input & Quick Chips -->
+              <!-- Equal-Width Preset Chips in a Single Row -->
               <div>
                 <label class="block text-neutral-300 font-semibold mb-1">
                   Amount (${adjusterCategory === 'points' ? 'Points' : 'EGP'})
                 </label>
                 <input id="ctrl-adjust-amount" type="number" min="1" step="1" class="ios-input text-white font-mono text-sm" placeholder="e.g. 50" required />
-                <div class="flex items-center gap-1.5 mt-2 overflow-x-auto">
+                <div class="grid grid-cols-4 gap-1.5 mt-2">
                   ${adjusterCategory === 'points' ? `
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="25">25</button>
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="50">50</button>
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="100">100</button>
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="250">250</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="25">25</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="250">250</button>
                   ` : `
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="50">50 EGP</button>
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="100">100 EGP</button>
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="200">200 EGP</button>
-                    <button type="button" class="btn-adj-preset px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs" data-amount="500">500 EGP</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="200">200</button>
+                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="500">500</button>
                   `}
                 </div>
               </div>
 
-              <!-- Mandatory Reason -->
+              <!-- Dark Glass Reason Field with Quick Reason Chips -->
               <div>
                 <label class="block text-neutral-300 font-semibold mb-1">
                   Reason <span class="text-rose-400">*</span>
                 </label>
                 <textarea id="ctrl-adjust-reason" class="ios-input text-white text-xs leading-relaxed" rows="2" placeholder="Required explanation for the transaction ledger..." required></textarea>
+                <div class="flex flex-wrap gap-1 mt-1.5">
+                  ${['Meeting attendance', 'Late check-in', 'Special contribution', 'Manual adjustment'].map(chip => `
+                    <button type="button" class="btn-quick-reason px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-neutral-300 transition" data-reason="${chip}">
+                      ${chip}
+                    </button>
+                  `).join('')}
+                </div>
               </div>
 
               <div class="pt-1">
@@ -10143,107 +12545,316 @@ function openMemberControlModal(member) {
                       </div>
                       ${sub.comment ? `<p class="text-neutral-300 italic bg-black/20 p-1.5 rounded">"${esc(sub.comment)}"</p>` : ''}
                       <div class="flex items-center justify-end gap-2 pt-1">
-                        <button class="btn-ctrl-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(sub.id)}">
-                          Edit Points
-                        </button>
-                        <button class="btn-ctrl-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-sub-id="${esc(sub.id)}">
-                          Revoke
-                        </button>
+                        <button class="btn-ctrl-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(sub.id)}">Edit</button>
+                        <button class="btn-ctrl-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-sub-id="${esc(sub.id)}">Revoke</button>
                       </div>
                     </div>
-                  ` : `
-                    <div class="pt-1 flex items-center justify-between border-t border-white/5">
-                      <span class="text-[11px] text-neutral-400">Pending completion</span>
-                      <button class="btn-ctrl-mark-completed px-3 py-1.5 rounded-xl bg-emerald-600/30 text-emerald-300 hover:bg-emerald-600/40 border border-emerald-500/30 font-semibold transition flex items-center gap-1" data-task-id="${esc(task.id)}" data-occ-key="${esc(occKey)}">
-                        <span>Mark Completed</span>
-                      </button>
-                    </div>
-                  `}
+                  ` : ''}
                 </div>
               `;
             }).join('')}
           </div>
         </div>
 
-        <!-- TAB 5: Attendance Logs -->
+        <!-- TAB 5: Attendance -->
         <div id="tab-sec-attendance" class="${activeTab === 'attendance' ? '' : 'hidden'} space-y-3">
-          ${(() => {
-            const memberLogs = state.attendanceLogs.filter(l => l.uid === currentMember.uid);
-            if (memberLogs.length === 0) {
-              return `<div class="p-6 text-center text-xs text-neutral-400">No attendance records found for this member.</div>`;
-            }
-            return `
-              <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-                ${memberLogs.map(log => `
-                  <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
-                    <div class="flex items-center justify-between">
-                      <span class="font-bold text-white">${esc(log.sessionTitle || 'Session')}</span>
-                      <span class="font-mono text-rose-400 font-bold">${log.penalty || 0} pen</span>
-                    </div>
-                    <div class="flex items-center justify-between text-[11px] text-neutral-400">
-                      <span>${formatDateTime(log.checkedInAt)}</span>
-                      <span class="capitalize px-1.5 py-0.5 rounded bg-white/10 text-neutral-300">${esc(log.status || 'checked-in')}</span>
-                    </div>
-                    <div class="flex items-center justify-end gap-2 pt-1 border-t border-white/5">
-                      <button class="btn-ctrl-edit-log px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-log-id="${esc(log.id)}" data-penalty="${log.penalty || 0}">
-                        Edit Penalty
-                      </button>
-                      <button class="btn-ctrl-delete-log px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-log-id="${esc(log.id)}" data-penalty="${log.penalty || 0}">
-                        Delete Log
-                      </button>
-                    </div>
+          <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between">
+            <span>Tracking attendance logs and penalties.</span>
+            <span class="font-mono text-neutral-400">${state.attendanceSessions.filter(s => !s.archived).length} sessions</span>
+          </div>
+
+          <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+            ${state.attendanceSessions.filter(s => !s.archived).map(session => {
+              const occ = resolveSessionOccurrence(session, serverNow());
+              const occKey = occ ? occ.key : 'once';
+              const log = state.attendanceLogs.find(l => l.uid === currentMember.uid && l.sessionId === session.id && l.occurrenceKey === occKey);
+
+              return `
+                <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-white">${esc(session.title)}</span>
+                    ${log ? `
+                      <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] ${log.status === 'on_time' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
+                        ${log.status === 'on_time' ? 'ON TIME' : 'LATE (-' + (log.penalty || 0) + ' pts)'}
+                      </span>
+                    ` : `
+                      <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] bg-white/10 text-neutral-400">NOT CHECKED IN</span>
+                    `}
                   </div>
-                `).join('')}
-              </div>
-            `;
-          })()}
+
+                  ${log ? `
+                    <div class="pt-1 text-[11px] space-y-1.5 border-t border-white/5">
+                      <div class="flex items-center justify-between text-neutral-400">
+                        <span>Checked In: ${formatDateTime(log.checkedInAt)}</span>
+                        ${log.fineEGP ? `<span class="text-rose-400 font-mono">${log.fineEGP} EGP</span>` : ''}
+                      </div>
+                      <div class="flex items-center justify-end gap-2 pt-1">
+                        <button class="btn-ctrl-edit-log px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-log-id="${esc(log.id)}">Edit Penalty</button>
+                        <button class="btn-ctrl-delete-log px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-log-id="${esc(log.id)}">Delete Log</button>
+                      </div>
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
         </div>
 
-        <!-- TAB 6: Submissions -->
+        <!-- TAB 6: Submissions History -->
         <div id="tab-sec-submissions" class="${activeTab === 'submissions' ? '' : 'hidden'} space-y-3">
-          ${(() => {
-            const memberSubs = state.submissions.filter(s => s.uid === currentMember.uid);
-            if (memberSubs.length === 0) {
-              return `<div class="p-6 text-center text-xs text-neutral-400">No submissions found for this member.</div>`;
-            }
-            return `
-              <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-                ${memberSubs.map(s => `
-                  <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
-                    <div class="flex items-center justify-between">
-                      <span class="font-bold text-white">${esc(s.taskTitle)}</span>
-                      <span class="font-mono text-emerald-400 font-bold">+${s.pointsAwarded || 0} pts</span>
-                    </div>
-                    <div class="text-[11px] text-neutral-400">${formatDateTime(s.submittedAt)}</div>
-                    ${s.comment ? `<p class="text-neutral-300 italic bg-black/20 p-1.5 rounded text-[11px]">"${esc(s.comment)}"</p>` : ''}
-                    <div class="flex items-center justify-end gap-2 pt-1 border-t border-white/5">
-                      <button class="btn-ctrl-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(s.id)}">
-                        Edit Points
-                      </button>
-                      <button class="btn-ctrl-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-sub-id="${esc(s.id)}">
-                        Revoke
-                      </button>
-                    </div>
+          <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+            ${state.submissions.filter(s => s.uid === currentMember.uid || s.userId === currentMember.uid).map(sub => {
+              const task = state.tasks.find(t => t.id === sub.taskId);
+              return `
+                <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-white">${esc(task?.title || sub.taskTitle || 'Task')}</span>
+                    <span class="font-mono text-emerald-400 font-bold">+${sub.pointsAwarded || 0} pts</span>
                   </div>
-                `).join('')}
-              </div>
-            `;
-          })()}
+                  <div class="text-[11px] text-neutral-400 flex items-center justify-between">
+                    <span>${formatDateTime(sub.submittedAt)}</span>
+                    <span class="uppercase font-mono text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-neutral-300">${esc(sub.occurrenceKey || 'once')}</span>
+                  </div>
+                  ${Array.isArray(sub.answers) && sub.answers.length > 0 ? `
+                    <div class="space-y-1 pt-1 border-t border-white/5">
+                      ${sub.answers.map((a, i) => {
+                        const aVal = typeof a === 'object' ? (a.type === 'mcq' && a.answer === 'Other' ? `Other: ${a.otherText || ''}` : (a.answer || '')) : a;
+                        return `
+                          <div class="text-[11px] bg-black/20 p-1.5 rounded">
+                            <span class="text-neutral-400 font-medium">Q${i+1}:</span> ${esc(aVal)}
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  ` : ''}
+                  <div class="flex items-center justify-end gap-2 pt-1">
+                    <button class="btn-ctrl-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(sub.id)}">Edit</button>
+                    <button class="btn-ctrl-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-sub-id="${esc(sub.id)}">Revoke</button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
         </div>
       </div>
     `;
 
-    // Wire Navigation Tabs
+    // Wire Tab Switching with Horizontal Smooth Scrolling
     modalBody.querySelectorAll('.member-tab-btn').forEach(btn => {
       btn.onclick = () => {
         activeTab = btn.dataset.tab;
         renderContent();
-        if (activeTab === 'ledger') {
-          loadTransactionLedger(currentMember.uid, document.getElementById('member-ctrl-ledger-list'));
-        }
+        setTimeout(() => {
+          const activeEl = modalBody.querySelector(`.member-tab-btn[data-tab="${activeTab}"]`);
+          if (activeEl) {
+            activeEl.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+          }
+        }, 10);
       };
     });
 
+    // Wire Avatar Tap-to-Crop
+    const avatarCropBtn = modalBody.querySelector('#btn-crop-member-avatar');
+    if (avatarCropBtn) {
+      avatarCropBtn.onclick = () => {
+        pickAndCropImage({
+          aspect: 1,
+          onCropped: async (base64Url) => {
+            try {
+              await updateDoc(doc(db, 'users', currentMember.uid), {
+                avatarUrl: base64Url,
+                photoURL: base64Url,
+                updatedAt: serverTimestamp()
+              });
+              currentMember.avatarUrl = base64Url;
+              currentMember.photoURL = base64Url;
+              const u = usersMap.get(currentMember.uid);
+              if (u) { u.avatarUrl = base64Url; u.photoURL = base64Url; }
+              toast('Avatar updated successfully', 'success');
+              renderContent();
+              renderMembersAdmin();
+            } catch (err) {
+              console.error('Avatar update error:', err);
+              toast('Failed to update avatar: ' + err.message, 'error');
+            }
+          }
+        });
+      };
+    }
+
+    // Wire Display Name Input
+    const nameInp = modalBody.querySelector('#ctrl-member-name');
+    if (nameInp) {
+      nameInp.oninput = (e) => {
+        editedName = e.target.value;
+        markDirty();
+      };
+    }
+
+    // Wire Role Segmented Selector
+    const roleWrap = modalBody.querySelector('#ctrl-role-seg-wrap');
+    if (roleWrap) {
+      roleWrap.appendChild(renderSegmented({
+        id: 'ctrl-member-role-seg',
+        options: [
+          { value: 'member', label: 'Member' },
+          { value: 'admin', label: 'Admin' }
+        ],
+        value: selectedRole,
+        onChange: (newRole) => {
+          if (newRole !== 'admin') {
+            if (currentMember.uid === state.user?.uid) {
+              toast('You cannot demote yourself from admin', 'error');
+              renderContent();
+              return;
+            }
+            const adminCount = state.members.filter(m => m.role === 'admin' || m.isAdmin).length;
+            if (adminCount <= 1) {
+              toast('Cannot demote the last administrator', 'error');
+              renderContent();
+              return;
+            }
+          }
+          selectedRole = newRole;
+          markDirty();
+        }
+      }));
+    }
+
+    // Wire Adjuster Category Segmented
+    const adjCatWrap = modalBody.querySelector('#ctrl-adj-cat-wrap');
+    if (adjCatWrap) {
+      adjCatWrap.appendChild(renderSegmented({
+        id: 'adj-cat-segmented',
+        options: [
+          { value: 'points', label: 'Points & Penalties' },
+          { value: 'financial', label: 'Financials (EGP)' }
+        ],
+        value: adjusterCategory,
+        onChange: (val) => {
+          adjusterCategory = val;
+          adjusterType = val === 'points' ? 'bonus' : 'fine';
+          renderContent();
+        }
+      }));
+    }
+
+    // Wire Adjuster Action Pills
+    modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
+      btn.onclick = () => {
+        adjusterType = btn.dataset.type;
+        renderContent();
+      };
+    });
+
+    // Wire Adjuster Preset Chips
+    modalBody.querySelectorAll('.btn-adj-preset').forEach(btn => {
+      btn.onclick = () => {
+        const amtInput = document.getElementById('ctrl-adjust-amount');
+        if (amtInput) amtInput.value = btn.dataset.amount;
+      };
+    });
+
+    // Wire Quick Reason Chips
+    modalBody.querySelectorAll('.btn-quick-reason').forEach(btn => {
+      btn.onclick = () => {
+        const reasonInput = document.getElementById('ctrl-adjust-reason');
+        if (reasonInput) reasonInput.value = btn.dataset.reason;
+      };
+    });
+
+    // Wire Adjuster Submit
+    const submitAdjustBtn = modalBody.querySelector('#btn-submit-adjust');
+    if (submitAdjustBtn) {
+      submitAdjustBtn.onclick = async () => {
+        const amountVal = parseInt(document.getElementById('ctrl-adjust-amount')?.value, 10);
+        const reasonVal = document.getElementById('ctrl-adjust-reason')?.value.trim();
+
+        if (isNaN(amountVal) || amountVal <= 0) {
+          toast('Please enter a valid amount greater than 0', 'error');
+          return;
+        }
+
+        if (!reasonVal) {
+          toast('Adjustment reason is mandatory for the ledger', 'error');
+          return;
+        }
+
+        submitAdjustBtn.disabled = true;
+        submitAdjustBtn.textContent = 'Recording adjustment...';
+
+        try {
+          const batch = writeBatch(db);
+          const txRef = doc(collection(db, 'users', currentMember.uid, 'transactions'));
+          const txData = {
+            type: adjusterType,
+            category: adjusterCategory,
+            amount: amountVal,
+            reason: reasonVal,
+            adminUid: state.user.uid,
+            adminName: state.user.displayName || 'Admin',
+            createdAt: serverTimestamp()
+          };
+          batch.set(txRef, txData);
+
+          let actionLabel = 'adjustment';
+          if (adjusterCategory === 'points') {
+            if (adjusterType === 'bonus') {
+              const pointsUpdate = buildPointsUpdate(usersMap.get(currentMember.uid) || currentMember, amountVal);
+              batch.update(doc(db, 'users', currentMember.uid), {
+                ...pointsUpdate,
+                updatedAt: serverTimestamp()
+              });
+              actionLabel = `+${amountVal} bonus points`;
+            } else if (adjusterType === 'penalty') {
+              batch.update(doc(db, 'users', currentMember.uid), {
+                penalties: increment(amountVal),
+                updatedAt: serverTimestamp()
+              });
+              actionLabel = `-${amountVal} penalty points`;
+            }
+          } else {
+            const pRef = doc(db, 'users_private', currentMember.uid);
+            if (adjusterType === 'fine') {
+              batch.set(pRef, { finesEGP: increment(amountVal), updatedAt: serverTimestamp() }, { merge: true });
+              actionLabel = `+${amountVal} EGP fine`;
+            } else if (adjusterType === 'payment') {
+              batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
+              actionLabel = `payment of ${amountVal} EGP`;
+            } else if (adjusterType === 'waive') {
+              batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
+              actionLabel = `waive of ${amountVal} EGP fine`;
+            }
+          }
+
+          createNotification(batch, {
+            uid: currentMember.uid,
+            title: 'Account Adjusted',
+            message: `Admin adjusted your account: ${actionLabel}. Reason: "${reasonVal}"`,
+            type: 'system'
+          });
+
+          logAdminAction(batch, {
+            action: 'member_adjusted',
+            targetUid: currentMember.uid,
+            details: { type: adjusterType, category: adjusterCategory, amount: amountVal, reason: reasonVal }
+          });
+
+          await batch.commit();
+
+          invalidateEgpCache(currentMember.uid);
+          getMemberDerivedEgpBalance(currentMember.uid, true).then(() => { renderContent(); });
+          toast(`Successfully applied ${actionLabel}`, 'success');
+        } catch (err) {
+          console.error('Adjuster error:', err);
+          toast('Failed to record adjustment: ' + err.message, 'error');
+          submitAdjustBtn.disabled = false;
+          submitAdjustBtn.textContent = 'Apply & Record in Ledger';
+        }
+      };
+    }
+
+    // Ledger tab loading
     if (activeTab === 'ledger') {
       loadTransactionLedger(currentMember.uid, document.getElementById('member-ctrl-ledger-list'));
       const refreshBtn = document.getElementById('btn-refresh-ctrl-ledger');
@@ -10254,7 +12865,55 @@ function openMemberControlModal(member) {
       }
     }
 
-    // Wire Badges Quick Add
+    // Badges management
+    const openBadgePickerBtn = modalBody.querySelector('#btn-open-badge-picker');
+    if (openBadgePickerBtn) {
+      openBadgePickerBtn.onclick = () => {
+        openBadgePickerSheet({
+          onSelect: async (badgeObj) => {
+            if (!badgeObj) return;
+            const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
+            if (curBadges.some(b => (b.id || b.label || b) === badgeObj.id)) return;
+
+            const newBadges = [...curBadges, badgeObj];
+            const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
+
+            try {
+              const batch = writeBatch(db);
+              batch.update(doc(db, 'users', currentMember.uid), {
+                badges: newBadges,
+                badgeIds: newBadgeIds,
+                updatedAt: serverTimestamp()
+              });
+
+              createNotification(batch, {
+                uid: currentMember.uid,
+                title: 'Badge Awarded!',
+                message: `You have been awarded the "${badgeObj.label}" badge!`,
+                type: 'badge'
+              });
+
+              logAdminAction(batch, {
+                action: 'badge_awarded',
+                targetUid: currentMember.uid,
+                details: { badgeId: badgeObj.id, badgeLabel: badgeObj.label }
+              });
+
+              await batch.commit();
+              currentMember.badges = newBadges;
+              currentMember.badgeIds = newBadgeIds;
+              toast(`Badge "${badgeObj.label}" awarded!`, 'success');
+              renderContent();
+            } catch (err) {
+              console.error('Error adding badge:', err);
+              toast('Failed to add badge', 'error');
+            }
+          }
+        });
+      };
+    }
+
+    // Quick add presets
     modalBody.querySelectorAll('.btn-quick-add-badge').forEach(btn => {
       btn.onclick = async () => {
         const presetId = btn.dataset.presetId;
@@ -10294,14 +12953,14 @@ function openMemberControlModal(member) {
           toast(`Badge "${preset.label}" awarded!`, 'success');
           renderContent();
         } catch (err) {
-          console.error('Error adding badge:', err);
-          toast(err.message || 'Failed to add badge', 'error');
+          console.error('Error adding preset badge:', err);
+          toast('Failed to add badge', 'error');
         }
       };
     });
 
-    // Wire Remove Badge
-    modalBody.querySelectorAll('.btn-remove-badge').forEach(btn => {
+    // Remove badge
+    modalBody.querySelectorAll('.btn-remove-member-badge').forEach(btn => {
       btn.onclick = async () => {
         const badgeId = btn.dataset.badgeId;
         const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
@@ -10314,13 +12973,6 @@ function openMemberControlModal(member) {
             badges: newBadges,
             badgeIds: newBadgeIds,
             updatedAt: serverTimestamp()
-          });
-
-          createNotification(batch, {
-            uid: currentMember.uid,
-            title: 'Badge Removed',
-            message: `A badge was removed from your profile by an administrator.`,
-            type: 'badge'
           });
 
           logAdminAction(batch, {
@@ -10336,456 +12988,74 @@ function openMemberControlModal(member) {
           renderContent();
         } catch (err) {
           console.error('Error removing badge:', err);
-          toast(err.message || 'Failed to remove badge', 'error');
+          toast('Failed to remove badge', 'error');
         }
       };
     });
 
-    // Wire Adjuster Category & Type
-    const catPointsBtn = document.getElementById('btn-adj-cat-points');
-    const catFinBtn = document.getElementById('btn-adj-cat-financial');
-    if (catPointsBtn && catFinBtn) {
-      catPointsBtn.onclick = () => {
-        adjusterCategory = 'points';
-        adjusterType = 'bonus';
-        renderContent();
-      };
-      catFinBtn.onclick = () => {
-        adjusterCategory = 'financial';
-        adjusterType = 'fine';
-        renderContent();
-      };
-    }
-
-    modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
-      btn.onclick = () => {
-        adjusterType = btn.dataset.type;
-        renderContent();
-      };
-    });
-
-    modalBody.querySelectorAll('.btn-adj-preset').forEach(btn => {
-      btn.onclick = () => {
-        const amountInput = document.getElementById('ctrl-adjust-amount');
-        if (amountInput) amountInput.value = btn.dataset.amount;
-      };
-    });
-
-    // Wire Adjuster Submit
-    const submitAdjustBtn = document.getElementById('btn-submit-adjust');
-    if (submitAdjustBtn) {
-      submitAdjustBtn.onclick = async () => {
-        const amountVal = parseInt(document.getElementById('ctrl-adjust-amount')?.value, 10);
-        const reasonVal = document.getElementById('ctrl-adjust-reason')?.value.trim();
-
-        if (isNaN(amountVal) || amountVal <= 0) {
-          toast('Please enter a valid amount greater than 0', 'error');
-          return;
-        }
-
-        if (!reasonVal) {
-          toast('Adjustment reason is mandatory for the ledger', 'error');
-          return;
-        }
-
-        submitAdjustBtn.disabled = true;
-        submitAdjustBtn.textContent = 'Recording adjustment...';
-
-        try {
-          const batch = writeBatch(db);
-          const txRef = doc(collection(db, 'users', currentMember.uid, 'transactions'));
-          const txData = {
-            type: adjusterType,
-            category: adjusterCategory,
-            amount: amountVal,
-            reason: reasonVal,
-            adminUid: state.user.uid,
-            adminName: state.user.displayName || 'Admin',
-            createdAt: serverTimestamp()
-          };
-          batch.set(txRef, txData);
-
-          if (adjusterCategory === 'points') {
-            if (adjusterType === 'bonus') {
-              const pointsUpdate = buildPointsUpdate(usersMap.get(currentMember.uid) || currentMember, amountVal);
-              batch.update(doc(db, 'users', currentMember.uid), {
-                ...pointsUpdate,
-                updatedAt: serverTimestamp()
-              });
-
-              createNotification(batch, {
-                uid: currentMember.uid,
-                title: 'Points Bonus Awarded',
-                message: `+${amountVal} pts: ${reasonVal}`,
-                type: 'points',
-                targetAction: { route: 'profile', itemId: 'ledger' }
-              });
-
-              logAdminAction(batch, {
-                action: 'adjust_points_bonus',
-                targetUid: currentMember.uid,
-                details: { amount: amountVal, reason: reasonVal }
-              });
-            } else {
-              // Deduct penalty
-              batch.update(doc(db, 'users', currentMember.uid), {
-                penalties: increment(amountVal),
-                updatedAt: serverTimestamp()
-              });
-
-              createNotification(batch, {
-                uid: currentMember.uid,
-                title: 'Penalty Incurred',
-                message: `-${amountVal} pts penalty: ${reasonVal}`,
-                type: 'penalty',
-                targetAction: { route: 'profile', itemId: 'ledger' }
-              });
-
-              logAdminAction(batch, {
-                action: 'adjust_points_penalty',
-                targetUid: currentMember.uid,
-                details: { amount: amountVal, reason: reasonVal }
-              });
-            }
-          } else {
-            // Financials (EGP)
-            const pRef = doc(db, 'users_private', currentMember.uid);
-            let notifTitle = 'Financial Adjustment';
-            let notifMsg = `${amountVal} EGP: ${reasonVal}`;
-
-            if (adjusterType === 'fine') {
-              batch.set(pRef, { finesEGP: increment(amountVal), updatedAt: serverTimestamp() }, { merge: true });
-              notifTitle = 'Fine Issued';
-              notifMsg = `Fine of ${amountVal} EGP: ${reasonVal}`;
-            } else if (adjusterType === 'payment') {
-              batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
-              notifTitle = 'Fine Payment Recorded';
-              notifMsg = `Payment of ${amountVal} EGP recorded: ${reasonVal}`;
-            } else if (adjusterType === 'waive') {
-              batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
-              notifTitle = 'Fine Waived';
-              notifMsg = `${amountVal} EGP fine waived: ${reasonVal}`;
-            }
-
-            createNotification(batch, {
-              uid: currentMember.uid,
-              title: notifTitle,
-              message: notifMsg,
-              type: 'fine',
-              targetAction: { route: 'profile', itemId: 'ledger' }
-            });
-
-            logAdminAction(batch, {
-              action: `adjust_financial_${adjusterType}`,
-              targetUid: currentMember.uid,
-              details: { amount: amountVal, reason: reasonVal, type: adjusterType }
-            });
-          }
-
-          await batch.commit();
-          toast('Adjustment recorded successfully!', 'success');
-
-          // Switch to ledger tab to see the recorded entry
-          activeTab = 'ledger';
-          renderContent();
-        } catch (err) {
-          console.error('Error recording adjustment:', err);
-          toast(err.message || 'Failed to record adjustment', 'error');
-          submitAdjustBtn.disabled = false;
-          submitAdjustBtn.textContent = 'Apply & Record in Ledger';
-        }
-      };
-    }
-
-    // Wire Form (Profile & Role)
-    const profileForm = document.getElementById('form-member-profile');
-    if (profileForm) {
-      profileForm.onsubmit = async (e) => {
-        e.preventDefault();
-        const newName = document.getElementById('ctrl-member-name')?.value.trim();
-        const newAvatar = document.getElementById('ctrl-member-avatar')?.value.trim();
-        const newRole = document.getElementById('ctrl-member-role')?.value;
-
-        if (!newName) {
-          toast('Display name cannot be empty', 'error');
-          return;
-        }
-
-        // Guard rail: Admin self-demotion
-        if (currentMember.uid === state.user.uid && newRole === 'member') {
-          toast('Action blocked: You cannot demote yourself from admin role.', 'error');
-          return;
-        }
-
-        // Guard rail: Last-admin demotion
-        if (isAdmin && newRole === 'member') {
-          const adminCount = state.members.filter(m => m.isAdmin || m.role === 'admin').length;
-          if (adminCount <= 1) {
-            toast('Action blocked: Cannot demote the last remaining admin in the system.', 'error');
-            return;
-          }
-        }
-
-        try {
-          const batch = writeBatch(db);
-          const userRef = doc(db, 'users', currentMember.uid);
-          batch.update(userRef, {
-            name: newName,
-            avatarUrl: newAvatar || '',
-            role: newRole,
-            isAdmin: newRole === 'admin',
-            updatedAt: serverTimestamp()
-          });
-
-          if (newRole !== currentMember.role) {
-            createNotification(batch, {
-              uid: currentMember.uid,
-              title: 'Role Updated by Admin',
-              message: `Your account role was changed to ${newRole === 'admin' ? 'Administrator' : 'Member'}.`,
-              type: 'account'
-            });
-          }
-
-          logAdminAction(batch, {
-            action: 'member_update_profile',
-            targetUid: currentMember.uid,
-            details: {
-              newName,
-              newRole,
-              previousRole: currentMember.role
-            }
-          });
-
-          await batch.commit();
-          toast('Member profile updated successfully!', 'success');
-          renderContent();
-        } catch (err) {
-          console.error('Error saving member profile:', err);
-          toast(err.message || 'Failed to update member', 'error');
-        }
-      };
-    }
-
-    // Wire Mark Completed override
-    modalBody.querySelectorAll('.btn-ctrl-mark-completed').forEach(btn => {
-      btn.onclick = async () => {
-        const taskId = btn.dataset.taskId;
-        const occKey = btn.dataset.occKey || 'once';
-        const task = state.tasks.find(t => t.id === taskId);
-        if (!task) return;
-
-        const subId = `${task.id}_${currentMember.uid}_${occKey}`;
-
-        try {
-          const batch = writeBatch(db);
-          const subRef = doc(db, 'submissions', subId);
-
-          batch.set(subRef, {
-            taskId: task.id,
-            taskTitle: task.title,
-            uid: currentMember.uid,
-            userId: currentMember.uid,
-            userName: currentMember.displayName,
-            userEmail: '',
-            userAvatar: currentMember.avatarUrl || '',
-            submittedAt: serverTimestamp(),
-            occurrenceKey: occKey,
-            answers: ['Marked complete by administrator'],
-            comment: 'Admin manual completion override',
-            pointsAwarded: task.points || 5,
-            status: 'approved'
-          });
-
-          const userRef = doc(db, 'users', currentMember.uid);
-          const pointsUpdate = buildPointsUpdate(usersMap.get(currentMember.uid) || currentMember, task.points || 5);
-          batch.update(userRef, {
-            ...pointsUpdate,
-            updatedAt: serverTimestamp()
-          });
-
-          createNotification(batch, {
-            uid: currentMember.uid,
-            title: 'Task Completed by Admin',
-            message: `Administrator marked "${task.title}" completed for you (+${task.points || 5} pts).`,
-            type: 'task',
-            refId: subId
-          });
-
-          logAdminAction(batch, {
-            action: 'admin_mark_task_completed',
-            targetUid: currentMember.uid,
-            details: {
-              taskId: task.id,
-              taskTitle: task.title,
-              pointsAwarded: task.points || 5,
-              subId
-            }
-          });
-
-          await batch.commit();
-          toast(`Task "${task.title}" marked completed!`, 'success');
-          renderContent();
-        } catch (err) {
-          console.error('Error marking task completed:', err);
-          toast(err.message || 'Failed to mark task completed', 'error');
-        }
-      };
-    });
-
-    // Wire Edit Sub & Revoke Sub
-    modalBody.querySelectorAll('.btn-ctrl-edit-sub').forEach(btn => {
-      btn.onclick = () => {
-        const sub = state.submissions.find(x => x.id === btn.dataset.subId);
-        if (sub) openAdminEditSubmissionModal(sub);
-      };
-    });
-
-    modalBody.querySelectorAll('.btn-ctrl-revoke-sub').forEach(btn => {
-      btn.onclick = async () => {
-        const sub = state.submissions.find(x => x.id === btn.dataset.subId);
-        if (sub) {
-          await handleAdminRevokeSubmission(sub);
-          renderContent();
-        }
-      };
-    });
-
-    // Wire Attendance Log Actions
-    modalBody.querySelectorAll('.btn-ctrl-edit-log').forEach(btn => {
-      btn.onclick = () => {
-        const logId = btn.dataset.logId;
-        const oldPenalty = parseInt(btn.dataset.penalty, 10) || 0;
-        const parentRow = btn.parentElement;
-        if (!parentRow) return;
-
-        parentRow.innerHTML = `
-          <div class="flex items-center justify-end gap-2 w-full">
-            <span class="text-neutral-400 text-[11px]">Penalty:</span>
-            <input type="number" min="0" step="1" class="input-inline-penalty w-16 px-2 py-0.5 rounded bg-white/10 border border-white/20 text-white font-mono text-xs text-center" value="${oldPenalty}" />
-            <button class="btn-inline-save px-2.5 py-1 rounded-lg bg-[#0A84FF] text-white font-semibold text-xs">Save</button>
-            <button class="btn-inline-cancel px-2 py-1 rounded-lg bg-white/10 text-neutral-300 text-xs">Cancel</button>
-          </div>
-        `;
-
-        const inputEl = parentRow.querySelector('.input-inline-penalty');
-        const saveBtn = parentRow.querySelector('.btn-inline-save');
-        const cancelBtn = parentRow.querySelector('.btn-inline-cancel');
-
-        if (inputEl) inputEl.focus();
-
-        cancelBtn.onclick = () => {
-          renderContent();
-        };
-
-        saveBtn.onclick = async () => {
-          const val = inputEl ? parseInt(inputEl.value, 10) : NaN;
-          if (isNaN(val) || val < 0) {
-            toast('Invalid penalty value', 'error');
-            return;
-          }
-
-          const newPenalty = val;
-          const delta = newPenalty - oldPenalty;
-
-          saveBtn.disabled = true;
-          saveBtn.textContent = 'Saving...';
-
-          try {
-            const batch = writeBatch(db);
-            batch.update(doc(db, 'attendance_logs', logId), {
-              penalty: newPenalty,
-              updatedAt: serverTimestamp()
-            });
-
-            if (delta !== 0) {
-              batch.update(doc(db, 'users', currentMember.uid), {
-                penalties: increment(delta),
-                updatedAt: serverTimestamp()
-              });
-            }
-
-            createNotification(batch, {
-              uid: currentMember.uid,
-              title: 'Attendance Penalty Updated',
-              message: `Your check-in penalty was updated to ${newPenalty} pts (${delta >= 0 ? '+' : ''}${delta}).`,
-              type: 'attendance',
-              refId: logId
-            });
-
-            logAdminAction(batch, {
-              action: 'attendance_penalty_edited',
-              targetUid: currentMember.uid,
-              details: { logId, oldPenalty, newPenalty, delta }
-            });
-
-            await batch.commit();
-            toast('Attendance penalty updated', 'success');
-            renderContent();
-          } catch (err) {
-            toast(err.message || 'Failed to update penalty', 'error');
-            renderContent();
-          }
-        };
-      };
-    });
-
-    modalBody.querySelectorAll('.btn-ctrl-delete-log').forEach(btn => {
-      btn.onclick = async () => {
-        const logId = btn.dataset.logId;
-        const penalty = parseInt(btn.dataset.penalty, 10) || 0;
-
-        const confirm = await confirmSheet({
-          title: 'Delete Attendance Log',
-          message: `Delete this check-in record? If removed, ${penalty} penalty points will be refunded to the member.`,
-          confirmLabel: 'Delete & Refund',
-          destructive: true
-        });
-
-        if (!confirm) return;
-
-        try {
-          const batch = writeBatch(db);
-          batch.delete(doc(db, 'attendance_logs', logId));
-
-          if (penalty > 0) {
-            batch.update(doc(db, 'users', currentMember.uid), {
-              penalties: increment(-penalty),
-              updatedAt: serverTimestamp()
-            });
-          }
-
-          createNotification(batch, {
-            uid: currentMember.uid,
-            title: 'Attendance Log Removed',
-            message: `A check-in log was removed by an admin (${penalty} penalty points refunded).`,
-            type: 'attendance',
-            refId: logId
-          });
-
-          logAdminAction(batch, {
-            action: 'attendance_log_deleted',
-            targetUid: currentMember.uid,
-            details: { logId, refundedPenalty: penalty }
-          });
-
-          await batch.commit();
-          toast('Attendance record deleted and penalty refunded', 'info');
-          renderContent();
-        } catch (err) {
-          toast(err.message || 'Failed to delete attendance log', 'error');
-        }
-      };
-    });
+    updateSaveButtonState();
   };
 
   openModal({
     title: `Member Control: ${member.displayName}`,
-    body: `<div id="member-ctrl-body"></div>`
+    body: `<div id="member-ctrl-body"></div>`,
+    saveLabel: 'Save',
+    cancelLabel: 'Cancel',
+    onSave: async () => {
+      if (!hasPendingChanges) return true;
+      const cleanName = editedName.trim();
+      if (!cleanName) {
+        toast('Display name cannot be empty', 'error');
+        return false;
+      }
+
+      try {
+        const batch = writeBatch(db);
+        const userRef = doc(db, 'users', member.uid);
+
+        batch.update(userRef, {
+          displayName: cleanName,
+          name: cleanName,
+          role: selectedRole,
+          isAdmin: selectedRole === 'admin',
+          updatedAt: serverTimestamp()
+        });
+
+        logAdminAction(batch, {
+          action: 'member_updated',
+          targetUid: member.uid,
+          details: { displayName: cleanName, role: selectedRole }
+        });
+
+        await batch.commit();
+
+        member.displayName = cleanName;
+        member.name = cleanName;
+        member.role = selectedRole;
+        member.isAdmin = (selectedRole === 'admin');
+
+        const u = usersMap.get(member.uid);
+        if (u) {
+          u.displayName = cleanName;
+          u.name = cleanName;
+          u.role = selectedRole;
+          u.isAdmin = (selectedRole === 'admin');
+        }
+
+        renderMembersAdmin();
+        toast('Member profile saved successfully', 'success');
+        hasPendingChanges = false;
+        return true;
+      } catch (err) {
+        console.error('Error saving member profile:', err);
+        toast('Failed to save member profile: ' + err.message, 'error');
+        return false;
+      }
+    }
   });
 
   renderContent();
 }
-
 
 async function handleRepairTotals() {
   openModal({
@@ -10834,9 +13104,8 @@ async function handleRepairTotals() {
         const pts = Number(s.pointsAwarded) || 0;
         realPoints += pts;
         const sTime = s.submittedAt?.toDate ? s.submittedAt.toDate().getTime() : (s.submittedAt?.seconds ? s.submittedAt.seconds * 1000 : new Date(s.submittedAt || s.createdAt || 0).getTime());
-        const { curMonthKey: smKey, curWeekKey: swKey } = getTimeBucketKeys(sTime, APP_TIMEZONE);
-        if (smKey === curMonthKey) realMonthPoints += pts;
-        if (swKey === curWeekKey) realWeekPoints += pts;
+        if (monthKeyOf(sTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += pts;
+        if (weekKeyOf(sTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += pts;
       });
 
       // 2.2 Points & Deduction Transactions
@@ -10848,9 +13117,8 @@ async function handleRepairTotals() {
           const bPts = Number(t.amount) || 0;
           realPoints += bPts;
           const tTime = t.createdAt?.toDate ? t.createdAt.toDate().getTime() : new Date(t.createdAt || 0).getTime();
-          const { curMonthKey: tmKey, curWeekKey: twKey } = getTimeBucketKeys(tTime, APP_TIMEZONE);
-          if (tmKey === curMonthKey) realMonthPoints += bPts;
-          if (twKey === curWeekKey) realWeekPoints += bPts;
+          if (monthKeyOf(tTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += bPts;
+          if (weekKeyOf(tTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += bPts;
         } else if (t.category === 'points' && t.type === 'deduction') {
           txDeductions += Number(t.amount) || 0;
         }
@@ -10864,14 +13132,14 @@ async function handleRepairTotals() {
 
       const curPoints = u.points || 0;
       const curPenalties = u.penalties || 0;
-      const curMonthPoints = u.monthBucket === curMonthKey ? (u.monthPoints || 0) : 0;
-      const curWeekPoints = u.weekBucket === curWeekKey ? (u.weekPoints || 0) : 0;
+      const curMonthPoints = (u.monthKey === curMonthKey || u.monthBucket === curMonthKey) ? (u.monthPoints || 0) : 0;
+      const curWeekPoints = (u.weekKey === curWeekKey || u.weekBucket === curWeekKey) ? (u.weekPoints || 0) : 0;
 
       const needsRepair = curPoints !== realPoints || 
                           curPenalties !== realPenalties || 
-                          u.monthBucket !== curMonthKey || 
+                          u.monthKey !== curMonthKey || 
                           u.monthPoints !== realMonthPoints || 
-                          u.weekBucket !== curWeekKey || 
+                          u.weekKey !== curWeekKey || 
                           u.weekPoints !== realWeekPoints;
 
       if (needsRepair) {
@@ -11075,7 +13343,33 @@ function toDatetimeLocalString(val) {
 
 function getActiveBroadcasts() {
   const now = serverNow();
-  return state.broadcasts.filter(b => now >= b.startDateTime && now <= b.endDateTime);
+  const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin');
+
+  return state.broadcasts.filter(b => {
+    // Archived broadcasts never appear to members
+    if (b.archived === true) return false;
+
+    // Check time window
+    if (now < b.startDateTime || now > b.endDateTime) return false;
+
+    // Admins see all active broadcasts
+    if (isAdmin) return true;
+
+    // Audience filtering for members
+    const targetType = b.targetType || 'all';
+    if (targetType === 'all') return true;
+
+    if (targetType === 'badge') {
+      const bBadgeIds = Array.isArray(b.badgeIds) ? b.badgeIds : [];
+      if (bBadgeIds.length === 0) return true;
+      const userBadgeIds = Array.isArray(state.user?.badgeIds) ? state.user.badgeIds : (
+        Array.isArray(state.user?.badges) ? state.user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : []
+      );
+      return bBadgeIds.some(id => userBadgeIds.includes(id));
+    }
+
+    return true;
+  });
 }
 
 function renderHomeBroadcastBanner() {
@@ -11083,6 +13377,7 @@ function renderHomeBroadcastBanner() {
   const titleEl = document.getElementById('broadcast-banner-title');
   const dotsEl = document.getElementById('broadcast-carousel-dots');
   const progressFill = document.getElementById('broadcast-progress-fill');
+  const iconEl = document.getElementById('broadcast-banner-icon');
   if (!banner || !titleEl || !dotsEl) return;
 
   const active = getActiveBroadcasts();
@@ -11104,6 +13399,11 @@ function renderHomeBroadcastBanner() {
 
   const current = active[currentBroadcastIndex];
   titleEl.textContent = current.title;
+
+  // Render broadcast icon
+  if (iconEl) {
+    iconEl.innerHTML = getIconSvg(current.icon || 'megaphone', 'w-4 h-4 text-[#0A84FF]');
+  }
 
   // Render dots
   if (active.length > 1) {
@@ -11192,22 +13492,23 @@ function openBroadcastDetailModal(initialBroadcastOrId) {
 
   function renderModalCard() {
     const currentB = activeBroadcasts.find(b => b.id === selectedId) || activeBroadcasts[0];
-    const startFormatted = formatDateTime(currentB.startDateTime);
-    const endFormatted = formatDateTime(currentB.endDateTime);
-    const iconSvg = getIconSvg(currentB.iconKey || currentB.icon || 'antenna', 'w-5 h-5 text-[#0A84FF]');
+    const iconSvg = getIconSvg(currentB.icon || 'megaphone', 'w-5 h-5 text-[#0A84FF]');
 
     let switcherHtml = '';
     if (activeBroadcasts.length > 1) {
       switcherHtml = `
-        <div class="task-filter-bar flex items-center gap-1.5 overflow-x-auto pb-1 mb-2">
+        <div class="task-filter-bar flex items-center gap-1.5 overflow-x-auto pb-1 mb-2 scrollbar-none">
           ${activeBroadcasts.map((b, idx) => `
-            <button type="button" class="btn-switch-broadcast px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition ${b.id === selectedId ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400 hover:text-white'}" data-b-id="${esc(b.id)}">
-              ${esc(b.title || `Notice ${idx + 1}`)}
+            <button type="button" class="btn-switch-broadcast px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition flex items-center gap-1.5 flex-shrink-0 ${b.id === selectedId ? 'bg-[#0A84FF] text-white shadow-md' : 'bg-white/10 text-neutral-400 hover:text-white'}" data-b-id="${esc(b.id)}">
+              <span class="w-3.5 h-3.5 flex items-center justify-center shrink-0">${getIconSvg(b.icon || 'megaphone', 'w-3.5 h-3.5')}</span>
+              <span>${esc(b.title || `Notice ${idx + 1}`)}</span>
             </button>
           `).join('')}
         </div>
       `;
     }
+
+    const hasFooter = Boolean(currentB.customFooter && currentB.customFooter.trim());
 
     bodyEl.innerHTML = `
       ${switcherHtml}
@@ -11222,14 +13523,15 @@ function openBroadcastDetailModal(initialBroadcastOrId) {
           </div>
         </div>
 
-        <div class="broadcast-unified-body">
+        <div class="broadcast-unified-body text-xs text-neutral-200 whitespace-pre-line py-3">
           ${esc(currentB.description || 'No additional details provided.')}
         </div>
 
-        <div class="broadcast-unified-footer flex items-center justify-between text-[11px] text-neutral-400">
-          <span>Active Window</span>
-          <span class="font-mono">${startFormatted} – ${endFormatted}</span>
-        </div>
+        ${hasFooter ? `
+          <div class="broadcast-unified-footer flex items-center text-[11px] text-neutral-400 pt-2 border-t border-white/5">
+            <span>${esc(currentB.customFooter.trim())}</span>
+          </div>
+        ` : ''}
       </div>
 
       <div class="pt-2 text-center">
@@ -11270,37 +13572,6 @@ if (!broadcastEvalInterval) {
   }, 30000);
 }
 
-async function fanOutBroadcastNotifications(broadcastId, broadcastTitle) {
-  try {
-    let lastUserDoc = null;
-    while (true) {
-      let q = query(collection(db, 'users'), limit(450));
-      if (lastUserDoc) {
-        q = query(collection(db, 'users'), startAfter(lastUserDoc), limit(450));
-      }
-      const snap = await getDocs(q);
-      if (snap.empty) break;
-
-      const batch = writeBatch(db);
-      snap.forEach(userDoc => {
-        createNotification(batch, {
-          uid: userDoc.id,
-          title: 'Broadcast Announcement',
-          message: broadcastTitle,
-          type: 'broadcast',
-          refId: broadcastId
-        });
-      });
-
-      await batch.commit();
-      lastUserDoc = snap.docs[snap.docs.length - 1];
-      if (snap.docs.length < 450) break;
-    }
-  } catch (err) {
-    console.warn('Error fanning out broadcast notifications:', err);
-  }
-}
-
 function renderAdminBroadcasts() {
   const container = document.getElementById('admin-broadcasts-list');
   if (!container) return;
@@ -11316,6 +13587,7 @@ function renderAdminBroadcasts() {
   }
 
   const now = serverNow();
+  const allBadges = getAllAvailableBadges();
 
   container.innerHTML = state.broadcasts.map(b => {
     let statusClass = 'bg-neutral-500/20 text-neutral-300 border-neutral-500/30';
@@ -11331,22 +13603,42 @@ function renderAdminBroadcasts() {
     const startFormatted = formatDateTime(b.startDateTime);
     const endFormatted = formatDateTime(b.endDateTime);
     const isSelected = selectionState.active && selectionState.type === 'broadcasts' && selectionState.selectedIds.has(b.id);
+    const iconSvg = getIconSvg(b.icon || 'megaphone', 'w-4 h-4 text-[#0A84FF]');
+
+    let audienceHtml = '<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">All Team</span>';
+    if (b.targetType === 'badge') {
+      const bBadgeIds = Array.isArray(b.badgeIds) ? b.badgeIds : [];
+      if (bBadgeIds.length === 0) {
+        audienceHtml = '<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-neutral-500/20 text-neutral-300">All Badges</span>';
+      } else {
+        audienceHtml = bBadgeIds.map(bId => {
+          const badgeObj = allBadges.find(bg => bg.id === bId) || { label: bId, color: '#3A3A3C' };
+          return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold text-white border border-white/10" style="background-color: ${badgeObj.color || '#3A3A3C'}40">${esc(badgeObj.label)}</span>`;
+        }).join(' ');
+      }
+    }
 
     return `
       <div class="glass-card bulk-select-card p-3.5 space-y-2 text-xs${isSelected ? ' selected' : ''}" data-broadcast-id="${esc(b.id)}" data-bulk-id="${esc(b.id)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content space-y-2 w-full">
           <div class="flex items-start justify-between gap-2">
-            <div class="space-y-0.5">
-              <div class="flex items-center gap-2">
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold border ${statusClass}">
-                  ${statusLabel}
-                </span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/10 text-neutral-300">
-                  ${b.durationSeconds || 5}s rotation
-                </span>
+            <div class="flex items-start gap-2.5 min-w-0 flex-1">
+              <div class="w-8 h-8 rounded-lg bg-[#0A84FF]/20 border border-[#0A84FF]/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                ${iconSvg}
               </div>
-              <h3 class="font-bold text-white text-sm pt-1">${esc(b.title)}</h3>
+              <div class="space-y-1 min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold border ${statusClass}">
+                    ${statusLabel}
+                  </span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/10 text-neutral-300">
+                    ${b.durationSeconds || 5}s rotation
+                  </span>
+                  ${audienceHtml}
+                </div>
+                <h3 class="font-bold text-white text-sm pt-0.5 truncate">${esc(b.title)}</h3>
+              </div>
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
               <button class="btn-edit-broadcast px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-broadcast-id="${esc(b.id)}">
@@ -11364,6 +13656,13 @@ function renderAdminBroadcasts() {
             </p>
           ` : ''}
 
+          ${b.customFooter ? `
+            <div class="text-[10px] text-neutral-300 italic flex items-center gap-1">
+              <span class="text-neutral-500">Footer:</span>
+              <span>"${esc(b.customFooter)}"</span>
+            </div>
+          ` : ''}
+
           <div class="text-[10px] text-neutral-400 font-mono flex items-center gap-1.5 pt-1 border-t border-white/5">
             <span>Schedule:</span>
             <span>${startFormatted} &rarr; ${endFormatted}</span>
@@ -11372,21 +13671,6 @@ function renderAdminBroadcasts() {
       </div>
     `;
   }).join('');
-
-  container.querySelectorAll('.glass-card').forEach(card => {
-    card.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'broadcasts') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-    };
-
-    attachLongPress(card, () => {
-      enterSelectionMode('broadcasts', card.dataset.bulkId);
-    });
-  });
 
   container.querySelectorAll('.btn-edit-broadcast').forEach(btn => {
     btn.onclick = (e) => {
@@ -11425,80 +13709,333 @@ function openAdminBroadcastModal(broadcast = null) {
   const defaultStart = broadcast ? broadcast.startDateTime : now;
   const defaultEnd = broadcast ? broadcast.endDateTime : (now + 7 * 24 * 3600 * 1000);
 
-  openModal({
-    title: broadcast ? 'Edit Broadcast' : 'New Broadcast',
-    body: `
-      <div class="space-y-4 text-xs">
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">Broadcast Title *</label>
-          <input id="input-broadcast-title" type="text" class="ios-input text-white text-sm" value="${esc(broadcast?.title || '')}" placeholder="e.g. Media Team General Meeting" required />
-        </div>
+  let selectedIcon = broadcast?.icon || 'megaphone';
+  let targetType = broadcast?.targetType === 'badge' ? 'badge' : 'all';
+  let selectedBadgeIds = Array.isArray(broadcast?.badgeIds) ? [...broadcast.badgeIds] : [];
+  let durationSeconds = typeof broadcast?.durationSeconds === 'number' && broadcast.durationSeconds >= 3 && broadcast.durationSeconds <= 30
+    ? broadcast.durationSeconds
+    : (broadcast?.durationSeconds || 5);
+  let broadcastStartMs = defaultStart;
+  let broadcastEndMs = defaultEnd;
 
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">Description (Optional)</label>
-          <textarea id="input-broadcast-desc" rows="3" class="ios-input text-white text-xs" placeholder="Full announcement notes or details shown when tapped...">${esc(broadcast?.description || '')}</textarea>
-        </div>
+  const modalBody = document.createElement('div');
+  modalBody.className = 'space-y-4 text-xs';
 
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">Carousel Rotation Duration (seconds)</label>
-          <input id="input-broadcast-duration" type="number" min="1" max="60" value="${broadcast?.durationSeconds || 5}" class="ios-input font-mono text-white text-sm" required />
-          <p class="text-[10px] text-neutral-400 mt-1">Seconds this banner stays visible before rotating to the next broadcast.</p>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-neutral-300 font-semibold mb-1">Start Date &amp; Time *</label>
-            <input id="input-broadcast-start" type="datetime-local" class="ios-input font-mono text-white text-xs" value="${toDatetimeLocalString(defaultStart)}" required />
+  function renderForm() {
+    modalBody.innerHTML = `
+      <!-- Section 1: Icon & Identity -->
+      <div class="ios-inset-group">
+        <div class="ios-inset-header">ANNOUNCEMENT IDENTITY</div>
+        <div class="p-3.5 space-y-3.5">
+          <!-- Icon Picker Row -->
+          <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/5 border border-white/10">
+            <div class="flex items-center gap-3 min-w-0">
+              <div id="broadcast-icon-preview" class="w-10 h-10 rounded-xl bg-[#0A84FF]/20 border border-[#0A84FF]/30 flex items-center justify-center text-[#0A84FF] flex-shrink-0">
+                ${getIconSvg(selectedIcon, 'w-5 h-5')}
+              </div>
+              <div class="min-w-0">
+                <div class="font-semibold text-white text-xs truncate">Broadcast Icon</div>
+                <div class="text-[11px] text-neutral-400 capitalize truncate">${esc(selectedIcon)}</div>
+              </div>
+            </div>
+            <button type="button" id="btn-change-broadcast-icon" class="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition text-xs flex-shrink-0">
+              Change Icon
+            </button>
           </div>
+
+          <!-- Title -->
           <div>
-            <label class="block text-neutral-300 font-semibold mb-1">End Date &amp; Time *</label>
-            <input id="input-broadcast-end" type="datetime-local" class="ios-input font-mono text-white text-xs" value="${toDatetimeLocalString(defaultEnd)}" required />
+            <label class="block text-neutral-300 font-semibold mb-1">Title *</label>
+            <input id="input-broadcast-title" type="text" maxlength="120" class="ios-input text-white text-sm" value="${esc(broadcast?.title || '')}" placeholder="e.g. Media Team General Meeting" required />
+          </div>
+
+          <!-- Description -->
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Description (Optional)</label>
+            <textarea id="input-broadcast-desc" rows="3" class="ios-input text-white text-xs" placeholder="Full announcement notes or details shown when tapped...">${esc(broadcast?.description || '')}</textarea>
           </div>
         </div>
       </div>
-    `,
+
+      <!-- Section 2: Audience & Rotation Duration -->
+      <div class="ios-inset-group">
+        <div class="ios-inset-header">AUDIENCE &amp; ROTATION</div>
+        <div class="p-3.5 space-y-3.5">
+          <!-- Audience Selector -->
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Target Audience</label>
+            <div id="broadcast-audience-seg-wrap"></div>
+            <p class="text-[10px] text-neutral-400 mt-1">Select whether this broadcast is shown to everyone or specific badges.</p>
+          </div>
+
+          <!-- Badge Selector (shown if Badges chosen) -->
+          <div id="broadcast-badges-section" class="${targetType === 'badge' ? '' : 'hidden'} space-y-2 p-2.5 rounded-xl bg-white/5 border border-white/10">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-white">Target Badges *</span>
+              <button type="button" id="btn-select-broadcast-badges" class="text-[#0A84FF] text-xs font-semibold hover:underline">
+                + Select Badges
+              </button>
+            </div>
+            <div id="broadcast-badges-chips" class="flex flex-wrap gap-1.5 min-h-6 items-center">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+          <!-- Rotation Duration Stepper -->
+          <div class="flex items-center justify-between gap-3 pt-1">
+            <div class="min-w-0 flex-1">
+              <span class="block text-neutral-200 font-semibold text-xs">Carousel Rotation Duration</span>
+              <span class="block text-[10px] text-neutral-400">Display duration before rotating to next banner (3-30s)</span>
+            </div>
+            <div id="broadcast-stepper-wrap" class="flex-shrink-0"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Schedule -->
+      <div class="ios-inset-group">
+        <div class="ios-inset-header">SCHEDULE (ACTIVE WINDOW)</div>
+        <div class="p-3.5 space-y-3">
+          <div id="field-broadcast-start"></div>
+          <div id="field-broadcast-end"></div>
+        </div>
+      </div>
+
+      <!-- Section 4: Custom Footer -->
+      <div class="ios-inset-group">
+        <div class="ios-inset-header">FOOTER NOTE (OPTIONAL)</div>
+        <div class="p-3.5 space-y-1.5">
+          <label class="block text-neutral-300 font-semibold mb-1">Custom Footer (max 80 chars)</label>
+          <input id="input-broadcast-footer" type="text" maxlength="80" class="ios-input text-white text-xs" value="${esc(broadcast?.customFooter || '')}" placeholder="e.g. Bring your laptop and badges" />
+          <p class="text-[10px] text-neutral-400">Displayed at the bottom of the member detail card. Leave empty to omit the footer entirely.</p>
+        </div>
+      </div>
+    `;
+
+    wireComponents();
+  }
+
+  function wireComponents() {
+    // 1. Icon Change Button
+    const changeIconBtn = modalBody.querySelector('#btn-change-broadcast-icon');
+    if (changeIconBtn) {
+      changeIconBtn.onclick = () => {
+        openIconPicker({
+          selectedKey: selectedIcon,
+          onSelect: (newKey) => {
+            selectedIcon = newKey;
+            const previewEl = modalBody.querySelector('#broadcast-icon-preview');
+            if (previewEl) previewEl.innerHTML = getIconSvg(selectedIcon, 'w-5 h-5');
+            const nameEl = previewEl?.nextElementSibling?.querySelector('.capitalize');
+            if (nameEl) nameEl.textContent = selectedIcon;
+          }
+        });
+      };
+    }
+
+    // 2. Audience Segmented
+    const audWrap = modalBody.querySelector('#broadcast-audience-seg-wrap');
+    if (audWrap) {
+      audWrap.innerHTML = '';
+      audWrap.appendChild(renderSegmented({
+        id: 'broadcast-audience-seg',
+        options: [
+          { value: 'all', label: 'All Team' },
+          { value: 'badge', label: 'Badges' }
+        ],
+        value: targetType,
+        onChange: (val) => {
+          targetType = val;
+          const badgeSec = modalBody.querySelector('#broadcast-badges-section');
+          if (badgeSec) {
+            if (val === 'badge') {
+              badgeSec.classList.remove('hidden');
+              if (selectedBadgeIds.length === 0) {
+                openBadgeMultiPickerModal();
+              }
+            } else {
+              badgeSec.classList.add('hidden');
+            }
+          }
+        }
+      }));
+    }
+
+    // 3. Badge chips and Selector button
+    renderBadgeChips();
+    const selectBadgesBtn = modalBody.querySelector('#btn-select-broadcast-badges');
+    if (selectBadgesBtn) {
+      selectBadgesBtn.onclick = () => openBadgeMultiPickerModal();
+    }
+
+    // 4. Stepper for Duration
+    const stepperWrap = modalBody.querySelector('#broadcast-stepper-wrap');
+    if (stepperWrap) {
+      stepperWrap.innerHTML = '';
+      stepperWrap.appendChild(renderStepper({
+        id: 'broadcast-stepper',
+        value: durationSeconds,
+        min: 3,
+        max: 30,
+        step: 1,
+        unit: 's',
+        onChange: (v) => {
+          durationSeconds = v;
+        }
+      }));
+    }
+
+    // 5. DateTime fields
+    const startBox = modalBody.querySelector('#field-broadcast-start');
+    if (startBox) {
+      startBox.replaceWith(renderDateTimeField({
+        label: 'Start Date & Time',
+        valueMs: broadcastStartMs,
+        mode: 'datetime',
+        onChange: (ms) => { broadcastStartMs = ms; }
+      }));
+    }
+    const endBox = modalBody.querySelector('#field-broadcast-end');
+    if (endBox) {
+      endBox.replaceWith(renderDateTimeField({
+        label: 'End Date & Time',
+        valueMs: broadcastEndMs,
+        mode: 'datetime',
+        onChange: (ms) => { broadcastEndMs = ms; }
+      }));
+    }
+  }
+
+  function renderBadgeChips() {
+    const chipsContainer = modalBody.querySelector('#broadcast-badges-chips');
+    if (!chipsContainer) return;
+    if (selectedBadgeIds.length === 0) {
+      chipsContainer.innerHTML = '<span class="text-neutral-500 italic text-[11px]">No badges selected yet.</span>';
+      return;
+    }
+    const allBadges = getAllAvailableBadges();
+    chipsContainer.innerHTML = selectedBadgeIds.map(bId => {
+      const bObj = allBadges.find(b => b.id === bId) || { id: bId, label: bId, color: '#3A3A3C' };
+      return `
+        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${bObj.color || '#3A3A3C'}40">
+          <span class="w-2 h-2 rounded-full" style="background-color: ${bObj.color || '#3A3A3C'}"></span>
+          <span>${esc(bObj.label)}</span>
+          <button type="button" class="btn-remove-broadcast-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(bObj.id)}" aria-label="Remove badge">&times;</button>
+        </span>
+      `;
+    }).join('');
+
+    chipsContainer.querySelectorAll('.btn-remove-broadcast-badge').forEach(btn => {
+      btn.onclick = () => {
+        const idToRemove = btn.dataset.badgeId;
+        selectedBadgeIds = selectedBadgeIds.filter(id => id !== idToRemove);
+        renderBadgeChips();
+      };
+    });
+  }
+
+  function openBadgeMultiPickerModal() {
+    const allBadges = getAllAvailableBadges();
+    const tempSelected = new Set(selectedBadgeIds);
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'space-y-3';
+
+    function renderPickerRows() {
+      bodyEl.innerHTML = `
+        <div class="space-y-1.5 max-h-72 overflow-y-auto">
+          ${allBadges.map(b => {
+            const isSelected = tempSelected.has(b.id);
+            return `
+              <button type="button" class="btn-toggle-badge-row w-full p-2.5 rounded-xl flex items-center justify-between text-left transition ${isSelected ? 'bg-[#0A84FF]/20 border border-[#0A84FF]/40 text-white' : 'bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-300'}" data-badge-id="${esc(b.id)}">
+                <div class="flex items-center gap-2.5 min-w-0">
+                  <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${b.color || '#0A84FF'}"></span>
+                  <span class="font-semibold text-xs truncate">${esc(b.label)}</span>
+                </div>
+                ${isSelected ? `
+                  <svg class="w-4 h-4 text-[#0A84FF] flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+                  </svg>
+                ` : ''}
+              </button>
+            `;
+          }).join('')}
+        </div>
+      `;
+
+      bodyEl.querySelectorAll('.btn-toggle-badge-row').forEach(btn => {
+        btn.onclick = () => {
+          const id = btn.dataset.badgeId;
+          if (tempSelected.has(id)) {
+            tempSelected.delete(id);
+          } else {
+            tempSelected.add(id);
+          }
+          renderPickerRows();
+        };
+      });
+    }
+
+    renderPickerRows();
+
+    openModal({
+      title: 'Select Target Badges',
+      body: bodyEl,
+      saveLabel: 'Done',
+      onSave: async () => {
+        selectedBadgeIds = Array.from(tempSelected);
+        renderBadgeChips();
+        return true;
+      }
+    });
+  }
+
+  renderForm();
+
+  openModal({
+    title: broadcast ? 'Edit Broadcast' : 'New Broadcast',
+    body: modalBody,
     saveLabel: broadcast ? 'Save Changes' : 'Publish Broadcast',
     onClose: () => {
       state.editingBroadcastId = null;
     },
     onSave: async () => {
-      const titleInput = document.getElementById('input-broadcast-title');
-      const descInput = document.getElementById('input-broadcast-desc');
-      const durInput = document.getElementById('input-broadcast-duration');
-      const startInput = document.getElementById('input-broadcast-start');
-      const endInput = document.getElementById('input-broadcast-end');
+      const titleInput = modalBody.querySelector('#input-broadcast-title');
+      const descInput = modalBody.querySelector('#input-broadcast-desc');
+      const footerInput = modalBody.querySelector('#input-broadcast-footer');
       const saveBtn = document.getElementById('shared-modal-save');
 
-      const title = titleInput?.value.trim();
-      const desc = descInput?.value.trim();
-      const durationSeconds = parseInt(durInput?.value, 10);
-      const startVal = startInput?.value;
-      const endVal = endInput?.value;
+      const title = titleInput?.value.trim() || '';
+      const desc = descInput?.value.trim() || '';
+      const customFooter = footerInput?.value.trim() || '';
 
       if (!title) {
         toast('Broadcast title is required', 'error');
-        return;
+        return false;
       }
-      if (isNaN(durationSeconds) || durationSeconds < 1) {
-        toast('Duration must be at least 1 second', 'error');
-        return;
+      if (title.length > 120) {
+        toast('Title cannot exceed 120 characters', 'error');
+        return false;
       }
-      if (!startVal || !endVal) {
-        toast('Both start and end dates are required', 'error');
-        return;
+      if (customFooter.length > 80) {
+        toast('Custom footer cannot exceed 80 characters', 'error');
+        return false;
       }
-
-      const startMs = new Date(startVal).getTime();
-      const endMs = new Date(endVal).getTime();
-
-      if (isNaN(startMs) || isNaN(endMs)) {
+      if (targetType === 'badge' && selectedBadgeIds.length === 0) {
+        toast('Please select at least one badge for the target audience', 'error');
+        return false;
+      }
+      if (isNaN(durationSeconds) || durationSeconds < 3 || durationSeconds > 30) {
+        toast('Rotation duration must be between 3 and 30 seconds', 'error');
+        return false;
+      }
+      if (isNaN(broadcastStartMs) || isNaN(broadcastEndMs)) {
         toast('Invalid date/time provided', 'error');
-        return;
+        return false;
       }
-
-      if (endMs <= startMs) {
+      if (broadcastEndMs <= broadcastStartMs) {
         toast('End date/time must be strictly after start date/time', 'error');
-        return;
+        return false;
       }
 
       if (saveBtn) {
@@ -11510,9 +14047,13 @@ function openAdminBroadcastModal(broadcast = null) {
         const payload = {
           title,
           description: desc || '',
+          icon: selectedIcon,
+          targetType,
+          badgeIds: targetType === 'badge' ? selectedBadgeIds : [],
           durationSeconds,
-          startDateTime: Timestamp.fromMillis(startMs),
-          endDateTime: Timestamp.fromMillis(endMs),
+          startDateTime: Timestamp.fromMillis(broadcastStartMs),
+          endDateTime: Timestamp.fromMillis(broadcastEndMs),
+          customFooter,
           updatedAt: serverTimestamp()
         };
 
@@ -11529,11 +14070,41 @@ function openAdminBroadcastModal(broadcast = null) {
 
           toast('Broadcast updated successfully', 'success');
         } else {
+          payload.archived = false;
           payload.createdAt = serverTimestamp();
           const docRef = await addDoc(collection(db, 'broadcasts'), payload);
 
-          // Fan out notifications to all members
-          await fanOutBroadcastNotifications(docRef.id, title);
+          // Write matching notifications_broadcast doc(s)
+          if (targetType === 'badge') {
+            for (const bId of selectedBadgeIds) {
+              await addDoc(collection(db, 'notifications_broadcast'), {
+                title,
+                message: desc || title,
+                body: desc || title,
+                type: 'broadcast',
+                targetType: 'badge',
+                badgeId: bId,
+                broadcastId: docRef.id,
+                icon: selectedIcon,
+                archived: false,
+                readBy: [],
+                createdAt: serverTimestamp()
+              });
+            }
+          } else {
+            await addDoc(collection(db, 'notifications_broadcast'), {
+              title,
+              message: desc || title,
+              body: desc || title,
+              type: 'broadcast',
+              targetType: 'all',
+              broadcastId: docRef.id,
+              icon: selectedIcon,
+              archived: false,
+              readBy: [],
+              createdAt: serverTimestamp()
+            });
+          }
 
           const batch = writeBatch(db);
           logAdminAction(batch, {
@@ -11547,13 +14118,15 @@ function openAdminBroadcastModal(broadcast = null) {
 
         state.editingBroadcastId = null;
         closeAllModals();
+        return true;
       } catch (err) {
         console.error('Error saving broadcast:', err);
-        toast(err.message || 'Failed to save broadcast', 'error');
+        toast('Failed to save broadcast: ' + err.message, 'error');
         if (saveBtn) {
           saveBtn.disabled = false;
           saveBtn.textContent = broadcast ? 'Save Changes' : 'Publish Broadcast';
         }
+        return false;
       }
     }
   });
@@ -12413,6 +14986,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initErrorBoundary();
   initOfflineBanner();
   initNavigation();
+  initAdminPushConsole();
   attachEventHandlers();
   // Cold-start cache: immediately attach listeners so local cache renders instantly before auth/network completes
   initFirestoreListeners();

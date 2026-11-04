@@ -12,14 +12,16 @@ rules_version = '2';
 //   - points: int (set to 0 on create; incremented via atomic batch with submission or admin)
 //   - penalties: int (set to 0 on create; incremented via atomic batch with attendance check-in or admin)
 //   - lastOpId: string (submission ID or attendanceLog ID tracking atomic point/penalty credit; prevents double-credit)
-//   - monthBucket: string (optional month bucket e.g. '2026-05', updated via atomic batch with submission or admin)
-//   - monthPoints: int (optional monthly points tally, updated via atomic batch with submission or admin)
-//   - weekBucket: string (optional week bucket e.g. '2026-W18', updated via atomic batch with submission or admin)
-//   - weekPoints: int (optional weekly points tally, updated via atomic batch with submission or admin)
+//   - weekKey: string (weekly leaderboard key e.g. '2026-W18', updated via atomic batch with submission or admin)
+//   - weekPoints: int (weekly points tally, reset on new weekKey or incremented via atomic batch with submission or admin)
+//   - monthKey: string (monthly leaderboard key e.g. '2026-05', updated via atomic batch with submission or admin)
+//   - monthPoints: int (monthly points tally, reset on new monthKey or incremented via atomic batch with submission or admin)
+//   - weekBucket: string (legacy weekly key e.g. '2026-W18', tolerated alongside weekKey)
+//   - monthBucket: string (legacy monthly key e.g. '2026-05', tolerated alongside monthKey)
 //   - badges: list (assigned by admin only, defaults to [] on create)
 //   - badgeIds: list (assigned by admin only, defaults to [] on create)
 //   - updatedAt: timestamp (editable by owner)
-//   - lastSeenAt: timestamp (editable by owner with request.time constraint)
+//   - lastSeenAt: timestamp (legacy field tolerated; server-clock sync moved to users_private)
 //
 // Subcollection: users/{uid}/transactions/{txId}
 //   - Read: owner or admin
@@ -32,6 +34,7 @@ rules_version = '2';
 //   - finesEGP: number / int (accumulated unpaid fines in EGP, managed strictly by admin)
 //   - createdAt: timestamp
 //   - updatedAt: timestamp
+//   - lastSeenAt: timestamp (server-clock sync; editable by owner with request.time constraint)
 //
 // Collection: tasks/{taskId}
 //   - active: bool (defaults to true)
@@ -50,7 +53,8 @@ rules_version = '2';
 //   - uid: string (author UID, matches auth.uid)
 //   - occurrenceKey: string
 //   - submittedAt: timestamp (must equal request.time)
-//   - pointsAwarded: int (matches task points or tiered rewards early/onTime/grace points)
+//   - pointsAwarded: int (matches task base points, earlyBonus points, or legacy tiered rewards)
+//   - answers: list (optional list of submission answers, max 50 items)
 //   - Read: owner or admin
 //   - Create: admin or authenticated user completing a valid, active, non-archived task
 //   - Update / Delete: admin only
@@ -71,8 +75,12 @@ rules_version = '2';
 //   - archived: bool (defaults to false)
 //   - earlyCheckInMinutes: int (early grace window in minutes)
 //   - lateCutoffMinutes: int (late cutoff window in minutes)
-//   - minPenalty: int (minimum penalty points for late arrival)
-//   - maxPenalty: int (maximum penalty points for late arrival)
+//   - minPenalty: int (legacy minimum penalty for late arrival)
+//   - maxPenalty: int (legacy maximum penalty for late arrival)
+//   - penaltyPointsEnabled: bool (legacy points penalty toggle, defaults to true)
+//   - penaltyFinesEnabled: bool (legacy financial fines toggle, defaults to false)
+//   - pointsPenalty: map (v2.1.0 decoupled points penalty configuration: { enabled: bool, min: int, max: int, ... })
+//   - finePenalty: map (v2.1.0 decoupled financial fine configuration: { enabled: bool, min: int, max: int, ... })
 //   - Read: signed-in users
 //   - Write: admin only
 //
@@ -84,7 +92,8 @@ rules_version = '2';
 //   - occurrenceStart: timestamp
 //   - checkedInAt: timestamp (must equal request.time)
 //   - status: string ('on_time' | 'late' | 'absent')
-//   - penalty: int (0 if on_time, bounded calculation if late)
+//   - penalty: int (0 if on_time, bounded points calculation if late)
+//   - fineEGP: number / int (0 if on_time, bounded financial fine calculation if late)
 //   - delaySeconds: int
 //   - Read: owner or admin
 //   - Create: admin or authenticated user checking in within allowed session window (document must not already exist)
@@ -123,15 +132,19 @@ rules_version = '2';
 //   - Update: admin, or signed-in user appending self to readBy
 //
 // Collection: broadcasts/{broadcastId}
-//   - title: string (required)
+//   - title: string (required, max length 120)
 //   - description: string (optional)
 //   - durationSeconds: int / number (default 5)
+//   - customFooter: string (optional, max length 120 if present)
+//   - icon: free field (optional)
+//   - targetType: string ('all' | 'badge')
+//   - badgeIds: list (optional target badge IDs)
 //   - startDateTime: timestamp / string
 //   - endDateTime: timestamp / string
 //   - createdAt: timestamp
 //   - updatedAt: timestamp
 //   - Read: signedIn()
-//   - Write: isAdmin()
+//   - Write: isAdmin() (schema validated for title & customFooter lengths)
 //
 // Collection: admin_logs/{logId}
 //   - adminUid: string (UID of executing admin)
@@ -182,24 +195,86 @@ service cloud.firestore {
       );
     }
 
+    // Validates that pointsAwarded matches one of the allowed point values configured on the task:
+    //   - Base / on-time points: task.get('points', 5)
+    //   - Early bonus: task.earlyBonus.points (if task.get('earlyBonus', {}).get('enabled', false) == true)
+    //   - Legacy tiered rewards: earlyPoints, onTimePoints, or gracePoints (if task.get('tieredRewards', {}).get('enabled', false) == true)
+    // Note: Deadline TIMING for recurring tasks cannot be verified by rules (the schedule cannot be evaluated there);
+    // the guarantee is that points can never exceed the task's configured values.
     function isValidSubmissionPoints(task, pointsAwarded) {
       return (
+        pointsAwarded == task.get('points', 5) ||
         (
-          task.get('tieredRewards', {}).get('enabled', false) == true &&
-          (
-            pointsAwarded == task.get('points', 5) ||
-            pointsAwarded in [
-              task.tieredRewards.earlyPoints,
-              task.tieredRewards.onTimePoints,
-              task.tieredRewards.gracePoints
-            ]
-          )
+          task.get('earlyBonus', {}).get('enabled', false) == true &&
+          pointsAwarded == task.earlyBonus.points
         ) ||
         (
-          task.get('tieredRewards', {}).get('enabled', false) != true &&
-          pointsAwarded == task.get('points', 5)
+          task.get('tieredRewards', {}).get('enabled', false) == true &&
+          pointsAwarded in [
+            task.tieredRewards.earlyPoints,
+            task.tieredRewards.onTimePoints,
+            task.tieredRewards.gracePoints
+          ]
         )
       );
+    }
+
+    // Validates attendance points penalty for late arrival:
+    //   - If session defines decoupled pointsPenalty map: bounds enforced if enabled, otherwise 0
+    //   - Else if session uses legacy configuration: bounds enforced if penaltyPointsEnabled (default true), otherwise 0
+    function isValidAttendancePoints(session, penalty) {
+      return ('pointsPenalty' in session && session.pointsPenalty is map)
+        ? (
+            session.pointsPenalty.get('enabled', false) == true
+              ? (penalty >= session.pointsPenalty.get('min', 0) && penalty <= session.pointsPenalty.get('max', 999999))
+              : penalty == 0
+          )
+        : (
+            session.get('penaltyPointsEnabled', true) == true
+              ? (penalty >= session.get('minPenalty', 0) && penalty <= session.get('maxPenalty', 999999))
+              : penalty == 0
+          );
+    }
+
+    // Validates attendance financial fine (EGP) for late arrival:
+    //   - If session defines decoupled finePenalty map: bounds enforced if enabled, otherwise 0
+    //   - Else if session uses legacy configuration: bounds enforced if penaltyFinesEnabled (default false), otherwise 0
+    function isValidAttendanceFine(session, fineEGP) {
+      return ('finePenalty' in session && session.finePenalty is map)
+        ? (
+            session.finePenalty.get('enabled', false) == true
+              ? (fineEGP >= session.finePenalty.get('min', 0) && fineEGP <= session.finePenalty.get('max', 999999))
+              : fineEGP == 0
+          )
+        : (
+            session.get('penaltyFinesEnabled', false) == true
+              ? (fineEGP >= session.get('minPenalty', 0) && fineEGP <= session.get('maxPenalty', 999999))
+              : fineEGP == 0
+          );
+    }
+
+    function isValidAvatarUrl() {
+      return !('avatarUrl' in request.resource.data) ||
+        (request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 32000);
+    }
+
+    function isValidLogoUrl() {
+      return !('logoUrl' in request.resource.data) ||
+        (request.resource.data.logoUrl is string && request.resource.data.logoUrl.size() <= 64000);
+    }
+
+    function isValidSubmissionPointUpdate(d) {
+      let oldWeekKey = resource.data.get('weekKey', resource.data.get('weekBucket', ''));
+      let newWeekKey = request.resource.data.get('weekKey', request.resource.data.get('weekBucket', oldWeekKey));
+      let oldWeekPts = resource.data.get('weekPoints', 0);
+      let newWeekPts = request.resource.data.get('weekPoints', 0);
+      let oldMonthKey = resource.data.get('monthKey', resource.data.get('monthBucket', ''));
+      let newMonthKey = request.resource.data.get('monthKey', request.resource.data.get('monthBucket', oldMonthKey));
+      let oldMonthPts = resource.data.get('monthPoints', 0);
+      let newMonthPts = request.resource.data.get('monthPoints', 0);
+      return request.resource.data.points - resource.data.get('points', 0) == d &&
+        (newWeekKey == oldWeekKey ? newWeekPts == oldWeekPts + d : newWeekPts == d) &&
+        (newMonthKey == oldMonthKey ? newMonthPts == oldMonthPts + d : newMonthPts == d);
     }
 
     // ---------------------------------------------------------------
@@ -220,28 +295,31 @@ service cloud.firestore {
       // Create: Admin can create any user profile.
       // Owner can create their own profile with role 'member', zero points/penalties, and empty/default badges.
       // Explicitly restricts badges and badgeIds writes to ADMIN-ONLY (defaults to [] if missing or on creation).
-      allow create: if isAdmin() || (
-                       isOwner(uid) &&
-                       request.resource.data.get('role', 'member') == 'member' &&
-                       request.resource.data.get('points', 0) == 0 &&
-                       request.resource.data.get('penalties', 0) == 0 &&
-                       request.resource.data.get('totalPenalties', 0) == 0 &&
-                       request.resource.data.get('badges', []) == [] &&
-                       request.resource.data.get('badgeIds', []) == []
+      // When avatarUrl is present in request.resource.data (admin and owner), requires string and size <= 32000.
+      allow create: if isValidAvatarUrl() && (
+                       isAdmin() || (
+                         isOwner(uid) &&
+                         request.resource.data.get('role', 'member') == 'member' &&
+                         request.resource.data.get('points', 0) == 0 &&
+                         request.resource.data.get('penalties', 0) == 0 &&
+                         request.resource.data.get('totalPenalties', 0) == 0 &&
+                         request.resource.data.get('badges', []) == [] &&
+                         request.resource.data.get('badgeIds', []) == []
+                       )
                      );
 
-      // Update: Admin can update any field (including points, monthBucket, monthPoints, weekBucket, weekPoints, penalties, badges, badgeIds, or roles).
+      // Update: Admin can update any field (including points, weekKey, weekPoints, monthKey, monthPoints, penalties, badges, badgeIds, or roles; tolerating legacy weekBucket, monthBucket).
       // Owner can update:
       //   1. Profile fields: name, displayName, avatarUrl, photoURL, updatedAt
-      //   2. Heartbeat: lastSeenAt == request.time
-      //   3. Atomic point increment via atomic batch with submission:
-      //      - Affected keys must strictly be in ['points', 'lastOpId', 'monthBucket', 'monthPoints', 'weekBucket', 'weekPoints', 'updatedAt']
+      //   2. Atomic point increment via atomic batch with submission:
+      //      - Affected keys must strictly be in ['points', 'lastOpId', 'weekKey', 'weekPoints', 'monthKey', 'monthPoints', 'updatedAt'] (tolerating legacy monthBucket, weekBucket)
       //      - lastOpId must differ from existing lastOpId
       //      - Submission document must not exist before the batch (!exists)
       //      - Submission document must exist after the batch (existsAfter)
       //      - Submission document must belong to the user
       //      - Point delta must exactly equal the submission's pointsAwarded
-      //   4. Atomic penalty increment via atomic batch with attendance check-in:
+      //      - weekPoints and monthPoints must increment by pointsAwarded if same weekKey/monthKey, or reset to pointsAwarded if new weekKey/monthKey
+      //   3. Atomic penalty increment via atomic batch with attendance check-in:
       //      - Affected keys must strictly be in ['penalties', 'totalPenalties', 'lastOpId', 'updatedAt']
       //      - lastOpId must differ from existing lastOpId
       //      - Attendance log document must not exist before the batch (!exists)
@@ -249,32 +327,31 @@ service cloud.firestore {
       //      - Attendance log document must belong to the user
       //      - Penalty delta must exactly equal the attendance log's penalty
       // Owner can NEVER change role, badges, or badgeIds (strictly admin-only).
-      allow update: if isAdmin() || (
-                       isOwner(uid) &&
-                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'badges', 'badgeIds']) &&
-                       (
-                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'avatarUrl', 'photoURL', 'updatedAt']) ||
+      // When avatarUrl is updated (admin and owner), requires string and size <= 32000. If omitted or not updated, allowed as before.
+      allow update: if (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || isValidAvatarUrl()) && (
+                       isAdmin() || (
+                         isOwner(uid) &&
+                         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'badges', 'badgeIds']) &&
                          (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeenAt']) &&
-                           request.resource.data.lastSeenAt == request.time
-                         ) ||
-                         (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId', 'monthBucket', 'monthPoints', 'weekBucket', 'weekPoints', 'updatedAt']) &&
-                           request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
-                           !exists(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
-                           existsAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
-                           getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
-                           request.resource.data.points - resource.data.get('points', 0) == getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.pointsAwarded
-                         ) ||
-                         (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penalties', 'totalPenalties', 'lastOpId', 'updatedAt']) &&
-                           request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
-                           !exists(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
-                           existsAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
-                           getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'avatarUrl', 'photoURL', 'updatedAt']) ||
                            (
-                             (request.resource.data.diff(resource.data).affectedKeys().hasAny(['penalties']) && request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty) ||
-                             (request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalPenalties']) && request.resource.data.totalPenalties - resource.data.get('totalPenalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty)
+                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId', 'weekKey', 'weekPoints', 'monthKey', 'monthPoints', 'updatedAt', 'monthBucket', 'weekBucket']) &&
+                             request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
+                             !exists(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
+                             existsAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
+                             getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
+                             isValidSubmissionPointUpdate(getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.pointsAwarded)
+                           ) ||
+                           (
+                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penalties', 'totalPenalties', 'lastOpId', 'updatedAt']) &&
+                             request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
+                             !exists(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
+                             existsAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
+                             getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
+                             (
+                               (request.resource.data.diff(resource.data).affectedKeys().hasAny(['penalties']) && request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty) ||
+                               (request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalPenalties']) && request.resource.data.totalPenalties - resource.data.get('totalPenalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty)
+                             )
                            )
                          )
                        )
@@ -295,11 +372,28 @@ service cloud.firestore {
       // Sensitive private data readable only by the owner or admins
       allow read: if isOwner(uid) || isAdmin();
 
-      // Owner can write non-financial fields (email, fcmTokens, createdAt, updatedAt; never finesEGP).
+      // Owner can write non-financial fields (email, fcmTokens, createdAt, updatedAt, and optional lastSeenAt; never finesEGP).
       // Admin can write/increment finesEGP and manage private docs.
-      allow create: if (isOwner(uid) && !request.resource.data.keys().hasAny(['finesEGP']) && request.resource.data.keys().hasOnly(['email', 'fcmTokens', 'createdAt', 'updatedAt'])) || isAdmin();
+      allow create: if (
+                       isOwner(uid) &&
+                       !request.resource.data.keys().hasAny(['finesEGP']) &&
+                       request.resource.data.keys().hasOnly(['email', 'fcmTokens', 'createdAt', 'updatedAt', 'lastSeenAt']) &&
+                       request.resource.data.get('lastSeenAt', request.time) == request.time
+                     ) || isAdmin();
 
-      allow update: if (isOwner(uid) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['finesEGP']) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'fcmTokens', 'updatedAt'])) || isAdmin();
+      // Owner can update email, fcmTokens, updatedAt OR heartbeat lastSeenAt (request.time); never finesEGP.
+      // Admin can update all fields.
+      allow update: if (
+                       isOwner(uid) &&
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['finesEGP']) &&
+                       (
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'fcmTokens', 'updatedAt']) ||
+                         (
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeenAt']) &&
+                           request.resource.data.lastSeenAt == request.time
+                         )
+                       )
+                     ) || isAdmin();
 
       // Delete allowed for admins
       allow delete: if isAdmin();
@@ -331,6 +425,7 @@ service cloud.firestore {
         request.resource.data.uid == request.auth.uid &&
         submissionId == (request.resource.data.taskId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey) &&
         request.resource.data.submittedAt == request.time &&
+        (!('answers' in request.resource.data) || (request.resource.data.answers is list && request.resource.data.answers.size() <= 50)) &&
         exists(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)) &&
         get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('active', true) == true &&
         get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('archived', false) == false &&
@@ -367,22 +462,29 @@ service cloud.firestore {
           ) &&
           request.resource.data.checkedInAt == request.time &&
           exists(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)) &&
-          get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('active', true) == true &&
+          get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('active', true) != false &&
           get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('archived', false) == false &&
           request.time.toMillis() >= request.resource.data.occurrenceStart.toMillis() - (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('earlyCheckInMinutes', 0) * 60 * 1000) &&
           request.time.toMillis() <= request.resource.data.occurrenceStart.toMillis() + (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('lateCutoffMinutes', 120) * 60 * 1000) &&
           (
             (
               request.resource.data.status == 'on_time' &&
+              request.time <= request.resource.data.occurrenceStart &&
               request.resource.data.penalty == 0 &&
-              request.time <= request.resource.data.occurrenceStart
+              request.resource.data.get('fineEGP', 0) == 0
             ) ||
             (
               request.resource.data.status == 'late' &&
               request.time > request.resource.data.occurrenceStart &&
-              request.resource.data.penalty >= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('minPenalty', 0) &&
-              request.resource.data.penalty <= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('maxPenalty', 999999) &&
-              math.abs(request.time.toMillis() - request.resource.data.occurrenceStart.toMillis() - request.resource.data.delaySeconds * 1000) <= 10000
+              math.abs(request.time.toMillis() - request.resource.data.occurrenceStart.toMillis() - request.resource.data.delaySeconds * 1000) <= 10000 &&
+              isValidAttendancePoints(
+                get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data,
+                request.resource.data.penalty
+              ) &&
+              isValidAttendanceFine(
+                get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data,
+                request.resource.data.get('fineEGP', 0)
+              )
             )
           )
         )
@@ -450,9 +552,24 @@ service cloud.firestore {
     // Broadcasts Collection
     // ---------------------------------------------------------------
 
+    // Audience filtering: members see a broadcast in the banner/switcher only if `targetType` is 'all' or their `badgeIds` intersect the broadcast's `badgeIds`; admins see all. This is display filtering only (the collection stays readable by signed-in users).
+    //
+    // Schema notes:
+    //   - title: string (title.size() <= 120)
+    //   - customFooter: optional string (customFooter.size() <= 120 if present)
+    //   - icon: free field (optional)
     match /broadcasts/{broadcastId} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow write: if isAdmin() && (
+        request.resource == null || (
+          request.resource.data.title is string &&
+          request.resource.data.title.size() <= 120 &&
+          (!('customFooter' in request.resource.data) || (
+            request.resource.data.customFooter is string &&
+            request.resource.data.customFooter.size() <= 120
+          ))
+        )
+      );
     }
 
     // ---------------------------------------------------------------
@@ -488,13 +605,17 @@ service cloud.firestore {
     // Global application settings (e.g. settings/global, settings/app_config, settings/general):
     // Public read allows the app to load branding, custom theme colors, and config.
     // Writes are strictly restricted to administrators.
-    // For settingId == 'general', defaultLeaderboardPeriod must be in ['all', 'month', 'week'] if provided.
+    // For settingId == 'general', defaultLeaderboardPeriod must be in ['all', 'month', 'week'] if provided,
+    // and logoUrl must be a string of <= 64000 characters if present.
     match /settings/{settingId} {
       allow read: if true;
       allow write: if isAdmin() && (
         request.resource == null ||
         settingId != 'general' ||
-        request.resource.data.get('defaultLeaderboardPeriod', 'all') in ['all', 'month', 'week']
+        (
+          request.resource.data.get('defaultLeaderboardPeriod', 'all') in ['all', 'month', 'week'] &&
+          isValidLogoUrl()
+        )
       );
     }
   }
