@@ -30,16 +30,17 @@ const sandbox = {
   Object,
   Set,
   Map,
-  serverNow: () => Date.now()
+  serverNow: () => Date.now(),
+  increment: (n) => ({ __op: 'increment', n })
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints } = exportsObj;
 
 assert.strictEqual(APP_TIMEZONE, 'Africa/Cairo', 'APP_TIMEZONE must be Africa/Cairo');
 assert.strictEqual(typeof getOccurrences, 'function', 'getOccurrences must be a function');
@@ -457,6 +458,45 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
     resolveSessionOccurrence(session);
     computeAttendance(session);
   }, 'Engine functions must default to serverNow() without throwing now.getTime is not a function');
+}
+
+// ==========================================
+// TEST 7: TIME-BUCKET HELPERS & LEADERBOARD PERIODS (v2.0.0)
+// ==========================================
+{
+  const may1Ms = zonedDateToMs(2026, 5, 1, 12, 0, 0, 'Africa/Cairo');
+  const { curMonthKey, curWeekKey } = getTimeBucketKeys(may1Ms, 'Africa/Cairo');
+  assert.strictEqual(curMonthKey, '2026-05', 'Month key for May 1 2026 should be 2026-05');
+  assert.strictEqual(curWeekKey, '2026-W18', 'Week key for May 1 2026 should be 2026-W18');
+
+  // buildPointsUpdate for new user or fresh month
+  const update1 = buildPointsUpdate({ points: 10, monthBucket: '2026-04', monthPoints: 5, weekBucket: '2026-W17', weekPoints: 5 }, 15, may1Ms);
+  assert.strictEqual(update1.monthBucket, '2026-05');
+  assert.strictEqual(update1.monthPoints, 15);
+  assert.strictEqual(update1.weekBucket, '2026-W18');
+  assert.strictEqual(update1.weekPoints, 15);
+
+  // buildPointsUpdate for existing bucket (accumulating)
+  const update2 = buildPointsUpdate({ points: 25, monthBucket: '2026-05', monthPoints: 15, weekBucket: '2026-W18', weekPoints: 15 }, 10, may1Ms);
+  assert.deepStrictEqual(update2.monthPoints, { __op: 'increment', n: 10 });
+  assert.deepStrictEqual(update2.weekPoints, { __op: 'increment', n: 10 });
+
+  // getMemberPeriodPoints
+  const member = {
+    points: 100,
+    monthBucket: '2026-05',
+    monthPoints: 40,
+    weekBucket: '2026-W18',
+    weekPoints: 20
+  };
+  assert.strictEqual(getMemberPeriodPoints(member, 'all', may1Ms), 100);
+  assert.strictEqual(getMemberPeriodPoints(member, 'month', may1Ms), 40);
+  assert.strictEqual(getMemberPeriodPoints(member, 'week', may1Ms), 20);
+
+  // Expired bucket gives 0 points
+  const june1Ms = zonedDateToMs(2026, 6, 1, 12, 0, 0, 'Africa/Cairo');
+  assert.strictEqual(getMemberPeriodPoints(member, 'month', june1Ms), 0);
+  assert.strictEqual(getMemberPeriodPoints(member, 'week', june1Ms), 0);
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');

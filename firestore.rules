@@ -12,12 +12,26 @@ rules_version = '2';
 //   - points: int (set to 0 on create; incremented via atomic batch with submission or admin)
 //   - penalties: int (set to 0 on create; incremented via atomic batch with attendance check-in or admin)
 //   - lastOpId: string (submission ID or attendanceLog ID tracking atomic point/penalty credit; prevents double-credit)
+//   - monthBucket: string (optional month bucket e.g. '2026-05', updated via atomic batch with submission or admin)
+//   - monthPoints: int (optional monthly points tally, updated via atomic batch with submission or admin)
+//   - weekBucket: string (optional week bucket e.g. '2026-W18', updated via atomic batch with submission or admin)
+//   - weekPoints: int (optional weekly points tally, updated via atomic batch with submission or admin)
+//   - badges: list (assigned by admin only, defaults to [] on create)
+//   - badgeIds: list (assigned by admin only, defaults to [] on create)
 //   - updatedAt: timestamp (editable by owner)
 //   - lastSeenAt: timestamp (editable by owner with request.time constraint)
+//
+// Subcollection: users/{uid}/transactions/{txId}
+//   - Read: owner or admin
+//   - Create: admin only
+//   - Update / Delete: false (append-only immutable financial balance log)
 //
 // Collection: users_private/{uid}
 //   - email: string (owner or admin managed)
 //   - fcmTokens: list / map / string (push notification tokens)
+//   - finesEGP: number / int (accumulated unpaid fines in EGP, managed strictly by admin)
+//   - createdAt: timestamp
+//   - updatedAt: timestamp
 //
 // Collection: tasks/{taskId}
 //   - active: bool (defaults to true)
@@ -36,10 +50,21 @@ rules_version = '2';
 //   - uid: string (author UID, matches auth.uid)
 //   - occurrenceKey: string
 //   - submittedAt: timestamp (must equal request.time)
-//   - pointsAwarded: int (must match task points)
+//   - pointsAwarded: int (matches task points or tiered rewards early/onTime/grace points)
 //   - Read: owner or admin
 //   - Create: admin or authenticated user completing a valid, active, non-archived task
 //   - Update / Delete: admin only
+//
+// Collection: missed_penalties/{penaltyId}
+//   - taskId: string
+//   - occurrenceKey: string
+//   - uid: string
+//   - penalty: int / number
+//   - createdAt: timestamp
+//   - Read: owner or admin
+//   - Create: admin only (document must not already exist)
+//   - Update: false (immutable record)
+//   - Delete: admin only
 //
 // Collection: attendance_sessions/{sessionId}
 //   - active: bool (defaults to true)
@@ -52,17 +77,27 @@ rules_version = '2';
 //   - Write: admin only
 //
 // Collection: attendance_logs/{logId}
-//   - logId format: sessionId + '_' + uid + '_' + occurrenceKey
+//   - logId format: sessionId + '_' + occurrenceKey + '_' + uid (or sessionId + '_' + uid + '_' + occurrenceKey for backward compatibility)
 //   - sessionId: string (foreign key to attendance_sessions/{sessionId})
 //   - uid: string (attendee UID, matches auth.uid)
 //   - occurrenceKey: string
 //   - occurrenceStart: timestamp
 //   - checkedInAt: timestamp (must equal request.time)
-//   - status: string ('on_time' | 'late')
+//   - status: string ('on_time' | 'late' | 'absent')
 //   - penalty: int (0 if on_time, bounded calculation if late)
 //   - delaySeconds: int
 //   - Read: owner or admin
-//   - Create: admin or authenticated user checking in within allowed session window
+//   - Create: admin or authenticated user checking in within allowed session window (document must not already exist)
+//   - Update / Delete: admin only
+//
+// Collection: waiver_requests/{waiverId}
+//   - waiverId format: 'waiver_' + sessionId + '_' + occurrenceKey + '_' + uid
+//   - sessionId: string
+//   - occurrenceKey: string
+//   - uid: string (author UID, matches auth.uid)
+//   - status: string ('pending' on create)
+//   - Read: owner or admin
+//   - Create: signed-in user creating pending request for self (or admin), doc must not already exist
 //   - Update / Delete: admin only
 //
 // Collection: notifications/{notificationId}
@@ -74,8 +109,18 @@ rules_version = '2';
 //   - link: string (optional)
 //   - createdAt: timestamp
 //   - Read: admin or recipient (resource.data.uid == request.auth.uid)
-//   - Create / Delete: admin only
+//   - Create: admin only
+//   - Delete: admin or recipient (resource.data.uid == request.auth.uid)
 //   - Update: admin, or recipient updating read state only
+//
+// Collection: notifications_broadcast/{broadcastId}
+//   - title: string (required)
+//   - body: string / message: string
+//   - readBy: list (list of user UIDs who marked this broadcast notification read)
+//   - createdAt: timestamp
+//   - Read: signed-in users
+//   - Create / Delete: admin only
+//   - Update: admin, or signed-in user appending self to readBy
 //
 // Collection: broadcasts/{broadcastId}
 //   - title: string (required)
@@ -130,8 +175,31 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return signedIn() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'member') == 'admin';
+      return signedIn() && (
+        request.auth.token.get('admin', false) == true ||
+        request.auth.token.get('role', '') == 'admin' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'member') == 'admin'
+      );
+    }
+
+    function isValidSubmissionPoints(task, pointsAwarded) {
+      return (
+        (
+          task.get('tieredRewards', {}).get('enabled', false) == true &&
+          (
+            pointsAwarded == task.get('points', 5) ||
+            pointsAwarded in [
+              task.tieredRewards.earlyPoints,
+              task.tieredRewards.onTimePoints,
+              task.tieredRewards.gracePoints
+            ]
+          )
+        ) ||
+        (
+          task.get('tieredRewards', {}).get('enabled', false) != true &&
+          pointsAwarded == task.get('points', 5)
+        )
+      );
     }
 
     // ---------------------------------------------------------------
@@ -149,76 +217,89 @@ service cloud.firestore {
       // Read allowed for any signed-in user (needed for member list & leaderboard)
       allow read: if signedIn();
 
-      // Create only by the owner with initial role 'member' and zero points/penalties
-      allow create: if isOwner(uid) &&
-                       request.resource.data.role == 'member' &&
-                       request.resource.data.points == 0 &&
-                       request.resource.data.penalties == 0;
+      // Create: Admin can create any user profile.
+      // Owner can create their own profile with role 'member', zero points/penalties, and empty/default badges.
+      // Explicitly restricts badges and badgeIds writes to ADMIN-ONLY (defaults to [] if missing or on creation).
+      allow create: if isAdmin() || (
+                       isOwner(uid) &&
+                       request.resource.data.get('role', 'member') == 'member' &&
+                       request.resource.data.get('points', 0) == 0 &&
+                       request.resource.data.get('penalties', 0) == 0 &&
+                       request.resource.data.get('totalPenalties', 0) == 0 &&
+                       request.resource.data.get('badges', []) == [] &&
+                       request.resource.data.get('badgeIds', []) == []
+                     );
 
-      // Update: Admin can update any field (including repairing points/penalties or updating roles).
+      // Update: Admin can update any field (including points, monthBucket, monthPoints, weekBucket, weekPoints, penalties, badges, badgeIds, or roles).
       // Owner can update:
-      //   1. Profile fields: name, avatarUrl, updatedAt
+      //   1. Profile fields: name, displayName, avatarUrl, photoURL, updatedAt
       //   2. Heartbeat: lastSeenAt == request.time
       //   3. Atomic point increment via atomic batch with submission:
-      //      - Affected keys must strictly be ['points', 'lastOpId']
+      //      - Affected keys must strictly be in ['points', 'lastOpId', 'monthBucket', 'monthPoints', 'weekBucket', 'weekPoints', 'updatedAt']
       //      - lastOpId must differ from existing lastOpId
       //      - Submission document must not exist before the batch (!exists)
       //      - Submission document must exist after the batch (existsAfter)
       //      - Submission document must belong to the user
       //      - Point delta must exactly equal the submission's pointsAwarded
       //   4. Atomic penalty increment via atomic batch with attendance check-in:
-      //      - Affected keys must strictly be ['penalties', 'lastOpId']
+      //      - Affected keys must strictly be in ['penalties', 'totalPenalties', 'lastOpId', 'updatedAt']
       //      - lastOpId must differ from existing lastOpId
       //      - Attendance log document must not exist before the batch (!exists)
       //      - Attendance log document must exist after the batch (existsAfter)
       //      - Attendance log document must belong to the user
       //      - Penalty delta must exactly equal the attendance log's penalty
-      //   Limitations / Notes:
-      //   - Atomic batch commits: Client MUST execute both the target document creation
-      //     and the user doc update in the same WriteBatch or transaction.
-      //   - existsAfter and getAfter depend on the batch containing the target doc.
-      // Owner can NEVER change role.
+      // Owner can NEVER change role, badges, or badgeIds (strictly admin-only).
       allow update: if isAdmin() || (
                        isOwner(uid) &&
-                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) &&
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'badges', 'badgeIds']) &&
                        (
-                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'avatarUrl', 'updatedAt']) ||
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'avatarUrl', 'photoURL', 'updatedAt']) ||
                          (
                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeenAt']) &&
                            request.resource.data.lastSeenAt == request.time
                          ) ||
                          (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId']) &&
-                           request.resource.data.lastOpId != resource.data.get('lastOpId', null) &&
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId', 'monthBucket', 'monthPoints', 'weekBucket', 'weekPoints', 'updatedAt']) &&
+                           request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
                            !exists(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
                            existsAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
                            getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
                            request.resource.data.points - resource.data.get('points', 0) == getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.pointsAwarded
                          ) ||
                          (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penalties', 'lastOpId']) &&
-                           request.resource.data.lastOpId != resource.data.get('lastOpId', null) &&
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penalties', 'totalPenalties', 'lastOpId', 'updatedAt']) &&
+                           request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
                            !exists(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
                            existsAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
                            getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
-                           request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty
+                           (
+                             (request.resource.data.diff(resource.data).affectedKeys().hasAny(['penalties']) && request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty) ||
+                             (request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalPenalties']) && request.resource.data.totalPenalties - resource.data.get('totalPenalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty)
+                           )
                          )
                        )
                      );
 
       // Delete allowed for admins only
       allow delete: if isAdmin();
+
+      // Subcollection: transactions (financial balance history)
+      match /transactions/{txId} {
+        allow read: if isOwner(uid) || isAdmin();
+        allow create: if isAdmin();
+        allow update, delete: if false; // strictly immutable and append-only
+      }
     }
 
     match /users_private/{uid} {
       // Sensitive private data readable only by the owner or admins
       allow read: if isOwner(uid) || isAdmin();
 
-      // Create allowed for owner (only email & fcmTokens) or admin
-      allow create: if (isOwner(uid) && request.resource.data.keys().hasOnly(['email', 'fcmTokens'])) || isAdmin();
+      // Owner can write non-financial fields (email, fcmTokens, createdAt, updatedAt; never finesEGP).
+      // Admin can write/increment finesEGP and manage private docs.
+      allow create: if (isOwner(uid) && !request.resource.data.keys().hasAny(['finesEGP']) && request.resource.data.keys().hasOnly(['email', 'fcmTokens', 'createdAt', 'updatedAt'])) || isAdmin();
 
-      // Update allowed for owner (only email & fcmTokens) or admin
-      allow update: if (isOwner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'fcmTokens'])) || isAdmin();
+      allow update: if (isOwner(uid) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['finesEGP']) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'fcmTokens', 'updatedAt'])) || isAdmin();
 
       // Delete allowed for admins
       allow delete: if isAdmin();
@@ -243,7 +324,7 @@ service cloud.firestore {
     // ---------------------------------------------------------------
 
     match /submissions/{submissionId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('userId', '') == request.auth.uid));
 
       allow create: if isAdmin() || (
         signedIn() &&
@@ -253,7 +334,10 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)) &&
         get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('active', true) == true &&
         get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('archived', false) == false &&
-        request.resource.data.pointsAwarded == get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.get('points', 5)
+        isValidSubmissionPoints(
+          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data,
+          request.resource.data.pointsAwarded
+        )
       );
 
       allow update, delete: if isAdmin();
@@ -269,35 +353,65 @@ service cloud.firestore {
     }
 
     match /attendance_logs/{logId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('userId', '') == request.auth.uid));
 
       allow update, delete: if isAdmin();
 
-      allow create: if isAdmin() || (
-        signedIn() &&
-        request.resource.data.uid == request.auth.uid &&
-        logId == (request.resource.data.sessionId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey) &&
-        request.resource.data.checkedInAt == request.time &&
-        exists(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)) &&
-        get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('active', true) == true &&
-        get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('archived', false) == false &&
-        request.time.toMillis() >= request.resource.data.occurrenceStart.toMillis() - (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('earlyCheckInMinutes', 0) * 60 * 1000) &&
-        request.time.toMillis() <= request.resource.data.occurrenceStart.toMillis() + (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('lateCutoffMinutes', 120) * 60 * 1000) &&
-        (
+      allow create: if (!exists(/databases/$(database)/documents/attendance_logs/$(logId))) && (
+        isAdmin() || (
+          signedIn() &&
+          request.resource.data.uid == request.auth.uid &&
           (
-            request.resource.data.status == 'on_time' &&
-            request.resource.data.penalty == 0 &&
-            request.time <= request.resource.data.occurrenceStart
-          ) ||
+            logId == (request.resource.data.sessionId + '_' + request.resource.data.occurrenceKey + '_' + request.auth.uid) ||
+            logId == (request.resource.data.sessionId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey)
+          ) &&
+          request.resource.data.checkedInAt == request.time &&
+          exists(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)) &&
+          get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('active', true) == true &&
+          get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('archived', false) == false &&
+          request.time.toMillis() >= request.resource.data.occurrenceStart.toMillis() - (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('earlyCheckInMinutes', 0) * 60 * 1000) &&
+          request.time.toMillis() <= request.resource.data.occurrenceStart.toMillis() + (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('lateCutoffMinutes', 120) * 60 * 1000) &&
           (
-            request.resource.data.status == 'late' &&
-            request.time > request.resource.data.occurrenceStart &&
-            request.resource.data.penalty >= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('minPenalty', 0) &&
-            request.resource.data.penalty <= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('maxPenalty', 999999) &&
-            math.abs(request.time.toMillis() - request.resource.data.occurrenceStart.toMillis() - request.resource.data.delaySeconds * 1000) <= 10000
+            (
+              request.resource.data.status == 'on_time' &&
+              request.resource.data.penalty == 0 &&
+              request.time <= request.resource.data.occurrenceStart
+            ) ||
+            (
+              request.resource.data.status == 'late' &&
+              request.time > request.resource.data.occurrenceStart &&
+              request.resource.data.penalty >= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('minPenalty', 0) &&
+              request.resource.data.penalty <= get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('maxPenalty', 999999) &&
+              math.abs(request.time.toMillis() - request.resource.data.occurrenceStart.toMillis() - request.resource.data.delaySeconds * 1000) <= 10000
+            )
           )
         )
       );
+    }
+
+    // ---------------------------------------------------------------
+    // Waiver Requests Collection
+    // ---------------------------------------------------------------
+
+    match /waiver_requests/{waiverId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.get('uid', '') == request.auth.uid);
+      allow create: if signedIn() &&
+        request.resource.data.get('uid', '') == request.auth.uid &&
+        request.resource.data.get('status', '') == 'pending' &&
+        (!exists(/databases/$(database)/documents/waiver_requests/$(waiverId))) &&
+        (isAdmin() || waiverId == ('waiver_' + request.resource.data.sessionId + '_' + request.resource.data.occurrenceKey + '_' + request.auth.uid));
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Missed Penalties Collection
+    // ---------------------------------------------------------------
+
+    match /missed_penalties/{penaltyId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.get('uid', '') == request.auth.uid);
+      allow create: if isAdmin() && !exists(/databases/$(database)/documents/missed_penalties/$(penaltyId));
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     // ---------------------------------------------------------------
@@ -305,12 +419,30 @@ service cloud.firestore {
     // ---------------------------------------------------------------
 
     match /notifications/{notificationId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
-      allow create, delete: if isAdmin();
+      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid));
+      allow create: if isAdmin();
+      allow delete: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid));
       allow update: if isAdmin() || (
         signedIn() &&
-        resource.data.uid == request.auth.uid &&
+        (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+      );
+    }
+
+    // ---------------------------------------------------------------
+    // Broadcast Notifications Collection
+    // ---------------------------------------------------------------
+
+    match /notifications_broadcast/{broadcastId} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if signedIn() && (
+        isAdmin() || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']) &&
+          request.resource.data.readBy.hasAll(resource.data.get('readBy', [])) &&
+          request.resource.data.readBy.size() == resource.data.get('readBy', []).size() + 1 &&
+          request.resource.data.readBy.hasAny([request.auth.uid])
+        )
       );
     }
 
@@ -321,6 +453,14 @@ service cloud.firestore {
     match /broadcasts/{broadcastId} {
       allow read: if signedIn();
       allow write: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Legacy Announcements Collection (migration support)
+    // ---------------------------------------------------------------
+
+    match /announcements/{announcementId} {
+      allow read, write: if isAdmin();
     }
 
     // ---------------------------------------------------------------
@@ -345,12 +485,17 @@ service cloud.firestore {
     // Application Settings Collection
     // ---------------------------------------------------------------
 
-    // Global application settings (e.g. settings/global):
+    // Global application settings (e.g. settings/global, settings/app_config, settings/general):
     // Public read allows the app to load branding, custom theme colors, and config.
     // Writes are strictly restricted to administrators.
+    // For settingId == 'general', defaultLeaderboardPeriod must be in ['all', 'month', 'week'] if provided.
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() && (
+        request.resource == null ||
+        settingId != 'general' ||
+        request.resource.data.get('defaultLeaderboardPeriod', 'all') in ['all', 'month', 'week']
+      );
     }
   }
 }

@@ -1,5 +1,5 @@
-// Service Worker for COC Media Team PWA (v1.0.5) - GitHub Pages Compatible
-const CACHE_NAME = 'coc-media-v1.0.5';
+// Service Worker for COC Media Team PWA (v2.0.0) - GitHub Pages Compatible
+const CACHE_NAME = 'coc-media-v2.0.0';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -101,26 +101,35 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Network-First with Cache Fallback for same-origin app shell (HTML, JS, CSS, JSON)
+  // 4. Stale-While-Revalidate Strategy for same-origin app shell (HTML, JS, CSS, JSON, SVG)
   if (url.origin === self.location.origin) {
     event.respondWith(
-      fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          return caches.match(event.request).then((cached) => {
-            if (cached) return cached;
-            if (event.request.mode === 'navigate') {
-              return caches.match('./index.html');
+      caches.match(event.request).then((cachedResponse) => {
+        // Fetch fresh copy in the background and update cache
+        const fetchPromise = fetch(event.request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              const clone = networkResponse.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
             }
-            return null;
-          });
-        })
+            return networkResponse;
+          })
+          .catch(() => null);
+
+        // If in cache, return immediately (instant cold-start)
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+
+        // If not in cache, wait for network or navigate fallback
+        return fetchPromise.then((networkResponse) => {
+          if (networkResponse) return networkResponse;
+          if (event.request.mode === 'navigate') {
+            return caches.match('./index.html');
+          }
+          return null;
+        });
+      })
     );
     return;
   }
