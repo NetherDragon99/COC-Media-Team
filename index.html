@@ -17,8 +17,24 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192x192.png" />
     <link rel="icon" type="image/jpeg" href="./image_ad59c0.jpg" />
 
-    <!-- Dev environment WebSocket / HMR error filter -->
+    <!-- Dev environment WebSocket / HMR error filter & crash-proof reloader -->
     <script>
+      window.__cocReloadApp = async function() {
+        try {
+          if ('serviceWorker' in navigator) {
+            var regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(function(r) { return r.unregister(); }));
+          }
+          if ('caches' in window) {
+            var keys = await caches.keys();
+            await Promise.all(keys.map(function(k) { return caches.delete(k); }));
+          }
+        } catch (err) {
+          console.warn('Error clearing SW / caches on reload:', err);
+        } finally {
+          window.location.reload();
+        }
+      };
       (function() {
         function shouldIgnore(e) {
           var msg = (e && (e.message || (e.error && e.error.message))) || '';
@@ -91,7 +107,7 @@
       </div>
       <h2 class="ios-title-2 mb-2">Something went wrong</h2>
       <p class="ios-subhead text-neutral-400 max-w-xs mb-6" id="error-boundary-message">An unexpected error occurred while running the application.</p>
-      <button onclick="window.location.reload()" class="px-6 py-2.5 rounded-full bg-[#0A84FF] text-white font-semibold text-sm shadow-md">
+      <button onclick="window.__cocReloadApp()" class="px-6 py-2.5 rounded-full bg-[#0A84FF] text-white font-semibold text-sm shadow-md">
         Reload App
       </button>
     </div>
@@ -1612,6 +1628,23 @@
 
     <!-- SERVICE WORKER REGISTRATION (GITHUB PAGES SAFE) -->
     <script>
+      // Error-screen "Reload App": drop every service worker registration and cache, then ALWAYS reload.
+      // (The messaging worker re-registers on the next load.)
+      window.__cocReloadApp = async function () {
+        try {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((r) => r.unregister()));
+          }
+        } catch (e) { console.warn('SW cleanup failed:', e); }
+        try {
+          if (window.caches) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+          }
+        } catch (e) { console.warn('Cache cleanup failed:', e); }
+        location.reload();
+      };
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           try {

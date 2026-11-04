@@ -171,7 +171,8 @@ const sandbox = {
   _fb_getDocs: () => Promise.resolve({ docs: [] }),
   _fb_Timestamp: {
     now: () => ({ toMillis: () => Date.now(), toDate: () => new Date() }),
-    fromMillis: (m) => ({ toMillis: () => m, toDate: () => new Date(m) })
+    fromMillis: (m) => ({ toMillis: () => m, toDate: () => new Date(m) }),
+    fromDate: (d) => ({ toMillis: () => new Date(d).getTime(), toDate: () => new Date(d) })
   },
   _fb_addDoc: () => Promise.resolve({ id: 'new-doc-id' }),
   _fb_updateDoc: () => Promise.resolve(),

@@ -373,8 +373,11 @@ const state = {
   leaderboardPeriod: 'all',
   editingTaskId: null,
   editingCategoryId: null,
+  editingSessionId: null,
   adminTasksFilter: 'active',
   adminCatsFilter: 'active',
+  adminSessionsFilter: 'active',
+  adminBroadcastsFilter: 'active',
   adminSubmissionsLimit: 50,
   hasMoreSubmissions: false,
   adminSubmissionsSearch: '',
@@ -392,6 +395,13 @@ const state = {
     version: APP_VERSION
   }
 };
+
+/* ==========================================================================
+   MODULE-LEVEL ADMIN FILTER & EDITING STATE (Hoisted module scope)
+   ========================================================================== */
+export let adminSessionsFilter = 'active';
+export let adminBroadcastsFilter = 'active';
+export let editingSessionId = null;
 
 /* ==========================================================================
    CATEGORY ICONS & COLOR SWATCHES
@@ -7051,7 +7061,7 @@ function openTaskDetailsModal(taskId) {
 
         await batch.commit();
         toast(`Task submitted! +${pointsAwarded} pts awarded${currentWin.inGrace ? ' (Grace Period)' : ''}`, 'success');
-        renderContent();
+        renderTasks();
         return true;
       } catch (err) {
         console.error('Submission error:', err);
@@ -15401,8 +15411,16 @@ function dismissLoader() {
 // Service Worker Update Listener
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    // New ServiceWorker controller active
+    // Prevent reload loops via sessionStorage guard
+    if (!sessionStorage.getItem('sw_controller_reloaded')) {
+      sessionStorage.setItem('sw_controller_reloaded', 'true');
+      window.location.reload();
+    }
   });
+  // Clear controller reload guard after successful load
+  setTimeout(() => {
+    try { sessionStorage.removeItem('sw_controller_reloaded'); } catch (e) {}
+  }, 5000);
 
   navigator.serviceWorker.ready.then((reg) => {
     reg.addEventListener('updatefound', () => {
@@ -15465,5 +15483,8 @@ if (typeof window !== 'undefined') {
   window.renderAttendance = renderAttendance;
   window.renderAttendanceView = renderAttendanceView;
   window.renderAttendanceLogs = renderAttendanceLogs;
+  window.adminSessionsFilter = adminSessionsFilter;
+  window.adminBroadcastsFilter = adminBroadcastsFilter;
+  window.editingSessionId = editingSessionId;
   window.openBadgePickerSheet = openBadgePickerSheet;
 }
