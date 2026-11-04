@@ -429,10 +429,11 @@ function normalizeTask(raw) {
 }
 
 // Assumption: Early window is submission at least earlyBonusMinutes before closesAt (or within earlyBonusMinutes of start if no closesAt or duration is short).
-function computeTieredTaskPoints(task, nowMs = (typeof serverNow === 'function' ? serverNow().getTime() : Date.now())) {
+function computeTieredTaskPoints(task, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!task) {
     return { points: 5, tier: 'flat', canSubmit: true, statusText: '' };
   }
+  const nowMs = parseDateTimeToMs(nowInput);
   if (!task.tieredRewards || !task.tieredRewards.enabled) {
     return { points: typeof task.points === 'number' ? task.points : 5, tier: 'flat', canSubmit: true, statusText: '' };
   }
@@ -691,7 +692,8 @@ const APP_TIMEZONE = "Africa/Cairo";
 const ENGINE_WEEKDAYS = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
 function getZonedParts(dateOrMs, timeZone = APP_TIMEZONE) {
-  const d = typeof dateOrMs === 'number' ? new Date(dateOrMs) : new Date(dateOrMs || 0);
+  const ms = parseDateTimeToMs(dateOrMs);
+  const d = new Date(ms || 0);
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone,
     year: 'numeric',
@@ -740,7 +742,8 @@ function formatZonedDateKey(dateOrMs, timeZone = APP_TIMEZONE) {
   return `${y}-${m}-${d}`;
 }
 
-function getTimeBucketKeys(nowMs = serverNow(), timeZone = APP_TIMEZONE) {
+function getTimeBucketKeys(nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now()), timeZone = APP_TIMEZONE) {
+  const nowMs = parseDateTimeToMs(nowInput);
   const p = getZonedParts(nowMs, timeZone);
   const curMonthKey = `${p.year}-${String(p.month).padStart(2, '0')}`;
   
@@ -754,8 +757,9 @@ function getTimeBucketKeys(nowMs = serverNow(), timeZone = APP_TIMEZONE) {
   return { curMonthKey, curWeekKey, monthKey: curMonthKey, weekKey: curWeekKey };
 }
 
-function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowMs = serverNow()) {
+function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const user = userDocOrMapEntry || {};
+  const nowMs = parseDateTimeToMs(nowInput);
   const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
   const update = {
     points: increment(deltaPoints)
@@ -778,11 +782,12 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowMs = serverNow()) 
   return update;
 }
 
-function getMemberPeriodPoints(userObj, period = 'all', nowMs = serverNow()) {
+function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!userObj) return 0;
   if (period === 'all') {
     return typeof userObj.points === 'number' ? userObj.points : 0;
   }
+  const nowMs = parseDateTimeToMs(nowInput);
   const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
   if (period === 'month') {
     return userObj.monthBucket === curMonthKey ? (userObj.monthPoints || 0) : 0;
@@ -800,6 +805,9 @@ function daysInMonth(year, month) {
 function parseDateTimeToMs(val, timeZone = APP_TIMEZONE) {
   if (typeof val === 'number') return val;
   if (!val) return 0;
+  if (typeof val.toMillis === 'function') return val.toMillis();
+  if (typeof val.toDate === 'function') return val.toDate().getTime();
+  if (typeof val.seconds === 'number') return val.seconds * 1000 + (val.nanoseconds ? Math.floor(val.nanoseconds / 1e6) : 0);
   if (val instanceof Date) return val.getTime();
   if (typeof val === 'string') {
     if (val.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(val)) {
@@ -1002,10 +1010,11 @@ function getOccurrences(scheduleInput, fromMs, toMs) {
   return Array.from(new Set(results)).sort((a, b) => a - b);
 }
 
-function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
+function getOccurrenceFor(item, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const sched = normalizeScheduleObject(item?.schedule || item);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const earlyWindowMs = (item?.earlyWindowMinutes || 0) * 60000;
+  const nowMs = parseDateTimeToMs(nowInput);
 
   if (sched.type === 'once') {
     if (nowMs < startMs - earlyWindowMs) {
@@ -1064,12 +1073,13 @@ function getOccurrenceFor(item, nowMs = (typeof serverNow === 'function' ? serve
   };
 }
 
-function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
+function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!task) return null;
   const sched = normalizeScheduleObject(task.schedule || task);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const isPermanent = Boolean(task.isPermanent);
   const durationMinutes = (typeof task.durationMinutes === 'number' && task.durationMinutes > 0) ? task.durationMinutes : null;
+  const nowMs = parseDateTimeToMs(nowInput);
 
   if (sched.type === 'once') {
     const occurrenceKey = 'once';
@@ -1166,9 +1176,10 @@ function getTaskWindow(task, nowMs = (typeof serverNow === 'function' ? serverNo
   };
 }
 
-function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
+function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   const sched = normalizeScheduleObject(session?.schedule || session);
   const startMs = parseDateTimeToMs(sched.startDateTime);
+  const nowMs = parseDateTimeToMs(nowInput);
   const lateCutoffMinutes = typeof session?.lateCutoffMinutes === 'number' ? session.lateCutoffMinutes : 120;
 
   if (sched.type === 'once') {
@@ -1230,8 +1241,9 @@ function resolveSessionOccurrence(session, nowMs = (typeof serverNow === 'functi
   };
 }
 
-function computeAttendance(session, nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
+function computeAttendance(session, nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!session) return { status: 'blocked', reason: 'no_session', message: 'No session provided' };
+  const nowMs = parseDateTimeToMs(nowInput);
   const occ = resolveSessionOccurrence(session, nowMs);
   if (!occ) {
     return { status: 'blocked', reason: 'no_occurrence', message: 'No active session occurrence' };
@@ -1315,12 +1327,13 @@ if (typeof globalThis !== 'undefined') {
   globalThis.getTimeBucketKeys = getTimeBucketKeys;
   globalThis.buildPointsUpdate = buildPointsUpdate;
   globalThis.getMemberPeriodPoints = getMemberPeriodPoints;
+  globalThis.parseDateTimeToMs = parseDateTimeToMs;
   if (typeof usersMap !== 'undefined') globalThis.usersMap = usersMap;
   if (typeof getUserProfile !== 'undefined') globalThis.getUserProfile = getUserProfile;
 }
 // ==== ENGINE END
 
-export { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints };
+export { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs };
 
 /* ==========================================================================
    SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
@@ -4742,7 +4755,7 @@ function renderTasks() {
               ${badgeHtml}
             </div>
             ${(() => {
-              const tieredInfo = computeTieredTaskPoints(task, now.getTime ? now.getTime() : now);
+              const tieredInfo = computeTieredTaskPoints(task, now);
               const displayedPoints = task.tieredRewards?.enabled ? tieredInfo.points : task.points;
               const pointsSubtext = task.tieredRewards?.enabled && tieredInfo.statusText ? ` <span class="text-[10px] text-amber-300 font-normal">(${esc(tieredInfo.statusText)})</span>` : '';
               return `<span class="text-xs font-bold font-mono text-amber-400">+${displayedPoints} pts${pointsSubtext}</span>`;
@@ -4807,7 +4820,7 @@ function openTaskDetailsModal(taskId) {
 
   const now = serverNow();
   const win = getTaskWindow(task, now);
-  const tieredInfo = computeTieredTaskPoints(task, now.getTime());
+  const tieredInfo = computeTieredTaskPoints(task, now);
   const cat = state.categories.find(c => c.id === task.categoryId || c.id === task.category) || { name: 'General', color: '#0A84FF', iconKey: 'film' };
 
   const isDone = Boolean(state.user && state.mySubmissions?.some(s =>
@@ -4947,7 +4960,7 @@ function openTaskDetailsModal(taskId) {
         const subRef = doc(db, 'submissions', subId);
         const userRef = doc(db, 'users', state.user.uid);
 
-        const currentPtsInfo = computeTieredTaskPoints(task, serverNow().getTime());
+        const currentPtsInfo = computeTieredTaskPoints(task, serverNow());
         if (!currentPtsInfo.canSubmit) {
           toast('Submission closed: deadline and grace period have expired.', 'error');
           return false;
@@ -8719,7 +8732,7 @@ async function renderAdminMissedTasks() {
   if (!container || !listEl) return;
 
   const now = serverNow();
-  const nowMs = now.getTime();
+  const nowMs = parseDateTimeToMs(now);
   const missedTasksList = [];
 
   const candidateTasks = (state.tasks || []).filter(t => t.active && !t.archived && t.missedPenalty?.enabled && !t.isPermanent);
@@ -11882,7 +11895,7 @@ function attachEventHandlers() {
           answer
         }] : [];
 
-        const formPtsInfo = computeTieredTaskPoints(task, now.getTime());
+        const formPtsInfo = computeTieredTaskPoints(task, now);
         if (!formPtsInfo.canSubmit) {
           toast('Submission closed: deadline and grace period have expired.', 'error');
           return;

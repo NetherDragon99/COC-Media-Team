@@ -37,10 +37,10 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs } = exportsObj;
 
 assert.strictEqual(APP_TIMEZONE, 'Africa/Cairo', 'APP_TIMEZONE must be Africa/Cairo');
 assert.strictEqual(typeof getOccurrences, 'function', 'getOccurrences must be a function');
@@ -497,6 +497,48 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   const june1Ms = zonedDateToMs(2026, 6, 1, 12, 0, 0, 'Africa/Cairo');
   assert.strictEqual(getMemberPeriodPoints(member, 'month', june1Ms), 0);
   assert.strictEqual(getMemberPeriodPoints(member, 'week', june1Ms), 0);
+}
+
+
+// ==========================================
+// TEST 8: FIRESTORE TIMESTAMP / DATE / NUMBER / UNDEFINED DATE HANDLING
+// ==========================================
+{
+  const targetMs = zonedDateToMs(2026, 5, 1, 12, 0, 0, 'Africa/Cairo');
+  
+  // All representation variants
+  const variants = [
+    { label: 'number timestamp', val: targetMs },
+    { label: 'Date instance', val: new Date(targetMs) },
+    { label: 'Firestore Timestamp with toMillis()', val: { toMillis: () => targetMs } },
+    { label: 'Firestore Timestamp with toDate()', val: { toDate: () => new Date(targetMs) } },
+    { label: 'Firestore Timestamp with seconds/nanoseconds', val: { seconds: Math.floor(targetMs / 1000), nanoseconds: (targetMs % 1000) * 1e6 } }
+  ];
+
+  for (const { label, val } of variants) {
+    // 8.1 parseDateTimeToMs converts cleanly to targetMs
+    assert.strictEqual(parseDateTimeToMs(val), targetMs, `parseDateTimeToMs must handle ${label}`);
+
+    // 8.2 getTimeBucketKeys never throws and returns correct keys
+    const keys = getTimeBucketKeys(val, 'Africa/Cairo');
+    assert.strictEqual(keys.curMonthKey, '2026-05', `Month key should be 2026-05 for ${label}`);
+    assert.strictEqual(keys.curWeekKey, '2026-W18', `Week key should be 2026-W18 for ${label}`);
+
+    // 8.3 getOccurrenceFor / getTaskWindow / computeAttendance
+    const task = { schedule: { type: 'once', startDateTime: val }, isPermanent: true };
+    assert.doesNotThrow(() => getOccurrenceFor(task, val), `getOccurrenceFor must accept ${label}`);
+    assert.doesNotThrow(() => getTaskWindow(task, val), `getTaskWindow must accept ${label}`);
+
+    const session = { schedule: { type: 'once', startDateTime: val }, earlyCheckInMinutes: 30, lateCutoffMinutes: 60 };
+    assert.doesNotThrow(() => computeAttendance(session, val), `computeAttendance must accept ${label}`);
+  }
+
+  // 8.4 Defaulting to serverNow() without arguments must not throw
+  assert.doesNotThrow(() => {
+    getTimeBucketKeys();
+    buildPointsUpdate({ points: 10 }, 5);
+    getMemberPeriodPoints({ points: 10 });
+  }, 'Time bucket helpers must default safely to serverNow() without throwing');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
