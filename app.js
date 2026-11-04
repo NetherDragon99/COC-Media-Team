@@ -399,9 +399,21 @@ const state = {
 /* ==========================================================================
    MODULE-LEVEL ADMIN FILTER & EDITING STATE (Hoisted module scope)
    ========================================================================== */
+export let adminTasksFilter = 'active';
+export let adminCatsFilter = 'active';
+export let adminCategoriesFilter = 'active';
 export let adminSessionsFilter = 'active';
 export let adminBroadcastsFilter = 'active';
+export let adminSubmissionsFilter = 'all';
+export let adminMembersFilter = 'all';
+export let statusFilter = 'all';
+export let selectedCategory = 'all';
+export let searchQuery = '';
+export let leaderboardPeriod = 'all';
+export let editingTaskId = null;
+export let editingCategoryId = null;
 export let editingSessionId = null;
+export let editingBroadcastId = null;
 
 /* ==========================================================================
    CATEGORY ICONS & COLOR SWATCHES
@@ -6943,7 +6955,7 @@ function openTaskDetailsModal(taskId) {
     const radios = card.querySelectorAll('input[type="radio"]');
     const otherInp = card.querySelector('.mcq-other-input');
     radios.forEach(r => {
-      r.onchange = () => {
+      if (r) r.onchange = () => {
         if (otherInp) {
           if (r.value === 'Other' && r.checked) {
             otherInp.classList.remove('hidden');
@@ -8681,7 +8693,7 @@ function openCategoryModal(categoryId = null) {
     `;
 
     const nameInput = bodyEl.querySelector('#cat-modal-name');
-    nameInput.oninput = (e) => {
+    if (nameInput) nameInput.oninput = (e) => {
       currentName = e.target.value;
       isDirty = true;
       const previewLabel = bodyEl.querySelector('#cat-modal-preview-label');
@@ -9410,18 +9422,69 @@ function openAdminTaskModal(taskId = null) {
       </div>
     `;
 
-    // Wire inputs
-    bodyEl.querySelector('#adm-task-title').oninput = e => { currentTitle = e.target.value; };
-    bodyEl.querySelector('#adm-task-desc').oninput = e => { currentDesc = e.target.value; };
-    bodyEl.querySelector('#adm-task-category').onchange = e => { currentCategoryId = e.target.value; };
-    bodyEl.querySelector('#adm-task-points').oninput = e => { currentPoints = e.target.value; };
-    bodyEl.querySelector('#adm-task-link').oninput = e => { currentLink = e.target.value; };
+    // Wire inputs with defensive null guards
+    const titleInp = bodyEl.querySelector('#adm-task-title');
+    if (titleInp) titleInp.oninput = e => { currentTitle = e.target.value; };
+    const descInp = bodyEl.querySelector('#adm-task-desc');
+    if (descInp) descInp.oninput = e => { currentDesc = e.target.value; };
+    const catInp = bodyEl.querySelector('#adm-task-category');
+    if (catInp) catInp.onchange = e => { currentCategoryId = e.target.value; };
+    const ptsInp = bodyEl.querySelector('#adm-task-points');
+    if (ptsInp) ptsInp.oninput = e => { currentPoints = e.target.value; };
+    const linkInp = bodyEl.querySelector('#adm-task-link');
+    if (linkInp) linkInp.oninput = e => { currentLink = e.target.value; };
+
+    // Category picker button wiring
+    const catBtn = bodyEl.querySelector('#btn-pick-task-category');
+    if (catBtn) {
+      const catObj = state.categories.find(c => c.id === currentCategoryId);
+      const catLabel = bodyEl.querySelector('#btn-pick-task-category-label');
+      if (catLabel && catObj) catLabel.textContent = catObj.name || catObj.nameEn || 'Select Category';
+      catBtn.onclick = () => {
+        openItemPicker({
+          title: 'Select Category',
+          items: state.categories.map(c => ({
+            id: c.id,
+            label: c.name || c.nameEn,
+            color: c.color,
+            icon: c.iconKey || c.icon || 'film'
+          })),
+          selectedId: currentCategoryId,
+          onSelect: (item) => {
+            currentCategoryId = item.id;
+            if (catInp) catInp.value = item.id;
+            if (catLabel) catLabel.textContent = item.label;
+          }
+        });
+      };
+    }
+
+    // Schedule Type Segmented control
+    const mountTaskSchedType = bodyEl.querySelector('#adm-task-sched-type-wrap');
+    if (mountTaskSchedType) {
+      mountTaskSchedType.innerHTML = '';
+      mountTaskSchedType.appendChild(renderSegmented({
+        id: 'segmented-task-sched-type',
+        options: [
+          { value: 'once', label: 'One-Time' },
+          { value: 'daily', label: 'Daily' },
+          { value: 'weekly', label: 'Weekly' }
+        ],
+        value: schedType,
+        onChange: (val) => {
+          schedType = val;
+          renderContent();
+        }
+      }));
+    }
 
     const schedTypeSelect = bodyEl.querySelector('#adm-task-sched-type');
-    schedTypeSelect.onchange = e => {
-      schedType = e.target.value;
-      renderContent();
-    };
+    if (schedTypeSelect) {
+      schedTypeSelect.onchange = e => {
+        schedType = e.target.value;
+        renderContent();
+      };
+    }
 
     // Mount Permanent Switch
     const mountPerm = bodyEl.querySelector('#mount-switch-permanent');
@@ -9636,6 +9699,40 @@ function openAdminTaskModal(taskId = null) {
     const subContainer = bodyEl.querySelector('#adm-sched-subform');
     if (!subContainer) return;
 
+    function wireTaskSchedDateTimeFields() {
+      const dBox = subContainer.querySelector('#field-sched-inp-date');
+      const tBox = subContainer.querySelector('#field-sched-inp-time');
+      if (dBox) {
+        dBox.replaceWith(renderDateTimeField({
+          label: 'Start Date',
+          valueMs: parseDateTimeToMs(selectedDateStr, APP_TIMEZONE) || Date.now(),
+          mode: 'date',
+          onChange: (ms) => {
+            selectedDateStr = formatZonedDateKey(ms, APP_TIMEZONE);
+            updateAllWords();
+          }
+        }));
+      }
+      if (tBox) {
+        const [th, tm] = selectedTimeStr.split(':').map(Number);
+        tBox.replaceWith(renderDateTimeField({
+          label: 'Start Time',
+          valueMs: (th || 0) * 60 + (tm || 0),
+          mode: 'time',
+          onChange: (mins) => {
+            const h = Math.floor(mins / 60) % 24;
+            const m = mins % 60;
+            selectedTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            updateAllWords();
+          }
+        }));
+      }
+      const schedDateInp = subContainer.querySelector('#sched-inp-date');
+      if (schedDateInp) schedDateInp.onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
+      const schedTimeInp = subContainer.querySelector('#sched-inp-time');
+      if (schedTimeInp) schedTimeInp.onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
+    }
+
     if (schedType === 'once') {
       subContainer.innerHTML = `
         <div class="grid grid-cols-2 gap-2">
@@ -9649,8 +9746,7 @@ function openAdminTaskModal(taskId = null) {
           </div>
         </div>
       `;
-      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
-      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
+      wireTaskSchedDateTimeFields();
     } else if (schedType === 'daily') {
       subContainer.innerHTML = `
         <div class="grid grid-cols-2 gap-2">
@@ -9664,8 +9760,7 @@ function openAdminTaskModal(taskId = null) {
           </div>
         </div>
       `;
-      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
-      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
+      wireTaskSchedDateTimeFields();
     } else if (schedType === 'weekly') {
       subContainer.innerHTML = `
         <div>
@@ -9697,8 +9792,7 @@ function openAdminTaskModal(taskId = null) {
           renderSchedSubform();
         };
       });
-      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
-      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
+      wireTaskSchedDateTimeFields();
     } else {
       subContainer.innerHTML = `
         <div class="grid grid-cols-2 gap-2">
@@ -9712,8 +9806,7 @@ function openAdminTaskModal(taskId = null) {
           </div>
         </div>
       `;
-      subContainer.querySelector('#sched-inp-date').onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
-      subContainer.querySelector('#sched-inp-time').onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
+      wireTaskSchedDateTimeFields();
     }
   }
 
@@ -9742,20 +9835,26 @@ function openAdminTaskModal(taskId = null) {
         <button type="button" class="btn-q-up text-[10px] text-neutral-400 hover:text-white px-1.5 py-0.5 rounded bg-white/5 ${idx === 0 ? 'disabled opacity-30 cursor-not-allowed' : ''}">▲</button>
         <button type="button" class="btn-q-down text-[10px] text-neutral-400 hover:text-white px-1.5 py-0.5 rounded bg-white/5 ${idx === currentQuestions.length - 1 ? 'disabled opacity-30 cursor-not-allowed' : ''}">▼</button>
       `;
-      reorderBtns.querySelector('.btn-q-up').onclick = () => {
-        if (idx > 0) {
-          const item = currentQuestions.splice(idx, 1)[0];
-          currentQuestions.splice(idx - 1, 0, item);
-          renderQuestionsList();
-        }
-      };
-      reorderBtns.querySelector('.btn-q-down').onclick = () => {
-        if (idx < currentQuestions.length - 1) {
-          const item = currentQuestions.splice(idx, 1)[0];
-          currentQuestions.splice(idx + 1, 0, item);
-          renderQuestionsList();
-        }
-      };
+      const btnUp = reorderBtns.querySelector('.btn-q-up');
+      if (btnUp) {
+        btnUp.onclick = () => {
+          if (idx > 0) {
+            const item = currentQuestions.splice(idx, 1)[0];
+            currentQuestions.splice(idx - 1, 0, item);
+            renderQuestionsList();
+          }
+        };
+      }
+      const btnDown = reorderBtns.querySelector('.btn-q-down');
+      if (btnDown) {
+        btnDown.onclick = () => {
+          if (idx < currentQuestions.length - 1) {
+            const item = currentQuestions.splice(idx, 1)[0];
+            currentQuestions.splice(idx + 1, 0, item);
+            renderQuestionsList();
+          }
+        };
+      }
 
       const promptInp = document.createElement('input');
       promptInp.type = 'text';
@@ -10325,11 +10424,32 @@ function openAdminSessionModal(sessionId = null) {
       </div>
       <div id="adm-session-sched-subform" class="space-y-3 pt-1"></div>
     `;
+    const schedTypeWrap = schedBox.querySelector('#adm-session-sched-type-wrap');
+    if (schedTypeWrap) {
+      schedTypeWrap.innerHTML = '';
+      schedTypeWrap.appendChild(renderSegmented({
+        id: 'segmented-session-sched-type',
+        options: [
+          { value: 'once', label: 'One-Time' },
+          { value: 'daily', label: 'Daily' },
+          { value: 'weekly', label: 'Weekly' },
+          { value: 'monthlyDates', label: 'Monthly' }
+        ],
+        value: schedType === 'monthlyDates' || schedType === 'monthlyWeekdays' ? 'monthlyDates' : schedType,
+        onChange: (val) => {
+          schedType = val;
+          renderSchedSubform();
+        }
+      }));
+    }
+
     const schedSelect = schedBox.querySelector('#adm-session-sched-type');
-    schedSelect.onchange = (e) => {
-      schedType = e.target.value;
-      renderSchedSubform();
-    };
+    if (schedSelect) {
+      schedSelect.onchange = (e) => {
+        schedType = e.target.value;
+        renderSchedSubform();
+      };
+    }
     bodyEl.appendChild(schedBox);
 
     // Window Boundaries via Time Pickers
@@ -10503,9 +10623,12 @@ function openAdminSessionModal(sessionId = null) {
           <label class="block text-[11px] text-neutral-300 mb-1">Fixed Late Amount (${unitLabel})</label>
           <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.fixed}" />
         `;
-        fixedDiv.querySelector('input').oninput = (e) => {
-          sysObj.fixed = Math.max(0, Number(e.target.value) || 0);
-        };
+        const fixedInp = fixedDiv.querySelector('input');
+        if (fixedInp) {
+          fixedInp.oninput = (e) => {
+            sysObj.fixed = Math.max(0, Number(e.target.value) || 0);
+          };
+        }
         matrixBox.appendChild(fixedDiv);
       } else {
         // Stepped: Unit (Seconds|Minutes), Step Size stepper, Amount per Step
@@ -10543,9 +10666,12 @@ function openAdminSessionModal(sessionId = null) {
           <label class="block text-[11px] text-neutral-300 mb-1">Fee / Step (${unitLabel})</label>
           <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.perStep}" />
         `;
-        perStepCol.querySelector('input').oninput = (e) => {
-          sysObj.perStep = Math.max(0, Number(e.target.value) || 0);
-        };
+        const perStepInp = perStepCol.querySelector('input');
+        if (perStepInp) {
+          perStepInp.oninput = (e) => {
+            sysObj.perStep = Math.max(0, Number(e.target.value) || 0);
+          };
+        }
 
         steppedGrid.appendChild(unitCol);
         steppedGrid.appendChild(sizeCol);
@@ -10566,12 +10692,18 @@ function openAdminSessionModal(sessionId = null) {
           <input type="number" min="0" class="w-full glass-input text-xs font-mono inp-max" value="${sysObj.max}" />
         </div>
       `;
-      boundsGrid.querySelector('.inp-min').oninput = (e) => {
-        sysObj.min = Math.max(0, Number(e.target.value) || 0);
-      };
-      boundsGrid.querySelector('.inp-max').oninput = (e) => {
-        sysObj.max = Math.max(0, Number(e.target.value) || 0);
-      };
+      const inpMin = boundsGrid.querySelector('.inp-min');
+      if (inpMin) {
+        inpMin.oninput = (e) => {
+          sysObj.min = Math.max(0, Number(e.target.value) || 0);
+        };
+      }
+      const inpMax = boundsGrid.querySelector('.inp-max');
+      if (inpMax) {
+        inpMax.oninput = (e) => {
+          sysObj.max = Math.max(0, Number(e.target.value) || 0);
+        };
+      }
       matrixBox.appendChild(boundsGrid);
 
       // Unexcused Absence
@@ -10582,9 +10714,12 @@ function openAdminSessionModal(sessionId = null) {
         <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.absence}" />
         <span class="text-[10px] text-neutral-500">Applied when member is marked absent</span>
       `;
-      absenceBox.querySelector('input').oninput = (e) => {
-        sysObj.absence = Math.max(0, Number(e.target.value) || 0);
-      };
+      const inpAbsence = absenceBox.querySelector('input');
+      if (inpAbsence) {
+        inpAbsence.oninput = (e) => {
+          sysObj.absence = Math.max(0, Number(e.target.value) || 0);
+        };
+      }
       matrixBox.appendChild(absenceBox);
 
       card.appendChild(matrixBox);
@@ -10633,19 +10768,13 @@ function openAdminSessionModal(sessionId = null) {
     const subContainer = bodyEl.querySelector('#adm-session-sched-subform');
     if (!subContainer) return;
 
-    if (schedType === 'once') {
-      subContainer.innerHTML = `
-        <div class="space-y-2">
-          <div id="field-sched-session-date"></div>
-          <div id="field-sched-session-time"></div>
-        </div>
-      `;
-      const dBox = subContainer.querySelector('#field-sched-session-date');
-      const tBox = subContainer.querySelector('#field-sched-session-time');
+    function wireSessionDateTimeFields() {
+      const dBox = subContainer.querySelector('#field-sched-session-date, #field-session-sched-inp-date');
+      const tBox = subContainer.querySelector('#field-sched-session-time, #field-session-sched-inp-time');
       if (dBox) {
         dBox.replaceWith(renderDateTimeField({
           label: 'Session Date',
-          valueMs: parseDateTimeToMs(selectedDateStr),
+          valueMs: parseDateTimeToMs(selectedDateStr, APP_TIMEZONE) || parseDateTimeToMs(selectedDateStr) || Date.now(),
           mode: 'date',
           onChange: (ms) => { selectedDateStr = formatZonedDateKey(ms, APP_TIMEZONE); }
         }));
@@ -10663,6 +10792,20 @@ function openAdminSessionModal(sessionId = null) {
           }
         }));
       }
+      const dateInp = subContainer.querySelector('#session-sched-inp-date');
+      if (dateInp) dateInp.onchange = (e) => { selectedDateStr = e.target.value; };
+      const timeInp = subContainer.querySelector('#session-sched-inp-time');
+      if (timeInp) timeInp.onchange = (e) => { selectedTimeStr = e.target.value; };
+    }
+
+    if (schedType === 'once') {
+      subContainer.innerHTML = `
+        <div class="grid grid-cols-2 gap-2">
+          <div id="field-sched-session-date"></div>
+          <div id="field-sched-session-time"></div>
+        </div>
+      `;
+      wireSessionDateTimeFields();
     } else if (schedType === 'daily') {
       subContainer.innerHTML = `
         <div class="grid grid-cols-2 gap-2">
@@ -10676,8 +10819,7 @@ function openAdminSessionModal(sessionId = null) {
           </div>
         </div>
       `;
-      subContainer.querySelector('#session-sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; };
-      subContainer.querySelector('#session-sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; };
+      wireSessionDateTimeFields();
     } else if (schedType === 'weekly') {
       subContainer.innerHTML = `
         <div>
@@ -10701,8 +10843,6 @@ function openAdminSessionModal(sessionId = null) {
           </div>
         </div>
       `;
-      subContainer.querySelector('#session-sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; };
-      subContainer.querySelector('#session-sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; };
       subContainer.querySelectorAll('.btn-session-wd').forEach(btn => {
         btn.onclick = () => {
           const wd = btn.dataset.wd;
@@ -10714,6 +10854,7 @@ function openAdminSessionModal(sessionId = null) {
           renderSchedSubform();
         };
       });
+      wireSessionDateTimeFields();
     } else if (schedType === 'monthlyDates') {
       subContainer.innerHTML = `
         <div>
@@ -10737,8 +10878,6 @@ function openAdminSessionModal(sessionId = null) {
           </div>
         </div>
       `;
-      subContainer.querySelector('#session-sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; };
-      subContainer.querySelector('#session-sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; };
       subContainer.querySelectorAll('.btn-session-mdate').forEach(btn => {
         btn.onclick = () => {
           const d = Number(btn.dataset.date);
@@ -10750,6 +10889,7 @@ function openAdminSessionModal(sessionId = null) {
           renderSchedSubform();
         };
       });
+      wireSessionDateTimeFields();
     } else if (schedType === 'monthlyWeekdays') {
       subContainer.innerHTML = `
         <div class="space-y-2">
@@ -10785,8 +10925,6 @@ function openAdminSessionModal(sessionId = null) {
           </div>
         </div>
       `;
-      subContainer.querySelector('#session-sched-inp-date').onchange = (e) => { selectedDateStr = e.target.value; };
-      subContainer.querySelector('#session-sched-inp-time').onchange = (e) => { selectedTimeStr = e.target.value; };
       subContainer.querySelectorAll('.btn-session-mweek').forEach(btn => {
         btn.onclick = () => {
           const w = btn.dataset.week;
@@ -10809,6 +10947,7 @@ function openAdminSessionModal(sessionId = null) {
           renderSchedSubform();
         };
       });
+      wireSessionDateTimeFields();
     }
   }
 
@@ -12730,7 +12869,7 @@ function openMemberControlModal(member) {
   }
 
   function updateSaveButtonState() {
-    const saveBtn = document.getElementById('btn-modal-save');
+    const saveBtn = document.getElementById('shared-modal-save') || document.getElementById('btn-modal-save');
     if (saveBtn) {
       saveBtn.disabled = !hasPendingChanges;
       saveBtn.classList.toggle('opacity-40', !hasPendingChanges);
@@ -13628,7 +13767,7 @@ async function handleRepairTotals() {
           </div>
         </div>
       `;
-      bodyEl.querySelector('.modal-close-btn').onclick = closeAllModals;
+      const closeBtn = bodyEl.querySelector('.modal-close-btn'); if (closeBtn) closeBtn.onclick = closeAllModals;
       return;
     }
 
@@ -13686,8 +13825,10 @@ async function handleRepairTotals() {
         </div>
       </div>
     `;
-    document.getElementById('btn-cancel-repair').onclick = closeAllModals;
-    document.getElementById('btn-apply-repair').onclick = async () => {
+    const cancelRepairBtn = bodyEl.querySelector('#btn-cancel-repair') || document.getElementById('btn-cancel-repair');
+    if (cancelRepairBtn) cancelRepairBtn.onclick = closeAllModals;
+    const applyRepairBtn = bodyEl.querySelector('#btn-apply-repair') || document.getElementById('btn-apply-repair');
+    if (applyRepairBtn) applyRepairBtn.onclick = async () => {
       const applyBtn = document.getElementById('btn-apply-repair');
       if (applyBtn) {
         applyBtn.disabled = true;
@@ -14976,12 +15117,14 @@ function attachEventHandlers() {
   const adminTaskFilterArchived = document.getElementById('admin-tasks-filter-archived');
   if (adminTaskFilterActive && adminTaskFilterArchived) {
     adminTaskFilterActive.onclick = () => {
+      adminTasksFilter = 'active';
       state.adminTasksFilter = 'active';
       adminTaskFilterActive.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white';
       adminTaskFilterArchived.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
       renderAdminTasks();
     };
     adminTaskFilterArchived.onclick = () => {
+      adminTasksFilter = 'archived';
       state.adminTasksFilter = 'archived';
       adminTaskFilterArchived.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white';
       adminTaskFilterActive.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
@@ -14993,12 +15136,16 @@ function attachEventHandlers() {
   const adminCatFilterArchived = document.getElementById('admin-cats-filter-archived');
   if (adminCatFilterActive && adminCatFilterArchived) {
     adminCatFilterActive.onclick = () => {
+      adminCatsFilter = 'active';
+      adminCategoriesFilter = 'active';
       state.adminCatsFilter = 'active';
       adminCatFilterActive.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white';
       adminCatFilterArchived.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
       renderAdminCategories();
     };
     adminCatFilterArchived.onclick = () => {
+      adminCatsFilter = 'archived';
+      adminCategoriesFilter = 'archived';
       state.adminCatsFilter = 'archived';
       adminCatFilterArchived.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white';
       adminCatFilterActive.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
@@ -15483,8 +15630,20 @@ if (typeof window !== 'undefined') {
   window.renderAttendance = renderAttendance;
   window.renderAttendanceView = renderAttendanceView;
   window.renderAttendanceLogs = renderAttendanceLogs;
+  window.adminTasksFilter = adminTasksFilter;
+  window.adminCatsFilter = adminCatsFilter;
+  window.adminCategoriesFilter = adminCategoriesFilter;
   window.adminSessionsFilter = adminSessionsFilter;
   window.adminBroadcastsFilter = adminBroadcastsFilter;
+  window.adminSubmissionsFilter = adminSubmissionsFilter;
+  window.adminMembersFilter = adminMembersFilter;
+  window.statusFilter = statusFilter;
+  window.selectedCategory = selectedCategory;
+  window.searchQuery = searchQuery;
+  window.leaderboardPeriod = leaderboardPeriod;
+  window.editingTaskId = editingTaskId;
+  window.editingCategoryId = editingCategoryId;
   window.editingSessionId = editingSessionId;
+  window.editingBroadcastId = editingBroadcastId;
   window.openBadgePickerSheet = openBadgePickerSheet;
 }

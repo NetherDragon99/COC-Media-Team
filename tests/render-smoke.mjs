@@ -253,8 +253,21 @@ if (typeof window !== 'undefined') {
   window.state = state;
   window.usersMap = usersMap;
   window.listeners = listeners;
+  window.adminTasksFilter = adminTasksFilter;
+  window.adminCatsFilter = adminCatsFilter;
+  window.adminCategoriesFilter = adminCategoriesFilter;
   window.adminSessionsFilter = adminSessionsFilter;
   window.adminBroadcastsFilter = adminBroadcastsFilter;
+  window.adminSubmissionsFilter = adminSubmissionsFilter;
+  window.adminMembersFilter = adminMembersFilter;
+  window.statusFilter = statusFilter;
+  window.selectedCategory = selectedCategory;
+  window.searchQuery = searchQuery;
+  window.leaderboardPeriod = leaderboardPeriod;
+  window.editingTaskId = editingTaskId;
+  window.editingCategoryId = editingCategoryId;
+  window.editingSessionId = editingSessionId;
+  window.editingBroadcastId = editingBroadcastId;
 }
 `;
 
