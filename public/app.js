@@ -205,6 +205,18 @@ export const listeners = {
 };
 
 /* ==========================================================================
+   SAFE INITIALIZER RUNNER (Boot error isolation)
+   ========================================================================== */
+export function safeInit(name, fn) {
+  try {
+    if (typeof fn === 'function') fn();
+  } catch (err) {
+    console.error(`[init:${name}]`, err);
+    // Non-fatal: do NOT let one secondary component crash the whole app / trigger error boundary
+  }
+}
+
+/* ==========================================================================
    SHARED TICKER SERVICE (Task 2 - Performance & Overheating)
    ========================================================================== */
 export const ticker = {
@@ -6119,33 +6131,279 @@ async function disablePushNotifications() {
 /* ==========================================================================
    ADMIN PUSH SENDER CONSOLE
    ========================================================================== */
-function updateAdminPushTargets() {
+export function initAdminPushConsole() {
+  const form = document.getElementById('form-admin-send-push');
+  if (!form) return;
+
+  // Ensure hidden inputs exist
+  let targetInput = document.getElementById('select-push-target');
+  if (!targetInput) {
+    targetInput = document.createElement('input');
+    targetInput.type = 'hidden';
+    targetInput.id = 'select-push-target';
+    targetInput.value = 'all';
+    form.appendChild(targetInput);
+  }
+
+  let routeInput = document.getElementById('select-push-route');
+  if (!routeInput) {
+    routeInput = document.createElement('input');
+    routeInput.type = 'hidden';
+    routeInput.id = 'select-push-route';
+    routeInput.value = '';
+    form.appendChild(routeInput);
+  }
+
+  let itemIdInput = document.getElementById('input-push-item-id');
+  if (!itemIdInput) {
+    itemIdInput = document.createElement('input');
+    itemIdInput.type = 'hidden';
+    itemIdInput.id = 'input-push-item-id';
+    itemIdInput.value = '';
+    form.appendChild(itemIdInput);
+  }
+
+  // 1. Audience Segmented Control
+  const audienceContainer = document.getElementById('push-audience-segmented-container');
+  const detailsContainer = document.getElementById('push-audience-details-container');
+  if (audienceContainer && detailsContainer && !audienceContainer.dataset.initialized) {
+    audienceContainer.dataset.initialized = 'true';
+    renderSegmented(audienceContainer, {
+      options: [
+        { value: 'all', label: 'All Team' },
+        { value: 'badge', label: 'By Badge' },
+        { value: 'member', label: 'Member' }
+      ],
+      value: targetInput.value?.startsWith('badge:') ? 'badge' : (targetInput.value && targetInput.value !== 'all' ? 'member' : 'all'),
+      onChange: (val) => {
+        if (val === 'all') {
+          targetInput.value = 'all';
+          detailsContainer.innerHTML = `
+            <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 flex items-center gap-2">
+              <div class="w-7 h-7 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
+                <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+              </div>
+              <div class="text-[11px] text-neutral-300">Broadcasts to all team members</div>
+            </div>
+          `;
+        } else if (val === 'badge') {
+          const defaultBadge = (state.badges && state.badges[0]) || (typeof PRESET_BADGES !== 'undefined' && PRESET_BADGES[0]) || { id: 'media', label: 'Media Team' };
+          targetInput.value = 'badge:' + defaultBadge.id;
+          detailsContainer.innerHTML = `
+            <button type="button" id="btn-push-pick-badge" class="w-full glass-card p-2.5 rounded-xl flex items-center justify-between hover:border-white/25 transition text-left">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full" style="background-color: ${defaultBadge.color || '#0A84FF'}"></span>
+                <span id="push-selected-badge-label" class="text-xs font-semibold text-white">${esc(defaultBadge.label || defaultBadge.id)}</span>
+              </div>
+              <span class="text-[10px] text-neutral-400 px-2 py-0.5 rounded-full bg-white/10">Choose</span>
+            </button>
+          `;
+          const pickBadgeBtn = detailsContainer.querySelector('#btn-push-pick-badge');
+          if (pickBadgeBtn) {
+            pickBadgeBtn.onclick = () => {
+              openBadgePickerSheet({
+                onSelect: (b) => {
+                  targetInput.value = 'badge:' + b.id;
+                  const lbl = detailsContainer.querySelector('#push-selected-badge-label');
+                  if (lbl) lbl.textContent = b.label || b.id;
+                }
+              });
+            };
+          }
+        } else if (val === 'member') {
+          const firstMember = (state.members && state.members[0]) || (state.user) || { uid: 'all', name: 'Member' };
+          targetInput.value = firstMember.uid;
+          detailsContainer.innerHTML = `
+            <button type="button" id="btn-push-pick-member" class="w-full glass-card p-2.5 rounded-xl flex items-center justify-between hover:border-white/25 transition text-left">
+              <div class="flex items-center gap-2 min-w-0">
+                <div id="push-selected-member-avatar" class="shrink-0">${renderAvatar(firstMember, 'w-6 h-6')}</div>
+                <span id="push-selected-member-name" class="text-xs font-semibold text-white truncate">${esc(firstMember.displayName || firstMember.name || 'Select Member')}</span>
+              </div>
+              <span class="text-[10px] text-neutral-400 px-2 py-0.5 rounded-full bg-white/10 shrink-0">Choose</span>
+            </button>
+          `;
+          const pickMemberBtn = detailsContainer.querySelector('#btn-push-pick-member');
+          if (pickMemberBtn) {
+            pickMemberBtn.onclick = () => {
+              openMemberPicker({
+                multi: false,
+                includeAllOption: false,
+                selectedUids: [targetInput.value],
+                onConfirm: (selected) => {
+                  const uid = selected[0];
+                  if (!uid) return;
+                  targetInput.value = uid;
+                  const mem = getUserProfile(uid);
+                  const nameEl = detailsContainer.querySelector('#push-selected-member-name');
+                  const avEl = detailsContainer.querySelector('#push-selected-member-avatar');
+                  if (nameEl) nameEl.textContent = mem.displayName || mem.name || 'Member';
+                  if (avEl) avEl.innerHTML = renderAvatar(mem, 'w-6 h-6');
+                }
+              });
+            };
+          }
+        }
+      }
+    });
+    // Initial display
+    detailsContainer.innerHTML = `
+      <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 flex items-center gap-2">
+        <div class="w-7 h-7 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        </div>
+        <div class="text-[11px] text-neutral-300">Broadcasts to all team members</div>
+      </div>
+    `;
+  }
+
+  // 2. Category Picker Button
+  const catBtn = document.getElementById('btn-push-category-picker');
+  const catInput = document.getElementById('input-push-type') || document.getElementById('select-push-type');
+  const catLabel = document.getElementById('push-category-label');
+  if (catBtn && !catBtn.dataset.bound) {
+    catBtn.dataset.bound = 'true';
+    const categories = [
+      { id: 'system', label: 'System / Notice', sub: 'General announcements and system alerts' },
+      { id: 'task', label: 'Task Update', sub: 'New or updated assignments' },
+      { id: 'attendance', label: 'Attendance Alert', sub: 'Session reminders and check-in calls' },
+      { id: 'announcement', label: 'Important Notice', sub: 'High-visibility updates' },
+      { id: 'reminder', label: 'Reminder', sub: 'Deadlines and upcoming events' }
+    ];
+    catBtn.onclick = () => {
+      openItemPicker({
+        title: 'Select Notification Category',
+        items: categories,
+        selectedId: catInput?.value || 'system',
+        onSelect: (item) => {
+          if (catInput) catInput.value = item.id;
+          if (catLabel) catLabel.textContent = item.label;
+        }
+      });
+    };
+  }
+
+  // 3. Deep Link Action Picker Button
+  const actionBtn = document.getElementById('btn-push-action-picker');
+  const actionLabel = document.getElementById('push-action-label');
+  const subPickerContainer = document.getElementById('push-sub-picker-container');
+  const subPickerBtn = document.getElementById('btn-push-subitem-picker');
+  const subPickerLabel = document.getElementById('push-subitem-label');
+
+  if (actionBtn && !actionBtn.dataset.bound) {
+    actionBtn.dataset.bound = 'true';
+    const actions = [
+      { id: '', label: 'None (Default Feed)' },
+      { id: 'tasks', label: 'Tasks Tab' },
+      { id: 'task_detail', label: 'Specific Task...' },
+      { id: 'attendance', label: 'Attendance Tab' },
+      { id: 'attendance_session', label: 'Specific Attendance Session...' },
+      { id: 'profile', label: 'Profile Tab' },
+      { id: 'leaderboard', label: 'Leaderboard Tab' }
+    ];
+
+    actionBtn.onclick = () => {
+      openItemPicker({
+        title: 'Open When Tapped',
+        items: actions,
+        selectedId: routeInput?.value || '',
+        onSelect: (act) => {
+          if (act.id === 'task_detail') {
+            routeInput.value = 'task_detail';
+            if (actionLabel) actionLabel.textContent = 'Specific Task...';
+            if (subPickerContainer) subPickerContainer.classList.remove('hidden');
+          } else if (act.id === 'attendance_session') {
+            routeInput.value = 'attendance_session';
+            if (actionLabel) actionLabel.textContent = 'Specific Session...';
+            if (subPickerContainer) subPickerContainer.classList.remove('hidden');
+          } else {
+            routeInput.value = act.id;
+            itemIdInput.value = '';
+            if (actionLabel) actionLabel.textContent = act.label;
+            if (subPickerContainer) subPickerContainer.classList.add('hidden');
+          }
+        }
+      });
+    };
+
+    if (subPickerBtn && !subPickerBtn.dataset.bound) {
+      subPickerBtn.dataset.bound = 'true';
+      subPickerBtn.onclick = () => {
+        const curRoute = routeInput?.value;
+        if (curRoute === 'task_detail') {
+          const taskItems = (state.tasks || []).map(t => ({ id: t.id, label: t.title, sub: `${t.points} pts` }));
+          openItemPicker({
+            title: 'Select Target Task',
+            items: taskItems,
+            selectedId: itemIdInput?.value || '',
+            onSelect: (item) => {
+              itemIdInput.value = item.id;
+              if (subPickerLabel) subPickerLabel.textContent = item.label;
+            }
+          });
+        } else if (curRoute === 'attendance_session') {
+          const sessItems = (state.attendanceSessions || []).map(s => ({ id: s.id, label: s.title || 'Session', sub: s.type || 'General' }));
+          openItemPicker({
+            title: 'Select Target Session',
+            items: sessItems,
+            selectedId: itemIdInput?.value || '',
+            onSelect: (item) => {
+              itemIdInput.value = item.id;
+              if (subPickerLabel) subPickerLabel.textContent = item.label;
+            }
+          });
+        }
+      };
+    }
+  }
+
+  // Ensure icon preview is initialized
+  const iconInput = document.getElementById('input-push-icon');
+  const iconPreview = document.getElementById('push-icon-preview');
+  const iconLabel = document.getElementById('push-icon-label');
+  const curIcon = iconInput?.value || 'bell';
+  if (iconPreview && !iconPreview.hasChildNodes()) {
+    iconPreview.innerHTML = getIconSvg(curIcon, 'w-4 h-4 stroke-current');
+  }
+  if (iconLabel) iconLabel.textContent = curIcon;
+}
+
+export function updateAdminPushTargets() {
   const hiddenInput = document.getElementById('select-push-target');
   const currentVal = hiddenInput?.value || 'all';
   updatePushTargetPickerDisplay(currentVal);
 }
 
-function updatePushTargetPickerDisplay(val = 'all') {
+export function updatePushTargetPickerDisplay(val = 'all') {
   const nameEl = document.getElementById('picker-push-target-name');
   const subEl = document.getElementById('picker-push-target-sub');
   const avatarContainer = document.getElementById('picker-push-target-avatar-container');
   const hiddenInput = document.getElementById('select-push-target');
   if (hiddenInput) hiddenInput.value = val;
 
-  if (val === 'all') {
-    if (nameEl) nameEl.textContent = 'All Team Members';
-    if (subEl) subEl.textContent = 'Broadcast to everyone';
-    if (avatarContainer) {
-      avatarContainer.className = 'w-8 h-8 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center flex-shrink-0';
-      avatarContainer.innerHTML = '<svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>';
-    }
-  } else {
-    const member = getUserProfile(val);
-    if (nameEl) nameEl.textContent = member.displayName || member.name;
-    if (subEl) subEl.textContent = (member.role || 'Member').toUpperCase();
-    if (avatarContainer) {
-      avatarContainer.className = 'w-8 h-8 flex-shrink-0';
-      avatarContainer.innerHTML = renderAvatar(member, 'w-8 h-8');
+  if (nameEl) {
+    if (val === 'all') {
+      nameEl.textContent = 'All Team Members';
+      if (subEl) subEl.textContent = 'Broadcast to everyone';
+      if (avatarContainer) {
+        avatarContainer.className = 'w-8 h-8 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center flex-shrink-0';
+        avatarContainer.innerHTML = '<svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>';
+      }
+    } else if (val.startsWith('badge:')) {
+      const bId = val.replace('badge:', '');
+      nameEl.textContent = 'Badge Group: ' + bId;
+      if (subEl) subEl.textContent = 'Broadcast to badge members';
+      if (avatarContainer) {
+        avatarContainer.className = 'w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center flex-shrink-0';
+        avatarContainer.innerHTML = '<svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>';
+      }
+    } else {
+      const member = getUserProfile(val);
+      nameEl.textContent = member.displayName || member.name;
+      if (subEl) subEl.textContent = (member.role || 'Member').toUpperCase();
+      if (avatarContainer) {
+        avatarContainer.className = 'w-8 h-8 flex-shrink-0';
+        avatarContainer.innerHTML = renderAvatar(member, 'w-8 h-8');
+      }
     }
   }
 }
@@ -8633,6 +8891,193 @@ function renderAdminCategories() {
       await updateDoc(doc(db, 'categories', btn.dataset.catId), { archived: false, updatedAt: serverTimestamp() });
       toast('Category restored', 'success');
     };
+  });
+}
+
+/* ==========================================================================
+   ADMIN TASKS RENDERER & COMPATIBILITY ALIASES
+   ========================================================================== */
+export function renderAdminTasks() {
+  const tbody = document.getElementById('admin-tasks-tbody');
+  if (!tbody) return;
+
+  const isArchivedView = state.adminTasksFilter === 'archived';
+  const filtered = (state.tasks || []).filter(t => isArchivedView ? t.archived : !t.archived);
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No ${isArchivedView ? 'archived' : 'active'} tasks found.</div>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(t => {
+    const cat = (state.categories || []).find(c => c.id === t.categoryId || c.id === t.category) || { name: 'General', color: '#0A84FF', iconKey: 'film' };
+    const isSelected = selectionState.active && selectionState.type === 'admin_tasks' && selectionState.selectedIds.has(t.id);
+    return `
+      <div class="inset-row bulk-select-card flex items-center justify-between py-2 text-xs${isSelected ? ' selected' : ''}" data-task-id="${esc(t.id)}" data-bulk-id="${esc(t.id)}">
+        ${BULK_INDICATOR_HTML}
+        <div class="bulk-card-content flex items-center justify-between w-full">
+          <div class="min-w-0 flex-1 pr-2">
+            <div class="font-semibold text-white truncate">${esc(t.title)}</div>
+            <div class="text-[10px] text-neutral-400 flex items-center gap-1.5 mt-0.5">
+              <span class="inline-flex items-center gap-1" style="color: ${cat.color};">
+                ${getCategorySvg(cat.iconKey, 'w-3 h-3')}
+                <span>${esc(cat.name)}</span>
+              </span>
+              <span>•</span>
+              <span class="font-mono text-amber-400 font-bold">${t.points} pts</span>
+              <span>•</span>
+              <span>${t.isPermanent ? 'Permanent' : (t.schedule?.type || 'once')}</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            ${isArchivedView ? `
+              <button type="button" class="btn-admin-restore-task text-xs text-emerald-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Restore</button>
+              <button type="button" class="btn-admin-delete-task text-xs text-rose-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Delete permanently</button>
+            ` : `
+              <button type="button" class="btn-admin-edit-task text-xs text-[#0A84FF] px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Edit</button>
+              <button type="button" class="btn-admin-archive-task text-xs text-amber-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Archive</button>
+            `}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  tbody.querySelectorAll('.inset-row').forEach(row => {
+    row.onclick = (e) => {
+      if (selectionState.active && selectionState.type === 'admin_tasks') {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleItemSelection(row, row.dataset.bulkId);
+        return;
+      }
+    };
+
+    attachLongPress(row, () => {
+      enterSelectionMode('admin_tasks', row.dataset.bulkId);
+    });
+  });
+
+  tbody.querySelectorAll('.btn-admin-edit-task').forEach(btn => {
+    btn.onclick = (e) => {
+      if (selectionState.active && selectionState.type === 'admin_tasks') {
+        e.preventDefault();
+        e.stopPropagation();
+        const row = btn.closest('.bulk-select-card');
+        if (row) toggleItemSelection(row, row.dataset.bulkId);
+        return;
+      }
+      e.stopPropagation();
+      openAdminTaskModal(btn.dataset.taskId);
+    };
+  });
+
+  tbody.querySelectorAll('.btn-admin-archive-task').forEach(btn => {
+    btn.onclick = async (e) => {
+      if (selectionState.active && selectionState.type === 'admin_tasks') {
+        e.preventDefault();
+        e.stopPropagation();
+        const row = btn.closest('.bulk-select-card');
+        if (row) toggleItemSelection(row, row.dataset.bulkId);
+        return;
+      }
+      e.stopPropagation();
+      const task = (state.tasks || []).find(t => t.id === btn.dataset.taskId);
+      if (!task) return;
+      const confirm = await confirmSheet({
+        title: 'Archive Task',
+        message: `Are you sure you want to archive "${task.title}"? It will be hidden from members.`,
+        confirmLabel: 'Archive',
+        destructive: true
+      });
+      if (confirm) {
+        await updateDoc(doc(db, 'tasks', task.id), { archived: true, updatedAt: serverTimestamp() });
+        toast('Task archived', 'info');
+      }
+    };
+  });
+
+  tbody.querySelectorAll('.btn-admin-restore-task').forEach(btn => {
+    btn.onclick = async (e) => {
+      if (selectionState.active && selectionState.type === 'admin_tasks') {
+        e.preventDefault();
+        e.stopPropagation();
+        const row = btn.closest('.bulk-select-card');
+        if (row) toggleItemSelection(row, row.dataset.bulkId);
+        return;
+      }
+      e.stopPropagation();
+      await updateDoc(doc(db, 'tasks', btn.dataset.taskId), { archived: false, updatedAt: serverTimestamp() });
+      toast('Task restored', 'success');
+    };
+  });
+
+  tbody.querySelectorAll('.btn-admin-delete-task').forEach(btn => {
+    btn.onclick = async (e) => {
+      if (selectionState.active && selectionState.type === 'admin_tasks') {
+        e.preventDefault();
+        e.stopPropagation();
+        const row = btn.closest('.bulk-select-card');
+        if (row) toggleItemSelection(row, row.dataset.bulkId);
+        return;
+      }
+      e.stopPropagation();
+      const task = (state.tasks || []).find(t => t.id === btn.dataset.taskId);
+      const confirm = await confirmSheet({
+        title: 'Delete Task Permanently',
+        message: `Are you sure you want to permanently delete "${task ? task.title : 'this task'}"? This action cannot be undone.`,
+        confirmLabel: 'Delete Permanently',
+        destructive: true
+      });
+      if (confirm) {
+        await deleteDoc(doc(db, 'tasks', btn.dataset.taskId));
+        toast('Task permanently deleted', 'info');
+      }
+    };
+  });
+}
+
+export function renderTasksView() {
+  return renderTasks();
+}
+
+export function renderBroadcastBanner() {
+  return renderHomeBroadcastBanner();
+}
+
+export function renderSubmissionsInspector() {
+  return renderAdminSubmissions();
+}
+
+export function closeModal() {
+  return closeAllModals();
+}
+
+export function renderMembersAdmin() {
+  return renderAdminMembers();
+}
+
+export function renderAttendance() {
+  renderAttendanceView();
+  renderAttendanceLogs();
+}
+
+export function openBadgePickerSheet({ onSelect }) {
+  const presets = typeof PRESET_BADGES !== 'undefined' ? PRESET_BADGES : [];
+  const items = presets.map(b => ({
+    id: b.id,
+    label: b.label,
+    icon: b.icon,
+    color: b.color,
+    badge: b
+  }));
+  openItemPicker({
+    title: 'Select Badge',
+    items,
+    selectedId: null,
+    onSelect: (item) => {
+      if (typeof onSelect === 'function') onSelect(item.badge || item);
+    }
   });
 }
 
@@ -14984,17 +15429,41 @@ if ('serviceWorker' in navigator) {
 // BOOTSTRAP WORKSPACE
 window.addEventListener('DOMContentLoaded', () => {
   initErrorBoundary();
-  initOfflineBanner();
+  safeInit('offlineBanner', initOfflineBanner);
   initNavigation();
-  initAdminPushConsole();
+  safeInit('adminPushConsole', initAdminPushConsole);
   attachEventHandlers();
   // Cold-start cache: immediately attach listeners so local cache renders instantly before auth/network completes
   initFirestoreListeners();
   setupAuthLifecycle();
-  applySettings();
-  initFCM();
+  safeInit('applySettings', applySettings);
+  safeInit('fcm', initFCM);
 
   setTimeout(() => {
-    if (window.lucide) window.lucide.createIcons();
+    safeInit('lucide', () => {
+      if (window.lucide) window.lucide.createIcons();
+    });
   }, 400);
 });
+
+// Window compatibility exports
+if (typeof window !== 'undefined') {
+  window.safeInit = safeInit;
+  window.initAdminPushConsole = initAdminPushConsole;
+  window.updateAdminPushTargets = updateAdminPushTargets;
+  window.updatePushTargetPickerDisplay = updatePushTargetPickerDisplay;
+  window.renderTasks = renderTasks;
+  window.renderTasksView = renderTasksView;
+  window.renderAdminTasks = renderAdminTasks;
+  window.renderBroadcastBanner = renderBroadcastBanner;
+  window.renderHomeBroadcastBanner = renderHomeBroadcastBanner;
+  window.renderSubmissionsInspector = renderSubmissionsInspector;
+  window.closeModal = closeModal;
+  window.closeAllModals = closeAllModals;
+  window.renderMembersAdmin = renderMembersAdmin;
+  window.renderAdminMembers = renderAdminMembers;
+  window.renderAttendance = renderAttendance;
+  window.renderAttendanceView = renderAttendanceView;
+  window.renderAttendanceLogs = renderAttendanceLogs;
+  window.openBadgePickerSheet = openBadgePickerSheet;
+}
