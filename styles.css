@@ -2039,7 +2039,8 @@ input[type="datetime-local"],
 textarea,
 select,
 .ios-input,
-.input-field {
+.input-field,
+.glass-input {
   width: 100% !important;
   box-sizing: border-box !important;
   background: rgba(255, 255, 255, 0.08) !important;
@@ -2081,7 +2082,8 @@ textarea::placeholder {
 
 input:focus,
 textarea:focus,
-select:focus {
+select:focus,
+.glass-input:focus {
   background: rgba(255, 255, 255, 0.12) !important;
   border-color: #0A84FF !important;
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.25) !important;

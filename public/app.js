@@ -4518,6 +4518,9 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     if (currentHash && window.location.hash !== currentHash) {
       history.replaceState(null, '', currentHash);
     }
+    if (typeof onPageChange === 'function') {
+      try { onPageChange(pages[index]?.id, index); } catch (e) { console.warn(e); }
+    }
   }
 
   function goTo(pageId, behavior = 'smooth') {
@@ -4970,7 +4973,13 @@ function initNavigation() {
   ];
 
   if (adminPagerEl && adminDockEl) {
-    adminPagerInstance = createPager(adminPagerEl, adminDockEl, adminPages, 'overview');
+    adminPagerInstance = createPager(adminPagerEl, adminDockEl, adminPages, 'overview', (pageId) => {
+      if (pageId === 'waivers') renderAdminWaivers();
+      else if (pageId === 'submissions') renderAdminSubmissions();
+      else if (pageId === 'attendance') renderAttendanceView();
+      else if (pageId === 'members') renderAdminMembers();
+      else if (pageId === 'broadcasts') renderAdminBroadcasts();
+    });
   }
 
   window.addEventListener('hashchange', () => {
@@ -5165,6 +5174,7 @@ export function showAdminDashboard(targetPage = 'overview') {
       setupAttendanceListeners();
     }
     updateAdminOverviewStats();
+    if (targetPage === 'waivers') renderAdminWaivers();
   }
 }
 
@@ -7855,7 +7865,7 @@ function updateLeaderboardPeriodButtons() {
 function renderLeaderboard() {
   const listEl = document.getElementById('leaderboard-list');
   const countEl = document.getElementById('leaderboard-total-count');
-  const podiumEl = document.getElementById('leaderboard-podium');
+  const podiumEl = document.getElementById('leaderboard-podium') || document.getElementById('leaderboardPodium');
   if (!listEl) return;
 
   updateLeaderboardPeriodButtons();
@@ -7870,7 +7880,7 @@ function renderLeaderboard() {
     const prof = getUserProfile(m.uid, m.displayName, m.photoURL);
     const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
     const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
-    return { ...m, ...prof, periodPoints, penalties };
+    return { ...m, ...prof, periodPoints, penalties, points: periodPoints };
   });
 
   const rankedMembers = sorted
@@ -7971,10 +7981,21 @@ function renderLeaderboard() {
       </div>`;
   }
 
-  let listHtml = restRanked.map((m, i) => rowHtml(m, podiumCount + 1 + i, false)).join('');
+  let listHtml = '';
+  if (restRanked.length > 0) {
+    listHtml += restRanked.map((m, i) => rowHtml(m, podiumCount + 1 + i, false)).join('');
+  }
   if (unrankedMembers.length > 0) {
-    listHtml += `<div class="pt-3 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">No points yet</div>`;
-    listHtml += unrankedMembers.map(m => rowHtml(m, null, true)).join('');
+    if (rankedMembers.length > 0) {
+      if (restRanked.length > 0) {
+        listHtml += `<div class="pt-3 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">Other Members</div>`;
+      } else {
+        listHtml += `<div class="pt-1 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">Other Members</div>`;
+      }
+      listHtml += unrankedMembers.map(m => rowHtml(m, null, true)).join('');
+    } else {
+      listHtml += unrankedMembers.map(m => rowHtml(m, null, true)).join('');
+    }
   }
   listEl.innerHTML = listHtml;
 
@@ -11358,7 +11379,9 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
     members.forEach(m => {
       if (attendedMap.has(m.uid)) {
         const log = attendedMap.get(m.uid);
-        if (log.status === 'absent') {
+        if (log.status === 'excused' || log.excused === true) {
+          excusedList.push({ member: m, log, waiver: waiversMap.get(m.uid) });
+        } else if (log.status === 'absent') {
           penalizedAbsentList.push({ member: m, log });
         } else {
           presentList.push({ member: m, log });
@@ -11464,7 +11487,7 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
                       <div class="shrink-0">${renderAvatar(prof, 'w-6 h-6')}</div>
                       <div class="min-w-0 flex-1">
                         <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400 truncate block">"${esc(waiver.reason)}"</span>
+                        <span class="text-[10px] text-neutral-400 truncate block">"${esc(waiver?.reason || 'Approved Excuse')}"</span>
                       </div>
                     </div>
                     <span class="badge-waived px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono shrink-0">
@@ -12593,6 +12616,40 @@ function renderAdminWaivers() {
         updatedAt: serverTimestamp()
       });
 
+      // System Impact: On Approve, flag member attendance as Excused for that session
+      if (newStatus === 'approved' && waiver.sessionId && waiver.occurrenceKey && waiver.uid) {
+        const logId = `${waiver.sessionId}_${waiver.occurrenceKey}_${waiver.uid}`;
+        const logRef = doc(db, 'attendance_logs', logId);
+        const existingLog = (state.attendanceLogs || []).find(l => l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey);
+        if (existingLog && existingLog.penalty > 0) {
+          batch.update(doc(db, 'users', waiver.uid), {
+            penalties: increment(-existingLog.penalty),
+            updatedAt: serverTimestamp()
+          });
+        }
+        if (existingLog && existingLog.fineEGP > 0) {
+          batch.set(doc(db, 'users_private', waiver.uid), {
+            finesEGP: increment(-existingLog.fineEGP),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
+        batch.set(logRef, {
+          sessionId: waiver.sessionId,
+          sessionTitle: waiver.sessionTitle || '',
+          uid: waiver.uid,
+          userName: waiver.userName || '',
+          userAvatar: waiver.userAvatar || '',
+          occurrenceKey: waiver.occurrenceKey,
+          status: 'excused',
+          excused: true,
+          penalty: 0,
+          fineEGP: 0,
+          excusedAt: serverTimestamp(),
+          adminNote: adminNote || '',
+          resolvedBy: state.user.uid
+        }, { merge: true });
+      }
+
       // In-app notification for the member
       createNotification(batch, {
         uid: waiver.uid,
@@ -12611,6 +12668,15 @@ function renderAdminWaivers() {
       await batch.commit();
       waiver.status = newStatus;
       waiver.adminNote = adminNote;
+      if (newStatus === 'approved') {
+        const existingLog = (state.attendanceLogs || []).find(l => l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey);
+        if (existingLog) {
+          existingLog.status = 'excused';
+          existingLog.excused = true;
+          existingLog.penalty = 0;
+          existingLog.fineEGP = 0;
+        }
+      }
       toast(`Excuse ${newStatus}`, 'success');
       renderAdminWaivers();
     } catch (err) {
