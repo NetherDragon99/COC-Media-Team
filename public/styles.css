@@ -16,6 +16,10 @@
   --ios-yellow: #FFCC00;
 
   /* Light Theme Tokens */
+  --surface-1: #000000;
+  --surface-2: #1C1C1E;
+  --surface-3: #2C2C2E;
+
   --bg-primary: #FFFFFF;
   --bg-secondary: #F2F2F7;
   --bg-grouped: #F2F2F7;
@@ -49,7 +53,7 @@
   --radius-xl: 22px;
   --radius-full: 9999px;
   
-  --font-system: -apple-system, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -728,8 +732,8 @@ body.selection-mode-active .bulk-select-card.selected {
   width: 36px;
   height: 5px;
   border-radius: 2.5px;
-  background: var(--text-tertiary);
-  margin: 8px auto 4px auto;
+  background: rgba(255, 255, 255, 0.3);
+  margin: 8px auto 12px;
   flex-shrink: 0;
 }
 
@@ -1434,6 +1438,8 @@ textarea:focus-visible {
   -webkit-user-select: none;
   box-sizing: border-box;
   width: 100%;
+  gap: 2px;
+  display: flex;
 }
 
 .ios-segmented-thumb {
@@ -1475,8 +1481,10 @@ textarea:focus-visible {
 
 .ios-segmented-item.active,
 .ios-segmented-item[aria-selected="true"] {
+  background: #636366;
   color: #FFFFFF;
   font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 /* iOS Stepper */
@@ -1893,8 +1901,8 @@ textarea:focus-visible {
 .sub-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 11000 !important;
-  background: rgba(0, 0, 0, 0.7);
+  z-index: 12000 !important;
+  background: rgba(0, 0, 0, 0.65);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   display: flex;
@@ -1933,4 +1941,36 @@ textarea:focus-visible {
 
 #podium-first {
   transform: translateY(-10px);
+}
+
+
+/* iOS Inset-Grouped Card (iOS HIG) */
+.ios-card {
+  border-radius: 14px;
+  background: var(--surface-2, #1C1C1E);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+/* iOS Active Press Effect */
+button:active,
+.btn:active,
+.ios-card:active,
+.ios-segmented-item:active,
+.modal-header button:active {
+  transform: scale(0.99);
+}
+
+/* Modal Tabs Horizontal Overflow Fix */
+.modal-tabs,
+#member-ctrl-tab-bar {
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.modal-tabs::-webkit-scrollbar,
+#member-ctrl-tab-bar::-webkit-scrollbar {
+  display: none;
 }

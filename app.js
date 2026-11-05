@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.5)
+ * COC Media Team - Production Web App (v2.1.6)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.5';
+export const APP_VERSION = '2.1.6';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -102,7 +102,8 @@ import {
   where,
   orderBy,
   startAfter,
-  writeBatch
+  writeBatch,
+  runTransaction
 } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js';
 
 import {
@@ -7864,8 +7865,8 @@ function renderLeaderboard() {
 
   if (countEl) countEl.textContent = `${sorted.length} Members`;
 
-  // Zero-Point rule: Only members with >0 points qualify for podium ranking
-  const rankedMembers = sorted.filter(m => (m.periodPoints || 0) > 0);
+  // Filter & Sort Eligible Members with points > 0
+  const rankedMembers = sorted.filter(m => Number(m.periodPoints || 0) > 0);
 
   function renderRows(membersToRender, startRank = 1) {
     if (membersToRender.length === 0) {
@@ -7922,24 +7923,78 @@ function renderLeaderboard() {
     });
   }
 
-  if (rankedMembers.length < 3) {
-    // If < 3 members have points, hide podium boxes and display clean sleek list
-    if (podiumEl) podiumEl.classList.add('hidden');
-    renderRows(sorted, 1);
-  } else {
-    // If >= 3 members have points, show organic podium
-    if (podiumEl) podiumEl.classList.remove('hidden');
-    updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
-    updatePodiumSlot(rankedMembers[1], 'podium-second', 'podium-2', period);
-    updatePodiumSlot(rankedMembers[2], 'podium-third', 'podium-3', period);
+  const p1 = document.getElementById('podium-first');
+  const p2 = document.getElementById('podium-second');
+  const p3 = document.getElementById('podium-third');
 
-    // Deduplicate: Members on podium must NOT be re-rendered in the list below
-    const remainingMembers = sorted.filter(m =>
-      m.uid !== rankedMembers[0].uid &&
-      m.uid !== rankedMembers[1].uid &&
-      m.uid !== rankedMembers[2].uid
-    );
-    renderRows(remainingMembers, 4);
+  if (rankedMembers.length === 0) {
+    // CASE 0: Hide podium, render empty state
+    if (podiumEl) podiumEl.classList.add('hidden');
+    renderRows([], 1);
+  } else if (rankedMembers.length === 1) {
+    // CASE 1: Single Leader Spotlight hero card
+    if (podiumEl) {
+      podiumEl.classList.remove('hidden', 'grid-cols-3', 'grid-cols-2');
+      podiumEl.className = 'flex justify-center items-center pt-4 pb-2';
+    }
+    if (p2) p2.classList.add('hidden');
+    if (p3) p3.classList.add('hidden');
+    if (p1) {
+      p1.classList.remove('hidden');
+      p1.className = 'glass-card p-4 text-center border-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/15 to-transparent rounded-2xl w-full max-w-[260px] cursor-pointer hover:scale-[1.02] transition';
+      updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
+      p1.onclick = () => openMiniProfileSheet(rankedMembers[0].uid);
+    }
+    const remaining = sorted.filter(m => m.uid !== rankedMembers[0].uid);
+    renderRows(remaining, 2);
+  } else if (rankedMembers.length === 2) {
+    // CASE 2: 2-pillar podium: #1 Gold (elevated) and #2 Silver (left)
+    if (podiumEl) {
+      podiumEl.classList.remove('hidden', 'grid-cols-3', 'flex', 'justify-center');
+      podiumEl.className = 'grid grid-cols-2 gap-3 max-w-sm mx-auto items-end pt-4 pb-2';
+    }
+    if (p3) p3.classList.add('hidden');
+    if (p2) {
+      p2.classList.remove('hidden');
+      p2.className = 'glass-card p-3 text-center border-t-2 border-slate-300 rounded-xl cursor-pointer hover:bg-white/5 transition';
+      updatePodiumSlot(rankedMembers[1], 'podium-second', 'podium-2', period);
+      p2.onclick = () => openMiniProfileSheet(rankedMembers[1].uid);
+    }
+    if (p1) {
+      p1.classList.remove('hidden');
+      p1.className = 'glass-card p-3.5 text-center border-t-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/10 to-transparent rounded-xl cursor-pointer hover:bg-white/5 transition';
+      updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
+      p1.onclick = () => openMiniProfileSheet(rankedMembers[0].uid);
+    }
+    const remaining = sorted.filter(m => m.uid !== rankedMembers[0].uid && m.uid !== rankedMembers[1].uid);
+    renderRows(remaining, 3);
+  } else {
+    // CASE 3: Full 3-step podium
+    if (podiumEl) {
+      podiumEl.classList.remove('hidden', 'grid-cols-2', 'flex', 'justify-center', 'max-w-sm', 'mx-auto');
+      podiumEl.className = 'grid grid-cols-3 gap-2 items-end pt-4 pb-2';
+    }
+    if (p2) {
+      p2.classList.remove('hidden');
+      p2.className = 'glass-card p-3 text-center border-t-2 border-slate-300 rounded-xl cursor-pointer hover:bg-white/5 transition';
+      updatePodiumSlot(rankedMembers[1], 'podium-second', 'podium-2', period);
+      p2.onclick = () => openMiniProfileSheet(rankedMembers[1].uid);
+    }
+    if (p1) {
+      p1.classList.remove('hidden');
+      p1.className = 'glass-card p-3.5 text-center border-t-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/10 to-transparent rounded-xl cursor-pointer hover:bg-white/5 transition';
+      updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
+      p1.onclick = () => openMiniProfileSheet(rankedMembers[0].uid);
+    }
+    if (p3) {
+      p3.classList.remove('hidden');
+      p3.className = 'glass-card p-3 text-center border-t-2 border-amber-700 rounded-xl cursor-pointer hover:bg-white/5 transition';
+      updatePodiumSlot(rankedMembers[2], 'podium-third', 'podium-3', period);
+      p3.onclick = () => openMiniProfileSheet(rankedMembers[2].uid);
+    }
+    const topUids = new Set([rankedMembers[0].uid, rankedMembers[1].uid, rankedMembers[2].uid]);
+    const remaining = sorted.filter(m => !topUids.has(m.uid));
+    renderRows(remaining, 4);
   }
 }
 
@@ -8013,280 +8068,273 @@ function updateNotificationBadges() {
    TASK 8: 50+ VECTOR SVG ICON LIBRARY (ZERO EMOJIS)
    ========================================================================== */
 
-export const ICON_LIBRARY = {
-  // 1. Media & Production (12 icons)
-  camera: {
+// EXACTLY 50 CURATED SVG ICONS (10 Media, 10 Tasks, 10 Rewards, 10 People, 10 System)
+export const ICON_CATALOG = new Map([
+  // 1. Media & Production (10 icons)
+  ['camera', {
     category: 'media',
     label: 'Camera',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>'
-  },
-  video: {
+  }],
+  ['video', {
     category: 'media',
     label: 'Video',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>'
-  },
-  mic: {
+  }],
+  ['mic', {
     category: 'media',
     label: 'Microphone',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>'
-  },
-  waveform: {
+  }],
+  ['waveform', {
     category: 'media',
     label: 'Waveform',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 10v4"></path><path d="M6 7v10"></path><path d="M10 4v16"></path><path d="M14 7v10"></path><path d="M18 10v4"></path><path d="M22 12v0"></path></svg>'
-  },
-  tv: {
+  }],
+  ['tv', {
     category: 'media',
     label: 'Monitor / TV',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>'
-  },
-  antenna: {
+  }],
+  ['antenna', {
     category: 'media',
     label: 'Live Broadcast',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 12a10 10 0 0 1 20 0"></path><path d="M6 12a6 6 0 0 1 12 0"></path><circle cx="12" cy="12" r="2"></circle><line x1="12" y1="14" x2="12" y2="22"></line></svg>'
-  },
-  sliders: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.48"></path><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.48"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>'
+  }],
+  ['sliders', {
     category: 'media',
     label: 'Audio Mixer',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>'
-  },
-  play: {
+  }],
+  ['play', {
     category: 'media',
     label: 'Play Media',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>'
-  },
-  headphones: {
+  }],
+  ['headphones', {
     category: 'media',
     label: 'Headphones',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>'
-  },
-  film: {
+  }],
+  ['film', {
     category: 'media',
     label: 'Film Roll',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>'
-  },
-  aperture: {
-    category: 'media',
-    label: 'Aperture / Lens',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="14.31" y1="8" x2="20.05" y2="17.94"></line><line x1="9.69" y1="8" x2="21.17" y2="8"></line><line x1="7.38" y1="12" x2="13.12" y2="2.06"></line><line x1="9.69" y1="16" x2="3.95" y2="6.06"></line><line x1="14.31" y1="16" x2="2.83" y2="16"></line><line x1="16.62" y1="12" x2="10.88" y2="21.94"></line></svg>'
-  },
-  light: {
-    category: 'media',
-    label: 'Studio Light',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>'
-  },
+  }],
 
-  // 2. Tasks & Operations (10 icons)
-  'check-circle': {
-    category: 'tasks',
-    label: 'Completed',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>'
-  },
-  checklist: {
+  // 2. Tasks & Production Flow (10 icons)
+  ['checklist', {
     category: 'tasks',
     label: 'Checklist',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><polyline points="3 6 4 7 6 5"></polyline><polyline points="3 12 4 13 6 11"></polyline><polyline points="3 18 4 19 6 17"></polyline></svg>'
-  },
-  clock: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>'
+  }],
+  ['clock', {
     category: 'tasks',
     label: 'Clock',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>'
-  },
-  hourglass: {
+  }],
+  ['hourglass', {
     category: 'tasks',
     label: 'Hourglass',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path></svg>'
-  },
-  target: {
+  }],
+  ['target', {
     category: 'tasks',
     label: 'Target',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>'
-  },
-  flag: {
+  }],
+  ['flag', {
     category: 'tasks',
     label: 'Milestone Flag',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>'
-  },
-  clipboard: {
+  }],
+  ['clipboard', {
     category: 'tasks',
     label: 'Clipboard',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>'
-  },
-  inbox: {
+  }],
+  ['inbox', {
     category: 'tasks',
     label: 'Submissions Inbox',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>'
-  },
-  upload: {
+  }],
+  ['upload', {
     category: 'tasks',
     label: 'Upload Work',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>'
-  },
-  folder: {
+  }],
+  ['folder', {
     category: 'tasks',
     label: 'Project Folder',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
-  },
+  }],
+  ['check-circle', {
+    category: 'tasks',
+    label: 'Completed',
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>'
+  }],
 
-  // 3. Rewards, Points & Penalties (10 icons)
-  trophy: {
+  // 3. Rewards & Achievements (10 icons)
+  ['trophy', {
     category: 'rewards',
     label: 'Trophy',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H8v4h8v-4h-1c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"></path></svg>'
-  },
-  medal: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1 .45-1 1v1h12v-1c0-.55-.45-1-1-1h-2c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 4H6v7a6 6 0 0 0 12 0V4z"></path></svg>'
+  }],
+  ['medal', {
     category: 'rewards',
     label: 'Medal',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="14" r="6"></circle><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"></path><path d="M15.48 4H8.52l-2 5h10.96l-2-5z"></path></svg>'
-  },
-  star: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>'
+  }],
+  ['star', {
     category: 'rewards',
     label: 'Star',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>'
-  },
-  sparkles: {
+  }],
+  ['sparkles', {
     category: 'rewards',
     label: 'Sparkles',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 3l1.912 5.813a2 2 0 0 0 1.275 1.275L21 12l-5.813 1.912a2 2 0 0 0-1.275 1.275L12 21l-1.912-5.813a2 2 0 0 0-1.275-1.275L3 12l5.813-1.912a2 2 0 0 0 1.275-1.275L12 3z"></path></svg>'
-  },
-  flame: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 3v3m0 12v3m9-9h-3M6 12H3m14.5-6.5l-2.1 2.1M8.6 15.4l-2.1 2.1m11-2.1l-2.1-2.1M8.6 8.6L6.5 6.5"></path></svg>'
+  }],
+  ['flame', {
     category: 'rewards',
     label: 'Streak Fire',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>'
-  },
-  crown: {
+  }],
+  ['crown', {
     category: 'rewards',
     label: 'Crown',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14v2H5v-2z"></path></svg>'
-  },
-  zap: {
+  }],
+  ['zap', {
     category: 'rewards',
     label: 'Lightning / Bonus',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>'
-  },
-  coins: {
+  }],
+  ['coins', {
     category: 'rewards',
     label: 'Points / Coins',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="8" cy="8" r="6"></circle><path d="M18.09 10.37A6 6 0 1 1 10.34 18"></path><path d="M7 6h1v4"></path><path d="M16.7 13.3a4 4 0 0 1 0 5.4"></path></svg>'
-  },
-  'alert-triangle': {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="8" cy="8" r="6"></circle><path d="M18.09 10.37A6 6 0 1 1 10.34 18"></path><path d="M7 6h1v4"></path><path d="M16.7 13.3l.6.6"></path></svg>'
+  }],
+  ['alert-triangle', {
     category: 'rewards',
     label: 'Penalty Alert',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
-  },
-  'slash-circle': {
+  }],
+  ['slash-circle', {
     category: 'rewards',
     label: 'Deduction / Fine',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>'
-  },
+  }],
 
-  // 4. People & Collaboration (10 icons)
-  user: {
+  // 4. People & Membership (10 icons)
+  ['user', {
     category: 'people',
     label: 'Member',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>'
-  },
-  users: {
+  }],
+  ['users', {
     category: 'people',
     label: 'Team Members',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>'
-  },
-  badge: {
+  }],
+  ['badge', {
     category: 'people',
     label: 'Role Badge',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>'
-  },
-  id: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76z"></path></svg>'
+  }],
+  ['id', {
     category: 'people',
     label: 'ID Card',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="18" rx="2"></rect><circle cx="8" cy="10" r="3"></circle><line x1="15" y1="9" x2="19" y2="9"></line><line x1="15" y1="13" x2="19" y2="13"></line><path d="M4 19a4 4 0 0 1 8 0"></path></svg>'
-  },
-  handshake: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="18" rx="2"></rect><circle cx="8" cy="10" r="3"></circle><line x1="14" y1="8" x2="18" y2="8"></line><line x1="14" y1="12" x2="18" y2="12"></line><line x1="6" y1="17" x2="18" y2="17"></line></svg>'
+  }],
+  ['handshake', {
     category: 'people',
     label: 'Partnership',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M11 17l-5-5a3 3 0 0 1 0-4.24l.76-.76a3 3 0 0 1 4.24 0L12 8l1-1a3 3 0 0 1 4.24 0l.76.76a3 3 0 0 1 0 4.24l-5 5"></path><path d="M12 8l3 3"></path><path d="M9 11l3 3"></path></svg>'
-  },
-  chat: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M11 17a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-2z"></path><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>'
+  }],
+  ['chat', {
     category: 'people',
     label: 'Chat Message',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'
-  },
-  smile: {
+  }],
+  ['smile', {
     category: 'people',
     label: 'Smile / Friendly',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>'
-  },
-  shield: {
+  }],
+  ['shield', {
     category: 'people',
     label: 'Admin Shield',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>'
-  },
-  key: {
+  }],
+  ['key', {
     category: 'people',
     label: 'Access Key',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-1.5 1.5L14 9l-2 2-2-2-4 4a5 5 0 1 0 7 7l4-4 2 2 4-4-2-2 1.5-1.5z"></path><circle cx="7.5" cy="16.5" r="1.5"></circle></svg>'
-  },
-  heart: {
+    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l-1.5-1.5L10 7M3 13a7 7 0 1 0 14 0 7 7 0 0 0-14 0z"></path></svg>'
+  }],
+  ['heart', {
     category: 'people',
     label: 'Gratitude',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>'
-  },
+  }],
 
-  // 5. System, Status & Navigation (10 icons)
-  bell: {
+  // 5. System & Navigation (10 icons)
+  ['bell', {
     category: 'system',
     label: 'Notification Bell',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>'
-  },
-  calendar: {
+  }],
+  ['calendar', {
     category: 'system',
     label: 'Calendar / Schedule',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>'
-  },
-  compass: {
+  }],
+  ['compass', {
     category: 'system',
     label: 'Explore / Hub',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>'
-  },
-  settings: {
+  }],
+  ['settings', {
     category: 'system',
     label: 'Settings',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
-  },
-  layers: {
+  }],
+  ['layers', {
     category: 'system',
     label: 'Layers',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>'
-  },
-  database: {
+  }],
+  ['database', {
     category: 'system',
     label: 'Database',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>'
-  },
-  refresh: {
+  }],
+  ['refresh', {
     category: 'system',
     label: 'Sync / Refresh',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>'
-  },
-  trash: {
+  }],
+  ['trash', {
     category: 'system',
     label: 'Trash / Purge',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>'
-  },
-  link: {
+  }],
+  ['link', {
     category: 'system',
     label: 'External Link',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>'
-  },
-  info: {
+  }],
+  ['info', {
     category: 'system',
     label: 'Info / Notice',
     svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
-  }
-};
+  }]
+]);
+
+export const ICON_LIBRARY = Object.fromEntries(ICON_CATALOG);
 
 export function getIconSvg(iconKey, className = 'w-5 h-5') {
-  const item = ICON_LIBRARY[iconKey] || ICON_LIBRARY.bell;
+  const item = ICON_CATALOG.get(iconKey) || ICON_LIBRARY[iconKey] || ICON_CATALOG.get('bell') || ICON_LIBRARY.bell;
   return item.svg.replace('{CLASS}', className);
 }
 
@@ -8294,7 +8342,7 @@ export function openSubModal({ title = 'Select Icon', body, onClose }) {
   const overlay = document.getElementById('subModalOverlay');
   const titleEl = document.getElementById('sub-modal-title');
   const bodyEl = document.getElementById('sub-modal-body');
-  const cancelBtn = document.getElementById('sub-modal-cancel');
+  const cancelBtn = document.getElementById('subModalCancelBtn') || document.getElementById('sub-modal-cancel');
   if (!overlay || !bodyEl) return;
 
   if (titleEl) titleEl.textContent = title;
@@ -8352,70 +8400,93 @@ export function openIconPicker(param1, onSelectParam) {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-3';
 
-  function renderGrid() {
-    const keys = Object.keys(ICON_LIBRARY).filter(key => {
-      const item = ICON_LIBRARY[key];
+  bodyEl.innerHTML = `
+    <div class="space-y-3">
+      <input type="text" id="icon-picker-search" class="ios-input text-xs w-full text-white placeholder-neutral-500" placeholder="Search 50 curated SVG icons..." value="" />
+      <div class="task-filter-bar flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px]">
+        <button type="button" class="btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap bg-[#0A84FF] text-white font-bold" data-cat="all">All</button>
+        ${categories.map(c => `
+          <button type="button" class="btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap bg-white/10 text-neutral-400" data-cat="${c.id}">${c.label}</button>
+        `).join('')}
+      </div>
+      <div id="iconGridContainer" class="icon-picker-grid max-h-[300px] overflow-y-auto pr-1"></div>
+    </div>
+  `;
+
+  function renderGridChunks() {
+    const gridContainer = bodyEl.querySelector('#iconGridContainer');
+    if (!gridContainer) return;
+    gridContainer.innerHTML = '';
+
+    const matchingKeys = Array.from(ICON_CATALOG.keys()).filter(key => {
+      const item = ICON_CATALOG.get(key) || ICON_LIBRARY[key];
       const matchCat = activeCategory === 'all' || item.category === activeCategory;
       const matchQuery = !searchQuery || key.toLowerCase().includes(searchQuery.toLowerCase()) || item.label.toLowerCase().includes(searchQuery.toLowerCase());
       return matchCat && matchQuery;
     });
 
-    bodyEl.innerHTML = `
-      <div class="space-y-3">
-        <input type="text" id="icon-picker-search" class="ios-input text-xs w-full text-white placeholder-neutral-500" placeholder="Search 50+ SVG icons..." value="${esc(searchQuery)}" />
-        <div class="task-filter-bar flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px]">
-          <button type="button" class="btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap ${activeCategory === 'all' ? 'bg-[#0A84FF] text-white font-bold' : 'bg-white/10 text-neutral-400'}" data-cat="all">All</button>
-          ${categories.map(c => `
-            <button type="button" class="btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap ${activeCategory === c.id ? 'bg-[#0A84FF] text-white font-bold' : 'bg-white/10 text-neutral-400'}" data-cat="${c.id}">${c.label}</button>
-          `).join('')}
-        </div>
-        <div class="icon-picker-grid max-h-[300px] overflow-y-auto pr-1">
-          ${keys.length === 0 ? `
-            <div class="col-span-4 py-8 text-center text-xs text-neutral-400">No matching icons</div>
-          ` : keys.map(key => {
-            const isSelected = key === selectedKey;
-            const item = ICON_LIBRARY[key];
-            return `
-              <button type="button" class="icon-picker-item ${isSelected ? 'selected' : ''}" data-icon-key="${key}" title="${esc(item.label)}">
-                ${getIconSvg(key, 'w-6 h-6 stroke-current')}
-                <span class="text-[10px] text-neutral-300 truncate w-full text-center">${esc(item.label)}</span>
-              </button>
-            `;
-          }).join('')}
-        </div>
-      </div>
-    `;
-
-    const searchInput = bodyEl.querySelector('#icon-picker-search');
-    if (searchInput) {
-      searchInput.oninput = (e) => {
-        searchQuery = e.target.value;
-        renderGrid();
-        const nextInput = bodyEl.querySelector('#icon-picker-search');
-        if (nextInput) {
-          nextInput.focus();
-          nextInput.setSelectionRange(searchQuery.length, searchQuery.length);
-        }
-      };
+    if (matchingKeys.length === 0) {
+      gridContainer.innerHTML = '<div class="col-span-4 py-8 text-center text-xs text-neutral-400">No matching icons found</div>';
+      return;
     }
 
-    bodyEl.querySelectorAll('.btn-picker-cat').forEach(b => {
-      b.onclick = () => {
-        activeCategory = b.dataset.cat;
-        renderGrid();
-      };
-    });
+    const CHUNK_SIZE = 15;
+    let index = 0;
 
-    bodyEl.querySelectorAll('.icon-picker-item').forEach(b => {
-      b.onclick = () => {
-        const key = b.dataset.iconKey;
-        if (typeof onSelect === 'function') onSelect(key);
-        closeSubModal();
-      };
-    });
+    function appendChunk() {
+      const fragment = document.createDocumentFragment();
+      const end = Math.min(index + CHUNK_SIZE, matchingKeys.length);
+      for (; index < end; index++) {
+        const key = matchingKeys[index];
+        const item = ICON_CATALOG.get(key) || ICON_LIBRARY[key];
+        const isSelected = key === selectedKey;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `icon-picker-item ${isSelected ? 'selected' : ''}`;
+        btn.dataset.iconKey = key;
+        btn.title = item.label;
+        btn.innerHTML = `
+          ${getIconSvg(key, 'w-6 h-6 stroke-current')}
+          <span class="text-[10px] text-neutral-300 truncate w-full text-center">${esc(item.label)}</span>
+        `;
+        btn.onclick = () => {
+          if (typeof onSelect === 'function') onSelect(key);
+          const previewEl = document.getElementById('badgeIconPreview') || document.getElementById('badge-icon-preview');
+          if (previewEl) previewEl.innerHTML = getIconSvg(key, 'w-4 h-4');
+          const nameEl = document.getElementById('badge-icon-name');
+          if (nameEl) nameEl.textContent = key;
+          closeSubModal();
+        };
+        fragment.appendChild(btn);
+      }
+      gridContainer.appendChild(fragment);
+      if (index < matchingKeys.length) {
+        requestAnimationFrame(appendChunk);
+      }
+    }
+    appendChunk();
   }
 
-  renderGrid();
+  const searchInput = bodyEl.querySelector('#icon-picker-search');
+  if (searchInput) {
+    searchInput.oninput = (e) => {
+      searchQuery = e.target.value.trim();
+      renderGridChunks();
+    };
+  }
+
+  bodyEl.querySelectorAll('.btn-picker-cat').forEach(b => {
+    b.onclick = () => {
+      activeCategory = b.dataset.cat;
+      bodyEl.querySelectorAll('.btn-picker-cat').forEach(btn => {
+        const isActive = btn.dataset.cat === activeCategory;
+        btn.className = `btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap ${isActive ? 'bg-[#0A84FF] text-white font-bold' : 'bg-white/10 text-neutral-400'}`;
+      });
+      renderGridChunks();
+    };
+  });
+
+  renderGridChunks();
 
   openSubModal({
     title: 'Select Icon',
@@ -12299,6 +12370,59 @@ function renderAdminSubmissions() {
 // TASK 6: ATTENDANCE ASSIGNMENTS, IDEMPOTENT ABSENCE & WAIVER REQUESTS
 // ============================================================================
 
+export function generateFutureOccurrences(sessionTemplate, count = 52) {
+  if (!sessionTemplate) return [];
+  const schedule = sessionTemplate.schedule || sessionTemplate;
+  const nowMs = Date.now();
+  const oneYearAheadMs = nowMs + 365 * 24 * 60 * 60 * 1000;
+
+  let rawTimestamps = [];
+  try {
+    rawTimestamps = getOccurrences(schedule, nowMs, oneYearAheadMs, APP_TIMEZONE);
+  } catch (err) {
+    console.warn('generateFutureOccurrences error:', err);
+  }
+
+  if (!rawTimestamps || rawTimestamps.length === 0) {
+    const rawStart = schedule?.startDateTime || sessionTemplate.startDateTime || sessionTemplate.createdAt;
+    const fallbackStart = parseDateTimeToMs(rawStart);
+    if (typeof fallbackStart === 'number' && !isNaN(fallbackStart) && fallbackStart >= nowMs && fallbackStart <= oneYearAheadMs) {
+      rawTimestamps.push(fallbackStart);
+    }
+  }
+
+  const uniqueSorted = Array.from(new Set(rawTimestamps))
+    .filter(ms => typeof ms === 'number' && !isNaN(ms) && ms >= nowMs)
+    .sort((a, b) => a - b)
+    .slice(0, count);
+
+  return uniqueSorted.map(dateMs => {
+    const d = new Date(dateMs);
+    const dateStr = d.toISOString().slice(0, 10);
+    const formattedDate = d.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: APP_TIMEZONE || undefined
+    });
+    const formattedTime = d.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: APP_TIMEZONE || undefined
+    });
+
+    return {
+      dateMs,
+      dateStr,
+      formattedDate,
+      formattedTime,
+      key: `occ_${dateMs}`
+    };
+  });
+}
+
 export function openRequestWaiverModal() {
   if (!state.user) {
     toast('Please sign in to submit a waiver request', 'error');
@@ -12308,10 +12432,7 @@ export function openRequestWaiverModal() {
     return;
   }
 
-  const nowMs = serverNow();
-  const endWindowMs = nowMs + 14 * 86400000; // Next 14 days
-
-  // STEP 1: Find UNIQUE service templates the user is rostered for (no duplicates)
+  // STEP 1: Find UNIQUE service templates the user is rostered for
   const assignedSessions = (state.attendanceSessions || []).filter(session => {
     if (session.active === false || session.archived) return false;
     const targetType = session.targetType || (Array.isArray(session.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
@@ -12327,8 +12448,10 @@ export function openRequestWaiverModal() {
 
   let currentStep = 1;
   let selectedSession = null;
+  let selectedOccurrenceDateMs = null;
   let selectedOccurrence = null;
   let selectedCategory = 'Exams / Study';
+  let dateSearchQuery = '';
 
   const WAIVER_REASON_CATEGORIES = [
     { id: 'Exams / Study', label: 'Exams / Study', icon: 'clipboard', prefill: 'Exams and academic study preparation.' },
@@ -12387,8 +12510,9 @@ export function openRequestWaiverModal() {
           `;
           card.onclick = () => {
             selectedSession = session;
-            const occs = getOccurrences(session.schedule, nowMs, endWindowMs, APP_TIMEZONE);
-            selectedOccurrence = occs[0] || null;
+            const futureOccs = generateFutureOccurrences(session, 52);
+            selectedOccurrence = futureOccs[0] || null;
+            selectedOccurrenceDateMs = futureOccs[0]?.dateMs || null;
             currentStep = 2;
             renderView();
           };
@@ -12413,43 +12537,21 @@ export function openRequestWaiverModal() {
       };
       bodyEl.appendChild(topRow);
 
-      const occs = getOccurrences(selectedSession.schedule, nowMs, endWindowMs, APP_TIMEZONE);
+      const futureOccs = generateFutureOccurrences(selectedSession, 52);
+      if (selectedOccurrenceDateMs === null && futureOccs.length > 0) {
+        selectedOccurrenceDateMs = futureOccs[0].dateMs;
+        selectedOccurrence = futureOccs[0];
+      }
 
       const step2Box = document.createElement('div');
       step2Box.className = 'space-y-3.5 pt-1';
 
-      let occPickerHtml = '';
-      if (occs.length > 0) {
-        occPickerHtml = `
-          <div>
-            <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Select Which Occurrence Date</label>
-            <div class="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-              ${occs.map((occ, idx) => {
-                const isSelected = selectedOccurrence?.key === occ.key || (!selectedOccurrence && idx === 0);
-                const occDate = new Date(occ.start);
-                const dateLabel = occDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: APP_TIMEZONE });
-                const timeLabel = occDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: APP_TIMEZONE });
-                return `
-                  <button type="button" class="btn-occ-pick w-full p-2.5 rounded-xl border text-left text-xs transition flex items-center justify-between ${isSelected ? 'bg-[#0A84FF]/20 border-[#0A84FF] text-white font-semibold' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-occ-key="${occ.key}">
-                    <span>${dateLabel} at ${timeLabel}</span>
-                    ${isSelected ? '<span class="text-[#0A84FF] font-bold text-xs">✓</span>' : ''}
-                  </button>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        `;
-      } else {
-        occPickerHtml = `
-          <div>
-            <label class="block text-xs font-semibold text-neutral-200 mb-1">Occurrence Date</label>
-            <input type="date" id="waiver-custom-date" class="w-full glass-input text-xs text-white font-mono" value="${new Date().toISOString().slice(0, 10)}" />
-          </div>
-        `;
-      }
-
       step2Box.innerHTML = `
-        ${occPickerHtml}
+        <div>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Select Which Occurrence Date</label>
+          <input type="text" id="excuseDateSearch" class="input-field w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-neutral-500 text-xs mb-2 focus:outline-none focus:border-[#0A84FF]" placeholder="Search upcoming dates..." value="${esc(dateSearchQuery)}" />
+          <div id="excuseOccurrencesList" class="space-y-1.5 max-h-44 overflow-y-auto pr-1"></div>
+        </div>
         <div>
           <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Reason Category</label>
           <div class="flex flex-wrap gap-1.5" id="waiver-cat-chips">
@@ -12469,13 +12571,52 @@ export function openRequestWaiverModal() {
         </button>
       `;
 
-      step2Box.querySelectorAll('.btn-occ-pick').forEach(b => {
-        b.onclick = () => {
-          const key = b.dataset.occKey;
-          selectedOccurrence = occs.find(o => o.key === key) || null;
-          renderView();
+      const listContainer = step2Box.querySelector('#excuseOccurrencesList');
+      function renderOccurrencesRows() {
+        if (!listContainer) return;
+        const filtered = futureOccs.filter(occ => {
+          if (!dateSearchQuery) return true;
+          const q = dateSearchQuery.toLowerCase();
+          return occ.formattedDate.toLowerCase().includes(q) ||
+                 occ.formattedTime.toLowerCase().includes(q) ||
+                 occ.dateStr.includes(q);
+        });
+
+        if (filtered.length === 0) {
+          listContainer.innerHTML = '<div class="py-4 text-center text-xs text-neutral-400">No matching dates found</div>';
+          return;
+        }
+
+        listContainer.innerHTML = filtered.map(occ => {
+          const isSelected = selectedOccurrenceDateMs === occ.dateMs;
+          return `
+            <button type="button" class="btn-occ-radio w-full p-2.5 rounded-xl border text-left text-xs transition flex items-center justify-between ${isSelected ? 'bg-[#0A84FF]/20 border-[#0A84FF] text-white font-semibold' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-date-ms="${occ.dateMs}">
+              <span>${occ.formattedDate} at ${occ.formattedTime}</span>
+              <div class="w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'border-[#0A84FF] bg-[#0A84FF] text-white' : 'border-white/20 bg-white/5'}">
+                ${isSelected ? '<svg class="w-3 h-3 stroke-current fill-none" stroke-width="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+              </div>
+            </button>
+          `;
+        }).join('');
+
+        listContainer.querySelectorAll('.btn-occ-radio').forEach(b => {
+          b.onclick = () => {
+            selectedOccurrenceDateMs = Number(b.dataset.dateMs);
+            selectedOccurrence = futureOccs.find(o => o.dateMs === selectedOccurrenceDateMs) || null;
+            renderOccurrencesRows();
+          };
+        });
+      }
+
+      renderOccurrencesRows();
+
+      const searchInput = step2Box.querySelector('#excuseDateSearch');
+      if (searchInput) {
+        searchInput.oninput = (e) => {
+          dateSearchQuery = e.target.value.trim();
+          renderOccurrencesRows();
         };
-      });
+      }
 
       step2Box.querySelectorAll('.btn-waiver-cat').forEach(b => {
         b.onclick = () => {
@@ -12483,7 +12624,10 @@ export function openRequestWaiverModal() {
           const prefill = WAIVER_REASON_CATEGORIES.find(c => c.id === selectedCategory)?.prefill || '';
           const reasonInp = step2Box.querySelector('#waiver-reason-input');
           if (reasonInp) reasonInp.value = prefill;
-          renderView();
+          step2Box.querySelectorAll('.btn-waiver-cat').forEach(btn => {
+            const isActive = btn.dataset.cat === selectedCategory;
+            btn.className = `btn-waiver-cat px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition ${isActive ? 'bg-[#0A84FF] border-[#0A84FF] text-white shadow-sm' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
+          });
         };
       });
 
@@ -12495,7 +12639,12 @@ export function openRequestWaiverModal() {
             toast('Please provide a reason for the excuse request', 'error');
             return;
           }
-          const occKey = selectedOccurrence?.key || (selectedSession.schedule?.type === 'once' ? 'once' : (step2Box.querySelector('#waiver-custom-date')?.value || 'once'));
+          if (!selectedOccurrenceDateMs) {
+            toast('Please select an occurrence date', 'error');
+            return;
+          }
+
+          const occKey = `occ_${selectedOccurrenceDateMs}`;
           const deterministicId = `waiver_${selectedSession.id}_${occKey}_${state.user.uid}`;
 
           submitBtn.disabled = true;
@@ -12504,9 +12653,11 @@ export function openRequestWaiverModal() {
           try {
             await setDoc(doc(db, 'waiver_requests', deterministicId), {
               sessionId: selectedSession.id,
+              sessionTemplateId: selectedSession.id,
               sessionTitle: selectedSession.title,
               occurrenceKey: occKey,
-              occurrenceStart: selectedOccurrence ? Timestamp.fromMillis(selectedOccurrence.start) : serverTimestamp(),
+              selectedOccurrenceDateMs: selectedOccurrenceDateMs,
+              occurrenceStart: Timestamp.fromMillis(selectedOccurrenceDateMs),
               uid: state.user.uid,
               userName: state.user.name || state.user.displayName || 'Member',
               userEmail: state.user.email || '',
@@ -12952,51 +13103,60 @@ function renderAdminMembers() {
     return;
   }
 
-  tbody.innerHTML = filtered.map(m => {
+    tbody.innerHTML = filtered.map(m => {
     const isAdmin = Boolean(m.isAdmin || m.role === 'admin');
     const isSelected = selectionState.active && selectionState.type === 'members' && selectionState.selectedIds.has(m.uid);
+    const memberEmail = esc(usersPrivate.get(m.uid)?.email || m.email || '');
+    const points = m.points || 0;
+    const penalties = m.penalties || 0;
+    const finesDue = m.finesDue || 0;
 
     return `
-      <div class="admin-member-row member-card-row bulk-select-card hover:bg-white/5 transition cursor-pointer select-none rounded-xl${isSelected ? ' selected' : ''}" data-member-uid="${esc(m.uid)}" data-bulk-id="${esc(m.uid)}">
+      <div class="admin-member-row member-card-row bulk-select-card hover:bg-white/5 transition cursor-pointer select-none rounded-xl p-3 bg-white/[0.02] border border-white/5 mb-2${isSelected ? ' selected' : ''}" data-member-uid="${esc(m.uid)}" data-bulk-id="${esc(m.uid)}">
         ${BULK_INDICATOR_HTML}
-        <div class="bulk-card-content flex items-center justify-between w-full min-w-0">
-          <div class="member-identity-col">
-            <div class="shrink-0">
-              ${renderAvatar(m, 'w-10 h-10')}
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="font-bold text-white text-sm flex items-center gap-2 min-w-0">
-                <span class="truncate shrink-0 max-w-[120px]">${esc(m.displayName)}</span>
-                <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(m.uid)}"></div>
+        <div class="bulk-card-content flex flex-col w-full min-w-0 gap-2">
+          <!-- ROW 1 (Header): Avatar + Name + Role badge (Left) | "Manage ›" button (Right) -->
+          <div class="flex items-center justify-between w-full min-w-0">
+            <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+              <div class="shrink-0">
+                ${renderAvatar(m, 'w-10 h-10')}
               </div>
-              <div class="flex items-center gap-2 mt-0.5 min-w-0">
-                ${isAdmin ? `
-                  <span class="px-1.5 py-0.2 rounded-full text-[9px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0">
-                    Admin
-                  </span>
-                ` : `
-                  <span class="px-1.5 py-0.2 rounded-full text-[9px] font-semibold bg-white/10 text-neutral-300 shrink-0">
-                    Member
-                  </span>
-                `}
-                <span style="font-size:13px; color:#8E8E93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:190px;">
-                  ${esc(usersPrivate.get(m.uid)?.email || m.email || '')}
+              <div class="min-w-0 flex-1">
+                <div class="font-bold text-white text-sm truncate">${esc(m.displayName || m.name || 'Member')}</div>
+              </div>
+              ${isAdmin ? `
+                <span class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0">
+                  Admin
                 </span>
-              </div>
+              ` : `
+                <span class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-white/10 text-neutral-300 shrink-0">
+                  Member
+                </span>
+              `}
             </div>
-          </div>
-
-          <div class="member-right-actions">
-            <div class="member-metrics-stack">
-              <span class="metric-pts font-mono">${m.points || 0} pts</span>
-              <span class="metric-pen font-mono">${m.penalties || 0} pen</span>
-            </div>
-            <button type="button" class="btn-manage-member px-3 py-1.5 rounded-xl bg-white/10 text-white text-xs font-semibold hover:bg-white/15 transition flex items-center gap-1">
+            <button type="button" class="btn-manage-member px-3 py-1.5 rounded-xl bg-white/10 text-white text-xs font-semibold hover:bg-white/15 transition flex items-center gap-1 shrink-0">
               <span>Manage</span>
               <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
                 <path d="m9 18 6-6-6-6"></path>
               </svg>
             </button>
+          </div>
+
+          <!-- ROW 2 (Details): Email + Badges (wrap) (Left) | Stat pills: pts (Green), pen (Red), EGP (Orange) (Right) -->
+          <div class="flex items-center justify-between w-full min-w-0 pt-2 border-t border-white/5 gap-2">
+            <div class="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
+              ${memberEmail ? `
+                <span style="font-size:12px; color:#8E8E93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;">
+                  ${memberEmail}
+                </span>
+              ` : ''}
+              <div class="badge-row-container flex items-center gap-1 min-w-0 flex-wrap" data-uid="${esc(m.uid)}"></div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">${points} pts</span>
+              <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-rose-500/15 text-rose-400 border border-rose-500/25">${penalties} pen</span>
+              <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-amber-500/15 text-amber-400 border border-amber-500/25">${finesDue} EGP</span>
+            </div>
           </div>
         </div>
       </div>
@@ -13129,7 +13289,7 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
       return;
     }
 
-    containerEl.innerHTML = `
+        containerEl.innerHTML = `
       <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
         ${txs.map(tx => {
           const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty';
@@ -13157,9 +13317,16 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
             <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
               <div class="flex items-center justify-between gap-2">
                 <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
-                <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
-                  ${sign}${tx.amount} ${unit}
-                </span>
+                <div class="flex items-center gap-2">
+                  <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
+                    ${sign}${tx.amount} ${unit}
+                  </span>
+                  ${tx.status === 'revoked' ? `
+                    <span class="text-rose-400 font-mono text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-rose-500/10 border border-rose-500/20">Revoked</span>
+                  ` : (isAdminUser && !tx.isAttendanceLog ? `
+                    <button type="button" class="btn-text-danger btn-revoke-ledger text-xs text-rose-400 hover:text-rose-300 font-semibold transition px-2 py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20" data-id="${tx.id}">Revoke</button>
+                  ` : '')}
+                </div>
               </div>
               <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
               <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
@@ -13171,6 +13338,97 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
         }).join('')}
       </div>
     `;
+
+    containerEl.querySelectorAll('.btn-revoke-ledger').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const txId = btn.dataset.id;
+        const txItem = txs.find(t => t.id === txId);
+        if (!txItem) return;
+
+        const confirmed = await confirmSheet({
+          title: 'Revoke Transaction',
+          message: `Are you sure you want to revoke this ${txItem.type} transaction (${txItem.amount})? This will atomically reverse the member's balance in the database.`,
+          confirmLabel: 'Revoke',
+          destructive: true
+        });
+        if (!confirmed) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Revoking...';
+
+        try {
+          await runTransaction(db, async (t) => {
+            const txDocRef = doc(db, 'users', uid, 'transactions', txId);
+            const txSnap = await t.get(txDocRef);
+            if (!txSnap.exists()) {
+              throw new Error('Transaction record not found.');
+            }
+            const txData = txSnap.data();
+            if (txData.status === 'revoked') {
+              throw new Error('Transaction has already been revoked.');
+            }
+
+            const userDocRef = doc(db, 'users', uid);
+            const userSnap = await t.get(userDocRef);
+            const userData = userSnap.exists() ? userSnap.data() : {};
+
+            const userPoints = Number(userData.points || 0);
+            const userPenalties = Number(userData.penalties || 0);
+            const amount = Number(txData.amount || 0);
+
+            if (txData.category === 'points' || txData.type === 'bonus' || txData.type === 'penalty') {
+              if (txData.type === 'bonus') {
+                const newPoints = Math.max(0, userPoints - amount);
+                t.update(userDocRef, {
+                  points: newPoints,
+                  updatedAt: serverTimestamp()
+                });
+              } else if (txData.type === 'penalty') {
+                const newPoints = userPoints + amount;
+                const newPenalties = Math.max(0, userPenalties - amount);
+                t.update(userDocRef, {
+                  points: newPoints,
+                  penalties: newPenalties,
+                  updatedAt: serverTimestamp()
+                });
+              }
+            } else if (txData.category === 'financial' || txData.type === 'fine' || txData.type === 'payment' || txData.type === 'waive') {
+              const privDocRef = doc(db, 'users_private', uid);
+              const privSnap = await t.get(privDocRef);
+              const privData = privSnap.exists() ? privSnap.data() : {};
+              const currentFines = Number(privData.finesEGP || 0);
+
+              if (txData.type === 'fine') {
+                const newFinesDue = Math.max(0, currentFines - amount);
+                t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
+              } else if (txData.type === 'payment' || txData.type === 'waive') {
+                const newFinesDue = currentFines + amount;
+                t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
+              }
+            }
+
+            t.update(txDocRef, {
+              status: 'revoked',
+              revokedAt: serverTimestamp(),
+              revokedBy: state.user?.uid || 'Admin'
+            });
+          });
+
+          invalidateEgpCache(uid);
+          await getMemberDerivedEgpBalance(uid, true);
+          toast('Transaction revoked and balance reversed atomically', 'success');
+          loadTransactionLedger(uid, containerEl, countBadgeEl);
+          if (typeof renderAdminMembers === 'function') renderAdminMembers();
+          if (typeof renderLeaderboard === 'function') renderLeaderboard();
+        } catch (err) {
+          console.error('Revoke transaction error:', err);
+          toast('Failed to revoke transaction: ' + err.message, 'error');
+          btn.disabled = false;
+          btn.textContent = 'Revoke';
+        }
+      };
+    });
   } catch (err) {
     console.error('Error loading transaction ledger:', err);
     containerEl.innerHTML = `
@@ -13217,12 +13475,12 @@ function openMemberControlModal(member) {
     modalBody.innerHTML = `
       <div class="space-y-4 text-xs">
         <!-- Navigation Tab Bar (Flexible, non-wrapping, horizontal scroll) -->
-        <div id="member-ctrl-tab-bar" class="flex items-center gap-2 p-1.5 rounded-xl bg-white/5 border border-white/10 overflow-x-auto whitespace-nowrap scrollbar-none">
+        <div id="member-ctrl-tab-bar" class="modal-tabs flex items-center gap-2 p-1.5 rounded-xl bg-white/5 border border-white/10 overflow-x-auto whitespace-nowrap scrollbar-none" style="scrollbar-width: none; -ms-overflow-style: none;">
           <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'profile' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="profile">
-            Profile &amp; Role
+            Profile
           </button>
           <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'adjuster' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="adjuster">
-            Adjuster
+            Adjust
           </button>
           <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'ledger' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="ledger">
             Ledger
