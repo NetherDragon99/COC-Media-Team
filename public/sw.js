@@ -1,5 +1,5 @@
-// Service Worker for COC Media Team PWA (v2.1.1) - GitHub Pages Compatible
-const CACHE_NAME = 'coc-media-v2.1.1-r2';
+// Service Worker for COC Media Team PWA (v2.1.2) - GitHub Pages Compatible
+const CACHE_NAME = 'coc-media-cache-v2.1.2';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -101,42 +101,29 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Network-First Strategy with 3-second timeout for same-origin app shell (HTML, JS, CSS, JSON)
-  if (url.origin === self.location.origin) {
-    event.respondWith(
-      new Promise((resolve) => {
-        let timedOut = false;
-        const timer = setTimeout(() => {
-          timedOut = true;
-          caches.match(event.request).then((cached) => {
-            if (cached) resolve(cached);
-          });
-        }, 3000);
+  // 4. Network-First Strategy for HTML navigation requests and same-origin core code (.js, .css, .json, .html)
+  const isNavigation = event.request.mode === 'navigate';
+  const isSameOriginCode = url.origin === self.location.origin;
 
-        fetch(event.request)
-          .then((networkResponse) => {
-            clearTimeout(timer);
-            if (networkResponse && networkResponse.status === 200) {
-              const clone = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+  if (isNavigation || isSameOriginCode) {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match(event.request).then((cached) => {
+            if (cached) return cached;
+            if (isNavigation) {
+              return caches.match('./index.html').then((indexFallback) => indexFallback || caches.match('./'));
             }
-            if (!timedOut) {
-              resolve(networkResponse);
-            }
-          })
-          .catch(() => {
-            clearTimeout(timer);
-            caches.match(event.request).then((cached) => {
-              if (cached) {
-                resolve(cached);
-              } else if (event.request.mode === 'navigate') {
-                caches.match('./index.html').then((indexFallback) => resolve(indexFallback));
-              } else {
-                resolve(new Response('Network error', { status: 503, statusText: 'Service Unavailable' }));
-              }
-            });
+            return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
           });
-      })
+        })
     );
     return;
   }

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.1)
+ * COC Media Team - Production Web App (v2.1.2)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.1';
+export const APP_VERSION = '2.1.2';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -15752,40 +15752,67 @@ function dismissLoader() {
   }
 }
 
-// Service Worker Update Listener
+// Automated Zero-Touch Service Worker & Update Architecture (Task 5 / v2.1.2)
 if ('serviceWorker' in navigator) {
+  let appSwRegistration = null;
+
+  const registerAppServiceWorker = async () => {
+    try {
+      appSwRegistration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+
+      // Trigger reg.update() on initial load
+      if (appSwRegistration && typeof appSwRegistration.update === 'function') {
+        appSwRegistration.update().catch(() => {});
+      }
+
+      // Trigger reg.update() on visibilitychange (when visible)
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && appSwRegistration && typeof appSwRegistration.update === 'function') {
+          appSwRegistration.update().catch(() => {});
+        }
+      });
+
+      // Trigger reg.update() periodically every 10 mins
+      setInterval(() => {
+        if (appSwRegistration && typeof appSwRegistration.update === 'function') {
+          appSwRegistration.update().catch(() => {});
+        }
+      }, 10 * 60 * 1000);
+
+      // When a new service worker is installed, tell it to skipWaiting immediately
+      appSwRegistration.addEventListener('updatefound', () => {
+        const newWorker = appSwRegistration.installing;
+        if (newWorker) {
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              newWorker.postMessage('skipWaiting');
+            }
+          });
+        }
+      });
+    } catch (e) {
+      console.warn('ServiceWorker registration handled safely:', e);
+    }
+  };
+
+  if (document.readyState === 'complete') {
+    registerAppServiceWorker();
+  } else {
+    window.addEventListener('load', registerAppServiceWorker);
+  }
+
+  // On controllerchange, guard with sessionStorage and reload page smoothly once
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    // Prevent reload loops via sessionStorage guard
     if (!sessionStorage.getItem('sw_controller_reloaded')) {
       sessionStorage.setItem('sw_controller_reloaded', 'true');
       window.location.reload();
     }
   });
-  // Clear controller reload guard after successful load
+
+  // Clear controller reload guard after successful boot
   setTimeout(() => {
     try { sessionStorage.removeItem('sw_controller_reloaded'); } catch (e) {}
   }, 5000);
-
-  navigator.serviceWorker.ready.then((reg) => {
-    reg.addEventListener('updatefound', () => {
-      const newWorker = reg.installing;
-      if (newWorker) {
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            toast('Update available, tap to refresh', 'info');
-            const container = document.getElementById('toast-container');
-            const lastToast = container?.lastElementChild;
-            if (lastToast) {
-              lastToast.onclick = () => {
-                newWorker.postMessage('skipWaiting');
-                window.location.reload();
-              };
-            }
-          }
-        });
-      }
-    });
-  });
 }
 
 // BOOTSTRAP WORKSPACE

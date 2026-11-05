@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v2.1.1</title>
+    <title>COC Media Team v2.1.2</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
     <!-- PWA Configuration (GitHub Pages Relative Paths) -->
-    <link rel="manifest" href="./manifest.json" />
+    <link rel="manifest" href="./manifest.json?v=2.1.2" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -80,7 +80,7 @@
     </script>
 
     <!-- Apple iOS 17/18 Design System Stylesheet -->
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=2.1.2" />
 
     <!-- Confetti & Lucide CDN for Interactions & Icons -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
@@ -120,7 +120,7 @@
       </div>
       <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
         <span id="loader-app-name">COC Media Team</span>
-        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono">v2.1.1</span>
+        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono">v2.1.2</span>
       </div>
       <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
       <div class="w-7 h-7 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-spin"></div>
@@ -222,7 +222,7 @@
             <div id="brand-header-click" class="flex items-center gap-2 cursor-pointer">
               <img id="header-logo-img" src="./image_ad59c0.jpg" alt="Logo" class="w-8 h-8 rounded-full object-cover border border-white/20 shadow-sm" />
               <span id="header-app-title" class="font-bold text-sm tracking-tight text-white">COC Media</span>
-              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono">v2.1.1</span>
+              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono">v2.1.2</span>
             </div>
 
             <button id="btn-open-notifications" class="floating-glass-btn relative" aria-label="Notifications" title="Notifications">
@@ -574,7 +574,7 @@
 
           <!-- Profile Footer -->
           <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
-            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300">v2.1.1</span></div>
+            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300">v2.1.2</span></div>
             <div class="text-[11px] text-neutral-500">Official Production Release</div>
           </div>
         </section>
@@ -768,7 +768,7 @@
               </div>
               <span class="text-xs font-semibold text-white">App Version</span>
             </div>
-            <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300">v2.1.1</span>
+            <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300">v2.1.2</span>
           </div>
         </div>
 
@@ -1644,12 +1644,13 @@
             await Promise.all(keys.map((k) => caches.delete(k)));
           }
         } catch (e) { console.warn('Cache cleanup failed:', e); }
-        location.reload();
+        try { sessionStorage.clear(); } catch (e) {}
+        window.location.href = window.location.origin + window.location.pathname + '?_bust=' + Date.now();
       };
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           try {
-            navigator.serviceWorker.register('./sw.js')
+            navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
               .catch((err) => console.warn('ServiceWorker registration ignored (non-blocking):', err));
           } catch (e) {
             console.warn('ServiceWorker registration error handled:', e);
@@ -1659,7 +1660,7 @@
     </script>
 
     <!-- CORE VANILLA JS APPLICATION MODULE -->
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=2.1.2"></script>
 
   </body>
 </html>
