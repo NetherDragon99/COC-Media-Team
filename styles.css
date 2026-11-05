@@ -590,7 +590,8 @@ body.selection-mode-active .bulk-select-card.selected {
   z-index: 900;
 }
 
-#side-drawer-backdrop.drawer-open {
+#side-drawer-backdrop.drawer-open,
+#side-drawer-backdrop.is-open {
   opacity: 1;
   pointer-events: auto;
 }
@@ -620,7 +621,8 @@ body.selection-mode-active .bulk-select-card.selected {
   padding-left: env(safe-area-inset-left, 0px);
 }
 
-#side-drawer.drawer-open {
+#side-drawer.drawer-open,
+#side-drawer.is-open {
   transform: translateX(0);
 }
 

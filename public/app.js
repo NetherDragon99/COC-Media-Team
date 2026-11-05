@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.3)
+ * COC Media Team - Production Web App (v2.1.4)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.3';
+export const APP_VERSION = '2.1.4';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -5003,73 +5003,98 @@ export function updateDrawerPushUI() {
   }));
 }
 
-export function renderSettingsDrawer() {
-  const userCard = document.getElementById('drawer-profile-card');
-  const guestCard = document.getElementById('drawer-guest-card');
-  const avatarEl = document.getElementById('drawer-profile-avatar');
-  const nameEl = document.getElementById('drawer-profile-name');
-  const emailEl = document.getElementById('drawer-profile-email');
-  const roleEl = document.getElementById('drawer-profile-role');
-  const signoutContainer = document.getElementById('drawer-signout-container');
-  const adminBtn = document.getElementById('drawer-btn-admin');
+let isDrawerRendering = false;
 
-  if (state.user) {
-    if (guestCard) guestCard.classList.add('hidden');
-    if (userCard) {
-      userCard.classList.remove('hidden');
-      const userDoc = usersMap.get(state.user.uid) || state.user;
-      const displayName = userDoc.displayName || userDoc.name || state.user.displayName || 'Member';
-      const email = state.userPrivate?.email || userDoc.email || state.user.email || 'Verified Member';
-      const isAdmin = Boolean(userDoc.role === 'admin' || userDoc.isAdmin || state.user.isAdmin || state.isAdminUnlocked);
+export function updateDrawerProfile() {
+  if (isDrawerRendering) return;
+  isDrawerRendering = true;
+  try {
+    const userCard = document.getElementById('drawer-profile-card');
+    const guestCard = document.getElementById('drawer-guest-card');
+    const avatarEl = document.getElementById('drawer-profile-avatar');
+    const nameEl = document.getElementById('drawer-profile-name');
+    const emailEl = document.getElementById('drawer-profile-email');
+    const roleEl = document.getElementById('drawer-profile-role');
+    const signoutContainer = document.getElementById('drawer-signout-container');
+    const adminBtn = document.getElementById('drawer-btn-admin');
 
-      if (avatarEl) avatarEl.innerHTML = renderAvatar(userDoc, 48);
-      if (nameEl) nameEl.textContent = displayName;
-      if (emailEl) emailEl.textContent = email;
-      if (roleEl) {
-        roleEl.textContent = isAdmin ? 'Admin' : 'Member';
-        roleEl.className = isAdmin
-          ? 'px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30'
-          : 'px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-neutral-300';
+    if (state.user) {
+      if (guestCard) guestCard.classList.add('hidden');
+      if (userCard) {
+        userCard.classList.remove('hidden');
+        const userDoc = usersMap.get(state.user.uid) || state.user;
+        const displayName = userDoc.displayName || userDoc.name || state.user.displayName || 'Member';
+        const email = state.userPrivate?.email || userDoc.email || state.user.email || 'Verified Member';
+        const isAdmin = Boolean(userDoc.role === 'admin' || userDoc.isAdmin || state.user.isAdmin || state.isAdminUnlocked);
+
+        if (avatarEl) avatarEl.innerHTML = renderAvatar(userDoc, 48);
+        if (nameEl) nameEl.textContent = displayName;
+        if (emailEl) emailEl.textContent = email;
+        if (roleEl) {
+          roleEl.textContent = isAdmin ? 'Admin' : 'Member';
+          roleEl.className = isAdmin
+            ? 'px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30'
+            : 'px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-neutral-300';
+        }
+
+        userCard.onclick = () => {
+          closeDrawer();
+          if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.goTo) {
+            userPagerInstance.goTo('profile');
+          }
+        };
       }
 
-      userCard.onclick = () => {
-        closeDrawer();
-        if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.goTo) {
-          userPagerInstance.goTo('profile');
-        }
-      };
+      if (signoutContainer) signoutContainer.classList.remove('hidden');
+      if (adminBtn) {
+        const isAdmin = Boolean(state.user.isAdmin || state.user.role === 'admin' || state.isAdminUnlocked);
+        adminBtn.classList.toggle('hidden', !isAdmin);
+      }
+    } else {
+      if (userCard) userCard.classList.add('hidden');
+      if (guestCard) guestCard.classList.remove('hidden');
+      if (signoutContainer) signoutContainer.classList.add('hidden');
+      if (adminBtn) adminBtn.classList.add('hidden');
     }
 
-    if (signoutContainer) signoutContainer.classList.remove('hidden');
-    if (adminBtn) {
-      const isAdmin = Boolean(state.user.isAdmin || state.user.role === 'admin' || state.isAdminUnlocked);
-      adminBtn.classList.toggle('hidden', !isAdmin);
-    }
-  } else {
-    renderSettingsDrawer();
-    if (signoutContainer) signoutContainer.classList.add('hidden');
-    if (adminBtn) adminBtn.classList.add('hidden');
+    updateDrawerPushUI();
+  } catch (err) {
+    console.error('[drawer] Error updating drawer profile:', err);
+  } finally {
+    isDrawerRendering = false;
   }
+}
 
-  updateDrawerPushUI();
+export function renderSettingsDrawer() {
+  updateDrawerProfile();
 }
 
 export function openDrawer() {
   const drawer = document.getElementById('side-drawer');
   const backdrop = document.getElementById('side-drawer-backdrop');
   if (drawer && backdrop) {
-    drawer.classList.add('drawer-open');
-    backdrop.classList.add('drawer-open');
-    renderSettingsDrawer();
+    drawer.classList.add('drawer-open', 'is-open');
+    backdrop.classList.add('drawer-open', 'is-open');
+    updateDrawerProfile();
   }
 }
 
-function closeDrawer() {
+export function closeDrawer() {
   const drawer = document.getElementById('side-drawer');
   const backdrop = document.getElementById('side-drawer-backdrop');
   if (drawer && backdrop) {
-    drawer.classList.remove('drawer-open');
-    backdrop.classList.remove('drawer-open');
+    drawer.classList.remove('drawer-open', 'is-open');
+    backdrop.classList.remove('drawer-open', 'is-open');
+  }
+}
+
+export function toggleDrawer() {
+  const drawer = document.getElementById('side-drawer');
+  if (!drawer) return;
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+    closeDrawer();
+  } else {
+    openDrawer();
   }
 }
 
@@ -15177,6 +15202,7 @@ function applySettings() {
     document.getElementById('header-app-version'),
     document.getElementById('profile-footer-version')
   ];
+  document.querySelectorAll('.version-badge').forEach(el => { if (el) el.textContent = `v${APP_VERSION}`; });
   versionEls.forEach(el => {
     if (el) el.textContent = `v${APP_VERSION}`;
   });
@@ -16083,6 +16109,10 @@ if (typeof window !== 'undefined') {
   window.editingSessionId = editingSessionId;
   window.editingBroadcastId = editingBroadcastId;
   window.renderSettingsDrawer = renderSettingsDrawer;
+  window.updateDrawerProfile = updateDrawerProfile;
+  window.openDrawer = openDrawer;
+  window.closeDrawer = closeDrawer;
+  window.toggleDrawer = toggleDrawer;
   window.updateDrawerPushUI = updateDrawerPushUI;
   window.updateLiveAppLogo = updateLiveAppLogo;
   window.handleChangeAppLogo = handleChangeAppLogo;

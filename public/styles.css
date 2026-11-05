@@ -331,17 +331,13 @@ button:active {
   min-width: 100%;
   max-width: 100%;
   height: 100%;
-  max-height: 100%;
-  min-height: 0;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-x pan-y;
+  position: relative;
   box-sizing: border-box;
-  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(env(safe-area-inset-bottom, 0px) + 96px) 16px;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(110px + env(safe-area-inset-bottom, 0px)) 16px;
+  padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px));
   scrollbar-width: none;
 }
 
@@ -594,7 +590,8 @@ body.selection-mode-active .bulk-select-card.selected {
   z-index: 900;
 }
 
-#side-drawer-backdrop.drawer-open {
+#side-drawer-backdrop.drawer-open,
+#side-drawer-backdrop.is-open {
   opacity: 1;
   pointer-events: auto;
 }
@@ -624,12 +621,15 @@ body.selection-mode-active .bulk-select-card.selected {
   padding-left: env(safe-area-inset-left, 0px);
 }
 
-#side-drawer.drawer-open {
+#side-drawer.drawer-open,
+#side-drawer.is-open {
   transform: translateX(0);
 }
 
 /* Full-Screen Admin Dashboard Overlay */
-.admin-overlay {
+.admin-overlay,
+#adminOverlay,
+#modal-admin-dashboard {
   position: fixed;
   inset: 0;
   z-index: 800;
@@ -667,7 +667,7 @@ body.selection-mode-active .bulk-select-card.selected {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 2000;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -1295,20 +1295,23 @@ textarea:focus-visible {
   color: #8E8E93;
 }
 
-/* Home Broadcast Progress Bar */
-.broadcast-progress-bar {
-  width: 28px;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.16);
+/* Home Broadcast Single Unified Bottom-Edge Progress Bar (Task 4) */
+.broadcast-progress-track {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
   overflow: hidden;
-  position: relative;
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
 }
 
 .broadcast-progress-fill {
   height: 100%;
   width: 0%;
-  background: #FFFFFF;
+  background: #0A84FF;
   border-radius: 2px;
   transition: width 0.1s linear;
 }
@@ -1827,4 +1830,51 @@ textarea:focus-visible {
   transform: translateY(-130%);
   opacity: 0;
   transition: transform 0.35s cubic-bezier(0.4, 0, 1, 1), opacity 0.3s ease;
+}
+
+/* Utilities for horizontal scrolling tab bars */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Cropper stacking above admin overlay */
+.cropper-modal-sheet, #shared-modal-root.has-cropper { z-index: 2500 !important; }
+
+/* Stepper Control and iOS Stepper Touch Target Fix (Task 2 / Section 2) */
+.stepper-control, .ios-stepper {
+  display: inline-flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  min-width: 120px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 2px 4px;
+}
+
+.stepper-control .ios-stepper-btn, .ios-stepper-btn {
+  min-width: 44px;
+  min-height: 44px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #0A84FF;
+  font-size: 20px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease, opacity 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 8px;
 }
