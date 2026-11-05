@@ -2495,7 +2495,8 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 3
 
         const cropModal = openModal({
           title: shape === 'circle' ? 'Crop Profile Avatar' : 'Crop App Logo',
-          bodyHtml: `
+          sheetClass: 'cropper-modal-sheet',
+          body: `
             <div class="space-y-4">
               <div class="ios-cropper-viewport" id="cropper-viewport">
                 <canvas id="cropper-canvas" width="280" height="280" class="block w-[280px] h-[280px] pointer-events-none"></canvas>
@@ -2559,6 +2560,7 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 3
             }
 
             resolve(dataUri);
+            return true;
           }
         });
 
@@ -2758,7 +2760,7 @@ export const showCustomConfirm = (title, message) => confirmSheet({ title, messa
  */
 export const modalStack = [];
 
-function openModal({ title, body, onSave, onClose, isDirty, saveLabel, sheetClass = '' }) {
+function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel, sheetClass = '' }) {
   const root = document.getElementById('shared-modal-root');
   const titleEl = document.getElementById('shared-modal-title');
   const bodyEl = document.getElementById('shared-modal-body');
@@ -2792,11 +2794,12 @@ function openModal({ title, body, onSave, onClose, isDirty, saveLabel, sheetClas
   }
 
   titleEl.textContent = title || '';
-  if (typeof body === 'string') {
-    bodyEl.innerHTML = body;
-  } else if (body instanceof HTMLElement) {
+  const modalBodyContent = body !== undefined ? body : bodyHtml;
+  if (typeof modalBodyContent === 'string') {
+    bodyEl.innerHTML = modalBodyContent;
+  } else if (modalBodyContent instanceof HTMLElement) {
     bodyEl.innerHTML = '';
-    bodyEl.appendChild(body);
+    bodyEl.appendChild(modalBodyContent);
   }
 
   if (typeof onSave === 'function') {
@@ -14946,6 +14949,43 @@ function applySettings() {
 /* ==========================================================================
    EVENT HANDLERS & INITIALIZATION
    ========================================================================== */
+export function updateLiveAppLogo(logoUrl) {
+  if (!logoUrl) return;
+  state.settings.logoUrl = logoUrl;
+  const targets = [
+    document.getElementById('header-logo-img'),
+    document.getElementById('img-settings-logo-preview'),
+    document.querySelector('#side-drawer img[alt="Logo"]'),
+    document.querySelector('#app-loader img[alt="COC Media Team Logo"]')
+  ];
+  targets.forEach(img => {
+    if (img) img.src = logoUrl;
+  });
+}
+
+export async function handleChangeAppLogo() {
+  try {
+    const dataUri = await pickAndCropImage({ shape: 'rounded', outSize: 256, maxChars: 60000 });
+    if (!dataUri) return;
+
+    await setDoc(doc(db, 'settings', 'general'), {
+      logoUrl: dataUri,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    await setDoc(doc(db, 'settings', 'app_config'), {
+      logoUrl: dataUri,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    updateLiveAppLogo(dataUri);
+    toast('App logo updated successfully!', 'success');
+  } catch (err) {
+    console.error('Error updating app logo:', err);
+    toast('Failed to update app logo: ' + (err.message || err), 'error');
+  }
+}
+
 function attachEventHandlers() {
   // Navigation & Drawer
   const menuBtn = document.getElementById('btn-open-drawer');
@@ -15363,12 +15403,30 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Hub Live Logo Preview (Task 8)
-  const logoInput = document.getElementById('input-settings-logourl');
-  const logoPreview = document.getElementById('img-settings-logo-preview');
-  if (logoInput && logoPreview) {
-    logoInput.oninput = (e) => {
-      if (e.target.value) logoPreview.src = e.target.value;
+  // Admin Hub App Logo Upload & Reset (Task 3)
+  const btnChangeLogo = document.getElementById('btn-change-logo');
+  if (btnChangeLogo) btnChangeLogo.onclick = handleChangeAppLogo;
+  const btnChangeLogoAction = document.getElementById('btn-change-logo-action');
+  if (btnChangeLogoAction) btnChangeLogoAction.onclick = handleChangeAppLogo;
+
+  const btnResetLogo = document.getElementById('btn-reset-logo');
+  if (btnResetLogo) {
+    btnResetLogo.onclick = async () => {
+      const defaultLogo = './image_ad59c0.jpg';
+      try {
+        await setDoc(doc(db, 'settings', 'general'), {
+          logoUrl: defaultLogo,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+        await setDoc(doc(db, 'settings', 'app_config'), {
+          logoUrl: defaultLogo,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+        updateLiveAppLogo(defaultLogo);
+        toast('Logo reset to default', 'info');
+      } catch (err) {
+        toast('Failed to reset logo: ' + (err.message || err), 'error');
+      }
     };
   }
 
@@ -15731,5 +15789,7 @@ if (typeof window !== 'undefined') {
   window.editingBroadcastId = editingBroadcastId;
   window.renderSettingsDrawer = renderSettingsDrawer;
   window.updateDrawerPushUI = updateDrawerPushUI;
+  window.updateLiveAppLogo = updateLiveAppLogo;
+  window.handleChangeAppLogo = handleChangeAppLogo;
   window.openBadgePickerSheet = openBadgePickerSheet;
 }

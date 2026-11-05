@@ -629,7 +629,9 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 /* Full-Screen Admin Dashboard Overlay */
-.admin-overlay {
+.admin-overlay,
+#adminOverlay,
+#modal-admin-dashboard {
   position: fixed;
   inset: 0;
   z-index: 800;
@@ -667,7 +669,7 @@ body.selection-mode-active .bulk-select-card.selected {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 2000;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -1837,3 +1839,6 @@ textarea:focus-visible {
 .scrollbar-none::-webkit-scrollbar {
   display: none;
 }
+
+/* Cropper stacking above admin overlay */
+.cropper-modal-sheet, #shared-modal-root.has-cropper { z-index: 2500 !important; }
