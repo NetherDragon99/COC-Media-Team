@@ -80,7 +80,7 @@
     </script>
 
     <!-- Apple iOS 17/18 Design System Stylesheet -->
-    <link rel="stylesheet" href="./styles.css?v=2.2.1" />
+    <link rel="stylesheet" href="./styles.css?v=2.2.2" />
 
     <!-- Confetti & Lucide CDN for Interactions & Icons -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
@@ -120,7 +120,7 @@
       </div>
       <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
         <span id="loader-app-name">COC Media Team</span>
-        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v2.2.1</span>
+        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v2.2.2</span>
       </div>
       <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
       <div class="w-7 h-7 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-spin"></div>
@@ -1017,7 +1017,7 @@
           <div class="flex items-center justify-between">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Attendance</h1>
-              <p class="ios-subhead text-neutral-400">Manage sessions and view member rosters.</p>
+              <p class="ios-subhead text-neutral-400">Manage sessions and view member attendance.</p>
             </div>
             <button id="btn-admin-add-session" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white flex items-center gap-1.5 shadow-sm">
               <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
@@ -1144,41 +1144,50 @@
         </section>
 
         
-        <!-- ADMIN PAGE: ADJUSTMENTS / TRANSFERS HUB (v2.2.1) -->
+        <!-- ADMIN PAGE: ADJUSTMENTS / TRANSFERS HUB (v2.2.2) -->
         <section id="admin-panel-adjustments" class="pager-page space-y-4">
           <div class="space-y-1">
             <h1 class="ios-large-title text-white">Adjustments Hub</h1>
             <p class="ios-subhead text-neutral-400">Direct credit, penalty, and fine adjustments with atomic audit logging.</p>
           </div>
 
-          <!-- Member Search Engine -->
-          <div class="ios-card space-y-3">
+          <!-- Top Card: Select Recipients & Always-Visible Roster -->
+          <div class="glass-card p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Select Recipients</span>
+                <span id="hubRecipientsBadge" class="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF]">0 Selected</span>
+              </div>
+              <button type="button" id="btnHubToggleAll" class="text-xs font-semibold text-[#0A84FF] hover:underline">Select All</button>
+            </div>
+
+            <!-- Member Search -->
             <div class="ios-search-wrapper">
               <svg class="w-4 h-4 text-neutral-400 stroke-current fill-none search-icon" stroke-width="1.75" viewBox="0 0 24 24">
                 <circle cx="11" cy="11" r="8"></circle>
                 <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
               </svg>
-              <input type="search" id="hubMemberSearchInput" class="ios-input ios-search-field" placeholder="Search by name, email, badge, or role..." autocomplete="off" />
+              <input type="search" id="hubMemberSearchInput" class="ios-input ios-search-field" placeholder="Search members by name, email, badge, or role..." autocomplete="off" />
             </div>
 
-            <!-- Member Dropdown Results -->
-            <div id="hubMemberSearchResults" class="max-h-48 overflow-y-auto space-y-1 hidden rounded-xl p-1 bg-white/[0.02] border border-white/5">
-              <!-- Rendered dynamically -->
+            <!-- Always Visible Scrollable Member Roster -->
+            <div id="hubMemberRosterList" class="space-y-1.5 max-h-56 overflow-y-auto p-1 rounded-xl bg-black/20 border border-white/5">
+              <!-- Dynamically populated roster rows with checkboxes -->
             </div>
 
-            <!-- Live Selected Member Balance Banner -->
+            <!-- Single Member Summary Cards (Visible only when exactly 1 member is selected) -->
             <div id="hubSelectedMemberCard" class="hidden p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
-              <!-- Injected dynamically -->
+              <!-- Injected dynamically with 3 prominent cards: POINTS, PENALTIES, FINES DUE -->
             </div>
           </div>
 
-          <!-- Adjustment Workstation Form (Visible once member is selected) -->
-          <div id="hubAdjustmentFormContainer" class="glass-card p-4 space-y-4 hidden">
+          <!-- Adjustment Workstation Form (Always Visible) -->
+          <div id="hubAdjustmentFormContainer" class="glass-card p-4 space-y-4">
             <!-- 3-Way Bucket Segmented Control -->
             <div>
               <label class="block text-neutral-300 font-semibold mb-1 text-xs">Target Bucket</label>
               <div class="ios-segmented-control grid grid-cols-3 gap-1 p-1 rounded-xl bg-white/5 border border-white/10" id="hubBucketSegmented">
-                <button type="button" class="hub-bucket-btn py-2 rounded-lg text-xs font-semibold transition text-white bg-white/15 shadow-sm" data-bucket="points">Points (pts)</button>
+                <button type="button" class="hub-bucket-btn active py-2 rounded-lg text-xs font-semibold transition text-amber-300" data-bucket="points">Points (pts)</button>
                 <button type="button" class="hub-bucket-btn py-2 rounded-lg text-xs font-semibold transition text-neutral-400 hover:text-white" data-bucket="penalties">Penalties (pts)</button>
                 <button type="button" class="hub-bucket-btn py-2 rounded-lg text-xs font-semibold transition text-neutral-400 hover:text-white" data-bucket="fines">Fines Due (EGP)</button>
               </div>
@@ -1188,10 +1197,10 @@
             <div>
               <div class="flex items-center justify-between mb-1">
                 <label class="text-neutral-300 font-semibold text-xs">Operation Direction</label>
-                <span id="hubOperationDesc" class="text-[11px] text-amber-400 font-medium">+ Add points to balance</span>
+                <span id="hubOperationDesc" class="text-[11px] text-emerald-400 font-medium">+ Add points to balance</span>
               </div>
               <div class="ios-segmented-control grid grid-cols-2 gap-1 p-1 rounded-xl bg-white/5 border border-white/10" id="hubDirectionSegmented">
-                <button type="button" class="hub-direction-btn py-2 rounded-lg text-xs font-semibold transition text-emerald-400 bg-emerald-500/15 border border-emerald-500/25 shadow-sm" data-direction="add">+ Add</button>
+                <button type="button" class="hub-direction-btn active py-2 rounded-lg text-xs font-semibold transition text-emerald-400" data-direction="add">+ Add</button>
                 <button type="button" class="hub-direction-btn py-2 rounded-lg text-xs font-semibold transition text-neutral-400 hover:text-white" data-direction="deduct">- Deduct</button>
               </div>
             </div>
@@ -1230,7 +1239,7 @@
               </div>
             </div>
 
-            <!-- Submit Button -->
+            <!-- Dynamic Submit Button -->
             <button type="button" id="btnHubSubmitAdjustment" class="w-full py-3 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold transition flex items-center justify-center gap-2 shadow-lg">
               <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
@@ -1404,7 +1413,7 @@
     <!-- SUB-MODAL OVERLAY (FOR NESTED PICKERS LIKE ICON PICKER) -->
     <!-- UNIFIED 100-ICON PICKER SUB-MODAL OVERLAY -->
     
-    <!-- AVATAR PAN / ZOOM CROPPER OVERLAY (v2.2.1) -->
+    <!-- AVATAR PAN / ZOOM CROPPER OVERLAY (v2.2.2) -->
     <div id="avatarCropperOverlay" class="hidden" role="dialog" aria-modal="true" aria-label="Crop Profile Picture">
       <div class="cropper-header flex items-center justify-between p-4 z-20">
         <button type="button" id="btnCancelCropper" class="text-xs font-semibold text-neutral-400 hover:text-white px-3 py-1.5 rounded-full bg-white/10 transition">Cancel</button>
@@ -1428,13 +1437,14 @@
     </div>
 
     <div id="unifiedIconPickerOverlay" class="sub-modal-overlay is-hidden" role="dialog" aria-modal="true">
-      <div class="sub-modal-sheet">
+      <div class="sub-modal-sheet icon-picker-sheet">
         <div class="modal-grabber"></div>
         <div class="sub-modal-toolbar">
           <button type="button" id="closeIconPickerBtn" class="sub-modal-text-btn">Cancel</button>
           <h3 class="sub-modal-title">Choose Icon</h3>
           <span style="width: 44px;"></span>
         </div>
+        <div class="icon-picker-body">
         <div class="sub-modal-search-row">
           <input type="search" id="iconPickerSearch" placeholder="Search 100 icons..." />
         </div>
@@ -1443,6 +1453,7 @@
         </div>
         <div class="icon-grid-scrollable">
           <div class="icon-picker-grid" id="iconPickerGrid"></div>
+        </div>
         </div>
       </div>
     </div>
@@ -1490,7 +1501,7 @@
     <!-- LEGACY / EXISTING FORM MODALS (STYLED FOR APPLE SYSTEM) -->
     <!-- ================================================================= -->
 
-    <!-- EDIT PROFILE MODAL (v2.2.1 Apple HIG) -->
+    <!-- EDIT PROFILE MODAL (v2.2.2 Apple HIG) -->
     <div id="modal-edit-profile" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
@@ -1502,7 +1513,7 @@
         <div class="modal-body">
           <form id="form-edit-profile" class="space-y-4 text-xs">
             <!-- Current Avatar Preview & Actions -->
-            <div class="flex flex-col items-center gap-3">
+            <div class="flex flex-col items-center gap-3 edit-profile-avatar-section">
               <div class="relative w-20 h-20 rounded-full overflow-hidden border-2 border-[#0A84FF] shadow-lg bg-neutral-900 flex items-center justify-center">
                 <img id="edit-profile-preview" src="./image_ad59c0.jpg" alt="Preview" class="w-full h-full object-cover" />
               </div>
@@ -1528,7 +1539,7 @@
                 <span>Choose a media persona</span>
                 <span class="text-neutral-500 font-mono">24 presets</span>
               </div>
-              <div id="profilePresetsGrid" class="grid grid-cols-6 gap-2 max-h-48 overflow-y-auto p-1">
+              <div id="profilePresetsGrid" class="grid grid-cols-4 gap-3 max-h-56 overflow-y-auto p-1">
                 <!-- Dynamically populated 24 SVG Avatars -->
               </div>
             </div>
@@ -1869,7 +1880,7 @@
     </script>
 
     <!-- CORE VANILLA JS APPLICATION MODULE -->
-    <script type="module" src="./app.js?v=2.2.1"></script>
+    <script type="module" src="./app.js?v=2.2.2"></script>
 
   </body>
 </html>

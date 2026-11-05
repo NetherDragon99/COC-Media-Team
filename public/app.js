@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.1';
+export const APP_VERSION = '2.2.2';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -2959,7 +2959,6 @@ export function initSheetDragGestures() {
   let startTime = 0;
   let viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
   let isDragging = false;
-  let isLarge = false;
 
   const onStart = (e) => {
     const target = e.target;
@@ -2982,7 +2981,6 @@ export function initSheetDragGestures() {
     startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     startHeight = sheet.getBoundingClientRect().height;
     viewportH = window.innerHeight;
-    isLarge = sheet.classList.contains('sheet-detent-large');
     isDragging = true;
 
     sheet.classList.add('is-dragging');
@@ -2994,19 +2992,19 @@ export function initSheetDragGestures() {
     const currentY = e.clientY ?? e.touches?.[0]?.clientY ?? startY;
     const deltaY = currentY - startY;
 
-    const minH = 0.50 * viewportH;
-    const maxH = 0.94 * viewportH;
-    const mediumH = 0.68 * viewportH;
+    const minH = 0.25 * viewportH;
+    const maxH = 0.96 * viewportH;
     const targetHeight = startHeight - deltaY;
 
-    if (deltaY < 0 || (targetHeight >= minH && targetHeight <= maxH)) {
-      const clampedHeight = Math.min(maxH, Math.max(minH, targetHeight));
+    if (targetHeight >= minH) {
+      const clampedHeight = Math.min(maxH, targetHeight);
       activeSheet.style.height = `${clampedHeight}px`;
       activeSheet.style.maxHeight = `${clampedHeight}px`;
       activeSheet.style.transform = 'translateY(0)';
-    } else if (deltaY > 0) {
-      const overDragY = Math.max(0, deltaY - Math.max(0, startHeight - mediumH));
-      activeSheet.style.transform = `translateY(${Math.max(0, overDragY)}px)`;
+    } else {
+      activeSheet.style.height = `${minH}px`;
+      activeSheet.style.maxHeight = `${minH}px`;
+      activeSheet.style.transform = `translateY(${minH - targetHeight}px)`;
     }
   };
 
@@ -3024,41 +3022,36 @@ export function initSheetDragGestures() {
     activeSheet = null;
 
     sheet.classList.remove('is-dragging');
-    sheet.style.height = '';
-    sheet.style.maxHeight = '';
-    sheet.style.transform = '';
 
-    // Snap & Dismiss Resolution
-    const shouldDismiss = 
-      (!isLarge && deltaY > 110) ||
-      (isLarge && deltaY > 240) ||
-      (velocity > 0.65 && deltaY > 40);
+    const finalHeight = startHeight - deltaY;
+    const finalRatio = finalHeight / viewportH;
+
+    // Dismiss Resolution: If released below 25% viewport height OR high downward velocity
+    const shouldDismiss = (finalRatio < 0.25) || (velocity > 0.65 && deltaY > 30);
 
     if (shouldDismiss) {
+      sheet.style.transition = 'transform 0.24s cubic-bezier(0.32, 0.72, 0, 1)';
       sheet.style.transform = 'translateY(100%)';
       setTimeout(() => {
         sheet.style.transform = '';
+        sheet.style.height = '';
+        sheet.style.maxHeight = '';
         dismissModalSheet(sheet);
-      }, 180);
+      }, 240);
       return;
     }
 
-    // Expand to Large
-    if (deltaY < -45 || (startHeight - deltaY) > 0.78 * viewportH) {
-      sheet.classList.add('sheet-detent-large');
-      return;
-    }
-
-    // Shrink from Large to Medium
-    if (isLarge && deltaY > 50 && deltaY <= 240) {
-      sheet.classList.remove('sheet-detent-large');
-      return;
-    }
-
-    // Default to retaining Medium if not large
-    if (!isLarge) {
-      sheet.classList.remove('sheet-detent-large');
-    }
+    // Freeform Fluid Height Retention:
+    // Sheet stays at exact released height clamped between 25vh and 96vh
+    const clampedParkedHeight = Math.min(0.96 * viewportH, Math.max(0.25 * viewportH, finalHeight));
+    sheet.classList.remove('sheet-detent-large');
+    sheet.style.transition = 'height 0.18s ease, max-height 0.18s ease';
+    sheet.style.height = `${clampedParkedHeight}px`;
+    sheet.style.maxHeight = `${clampedParkedHeight}px`;
+    sheet.style.transform = 'translateY(0)';
+    setTimeout(() => {
+      sheet.style.transition = '';
+    }, 200);
   };
 
   function dismissModalSheet(sheet) {
@@ -3311,7 +3304,7 @@ export function openMiniProfileSheet(uidOrMember) {
     currentUserInMap?.role === 'admin'
   );
   const isSelf = Boolean(currentUid && currentUid === userProf.uid);
-  const showFines = isSelf || isViewerAdmin;
+  const showFines = isSelf; // Strict Financial Privacy: NEVER expose fines on public/leaderboard profile sheets
 
   const wrapperEl = document.createElement('div');
   wrapperEl.className = 'mini-profile-container relative w-full flex flex-col h-full';
@@ -3953,6 +3946,7 @@ function getVisibleCardsForType(type) {
   else if (type === 'sessions') container = document.getElementById('admin-sessions-list');
   else if (type === 'submissions') container = document.getElementById('admin-submissions-list');
   else if (type === 'broadcasts') container = document.getElementById('admin-broadcasts-list');
+  else if (type === 'badges') container = document.getElementById('admin-badges-list');
 
   if (!container) return [];
   return Array.from(container.querySelectorAll('.bulk-select-card[data-bulk-id]'));
@@ -3968,6 +3962,12 @@ export function getBulkActions(listType) {
   ) || (
     listType === 'broadcasts' && adminBroadcastsFilter === 'archived'
   );
+
+  if (listType === 'badges') {
+    return [
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10' }
+    ];
+  }
 
   if (listType === 'tasks' || listType === 'admin_tasks' || listType === 'categories' || listType === 'sessions' || listType === 'broadcasts') {
     return [
@@ -4356,6 +4356,7 @@ export async function handleBulkDelete() {
       else if (type === 'broadcasts') colName = 'notifications_broadcast';
       else if (type === 'notifications' || type === 'notifications_admin') colName = 'notifications';
       else if (type === 'waivers') colName = 'waiver_requests';
+      else if (type === 'badges') colName = 'badges';
 
       for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
         const chunk = ids.slice(i, i + CHUNK_SIZE);
@@ -5240,179 +5241,238 @@ export function renderAdminAdjustments() {
   const panel = document.getElementById('admin-panel-adjustments');
   if (!panel) return;
 
+  const rosterList = document.getElementById('hubMemberRosterList');
   const searchInput = document.getElementById('hubMemberSearchInput');
-  const resultsContainer = document.getElementById('hubMemberSearchResults');
-  const selectedBanner = document.getElementById('hubSelectedMemberCard');
-  const formContainer = document.getElementById('hubAdjustmentFormContainer');
+  const recipientsBadge = document.getElementById('hubRecipientsBadge');
+  const toggleAllBtn = document.getElementById('btnHubToggleAll');
+  const selectedMemberCard = document.getElementById('hubSelectedMemberCard');
   const bucketSegmented = document.getElementById('hubBucketSegmented');
   const directionSegmented = document.getElementById('hubDirectionSegmented');
-  const operationDesc = document.getElementById('hubOperationDesc');
-  const amountUnit = document.getElementById('hubAmountUnit');
   const amountInput = document.getElementById('hubAdjustAmount');
+  const amountUnit = document.getElementById('hubAmountUnit');
+  const directionDesc = document.getElementById('hubOperationDesc');
   const reasonInput = document.getElementById('hubAdjustReason');
-  const submitBtn = document.getElementById('btnHubSubmitAdjustment');
   const reasonChipsContainer = document.getElementById('hubReasonChipsContainer');
+  const submitBtn = document.getElementById('btnHubSubmitAdjustment');
+  const submitBtnLabel = document.getElementById('hubSubmitBtnLabel');
 
-  function updateDirectionUI() {
-    if (directionSegmented) {
-      directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
-        const isDir = btn.dataset.direction === currentHubDirection;
-        if (isDir) {
-          btn.className = `hub-direction-btn py-2 rounded-lg text-xs font-semibold transition shadow-sm ${currentHubDirection === 'add' ? 'text-emerald-400 bg-emerald-500/15 border border-emerald-500/25' : 'text-rose-400 bg-rose-500/15 border border-rose-500/25'}`;
-        } else {
-          btn.className = 'hub-direction-btn py-2 rounded-lg text-xs font-semibold transition text-neutral-400 hover:text-white border border-transparent';
-        }
-      });
-    }
+  let currentBucket = 'points';
+  let currentDirection = 'add';
+  const selectedUids = new Set();
 
-    if (operationDesc) {
-      const descriptions = {
-        'points_add': { text: '+ Add bonus points to balance', color: 'text-amber-400' },
-        'points_deduct': { text: '- Deduct points from balance', color: 'text-rose-400' },
-        'penalties_add': { text: '+ Add misconduct penalty points', color: 'text-rose-400' },
-        'penalties_deduct': { text: '- Clear / Deduct penalty points', color: 'text-emerald-400' },
-        'fines_add': { text: '+ Add fine balance (EGP)', color: 'text-rose-400' },
-        'fines_deduct': { text: '- Deduct / Record payment / Waive fine (EGP)', color: 'text-emerald-400' }
-      };
-      const info = descriptions[`${currentHubBucket}_${currentHubDirection}`] || { text: 'Apply balance change', color: 'text-white' };
-      operationDesc.textContent = info.text;
-      operationDesc.className = `text-[11px] font-medium ${info.color}`;
-    }
+  function updateDynamicButtonLabel() {
+    if (!submitBtnLabel) return;
+    const count = selectedUids.size;
+    const amt = Number(amountInput?.value) || 0;
+    const dirSign = currentDirection === 'add' ? '+' : '-';
+    const dirWord = currentDirection === 'add' ? 'Add' : 'Deduct';
+    const unit = currentBucket === 'points' ? 'Points' : (currentBucket === 'penalties' ? 'Penalties' : 'EGP');
+    const toFrom = currentDirection === 'add' ? 'to' : 'from';
 
-    if (amountUnit) {
-      amountUnit.textContent = currentHubBucket === 'fines' ? 'EGP' : 'Points';
+    if (count === 0) {
+      submitBtnLabel.textContent = 'Select Recipient(s)';
+      if (submitBtn) submitBtn.disabled = true;
+    } else {
+      submitBtnLabel.textContent = `${dirSign} ${dirWord} ${amt > 0 ? amt : ''} ${unit} ${toFrom} ${count} Member${count > 1 ? 's' : ''}`;
+      if (submitBtn) submitBtn.disabled = false;
     }
   }
 
   function updateBucketUI() {
-    if (bucketSegmented) {
-      bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
-        const isBucket = btn.dataset.bucket === currentHubBucket;
-        if (isBucket) {
-          btn.className = 'hub-bucket-btn py-2 rounded-lg text-xs font-semibold transition text-white bg-white/20 shadow-sm border border-white/15';
-        } else {
-          btn.className = 'hub-bucket-btn py-2 rounded-lg text-xs font-semibold transition text-neutral-400 hover:text-white border border-transparent';
-        }
-      });
+    if (!bucketSegmented) return;
+    bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
+      const isCur = btn.dataset.bucket === currentBucket;
+      btn.classList.toggle('active', isCur);
+      if (isCur) {
+        btn.classList.remove('text-neutral-400');
+      } else {
+        btn.classList.add('text-neutral-400');
+      }
+    });
+
+    if (amountUnit) {
+      amountUnit.textContent = currentBucket === 'points' ? 'Points' : (currentBucket === 'penalties' ? 'Penalties' : 'EGP');
     }
-    updateDirectionUI();
+
+    if (directionDesc) {
+      if (currentBucket === 'points') {
+        directionDesc.textContent = currentDirection === 'add' ? '+ Add performance points to balance' : '- Deduct points from balance';
+      } else if (currentBucket === 'penalties') {
+        directionDesc.textContent = currentDirection === 'add' ? '+ Add misconduct penalty to record' : '- Remove / forgive penalty from record';
+      } else {
+        directionDesc.textContent = currentDirection === 'add' ? '+ Issue financial fine due to member' : '- Credit / settle fine paid by member';
+      }
+    }
+
+    updateDynamicButtonLabel();
   }
 
-  function renderSelectedBanner() {
-    if (!selectedBanner) return;
-    if (!currentHubSelectedMember) {
-      selectedBanner.classList.add('hidden');
-      if (formContainer) formContainer.classList.add('hidden');
+  function updateDirectionUI() {
+    if (!directionSegmented) return;
+    directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
+      const isCur = btn.dataset.direction === currentDirection;
+      btn.classList.toggle('active', isCur);
+      if (isCur) {
+        btn.classList.remove('text-neutral-400');
+      } else {
+        btn.classList.add('text-neutral-400');
+      }
+    });
+
+    updateBucketUI();
+  }
+
+  function renderRoster() {
+    if (!rosterList) return;
+    const q = (searchInput?.value || '').trim().toLowerCase();
+    const all = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
+    const filtered = all.filter(m => {
+      if (!q) return true;
+      const name = (m.displayName || m.name || '').toLowerCase();
+      const email = (m.email || '').toLowerCase();
+      const role = (m.role || '').toLowerCase();
+      const badges = (m.badges || []).map(b => (b.name || b.label || b.id || '').toLowerCase()).join(' ');
+      return name.includes(q) || email.includes(q) || role.includes(q) || badges.includes(q);
+    });
+
+    if (recipientsBadge) {
+      recipientsBadge.textContent = `${selectedUids.size} Selected`;
+    }
+
+    if (toggleAllBtn) {
+      const allSelected = filtered.length > 0 && filtered.every(m => selectedUids.has(m.uid));
+      toggleAllBtn.textContent = allSelected ? 'Deselect All' : 'Select All';
+    }
+
+    if (filtered.length === 0) {
+      rosterList.innerHTML = '<div class="p-4 text-center text-xs text-neutral-400">No members match your search.</div>';
+    } else {
+      rosterList.innerHTML = filtered.map(m => {
+        const isSelected = selectedUids.has(m.uid);
+        const memFines = m.finesDue !== undefined ? m.finesDue : (m.penalties ? m.penalties : 0);
+
+        return `
+          <div class="hub-roster-item${isSelected ? ' selected' : ''}" data-uid="${esc(m.uid)}">
+            <div class="flex items-center gap-2.5 min-w-0 flex-1">
+              <div class="w-5 h-5 rounded-full border ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF] text-white' : 'border-white/30 bg-transparent'} flex items-center justify-center shrink-0 transition">
+                ${isSelected ? '<svg class="w-3 h-3 stroke-current fill-none" stroke-width="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+              </div>
+              <div class="shrink-0">${renderAvatar(m, 'w-7 h-7')}</div>
+              <div class="min-w-0 flex-1">
+                <div class="font-semibold text-white text-xs truncate">${esc(m.displayName || m.name || 'Member')}</div>
+                <div class="text-[10px] text-neutral-400 truncate">${esc(m.role || 'member')}</div>
+              </div>
+            </div>
+            <div class="text-right shrink-0 font-mono text-[10px] text-neutral-400">
+              <span class="text-amber-400 font-bold">${m.points || 0} pts</span>
+              <span> | </span>
+              <span class="text-rose-400">${m.penalties || 0} pen</span>
+              <span> | </span>
+              <span class="text-blue-400">${memFines} EGP</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      rosterList.querySelectorAll('.hub-roster-item').forEach(item => {
+        item.onclick = () => {
+          const uid = item.dataset.uid;
+          if (selectedUids.has(uid)) {
+            selectedUids.delete(uid);
+          } else {
+            selectedUids.add(uid);
+          }
+          renderRoster();
+          renderSingleSummaryCard();
+          updateDynamicButtonLabel();
+        };
+      });
+    }
+
+    renderSingleSummaryCard();
+    updateDynamicButtonLabel();
+  }
+
+  function renderSingleSummaryCard() {
+    if (!selectedMemberCard) return;
+    if (selectedUids.size !== 1) {
+      selectedMemberCard.classList.add('hidden');
+      selectedMemberCard.innerHTML = '';
       return;
     }
 
-    const m = currentHubSelectedMember;
-    const memPoints = m.points || 0;
-    const memPenalties = m.penalties || 0;
-    const memFines = m.finesDue || 0;
+    const singleUid = Array.from(selectedUids)[0];
+    const member = usersMap.get(singleUid) || (state.members || []).find(m => m.uid === singleUid);
+    if (!member) {
+      selectedMemberCard.classList.add('hidden');
+      return;
+    }
 
-    selectedBanner.classList.remove('hidden');
-    if (formContainer) formContainer.classList.remove('hidden');
+    const memFines = member.finesDue !== undefined ? member.finesDue : (member.penalties ? member.penalties : 0);
 
-    selectedBanner.innerHTML = `
-      <div class="flex items-center justify-between gap-3 pb-2 border-b border-white/5">
+    selectedMemberCard.classList.remove('hidden');
+    selectedMemberCard.innerHTML = `
+      <div class="flex items-center justify-between">
         <div class="flex items-center gap-2.5 min-w-0">
-          ${renderAvatar(m, 'w-10 h-10')}
+          ${renderAvatar(member, 'w-8 h-8')}
           <div class="min-w-0">
-            <div class="font-bold text-white text-xs truncate">${esc(m.displayName || m.name || 'Member')}</div>
-            <div class="text-[11px] text-neutral-400 truncate">${esc(m.email || 'No email')}</div>
+            <div class="font-bold text-white text-xs truncate">${esc(member.displayName || member.name || 'Member')}</div>
+            <div class="text-[10px] text-neutral-400 truncate">${esc(member.email || member.role || 'Member')}</div>
           </div>
         </div>
-        <button type="button" id="btnHubDeselectMember" class="text-xs text-neutral-400 hover:text-white px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 transition">
-          Change
-        </button>
+        <button type="button" id="btnHubClearSingle" class="text-[10px] text-neutral-400 hover:text-white px-2 py-1 rounded-md bg-white/5">Deselect</button>
       </div>
-
-      <!-- Live 3-Bucket Balance Strip -->
-      <div class="grid grid-cols-3 gap-2 pt-1 text-center font-mono">
+      <div class="grid grid-cols-3 gap-2 text-center font-mono pt-1">
         <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
           <div class="text-[9px] uppercase tracking-wider text-amber-300 font-bold">Points</div>
-          <div id="hubBannerPoints" class="text-sm font-bold text-amber-400 mt-0.5">${memPoints} pts</div>
+          <div class="text-sm font-bold text-amber-400 mt-0.5">${member.points || 0} pts</div>
         </div>
         <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
           <div class="text-[9px] uppercase tracking-wider text-rose-300 font-bold">Penalties</div>
-          <div id="hubBannerPenalties" class="text-sm font-bold text-rose-400 mt-0.5">${memPenalties} pts</div>
+          <div class="text-sm font-bold text-rose-400 mt-0.5">${member.penalties || 0}</div>
         </div>
         <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
           <div class="text-[9px] uppercase tracking-wider text-blue-300 font-bold">Fines Due</div>
-          <div id="hubBannerFines" class="text-sm font-bold text-blue-400 mt-0.5">${memFines} EGP</div>
+          <div class="text-sm font-bold text-blue-400 mt-0.5">${memFines} EGP</div>
         </div>
       </div>
     `;
 
-    const deselectBtn = document.getElementById('btnHubDeselectMember');
-    if (deselectBtn) {
-      deselectBtn.onclick = () => {
-        currentHubSelectedMember = null;
-        renderSelectedBanner();
-        if (searchInput) {
-          searchInput.value = '';
-          searchInput.focus();
-        }
+    const clearSingleBtn = document.getElementById('btnHubClearSingle');
+    if (clearSingleBtn) {
+      clearSingleBtn.onclick = () => {
+        selectedUids.delete(singleUid);
+        renderRoster();
       };
     }
   }
 
-  // Search input handler (4 dimensions: Name, Email, Badges, Role)
-  if (searchInput && resultsContainer) {
-    searchInput.oninput = () => {
-      const q = searchInput.value.trim().toLowerCase();
-      if (!q) {
-        resultsContainer.innerHTML = '';
-        resultsContainer.classList.add('hidden');
-        return;
-      }
+  // Search input handler
+  if (searchInput) {
+    searchInput.oninput = () => renderRoster();
+  }
 
+  // Toggle All button
+  if (toggleAllBtn) {
+    toggleAllBtn.onclick = () => {
+      const q = (searchInput?.value || '').trim().toLowerCase();
       const all = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
-      const matches = all.filter(m => {
+      const filtered = all.filter(m => {
+        if (!q) return true;
         const name = (m.displayName || m.name || '').toLowerCase();
         const email = (m.email || '').toLowerCase();
         const role = (m.role || '').toLowerCase();
         const badges = (m.badges || []).map(b => (b.name || b.label || b.id || '').toLowerCase()).join(' ');
         return name.includes(q) || email.includes(q) || role.includes(q) || badges.includes(q);
-      }).slice(0, 8);
-
-      if (matches.length === 0) {
-        resultsContainer.innerHTML = '<div class="p-3 text-center text-xs text-neutral-400">No team members match your search.</div>';
-        resultsContainer.classList.remove('hidden');
-        return;
-      }
-
-      resultsContainer.innerHTML = matches.map(m => `
-        <div class="hub-search-result-item flex items-center justify-between p-2 rounded-xl hover:bg-white/10 cursor-pointer transition" data-uid="${esc(m.uid)}">
-          <div class="flex items-center gap-2.5 min-w-0">
-            ${renderAvatar(m, 'w-8 h-8')}
-            <div class="min-w-0">
-              <div class="font-semibold text-white text-xs truncate">${esc(m.displayName || m.name || 'Member')}</div>
-              <div class="text-[10px] text-neutral-400 truncate">${esc(m.email || m.role || 'Member')}</div>
-            </div>
-          </div>
-          <div class="text-right shrink-0 font-mono text-[11px]">
-            <span class="text-amber-400 font-bold">${m.points || 0} pts</span>
-            ${Number(m.finesDue || 0) > 0 ? `<span class="text-blue-400 ml-1.5 font-bold">${m.finesDue} EGP</span>` : ''}
-          </div>
-        </div>
-      `).join('');
-
-      resultsContainer.classList.remove('hidden');
-
-      resultsContainer.querySelectorAll('.hub-search-result-item').forEach(item => {
-        item.onclick = () => {
-          const uid = item.dataset.uid;
-          const found = usersMap.get(uid) || (state.members || []).find(x => x.uid === uid);
-          if (found) {
-            currentHubSelectedMember = found;
-            resultsContainer.classList.add('hidden');
-            searchInput.value = '';
-            renderSelectedBanner();
-          }
-        };
       });
+
+      const allSelected = filtered.length > 0 && filtered.every(m => selectedUids.has(m.uid));
+      if (allSelected) {
+        filtered.forEach(m => selectedUids.delete(m.uid));
+      } else {
+        filtered.forEach(m => selectedUids.add(m.uid));
+      }
+      renderRoster();
     };
   }
 
@@ -5420,7 +5480,7 @@ export function renderAdminAdjustments() {
   if (bucketSegmented) {
     bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
       btn.onclick = () => {
-        currentHubBucket = btn.dataset.bucket;
+        currentBucket = btn.dataset.bucket;
         updateBucketUI();
       };
     });
@@ -5430,7 +5490,7 @@ export function renderAdminAdjustments() {
   if (directionSegmented) {
     directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
       btn.onclick = () => {
-        currentHubDirection = btn.dataset.direction;
+        currentDirection = btn.dataset.direction;
         updateDirectionUI();
       };
     });
@@ -5439,11 +5499,23 @@ export function renderAdminAdjustments() {
   // Presets
   panel.querySelectorAll('.hub-preset-btn').forEach(btn => {
     btn.onclick = () => {
-      if (amountInput) amountInput.value = btn.dataset.amount;
+      if (amountInput) {
+        amountInput.value = btn.dataset.amount;
+        panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.toggle('active', b === btn));
+        updateDynamicButtonLabel();
+      }
     };
   });
 
-  // Reason quick chips
+  if (amountInput) {
+    amountInput.oninput = () => {
+      const val = amountInput.value;
+      panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.toggle('active', b.dataset.amount === val));
+      updateDynamicButtonLabel();
+    };
+  }
+
+  // Reason chips
   if (reasonChipsContainer) {
     reasonChipsContainer.querySelectorAll('.hub-quick-chip').forEach(chip => {
       chip.onclick = () => {
@@ -5452,11 +5524,11 @@ export function renderAdminAdjustments() {
     });
   }
 
-  // Submit button
+  // Submit adjustment button
   if (submitBtn) {
     submitBtn.onclick = async () => {
-      if (!currentHubSelectedMember) {
-        toast('Please select a member first', 'warning');
+      if (selectedUids.size === 0) {
+        toast('Please select at least one recipient member', 'warning');
         return;
       }
 
@@ -5468,32 +5540,38 @@ export function renderAdminAdjustments() {
 
       const reasonVal = String(reasonInput?.value || '').trim();
       if (!reasonVal) {
-        toast('Audit reason is required for the ledger', 'error');
+        toast('Audit reason is required for the transaction ledger', 'error');
         return;
       }
 
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Recording adjustment...';
+      submitBtn.textContent = 'Applying adjustments...';
 
       try {
-        const result = await applyAccountAdjustment({
-          targetUid: currentHubSelectedMember.uid,
-          bucket: currentHubBucket,
-          direction: currentHubDirection,
-          amount: amtVal,
-          reason: reasonVal
-        });
+        const uidsArray = Array.from(selectedUids);
+        for (const targetUid of uidsArray) {
+          const res = await applyAccountAdjustment({
+            targetUid,
+            bucket: currentBucket,
+            direction: currentDirection,
+            amount: amtVal,
+            reason: reasonVal
+          });
+
+          const mem = usersMap.get(targetUid) || (state.members || []).find(m => m.uid === targetUid);
+          if (mem) {
+            if (res.newPoints !== undefined) mem.points = res.newPoints;
+            if (res.newPenalties !== undefined) mem.penalties = res.newPenalties;
+            if (res.newFinesDue !== undefined) mem.finesDue = res.newFinesDue;
+          }
+        }
 
         if (amountInput) amountInput.value = '';
         if (reasonInput) reasonInput.value = '';
+        panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.remove('active'));
 
-        // Update selected banner balances
-        if (result.newPoints !== undefined) currentHubSelectedMember.points = result.newPoints;
-        if (result.newPenalties !== undefined) currentHubSelectedMember.penalties = result.newPenalties;
-        if (result.newFinesDue !== undefined) currentHubSelectedMember.finesDue = result.newFinesDue;
-        renderSelectedBanner();
-
-        toast(`Successfully applied ${currentHubDirection === 'add' ? '+' : '-'}${amtVal} ${currentHubBucket} adjustment`, 'success');
+        toast(`Applied ${currentDirection === 'add' ? '+' : '-'}${amtVal} ${currentBucket} to ${uidsArray.length} member(s)`, 'success');
+        renderRoster();
         if (typeof renderAdminMembers === 'function') renderAdminMembers();
         if (typeof renderLeaderboard === 'function') renderLeaderboard();
       } catch (err) {
@@ -5501,66 +5579,19 @@ export function renderAdminAdjustments() {
         toast(err.message || 'Failed to apply adjustment', 'error');
       } finally {
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Apply & Record in Ledger';
+        updateDynamicButtonLabel();
       }
     };
   }
 
   updateBucketUI();
-  renderSelectedBanner();
+  updateDirectionUI();
+  renderRoster();
 }
 
-/* ==========================================================================
-   24 PRESET SVG AVATARS & INTERACTIVE CROPPER ENGINE (v2.2.1)
-   ========================================================================== */
-
 export function getPresetAvatars() {
-  const personas = [
-    { label: 'Camera Pro', bg1: '#0A84FF', bg2: '#5E5CE6', path: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>' },
-    { label: 'Director', bg1: '#FF2D55', bg2: '#FF9500', path: '<rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/>' },
-    { label: 'Audio Pro', bg1: '#FF9F0A', bg2: '#FF375F', path: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>' },
-    { label: 'Live Streamer', bg1: '#32ADE6', bg2: '#007AFF', path: '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>' },
-    { label: 'Lighting Lead', bg1: '#FFD60A', bg2: '#FF9500', path: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>' },
-    { label: 'Drone Pilot', bg1: '#30D158', bg2: '#0A84FF', path: '<polygon points="3 11 22 2 13 21 11 13 3 11"/>' },
-    { label: 'Motion Lead', bg1: '#AF52DE', bg2: '#5856D6', path: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>' },
-    { label: 'Editor', bg1: '#30D158', bg2: '#34C759', path: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>' },
-    { label: 'Sound FX', bg1: '#FF375F', bg2: '#BF5AF2', path: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>' },
-    { label: 'Creative Lead', bg1: '#FFD60A', bg2: '#FF375F', path: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>' },
-    { label: 'Scriptwriter', bg1: '#64D2FF', bg2: '#5E5CE6', path: '<path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/>' },
-    { label: 'Photographer', bg1: '#5E5CE6', bg2: '#BF5AF2', path: '<circle cx="12" cy="12" r="10"/><line x1="14.31" y1="8" x2="20.05" y2="17.94"/><line x1="9.69" y1="8" x2="21.17" y2="8"/><line x1="7.38" y1="12" x2="13.12" y2="2.06"/><line x1="9.69" y1="16" x2="3.95" y2="6.06"/><line x1="14.31" y1="16" x2="2.83" y2="16"/><line x1="16.62" y1="12" x2="10.88" y2="21.94"/>' },
-    { label: 'Tech Lead', bg1: '#1C1C1E', bg2: '#3A3A3C', path: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>' },
-    { label: 'Producer', bg1: '#FFD60A', bg2: '#B48B00', path: '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>' },
-    { label: 'Colorist', bg1: '#FF453A', bg2: '#30D158', path: '<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>' },
-    { label: 'VFX Artist', bg1: '#BF5AF2', bg2: '#FF2D55', path: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>' },
-    { label: 'Broadcast Ops', bg1: '#32ADE6', bg2: '#30D158', path: '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>' },
-    { label: 'Content Lead', bg1: '#FF375F', bg2: '#FF9F0A', path: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>' },
-    { label: 'Neon Star', bg1: '#00F2FE', bg2: '#4FACFE', path: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' },
-    { label: 'Aurora', bg1: '#667EEA', bg2: '#764BA2', path: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>' },
-    { label: 'Sunset Glow', bg1: '#FA709A', bg2: '#FEE140', path: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>' },
-    { label: 'Forest Dawn', bg1: '#0BA360', bg2: '#3CBA92', path: '<circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>' },
-    { label: 'Obsidian Shield', bg1: '#232526', bg2: '#414345', path: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>' },
-    { label: 'Cyber Pulse', bg1: '#F857A6', bg2: '#FF5858', path: '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/>' }
-  ];
-
-  return personas.map((p, idx) => {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-      <defs>
-        <linearGradient id="g${idx}" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="${p.bg1}"/>
-          <stop offset="100%" stop-color="${p.bg2}"/>
-        </linearGradient>
-      </defs>
-      <rect width="100" height="100" rx="50" fill="url(#g${idx})"/>
-      <g transform="translate(24, 24) scale(2.16)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        ${p.path}
-      </g>
-    </svg>`;
-    return {
-      id: `preset-avatar-${idx + 1}`,
-      label: p.label,
-      dataUrl: `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
-    };
-  });
+  const avatars = [{"id":"char-1","label":"Alex (Headphones)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-1%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%233A82F6%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-1)%22%3E%20%3C!--%20Clothes%3A%20Hoodie%20--%3E%20%3Cpath%20d%3D%22M30%20120%20C30%2095%2045%2085%2060%2085%20C75%2085%2090%2095%2090%20120%20Z%22%20fill%3D%22%2310B981%22%2F%3E%20%3Cpath%20d%3D%22M52%2086%20L60%2098%20L68%2086%20Z%22%20fill%3D%22%23059669%22%2F%3E%20%3C!--%20Neck%20--%3E%20%3Crect%20x%3D%2252%22%20y%3D%2270%22%20width%3D%2216%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E5B892%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2252%22%20rx%3D%2222%22%20ry%3D%2226%22%20fill%3D%22%23FCD5B5%22%2F%3E%20%3C!--%20Hair%3A%20Short%20fade%20--%3E%20%3Cpath%20d%3D%22M38%2050%20C38%2032%2046%2022%2060%2022%20C74%2022%2082%2032%2082%2050%20C82%2042%2078%2030%2060%2030%20C42%2030%2038%2042%2038%2050%20Z%22%20fill%3D%22%231E293B%22%2F%3E%20%3C!--%20Eyes%20%26%20Brows%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cpath%20d%3D%22M47%2044%20Q51%2042%2055%2044%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M65%2044%20Q69%2042%2073%2044%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C!--%20Smile%20%26%20Nose%20--%3E%20%3Cpath%20d%3D%22M59%2055%20L61%2055%22%20stroke%3D%22%23D99B75%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M53%2062%20Q60%2068%2067%2062%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C!--%20Headphones%20--%3E%20%3Cpath%20d%3D%22M36%2048%20C36%2028%2044%2016%2060%2016%20C76%2016%2084%2028%2084%2048%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%225%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Crect%20x%3D%2233%22%20y%3D%2244%22%20width%3D%227%22%20height%3D%2216%22%20rx%3D%223.5%22%20fill%3D%22%23EF4444%22%2F%3E%20%3Crect%20x%3D%2280%22%20y%3D%2244%22%20width%3D%227%22%20height%3D%2216%22%20rx%3D%223.5%22%20fill%3D%22%23EF4444%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-2","label":"Maya (Glasses & Curly)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-2%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23EC4899%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-2)%22%3E%20%3C!--%20Clothes%3A%20Crewneck%20--%3E%20%3Cpath%20d%3D%22M30%20120%20C30%2095%2045%2086%2060%2086%20C75%2086%2090%2095%2090%20120%20Z%22%20fill%3D%22%238B5CF6%22%2F%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2286%22%20r%3D%2210%22%20fill%3D%22%23E8B993%22%2F%3E%20%3C!--%20Neck%20--%3E%20%3Crect%20x%3D%2253%22%20y%3D%2270%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23C9946F%22%2F%3E%20%3C!--%20Curly%20Hair%20Back%20--%3E%20%3Ccircle%20cx%3D%2242%22%20cy%3D%2245%22%20r%3D%2214%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Ccircle%20cx%3D%2278%22%20cy%3D%2245%22%20r%3D%2214%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Ccircle%20cx%3D%2246%22%20cy%3D%2230%22%20r%3D%2213%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Ccircle%20cx%3D%2274%22%20cy%3D%2230%22%20r%3D%2213%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2224%22%20r%3D%2213%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2252%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23E8B993%22%2F%3E%20%3C!--%20Glasses%20--%3E%20%3Ccircle%20cx%3D%2251%22%20cy%3D%2250%22%20r%3D%227%22%20stroke%3D%22%23F59E0B%22%20stroke-width%3D%222.5%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%2F%3E%20%3Ccircle%20cx%3D%2269%22%20cy%3D%2250%22%20r%3D%227%22%20stroke%3D%22%23F59E0B%22%20stroke-width%3D%222.5%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%2F%3E%20%3Cline%20x1%3D%2258%22%20y1%3D%2250%22%20x2%3D%2262%22%20y2%3D%2250%22%20stroke%3D%22%23F59E0B%22%20stroke-width%3D%222%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Ccircle%20cx%3D%2251%22%20cy%3D%2250%22%20r%3D%222.5%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Ccircle%20cx%3D%2269%22%20cy%3D%2250%22%20r%3D%222.5%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Cpath%20d%3D%22M54%2063%20Q60%2068%2066%2063%22%20stroke%3D%22%231E1B4B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C!--%20Hair%20Curls%20Front%20--%3E%20%3Ccircle%20cx%3D%2239%22%20cy%3D%2238%22%20r%3D%227%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Ccircle%20cx%3D%2281%22%20cy%3D%2238%22%20r%3D%227%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-3","label":"Jordan (Beanie)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-3%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23F59E0B%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-3)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2094%2044%2086%2060%2086%20C76%2086%2092%2094%2092%20120%20Z%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cpath%20d%3D%22M50%2086%20L60%20102%20L70%2086%20Z%22%20fill%3D%22%23E2E8F0%22%2F%3E%20%3C!--%20Neck%20--%3E%20%3Crect%20x%3D%2252%22%20y%3D%2268%22%20width%3D%2216%22%20height%3D%2220%22%20rx%3D%224%22%20fill%3D%22%23A87138%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2254%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23C68A4C%22%2F%3E%20%3C!--%20Eyes%20%26%20Brows%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2253%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2253%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3Cpath%20d%3D%22M47%2048%20Q51%2046%2055%2048%22%20stroke%3D%22%23111827%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M65%2048%20Q69%2046%2073%2048%22%20stroke%3D%22%23111827%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M54%2064%20Q60%2069%2066%2064%22%20stroke%3D%22%23111827%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C!--%20Beanie%20Hat%20--%3E%20%3Cpath%20d%3D%22M37%2042%20C37%2020%2045%2014%2060%2014%20C75%2014%2083%2020%2083%2042%20Z%22%20fill%3D%22%23DC2626%22%2F%3E%20%3Crect%20x%3D%2235%22%20y%3D%2238%22%20width%3D%2250%22%20height%3D%229%22%20rx%3D%224.5%22%20fill%3D%22%23B91C1C%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-4","label":"Samira (Blazer & Bun)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-4%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%238B5CF6%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-4)%22%3E%20%3C!--%20Hair%20Bun%20Top%20--%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2218%22%20r%3D%2213%22%20fill%3D%22%23171717%22%2F%3E%20%3C!--%20Clothes%3A%20Blazer%20--%3E%20%3Cpath%20d%3D%22M26%20120%20C26%2094%2042%2085%2060%2085%20C78%2085%2094%2094%2094%20120%20Z%22%20fill%3D%22%23312E81%22%2F%3E%20%3Cpolygon%20points%3D%2260%2C86%2048%2C110%2072%2C110%22%20fill%3D%22%23F8FAFC%22%2F%3E%20%3Cpolygon%20points%3D%2260%2C94%2056%2C120%2064%2C120%22%20fill%3D%22%23EF4444%22%2F%3E%20%3C!--%20Neck%20--%3E%20%3Crect%20x%3D%2252%22%20y%3D%2268%22%20width%3D%2216%22%20height%3D%2220%22%20rx%3D%224%22%20fill%3D%22%23704118%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%238D5524%22%2F%3E%20%3C!--%20Hair%20--%3E%20%3Cpath%20d%3D%22M39%2048%20C39%2026%2048%2024%2060%2024%20C72%2024%2081%2026%2081%2048%20C76%2034%2068%2032%2060%2032%20C52%2032%2044%2034%2039%2048%20Z%22%20fill%3D%22%23171717%22%2F%3E%20%3C!--%20Eyes%20%26%20Gold%20Hoop%20Earrings%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23171717%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23171717%22%2F%3E%20%3Ccircle%20cx%3D%2237%22%20cy%3D%2254%22%20r%3D%223.5%22%20stroke%3D%22%23FBBF24%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%2F%3E%20%3Ccircle%20cx%3D%2283%22%20cy%3D%2254%22%20r%3D%223.5%22%20stroke%3D%22%23FBBF24%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%2F%3E%20%3C!--%20Smile%20--%3E%20%3Cpath%20d%3D%22M53%2062%20Q60%2067%2067%2062%22%20stroke%3D%22%23171717%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-5","label":"Liam (Cap Backward)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-5%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%2310B981%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-5)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%230284C7%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2219%22%20rx%3D%224%22%20fill%3D%22%23E0B68A%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2253%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23FFDBAC%22%2F%3E%20%3C!--%20Cap%20Backward%20--%3E%20%3Cpath%20d%3D%22M37%2044%20C37%2024%2046%2018%2060%2018%20C74%2018%2083%2024%2083%2044%20Z%22%20fill%3D%22%232563EB%22%2F%3E%20%3Crect%20x%3D%2235%22%20y%3D%2240%22%20width%3D%2250%22%20height%3D%227%22%20rx%3D%223.5%22%20fill%3D%22%231D4ED8%22%2F%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2247%22%20rx%3D%228%22%20ry%3D%223%22%20fill%3D%22%231E40AF%22%2F%3E%20%3C!--%20Eyes%20%26%20Grin%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2252%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2252%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cpath%20d%3D%22M53%2063%20Q60%2070%2067%2063%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-6","label":"Zoe (Ponytail & Bangs)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-6%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%236366F1%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-6)%22%3E%20%3C!--%20High%20Ponytail%20--%3E%20%3Cpath%20d%3D%22M60%2022%20C78%2012%2095%2024%2092%2048%20C85%2046%2076%2034%2068%2028%20Z%22%20fill%3D%22%23B45309%22%2F%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23DB2777%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23D4A05B%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2252%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%23F1C27D%22%2F%3E%20%3C!--%20Bangs%20--%3E%20%3Cpath%20d%3D%22M40%2042%20C44%2026%2052%2024%2060%2024%20C68%2024%2076%2026%2080%2042%20C74%2034%2066%2033%2060%2033%20C54%2033%2046%2034%2040%2042%20Z%22%20fill%3D%22%23B45309%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cpath%20d%3D%22M54%2062%20Q60%2067%2066%2062%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-7","label":"Tariq (Afro Fade)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-7%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%230EA5E9%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-7)%22%3E%20%3C!--%20Afro%20Hair%20Background%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2240%22%20rx%3D%2227%22%20ry%3D%2225%22%20fill%3D%22%23111827%22%2F%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23D97706%22%2F%3E%20%3Crect%20x%3D%2252%22%20y%3D%2270%22%20width%3D%2216%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23422718%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2253%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%235A3825%22%2F%3E%20%3C!--%20Eyes%20%26%20Mustache%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3Cpath%20d%3D%22M49%2061%20Q55%2059%2060%2062%20Q65%2059%2071%2061%22%20stroke%3D%22%23111827%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M53%2066%20Q60%2070%2067%2066%22%20stroke%3D%22%23111827%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-8","label":"Elena (Studio Mic)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-8%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%2314B8A6%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-8)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%234F46E5%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E2B785%22%2F%3E%20%3C!--%20Long%20Hair%20Back%20--%3E%20%3Cpath%20d%3D%22M36%2040%20C34%2068%2036%2085%2044%2095%20L76%2095%20C84%2085%2086%2068%2084%2040%20Z%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%23FFDBAC%22%2F%3E%20%3C!--%20Headset%20%26%20Boom%20Mic%20--%3E%20%3Cpath%20d%3D%22M37%2048%20C37%2026%2046%2018%2060%2018%20C74%2018%2083%2026%2083%2048%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%224%22%20fill%3D%22none%22%2F%3E%20%3Ccircle%20cx%3D%2236%22%20cy%3D%2248%22%20r%3D%226%22%20fill%3D%22%233B82F6%22%2F%3E%20%3Ccircle%20cx%3D%2284%22%20cy%3D%2248%22%20r%3D%226%22%20fill%3D%22%233B82F6%22%2F%3E%20%3Cpath%20d%3D%22M84%2050%20Q75%2066%2064%2066%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Ccircle%20cx%3D%2263%22%20cy%3D%2266%22%20r%3D%223%22%20fill%3D%22%2310B981%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cpath%20d%3D%22M54%2060%20Q60%2065%2066%2060%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-9","label":"Marcus (Turtleneck)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-9%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%2364748B%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-9)%22%3E%20%3C!--%20Clothes%3A%20Black%20Turtleneck%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2092%2044%2082%2060%2082%20C76%2082%2092%2092%2092%20120%20Z%22%20fill%3D%22%230F172A%22%2F%3E%20%3Crect%20x%3D%2250%22%20y%3D%2270%22%20width%3D%2220%22%20height%3D%2216%22%20rx%3D%225%22%20fill%3D%22%231E293B%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2250%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%238D5524%22%2F%3E%20%3C!--%20Hair%3A%20Clean%20Buzz%20--%3E%20%3Cpath%20d%3D%22M39%2046%20C39%2026%2048%2020%2060%2020%20C72%2020%2081%2026%2081%2046%20C81%2035%2074%2025%2060%2025%20C46%2025%2039%2035%2039%2046%20Z%22%20fill%3D%22%2309090B%22%2F%3E%20%3C!--%20Eyes%2C%20Wire%20Glasses%20%26%20Goatee%20--%3E%20%3Crect%20x%3D%2244%22%20y%3D%2244%22%20width%3D%2213%22%20height%3D%2210%22%20rx%3D%223%22%20stroke%3D%22%23F8FAFC%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%2F%3E%20%3Crect%20x%3D%2263%22%20y%3D%2244%22%20width%3D%2213%22%20height%3D%2210%22%20rx%3D%223%22%20stroke%3D%22%23F8FAFC%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%2F%3E%20%3Cline%20x1%3D%2257%22%20y1%3D%2249%22%20x2%3D%2263%22%20y2%3D%2249%22%20stroke%3D%22%23F8FAFC%22%20stroke-width%3D%221.5%22%2F%3E%20%3Cellipse%20cx%3D%2250.5%22%20cy%3D%2249%22%20rx%3D%222%22%20ry%3D%222.5%22%20fill%3D%22%2309090B%22%2F%3E%20%3Cellipse%20cx%3D%2269.5%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%222.5%22%20fill%3D%22%2309090B%22%2F%3E%20%3C!--%20Goatee%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2268%22%20rx%3D%224%22%20ry%3D%223%22%20fill%3D%22%2309090B%22%2F%3E%20%3Cpath%20d%3D%22M54%2062%20Q60%2066%2066%2062%22%20stroke%3D%22%2309090B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-10","label":"Chloe (Sunglasses)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-10%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23F43F5E%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-10)%22%3E%20%3C!--%20Clothes%3A%20Denim%20Jacket%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%232563EB%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E5B892%22%2F%3E%20%3C!--%20Blonde%20Wavy%20Hair%20--%3E%20%3Cpath%20d%3D%22M36%2038%20C32%2060%2034%2085%2040%2096%20L80%2096%20C86%2085%2088%2060%2084%2038%20Z%22%20fill%3D%22%23F59E0B%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%23FCD5B5%22%2F%3E%20%3C!--%20Cool%20Sunglasses%20--%3E%20%3Cpolygon%20points%3D%2242%2C44%2057%2C44%2055%2C55%2045%2C55%22%20fill%3D%22%230F172A%22%2F%3E%20%3Cpolygon%20points%3D%2263%2C44%2078%2C44%2075%2C55%2065%2C55%22%20fill%3D%22%230F172A%22%2F%3E%20%3Cline%20x1%3D%2257%22%20y1%3D%2247%22%20x2%3D%2263%22%20y2%3D%2247%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%222%22%2F%3E%20%3Cpath%20d%3D%22M54%2063%20Q60%2068%2066%2063%22%20stroke%3D%22%23BE123C%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-11","label":"Kareem (Director Cap)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-11%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23D97706%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-11)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23374151%22%2F%3E%20%3Crect%20x%3D%2252%22%20y%3D%2270%22%20width%3D%2216%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%2384542B%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2253%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23A26D3F%22%2F%3E%20%3C!--%20Director%20Flat%20Cap%20--%3E%20%3Cpath%20d%3D%22M35%2038%20C35%2022%2046%2016%2060%2016%20C74%2016%2085%2022%2085%2038%20Z%22%20fill%3D%22%231F2937%22%2F%3E%20%3Cpath%20d%3D%22M32%2038%20Q60%2032%2088%2038%20L84%2043%20Q60%2038%2036%2043%20Z%22%20fill%3D%22%23111827%22%2F%3E%20%3C!--%20Eyes%20%26%20Beard%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3C!--%20Trimmed%20Beard%20--%3E%20%3Cpath%20d%3D%22M42%2053%20C42%2074%2050%2078%2060%2078%20C70%2078%2078%2074%2078%2053%20C74%2065%2068%2070%2060%2070%20C52%2070%2046%2065%2042%2053%20Z%22%20fill%3D%22%23111827%22%2F%3E%20%3Cpath%20d%3D%22M54%2062%20Q60%2066%2066%2062%22%20stroke%3D%22%23FFFFFF%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-12","label":"Hana (Wavy Bob)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-12%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%2384CC16%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-12)%22%3E%20%3C!--%20Dark%20Brown%20Wavy%20Bob%20--%3E%20%3Cpath%20d%3D%22M34%2042%20C30%2065%2034%2085%2044%2088%20L76%2088%20C86%2085%2090%2065%2086%2042%20Z%22%20fill%3D%22%23451A03%22%2F%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%237C3AED%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E5B892%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%23FCD5B5%22%2F%3E%20%3C!--%20Front%20Waves%20--%3E%20%3Cpath%20d%3D%22M39%2036%20C45%2022%2055%2024%2060%2026%20C68%2024%2076%2026%2081%2036%20C74%2030%2066%2032%2060%2032%20C54%2032%2046%2030%2039%2036%20Z%22%20fill%3D%22%23451A03%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231F2937%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231F2937%22%2F%3E%20%3Cpath%20d%3D%22M53%2061%20Q60%2067%2067%2061%22%20stroke%3D%22%23E11D48%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-13","label":"Omar (Hoodie & Beard)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-13%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%2306B6D4%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-13)%22%3E%20%3C!--%20Clothes%3A%20Gray%20Hoodie%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2094%2044%2084%2060%2084%20C76%2084%2092%2094%2092%20120%20Z%22%20fill%3D%22%23475569%22%2F%3E%20%3Cpath%20d%3D%22M48%2085%20C48%2098%2054%20104%2060%20104%20C66%20104%2072%2098%2072%2085%20Z%22%20fill%3D%22%23334155%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2252%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23C68A4C%22%2F%3E%20%3C!--%20Hair%3A%20Textured%20top%20--%3E%20%3Cpath%20d%3D%22M38%2046%20C38%2024%2046%2018%2060%2018%20C74%2018%2082%2024%2082%2046%20C76%2034%2068%2028%2060%2028%20C52%2028%2044%2034%2038%2046%20Z%22%20fill%3D%22%23111827%22%2F%3E%20%3C!--%20Full%20Beard%20--%3E%20%3Cpath%20d%3D%22M41%2054%20C41%2076%2050%2082%2060%2082%20C70%2082%2079%2076%2079%2054%20C74%2068%2068%2073%2060%2073%20C52%2073%2046%2068%2041%2054%20Z%22%20fill%3D%22%23111827%22%2F%3E%20%3C!--%20Eyes%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%23111827%22%2F%3E%20%3Cpath%20d%3D%22M54%2062%20Q60%2066%2066%2062%22%20stroke%3D%22%23FFFFFF%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-14","label":"Nadia (AirPods)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-14%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23A855F7%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-14)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23F43F5E%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23C9946F%22%2F%3E%20%3C!--%20Hair%20--%3E%20%3Cpath%20d%3D%22M37%2042%20C34%2065%2037%2086%2045%2092%20L75%2092%20C83%2086%2086%2065%2083%2042%20Z%22%20fill%3D%22%233730A3%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%23E8B993%22%2F%3E%20%3Cpath%20d%3D%22M40%2038%20C46%2024%2054%2022%2060%2022%20C66%2022%2074%2024%2080%2038%20C74%2030%2066%2029%2060%2029%20C54%2029%2046%2030%2040%2038%20Z%22%20fill%3D%22%233730A3%22%2F%3E%20%3C!--%20White%20AirPods%20in%20ears%20--%3E%20%3Cellipse%20cx%3D%2239%22%20cy%3D%2253%22%20rx%3D%222.5%22%20ry%3D%224%22%20fill%3D%22%23FFFFFF%22%2F%3E%20%3Cline%20x1%3D%2239%22%20y1%3D%2255%22%20x2%3D%2239%22%20y2%3D%2262%22%20stroke%3D%22%23FFFFFF%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cellipse%20cx%3D%2281%22%20cy%3D%2253%22%20rx%3D%222.5%22%20ry%3D%224%22%20fill%3D%22%23FFFFFF%22%2F%3E%20%3Cline%20x1%3D%2281%22%20y1%3D%2255%22%20x2%3D%2281%22%20y2%3D%2262%22%20stroke%3D%22%23FFFFFF%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Cpath%20d%3D%22M53%2061%20Q60%2067%2067%2061%22%20stroke%3D%22%231E1B4B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-15","label":"Youssef (Side Part)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-15%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%233B82F6%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-15)%22%3E%20%3C!--%20Clothes%3A%20Polo%20Shirt%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23059669%22%2F%3E%20%3Cpolygon%20points%3D%2260%2C86%2052%2C104%2068%2C104%22%20fill%3D%22%23047857%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E2B785%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23FFDBAC%22%2F%3E%20%3C!--%20Hair%3A%20Sleek%20Side%20Part%20--%3E%20%3Cpath%20d%3D%22M37%2042%20C37%2020%2048%2016%2064%2018%20C78%2020%2083%2028%2083%2044%20C76%2030%2068%2026%2056%2026%20C44%2026%2039%2034%2037%2042%20Z%22%20fill%3D%22%2318181B%22%2F%3E%20%3C!--%20Eyes%20%26%20Friendly%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%2318181B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%2318181B%22%2F%3E%20%3Cpath%20d%3D%22M54%2062%20Q60%2068%2066%2062%22%20stroke%3D%22%2318181B%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-16","label":"Leila (Braids & Beads)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-16%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23F97316%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-16)%22%3E%20%3C!--%20Braids%20hanging%20down%20--%3E%20%3Crect%20x%3D%2234%22%20y%3D%2235%22%20width%3D%224%22%20height%3D%2260%22%20rx%3D%222%22%20fill%3D%22%230A0A0A%22%2F%3E%20%3Crect%20x%3D%2240%22%20y%3D%2232%22%20width%3D%224%22%20height%3D%2264%22%20rx%3D%222%22%20fill%3D%22%230A0A0A%22%2F%3E%20%3Crect%20x%3D%2276%22%20y%3D%2232%22%20width%3D%224%22%20height%3D%2264%22%20rx%3D%222%22%20fill%3D%22%230A0A0A%22%2F%3E%20%3Crect%20x%3D%2282%22%20y%3D%2235%22%20width%3D%224%22%20height%3D%2260%22%20rx%3D%222%22%20fill%3D%22%230A0A0A%22%2F%3E%20%3C!--%20Golden%20Beads%20at%20ends%20--%3E%20%3Ccircle%20cx%3D%2236%22%20cy%3D%2292%22%20r%3D%223%22%20fill%3D%22%23FBBF24%22%2F%3E%20%3Ccircle%20cx%3D%2242%22%20cy%3D%2294%22%20r%3D%223%22%20fill%3D%22%23FBBF24%22%2F%3E%20%3Ccircle%20cx%3D%2278%22%20cy%3D%2294%22%20r%3D%223%22%20fill%3D%22%23FBBF24%22%2F%3E%20%3Ccircle%20cx%3D%2284%22%20cy%3D%2292%22%20r%3D%223%22%20fill%3D%22%23FBBF24%22%2F%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%237C3AED%22%2F%3E%20%3Crect%20x%3D%2252%22%20y%3D%2270%22%20width%3D%2216%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23422718%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%235A3825%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%230A0A0A%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%230A0A0A%22%2F%3E%20%3Cpath%20d%3D%22M54%2062%20Q60%2067%2066%2062%22%20stroke%3D%22%230A0A0A%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-17","label":"Adam (Techie Glasses)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-17%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%236366F1%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-17)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%230369A1%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E5B892%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23FCD5B5%22%2F%3E%20%3C!--%20Messy%20Hair%20--%3E%20%3Cpath%20d%3D%22M37%2042%20C37%2020%2046%2016%2060%2016%20C74%2016%2083%2020%2083%2042%20C77%2030%2070%2024%2060%2026%20C50%2024%2043%2030%2037%2042%20Z%22%20fill%3D%22%23713F12%22%2F%3E%20%3C!--%20Bold%20Rectangular%20Glasses%20--%3E%20%3Crect%20x%3D%2243%22%20y%3D%2244%22%20width%3D%2214%22%20height%3D%2211%22%20rx%3D%223%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%222%22%20fill%3D%22rgba(255%2C255%2C255%2C0.25)%22%2F%3E%20%3Crect%20x%3D%2263%22%20y%3D%2244%22%20width%3D%2214%22%20height%3D%2211%22%20rx%3D%223%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%222%22%20fill%3D%22rgba(255%2C255%2C255%2C0.25)%22%2F%3E%20%3Cline%20x1%3D%2257%22%20y1%3D%2249%22%20x2%3D%2263%22%20y2%3D%2249%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%222%22%2F%3E%20%3Ccircle%20cx%3D%2250%22%20cy%3D%2249.5%22%20r%3D%222.5%22%20fill%3D%22%230F172A%22%2F%3E%20%3Ccircle%20cx%3D%2270%22%20cy%3D%2249.5%22%20r%3D%222.5%22%20fill%3D%22%230F172A%22%2F%3E%20%3C!--%20Smile%20--%3E%20%3Cpath%20d%3D%22M54%2063%20Q60%2068%2066%2063%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-18","label":"Salma (Headscarf / Hijab)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-18%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23EC4899%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-18)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M26%20120%20C26%2092%2042%2084%2060%2084%20C78%2084%2094%2092%2094%20120%20Z%22%20fill%3D%22%234338CA%22%2F%3E%20%3C!--%20Hijab%20Outer%20Wrap%20--%3E%20%3Cpath%20d%3D%22M34%2050%20C34%2022%2045%2016%2060%2016%20C75%2016%2086%2022%2086%2050%20C86%2076%2076%2086%2060%2086%20C44%2086%2034%2076%2034%2050%20Z%22%20fill%3D%22%23BE185D%22%2F%3E%20%3C!--%20Face%20Opening%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2217%22%20ry%3D%2221%22%20fill%3D%22%23FFDBAC%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2252%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cellipse%20cx%3D%2268%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cpath%20d%3D%22M48%2044%20Q52%2042%2056%2044%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%221.75%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M64%2044%20Q68%2042%2072%2044%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%221.75%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M54%2060%20Q60%2065%2066%2060%22%20stroke%3D%22%239D174D%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-19","label":"Rami (Pompadour)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-19%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%2314B8A6%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-19)%22%3E%20%3C!--%20High%20Pompadour%20Hair%20--%3E%20%3Cpath%20d%3D%22M38%2038%20C38%2012%2050%2010%2060%2010%20C70%2010%2082%2012%2082%2038%20Z%22%20fill%3D%22%231C1917%22%2F%3E%20%3C!--%20Clothes%3A%20Red%20Bomber%20Jacket%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23B91C1C%22%2F%3E%20%3Cline%20x1%3D%2260%22%20y1%3D%2286%22%20x2%3D%2260%22%20y2%3D%22120%22%20stroke%3D%22%23F8FAFC%22%20stroke-width%3D%222%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23C9946F%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2252%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23E8B993%22%2F%3E%20%3C!--%20Eyes%20%26%20Confident%20Smirk%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231C1917%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2250%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231C1917%22%2F%3E%20%3Cpath%20d%3D%22M54%2062%20Q61%2067%2067%2061%22%20stroke%3D%22%231C1917%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-20","label":"Dina (Headband)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-20%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23F59E0B%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-20)%22%3E%20%3C!--%20Long%20Hair%20Back%20--%3E%20%3Cpath%20d%3D%22M36%2040%20C32%2064%2034%2086%2042%2094%20L78%2094%20C86%2086%2088%2064%2084%2040%20Z%22%20fill%3D%22%23312E81%22%2F%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23047857%22%2F%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E5B892%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%23FCD5B5%22%2F%3E%20%3C!--%20Sporty%20Headband%20--%3E%20%3Crect%20x%3D%2238%22%20y%3D%2232%22%20width%3D%2244%22%20height%3D%228%22%20rx%3D%224%22%20fill%3D%22%23EF4444%22%2F%3E%20%3Cpath%20d%3D%22M40%2034%20C46%2022%2054%2022%2060%2022%20C66%2022%2074%2022%2080%2034%20Z%22%20fill%3D%22%23312E81%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E1B4B%22%2F%3E%20%3Cpath%20d%3D%22M54%2061%20Q60%2066%2066%2061%22%20stroke%3D%22%231E1B4B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-21","label":"Karim (Lighting Visor)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-21%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23E11D48%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-21)%22%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%231E293B%22%2F%3E%20%3Crect%20x%3D%2252%22%20y%3D%2270%22%20width%3D%2216%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23A87138%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2253%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23C68A4C%22%2F%3E%20%3C!--%20Sun%20Visor%20--%3E%20%3Cpath%20d%3D%22M36%2038%20C42%2022%2052%2020%2060%2020%20C68%2020%2078%2022%2084%2038%20Z%22%20fill%3D%22%230F172A%22%2F%3E%20%3Cpath%20d%3D%22M32%2038%20Q60%2030%2088%2038%20L86%2044%20Q60%2038%2034%2044%20Z%22%20fill%3D%22%23F59E0B%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%230F172A%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%230F172A%22%2F%3E%20%3Cpath%20d%3D%22M54%2063%20Q60%2068%2066%2063%22%20stroke%3D%22%230F172A%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-22","label":"Lina (Earrings & Bob)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-22%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%2310B981%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-22)%22%3E%20%3C!--%20Sleek%20Sharp%20Bob%20--%3E%20%3Cpath%20d%3D%22M35%2038%20C32%2060%2035%2078%2044%2080%20L76%2080%20C85%2078%2088%2060%2085%2038%20Z%22%20fill%3D%22%2318181B%22%2F%3E%20%3C!--%20Clothes%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23D97706%22%2F%3E%20%3Crect%20x%3D%2252%22%20y%3D%2269%22%20width%3D%2216%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23704118%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2250%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%238D5524%22%2F%3E%20%3C!--%20Big%20Pearl%20Earrings%20--%3E%20%3Ccircle%20cx%3D%2238%22%20cy%3D%2252%22%20r%3D%223.5%22%20fill%3D%22%23F8FAFC%22%2F%3E%20%3Ccircle%20cx%3D%2282%22%20cy%3D%2252%22%20r%3D%223.5%22%20fill%3D%22%23F8FAFC%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2248%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%2318181B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2248%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%2318181B%22%2F%3E%20%3Cpath%20d%3D%22M54%2061%20Q60%2066%2066%2061%22%20stroke%3D%22%23F43F5E%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-23","label":"Farouk (Classic Suit)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-23%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%23475569%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-23)%22%3E%20%3C!--%20Clothes%3A%20Suit%20with%20Red%20Tie%20--%3E%20%3Cpath%20d%3D%22M26%20120%20C26%2092%2042%2084%2060%2084%20C78%2084%2094%2092%2094%20120%20Z%22%20fill%3D%22%230F172A%22%2F%3E%20%3Cpolygon%20points%3D%2260%2C84%2048%2C112%2072%2C112%22%20fill%3D%22%23FFFFFF%22%2F%3E%20%3Cpolygon%20points%3D%2260%2C92%2056%2C120%2064%2C120%22%20fill%3D%22%23DC2626%22%2F%3E%20%3C!--%20Neck%20--%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E2B785%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2251%22%20rx%3D%2221%22%20ry%3D%2225%22%20fill%3D%22%23FFDBAC%22%2F%3E%20%3C!--%20Silver-fox%20Hair%20--%3E%20%3Cpath%20d%3D%22M37%2042%20C37%2020%2048%2016%2060%2016%20C72%2016%2083%2020%2083%2042%20C76%2030%2068%2026%2060%2026%20C52%2026%2044%2030%2037%2042%20Z%22%20fill%3D%22%2364748B%22%2F%3E%20%3C!--%20Eyes%20%26%20Mustache%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2249%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%231E293B%22%2F%3E%20%3Cpath%20d%3D%22M50%2059%20Q55%2057%2060%2060%20Q65%2057%2070%2059%22%20stroke%3D%22%2364748B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Cpath%20d%3D%22M54%2064%20Q60%2068%2066%2064%22%20stroke%3D%22%231E293B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"},{"id":"char-24","label":"Nour (Creative Beanie)","dataUrl":"data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%20%3Cdefs%3E%20%3CclipPath%20id%3D%22circle-clip-char-24%22%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%2F%3E%20%3C%2FclipPath%3E%20%3C%2Fdefs%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2258%22%20fill%3D%22%237C3AED%22%2F%3E%20%3Cg%20clip-path%3D%22url(%23circle-clip-char-24)%22%3E%20%3C!--%20Clothes%3A%20Coral%20Crewneck%20--%3E%20%3Cpath%20d%3D%22M28%20120%20C28%2095%2044%2086%2060%2086%20C76%2086%2092%2095%2092%20120%20Z%22%20fill%3D%22%23E11D48%22%2F%3E%20%3Ccircle%20cx%3D%2260%22%20cy%3D%2286%22%20r%3D%2210%22%20fill%3D%22%23FCD5B5%22%2F%3E%20%3C!--%20Neck%20--%3E%20%3Crect%20x%3D%2253%22%20y%3D%2269%22%20width%3D%2214%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%23E5B892%22%2F%3E%20%3C!--%20Head%20--%3E%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2253%22%20rx%3D%2220%22%20ry%3D%2224%22%20fill%3D%22%23FCD5B5%22%2F%3E%20%3C!--%20Mustard%20Beanie%20--%3E%20%3Cpath%20d%3D%22M37%2042%20C37%2018%2046%2014%2060%2014%20C74%2014%2083%2018%2083%2042%20Z%22%20fill%3D%22%23FBBF24%22%2F%3E%20%3Crect%20x%3D%2235%22%20y%3D%2238%22%20width%3D%2250%22%20height%3D%228%22%20rx%3D%224%22%20fill%3D%22%23D97706%22%2F%3E%20%3C!--%20Curls%20escaping%20beanie%20--%3E%20%3Ccircle%20cx%3D%2237%22%20cy%3D%2248%22%20r%3D%224%22%20fill%3D%22%2318181B%22%2F%3E%20%3Ccircle%20cx%3D%2283%22%20cy%3D%2248%22%20r%3D%224%22%20fill%3D%22%2318181B%22%2F%3E%20%3C!--%20Eyes%20%26%20Smile%20--%3E%20%3Cellipse%20cx%3D%2251%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%2318181B%22%2F%3E%20%3Cellipse%20cx%3D%2269%22%20cy%3D%2251%22%20rx%3D%222.5%22%20ry%3D%223%22%20fill%3D%22%2318181B%22%2F%3E%20%3Cpath%20d%3D%22M54%2063%20Q60%2068%2066%2063%22%20stroke%3D%22%2318181B%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"}];
+  return avatars;
 }
 
 let cropperState = {
@@ -11399,7 +11430,7 @@ function renderAdminSessions() {
     const isSelected = selectionState.active && selectionState.type === 'sessions' && selectionState.selectedIds.has(session.id);
 
     return `
-      <div class="glass-card bulk-select-card p-4 space-y-3 text-xs border-white/10${isSelected ? ' selected' : ''}" data-session-id="${esc(session.id)}" data-bulk-id="${esc(session.id)}">
+      <div class="glass-card bulk-select-card p-4 space-y-3 text-xs border-white/10 cursor-pointer hover:bg-white/[0.03] transition rounded-2xl${isSelected ? ' selected' : ''}" data-session-id="${esc(session.id)}" data-bulk-id="${esc(session.id)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content space-y-3 w-full">
           <div class="flex items-start justify-between gap-2">
@@ -11430,15 +11461,10 @@ function renderAdminSessions() {
             </span>
           </div>
 
-          <div class="flex items-center gap-2 pt-1 border-t border-white/10">
-            <button class="btn-roster-session flex-1 py-1.5 rounded-xl font-semibold bg-[#0A84FF]/20 text-[#0A84FF] hover:bg-[#0A84FF]/30 transition text-center" data-session-id="${esc(session.id)}" data-occ-key="${esc(occKey)}" data-occ-start="${occStart}">
-              View Roster
-            </button>
-            <button class="btn-edit-session px-3 py-1.5 rounded-xl font-semibold bg-white/10 text-white hover:bg-white/15 transition" data-session-id="${esc(session.id)}">
-              Edit
-            </button>
-            <button class="btn-archive-session px-3 py-1.5 rounded-xl font-semibold ${session.archived ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'} hover:bg-white/10 transition" data-session-id="${esc(session.id)}" data-archived="${session.archived}">
-              ${session.archived ? 'Restore' : 'Archive'}
+          <div class="pt-1 border-t border-white/10">
+            <button type="button" class="btn-roster-session w-full py-2.5 rounded-xl font-semibold bg-[#0A84FF]/20 text-[#0A84FF] hover:bg-[#0A84FF]/30 transition text-center flex items-center justify-center gap-1.5" data-session-id="${esc(session.id)}" data-occ-key="${esc(occKey)}" data-occ-start="${occStart}">
+              <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+              <span>View Attendance</span>
             </button>
           </div>
         </div>
@@ -11446,14 +11472,17 @@ function renderAdminSessions() {
     `;
   }).join('');
 
-  list.querySelectorAll('.glass-card').forEach(card => {
+  list.querySelectorAll('.bulk-select-card').forEach(card => {
     card.onclick = (e) => {
+      if (e.target.closest('.btn-roster-session')) return;
       if (selectionState.active && selectionState.type === 'sessions') {
         e.preventDefault();
         e.stopPropagation();
         toggleItemSelection(card, card.dataset.bulkId);
         return;
       }
+      const sId = card.dataset.sessionId;
+      openAdminSessionModal(sId);
     };
 
     attachLongPress(card, () => {
@@ -11471,52 +11500,10 @@ function renderAdminSessions() {
         return;
       }
       e.stopPropagation();
-      const session = state.attendanceSessions.find(s => s.id === btn.dataset.sessionId);
+      const sId = btn.dataset.sessionId;
+      const session = state.attendanceSessions.find(s => s.id === sId);
       if (session) {
         openAdminRosterModal(session, btn.dataset.occKey, Number(btn.dataset.occStart));
-      }
-    };
-  });
-
-  list.querySelectorAll('.btn-edit-session').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'sessions') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      openAdminSessionModal(btn.dataset.sessionId);
-    };
-  });
-
-  list.querySelectorAll('.btn-archive-session').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'sessions') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const session = state.attendanceSessions.find(s => s.id === btn.dataset.sessionId);
-      if (!session) return;
-      const isArchived = btn.dataset.archived === 'true';
-      const confirmed = await confirmSheet({
-        title: isArchived ? 'Restore Session' : 'Archive Session',
-        message: isArchived ? `Restore "${session.title}"?` : `Archive "${session.title}"? Members will not see archived sessions.`,
-        confirmLabel: isArchived ? 'Restore' : 'Archive',
-        destructive: !isArchived
-      });
-      if (confirmed) {
-        await updateDoc(doc(db, 'attendance_sessions', session.id), {
-          archived: !isArchived,
-          updatedAt: serverTimestamp()
-        });
-        toast(isArchived ? 'Session restored' : 'Session archived', 'success');
       }
     };
   });
@@ -12124,77 +12111,56 @@ export function renderAdminBadges() {
     }).length;
 
     const color = badge.color || '#0A84FF';
-    const iconSvg = getIconSvg(badge.icon || 'star', 'w-5 h-5');
+    const iconSvg = getIconSvg(badge.icon || 'star', 'w-4 h-4');
+    const isSelected = selectionState.active && selectionState.type === 'badges' && selectionState.selectedIds.has(badge.id);
 
     return `
-      <div class="glass-card p-4 rounded-2xl border border-white/10 space-y-3 relative overflow-hidden" data-badge-id="${esc(badge.id)}">
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex items-center gap-3 min-w-0">
-            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-md" style="background-color: ${color}25; border: 1px solid ${color}50; color: ${color};">
+      <div class="glass-card bulk-select-card p-3 flex items-center justify-between text-xs rounded-xl cursor-pointer hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-badge-id="${esc(badge.id)}" data-bulk-id="${esc(badge.id)}">
+        ${BULK_INDICATOR_HTML}
+        <div class="bulk-card-content flex items-center justify-between w-full">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background-color: ${color}25; border: 1px solid ${color}50; color: ${color};">
               ${iconSvg}
             </div>
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <h3 class="font-bold text-white text-sm truncate">${esc(badge.label || badge.name || badge.id)}</h3>
-                <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${color};"></span>
+                <span class="font-semibold text-white truncate">${esc(badge.label || badge.name || badge.id)}</span>
+                <span class="w-2 h-2 rounded-full shrink-0" style="background-color: ${color};"></span>
               </div>
-              <p class="text-[11px] text-neutral-400 line-clamp-2 mt-0.5">${esc(badge.description || 'No description provided.')}</p>
+              ${badge.description ? `<p class="text-[10px] text-neutral-400 truncate mt-0.5">${esc(badge.description)}</p>` : ''}
             </div>
           </div>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-neutral-300 shrink-0">
-            ${memberCount} ${memberCount === 1 ? 'member' : 'members'}
-          </span>
-        </div>
-        <div class="flex items-center justify-end gap-2 pt-2 border-t border-white/5">
-          <button type="button" class="btn-edit-badge px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs text-white font-medium transition" data-badge-id="${esc(badge.id)}">
-            Edit
-          </button>
-          <button type="button" class="btn-delete-badge px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 text-xs font-medium transition" data-badge-id="${esc(badge.id)}">
-            Delete
-          </button>
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-neutral-300">
+              ${memberCount}
+            </span>
+            <svg class="w-4 h-4 text-neutral-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </div>
         </div>
       </div>
     `;
   }).join('');
 
-  container.querySelectorAll('.btn-edit-badge').forEach(btn => {
-    btn.onclick = (e) => {
-      e.preventDefault();
-      const bId = btn.dataset.badgeId;
-      const b = allBadges.find(x => x.id === bId);
-      if (b) openBadgeModal(b);
-    };
-  });
-
-  container.querySelectorAll('.btn-delete-badge').forEach(btn => {
-    btn.onclick = async (e) => {
-      e.preventDefault();
-      const bId = btn.dataset.badgeId;
-      const b = allBadges.find(x => x.id === bId);
-      if (!b) return;
-
-      const confirmed = await confirmSheet({
-        title: 'Delete Badge',
-        message: `Delete badge "${b.label || b.name || b.id}"? Existing members and past activity logs will be kept.`,
-        confirmLabel: 'Delete Badge',
-        destructive: true
-      });
-      if (!confirmed) return;
-
-      try {
-        await deleteDoc(doc(db, 'badges', b.id));
-        state.badges = (state.badges || []).filter(x => x.id !== b.id);
-        renderAdminBadges();
-        toast('Badge deleted', 'info');
-      } catch (err) {
-        console.error('Error deleting badge:', err);
-        toast('Failed to delete badge: ' + (err.message || err), 'error');
+  container.querySelectorAll('.bulk-select-card').forEach(card => {
+    card.onclick = (e) => {
+      if (selectionState.active && selectionState.type === 'badges') {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleItemSelection(card, card.dataset.bulkId);
+        return;
       }
+      const badgeId = card.dataset.badgeId;
+      const badge = allBadges.find(b => b.id === badgeId);
+      if (badge) openBadgeModal(badge);
     };
+
+    attachLongPress(card, () => {
+      enterSelectionMode('badges', card.dataset.bulkId);
+    });
   });
 }
 
-export function openBadgeModal(badge = null) {
+function openBadgeModal(badge = null) {
   let name = badge ? (badge.label || badge.name || '') : '';
   let description = badge ? (badge.description || '') : '';
   let selectedColor = badge ? (badge.color || '#0A84FF') : '#0A84FF';

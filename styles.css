@@ -2589,3 +2589,320 @@ input[type="search"],
   box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.5);
   transform: scale(1.1);
 }
+
+
+/* ==========================================================================
+   RELEASE v2.2.2: APPLE HIG & INTERACTIVE CONTROLS EXPANSION
+   ========================================================================== */
+
+/* Section 1: Icon Picker Full-Height Flex & 25% Card Reduction */
+.icon-picker-sheet {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 82vh !important;
+  max-height: 94vh !important;
+  overflow: hidden !important;
+}
+
+.icon-picker-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  padding: 0 16px 16px !important;
+}
+
+.icon-grid-scrollable {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 24px !important;
+}
+
+.icon-picker-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 8px !important;
+  max-height: none !important;
+  height: auto !important;
+  padding-bottom: 24px !important;
+}
+
+@media (min-width: 480px) {
+  .icon-picker-grid {
+    grid-template-columns: repeat(5, 1fr) !important;
+    gap: 10px !important;
+  }
+}
+
+.icon-picker-card,
+.icon-grid-item,
+.icon-picker-item {
+  height: 68px !important;
+  min-height: 68px !important;
+  padding: 8px 6px !important;
+  border-radius: 12px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
+  box-sizing: border-box !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+.icon-picker-card:hover,
+.icon-grid-item:hover,
+.icon-picker-item:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.icon-picker-card.selected,
+.icon-picker-card.active,
+.icon-grid-item.selected,
+.icon-grid-item.active,
+.icon-picker-item.selected,
+.icon-picker-item.active {
+  background: rgba(10, 132, 255, 0.25) !important;
+  border-color: #0A84FF !important;
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.4) !important;
+  color: #0A84FF !important;
+}
+
+.icon-picker-card svg,
+.icon-grid-item svg,
+.icon-picker-item svg {
+  width: 22px !important;
+  height: 22px !important;
+  flex-shrink: 0 !important;
+}
+
+.icon-picker-card span,
+.icon-grid-item span,
+.icon-picker-item span {
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+  color: rgba(235, 235, 245, 0.7) !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 100% !important;
+}
+
+/* Section 2: Universal Freeform Fluid Sheet Resizing Inner Bodies */
+.modal-body,
+.sheet-body,
+.sub-modal-body,
+#shared-modal-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Section 3: Floating Bulk Bar 2-Tier Layout & Segmented Control */
+.floating-bulk-bar {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 32px);
+  max-width: 480px;
+  height: auto !important;
+  min-height: 88px;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  gap: 10px !important;
+  padding: 12px 16px !important;
+  background: rgba(28, 28, 30, 0.94) !important;
+  backdrop-filter: blur(28px) !important;
+  -webkit-backdrop-filter: blur(28px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 20px !important;
+  z-index: 900 !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.65) !important;
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1), opacity 180ms ease;
+}
+
+.bulk-bar-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.bulk-bar-bottom-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.bulk-bar-bottom-row > button {
+  flex: 1;
+  text-align: center;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+/* Section 4: Adjustments Hub Interactive Apple HIG Buttons */
+.hub-bucket-btn {
+  border: 1px solid transparent;
+  transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.hub-bucket-btn[data-bucket="points"].active {
+  background: rgba(255, 214, 10, 0.22) !important;
+  border-color: #FFD60A !important;
+  color: #FFD60A !important;
+  box-shadow: 0 0 14px rgba(255, 214, 10, 0.35) !important;
+}
+
+.hub-bucket-btn[data-bucket="penalties"].active {
+  background: rgba(255, 69, 58, 0.22) !important;
+  border-color: #FF453A !important;
+  color: #FF453A !important;
+  box-shadow: 0 0 14px rgba(255, 69, 58, 0.35) !important;
+}
+
+.hub-bucket-btn[data-bucket="fines"].active {
+  background: rgba(10, 132, 255, 0.22) !important;
+  border-color: #0A84FF !important;
+  color: #0A84FF !important;
+  box-shadow: 0 0 14px rgba(10, 132, 255, 0.35) !important;
+}
+
+.hub-direction-btn {
+  border: 1px solid transparent;
+  transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.hub-direction-btn[data-direction="add"].active {
+  background: rgba(48, 209, 88, 0.22) !important;
+  border-color: #30D158 !important;
+  color: #30D158 !important;
+  box-shadow: 0 0 14px rgba(48, 209, 88, 0.35) !important;
+}
+
+.hub-direction-btn[data-direction="deduct"].active {
+  background: rgba(255, 69, 58, 0.22) !important;
+  border-color: #FF453A !important;
+  color: #FF453A !important;
+  box-shadow: 0 0 14px rgba(255, 69, 58, 0.35) !important;
+}
+
+.hub-preset-btn {
+  transition: all 0.15s ease;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.hub-preset-btn.active {
+  background: rgba(255, 255, 255, 0.25) !important;
+  border-color: rgba(255, 255, 255, 0.6) !important;
+  color: #FFFFFF !important;
+  transform: scale(1.04);
+}
+
+.hub-quick-chip {
+  transition: all 0.15s ease;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.hub-quick-chip:hover {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Adjustments Hub Member Roster Row */
+.hub-roster-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.hub-roster-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.hub-roster-item.selected {
+  background: rgba(10, 132, 255, 0.15) !important;
+  border-color: rgba(10, 132, 255, 0.45) !important;
+}
+
+/* Section 5: Leaderboard Badge Unclipped Wrap */
+.leaderboard-member-row .badge-row-container {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+  overflow: visible !important;
+}
+
+.leaderboard-member-row .badge-pill,
+.badge-row-container .badge-pill {
+  white-space: nowrap !important;
+  max-width: none !important;
+  overflow: visible !important;
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+  border-radius: 999px !important;
+}
+
+/* Section 6: 24 Character Avatars & Edit Profile Header Fix */
+.edit-profile-avatar-section {
+  padding-top: 16px !important;
+  margin-top: 4px !important;
+  overflow: visible !important;
+}
+
+#profilePresetsGrid {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 12px !important;
+  justify-items: center !important;
+}
+
+.preset-avatar-btn {
+  width: 60px !important;
+  height: 60px !important;
+  min-width: 60px !important;
+  min-height: 60px !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border: 2px solid rgba(255, 255, 255, 0.15) !important;
+  aspect-ratio: 1 / 1 !important;
+  transition: transform 0.15s cubic-bezier(0.32, 0.72, 0, 1), border-color 0.15s ease, box-shadow 0.15s ease !important;
+  background: transparent !important;
+  cursor: pointer !important;
+}
+
+.preset-avatar-btn:hover {
+  transform: scale(1.08) !important;
+  border-color: #0A84FF !important;
+}
+
+.preset-avatar-btn.active,
+.preset-avatar-btn.selected {
+  border-color: #0A84FF !important;
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.5) !important;
+  transform: scale(1.1) !important;
+}
