@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.10)
+ * COC Media Team - Production Web App (v2.2.0)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.10';
+export const APP_VERSION = '2.2.0';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -420,6 +420,8 @@ export let editingCategoryId = null;
 export let editingSessionId = null;
 export let editingBroadcastId = null;
 export const waiverDraftNotes = new Map();
+export let unsubscribeUserNotifications = null;
+export let userNotifications = [];
 
 /* ==========================================================================
    CATEGORY ICONS & COLOR SWATCHES
@@ -2810,6 +2812,14 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
     return { close: () => {}, modalEl: null };
   }
 
+  // Reset interactive detent state
+  if (modalSheet) {
+    modalSheet.classList.remove('sheet-detent-large');
+    modalSheet.style.height = '';
+    modalSheet.style.maxHeight = '';
+    modalSheet.style.transform = '';
+  }
+
   // Nested modal support: preserve parent modal state & DOM nodes cleanly
   if (root.classList.contains('open')) {
     const savedNodes = Array.from(bodyEl.childNodes);
@@ -2937,6 +2947,163 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   }
 
   return { close, modalEl: root };
+}
+
+/* ==========================================================================
+   RELEASE v2.2.0: INTERACTIVE iOS SHEET DETENTS CONTROLLER
+   ========================================================================== */
+export function initSheetDragGestures() {
+  let activeSheet = null;
+  let startY = 0;
+  let startHeight = 0;
+  let startTime = 0;
+  let viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  let isDragging = false;
+  let isLarge = false;
+
+  const onStart = (e) => {
+    const target = e.target;
+    if (!target) return;
+
+    // Check hit on grabber, grabber-hitarea, modal-grabber, modal-header, or sub-modal-toolbar
+    const grabber = target.closest('.sheet-grabber, .sheet-grabber-hitarea, .modal-grabber, .modal-header, .sub-modal-toolbar');
+    if (!grabber) return;
+
+    // Ignore interactive elements inside header
+    if (target.closest('button, input, textarea, select, a, .sub-modal-text-btn, .modal-close-btn, #shared-modal-cancel, #shared-modal-save')) {
+      return;
+    }
+
+    const sheet = grabber.closest('.modal-sheet, .sub-modal-sheet');
+    if (!sheet) return;
+
+    activeSheet = sheet;
+    startY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
+    startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    startHeight = sheet.getBoundingClientRect().height;
+    viewportH = window.innerHeight;
+    isLarge = sheet.classList.contains('sheet-detent-large');
+    isDragging = true;
+
+    sheet.classList.add('is-dragging');
+  };
+
+  const onMove = (e) => {
+    if (!isDragging || !activeSheet) return;
+
+    const currentY = e.clientY ?? e.touches?.[0]?.clientY ?? startY;
+    const deltaY = currentY - startY;
+
+    const minH = 0.50 * viewportH;
+    const maxH = 0.94 * viewportH;
+    const mediumH = 0.68 * viewportH;
+    const targetHeight = startHeight - deltaY;
+
+    if (deltaY < 0 || (targetHeight >= minH && targetHeight <= maxH)) {
+      const clampedHeight = Math.min(maxH, Math.max(minH, targetHeight));
+      activeSheet.style.height = `${clampedHeight}px`;
+      activeSheet.style.maxHeight = `${clampedHeight}px`;
+      activeSheet.style.transform = 'translateY(0)';
+    } else if (deltaY > 0) {
+      const overDragY = Math.max(0, deltaY - Math.max(0, startHeight - mediumH));
+      activeSheet.style.transform = `translateY(${Math.max(0, overDragY)}px)`;
+    }
+  };
+
+  const onEnd = (e) => {
+    if (!isDragging || !activeSheet) return;
+
+    const currentY = e.clientY ?? e.changedTouches?.[0]?.clientY ?? startY;
+    const deltaY = currentY - startY;
+    const nowTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const deltaTime = Math.max(1, nowTime - startTime);
+    const velocity = deltaY / deltaTime; // px/ms
+
+    const sheet = activeSheet;
+    isDragging = false;
+    activeSheet = null;
+
+    sheet.classList.remove('is-dragging');
+    sheet.style.height = '';
+    sheet.style.maxHeight = '';
+    sheet.style.transform = '';
+
+    // Snap & Dismiss Resolution
+    const shouldDismiss = 
+      (!isLarge && deltaY > 110) ||
+      (isLarge && deltaY > 240) ||
+      (velocity > 0.65 && deltaY > 40);
+
+    if (shouldDismiss) {
+      sheet.style.transform = 'translateY(100%)';
+      setTimeout(() => {
+        sheet.style.transform = '';
+        dismissModalSheet(sheet);
+      }, 180);
+      return;
+    }
+
+    // Expand to Large
+    if (deltaY < -45 || (startHeight - deltaY) > 0.78 * viewportH) {
+      sheet.classList.add('sheet-detent-large');
+      return;
+    }
+
+    // Shrink from Large to Medium
+    if (isLarge && deltaY > 50 && deltaY <= 240) {
+      sheet.classList.remove('sheet-detent-large');
+      return;
+    }
+
+    // Default to retaining Medium if not large
+    if (!isLarge) {
+      sheet.classList.remove('sheet-detent-large');
+    }
+  };
+
+  function dismissModalSheet(sheet) {
+    if (sheet.closest('#unifiedIconPickerOverlay')) {
+      if (typeof closeUnifiedIconPicker === 'function') closeUnifiedIconPicker();
+      return;
+    }
+    if (sheet.closest('#subModalOverlay')) {
+      if (typeof closeSubModal === 'function') closeSubModal();
+      return;
+    }
+    const sharedRoot = sheet.closest('#shared-modal-root');
+    if (sharedRoot) {
+      const cancelBtn = document.getElementById('shared-modal-cancel');
+      if (cancelBtn) {
+        cancelBtn.click();
+      } else {
+        closeModal();
+      }
+      return;
+    }
+    const closeBtn = sheet.querySelector('.modal-close-btn, #btn-close-modal, .btn-close-modal');
+    if (closeBtn) {
+      closeBtn.click();
+      return;
+    }
+    const backdrop = sheet.closest('.modal-backdrop');
+    if (backdrop) {
+      backdrop.classList.remove('open');
+      document.body.style.overflow = '';
+      return;
+    }
+    closeModal();
+  }
+
+  // Pointer events (with touch fallbacks)
+  document.addEventListener('pointerdown', onStart, { passive: true });
+  document.addEventListener('pointermove', onMove, { passive: true });
+  document.addEventListener('pointerup', onEnd, { passive: true });
+  document.addEventListener('pointercancel', onEnd, { passive: true });
+
+  document.addEventListener('touchstart', onStart, { passive: true });
+  document.addEventListener('touchmove', onMove, { passive: true });
+  document.addEventListener('touchend', onEnd, { passive: true });
+  document.addEventListener('touchcancel', onEnd, { passive: true });
 }
 
 /**
@@ -5600,6 +5767,13 @@ function closeAllModals() {
   if (typeof modalStack !== 'undefined') modalStack.length = 0;
   document.querySelectorAll('.modal-backdrop').forEach(m => {
     m.classList.remove('open');
+    const sheet = m.querySelector('.modal-sheet, .sub-modal-sheet');
+    if (sheet) {
+      sheet.classList.remove('sheet-detent-large');
+      sheet.style.height = '';
+      sheet.style.maxHeight = '';
+      sheet.style.transform = '';
+    }
   });
   document.body.style.overflow = '';
 }
@@ -5935,12 +6109,21 @@ function setupWaiverRequestsListener() {
 
 function mergeAndRenderNotifications() {
   const personal = state.personalNotifications || [];
+  const userSubs = userNotifications || [];
   const bAll = state.broadcastNotificationsAll || [];
   const bBadge = state.broadcastNotificationsBadge || [];
 
   const combinedMap = new Map();
 
   personal.forEach(n => {
+    combinedMap.set(n.id, {
+      ...n,
+      isBroadcast: false,
+      read: Boolean(n.read)
+    });
+  });
+
+  userSubs.forEach(n => {
     combinedMap.set(n.id, {
       ...n,
       isBroadcast: false,
@@ -5969,7 +6152,57 @@ function mergeAndRenderNotifications() {
 }
 
 
+/* ==========================================================================
+   RELEASE v2.2.0: REAL-TIME iOS BANNER NOTIFICATION TOAST
+   ========================================================================== */
+export function showNotificationToast(title, body) {
+  const toastEl = document.getElementById('live-notification-toast');
+  if (!toastEl) return;
+
+  const titleEl = document.getElementById('live-toast-title');
+  const bodyEl = document.getElementById('live-toast-body');
+
+  if (titleEl) titleEl.textContent = title || 'Notification';
+  if (bodyEl) bodyEl.textContent = body || '';
+
+  toastEl.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    toastEl.classList.add('visible');
+  });
+
+  if (toastEl._dismissTimer) clearTimeout(toastEl._dismissTimer);
+
+  function dismiss() {
+    clearTimeout(toastEl._dismissTimer);
+    toastEl.classList.remove('visible');
+    setTimeout(() => {
+      toastEl.classList.add('hidden');
+    }, 350);
+  }
+
+  toastEl._dismissTimer = setTimeout(dismiss, 5000);
+
+  toastEl.onclick = (e) => {
+    if (e.target.closest('#btn-close-live-toast')) {
+      e.stopPropagation();
+      dismiss();
+      return;
+    }
+    dismiss();
+    window.location.hash = '#notifications';
+  };
+
+  const closeBtn = document.getElementById('btn-close-live-toast');
+  if (closeBtn) {
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismiss();
+    };
+  }
+}
+
 export function showLiveNotificationToast({ title, message, icon = 'bell', onClick = null } = {}) {
+  showNotificationToast(title, message);
   const toastEl = document.getElementById('live-notification-toast');
   if (!toastEl) return;
 
@@ -6024,6 +6257,7 @@ export function showLiveNotificationToast({ title, message, icon = 'bell', onCli
 let isPersonalInitialLoad = true;
 let isBroadcastAllInitialLoad = true;
 let isBroadcastBadgeInitialLoad = true;
+let isUserNotificationsInitialLoad = true;
 
 function setupNotificationsListener() {
   if (!db) return;
@@ -6031,6 +6265,12 @@ function setupNotificationsListener() {
     listeners.clear('notifications_personal');
     listeners.clear('notifications_broadcast_all');
     listeners.clear('notifications_broadcast_badge');
+    listeners.clear('notifications_user_subcollection');
+    if (unsubscribeUserNotifications) {
+      try { unsubscribeUserNotifications(); } catch (e) {}
+      unsubscribeUserNotifications = null;
+    }
+    userNotifications = [];
     state.notifications = [];
     state.personalNotifications = [];
     state.broadcastNotificationsAll = [];
@@ -6038,9 +6278,43 @@ function setupNotificationsListener() {
     isPersonalInitialLoad = true;
     isBroadcastAllInitialLoad = true;
     isBroadcastBadgeInitialLoad = true;
+    isUserNotificationsInitialLoad = true;
     renderNotifications();
     updateNotificationBadges();
     return;
+  }
+
+  // 0. Dedicated Real-Time Listener on users/{uid}/notifications
+  try {
+    listeners.clear('notifications_user_subcollection');
+    if (unsubscribeUserNotifications) {
+      try { unsubscribeUserNotifications(); } catch (e) {}
+      unsubscribeUserNotifications = null;
+    }
+    isUserNotificationsInitialLoad = true;
+    const qUserNotifs = query(
+      collection(db, 'users', state.user.uid, 'notifications'),
+      orderBy('timestamp', 'desc'),
+      limit(50)
+    );
+    unsubscribeUserNotifications = onSnapshot(qUserNotifs, (snapshot) => {
+      if (!isUserNotificationsInitialLoad) {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            if (data.read === false || data.read === undefined) {
+              showNotificationToast(data.title || 'Notification', data.body || data.message || '');
+            }
+          }
+        });
+      }
+      isUserNotificationsInitialLoad = false;
+      userNotifications = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
+      mergeAndRenderNotifications();
+    }, (err) => console.warn('User subcollection notifications listener warning:', err));
+    listeners.add('notifications_user_subcollection', unsubscribeUserNotifications);
+  } catch (err) {
+    console.warn('User subcollection notifications listener error:', err);
   }
 
   // 1. Personal Notifications
@@ -8496,6 +8770,21 @@ function getSquircleColorClass(type) {
   return 'notification-squircle-blue';
 }
 
+function formatNotificationContent(bodyText) {
+  if (!bodyText) return '';
+  const marker = '💬 Admin Note:';
+  const idx = bodyText.indexOf(marker);
+  if (idx !== -1) {
+    const mainText = bodyText.substring(0, idx).trim();
+    const noteText = bodyText.substring(idx).trim();
+    return `
+      <div class="text-neutral-300 text-xs mt-1" style="white-space: pre-line;">${esc(mainText)}</div>
+      <div class="notification-admin-note mt-1.5">${esc(noteText)}</div>
+    `;
+  }
+  return `<p class="text-neutral-300 text-xs mt-1" style="white-space: pre-line;">${esc(bodyText)}</p>`;
+}
+
 function renderNotifications() {
   const container = document.getElementById('notifications-container');
   if (!container) return;
@@ -8537,7 +8826,7 @@ function renderNotifications() {
               </div>
               <span class="text-[10px] text-neutral-400 flex-shrink-0 font-mono">${timeFormatted}</span>
             </div>
-            <p class="text-neutral-300 text-xs line-clamp-2 mt-1">${esc(n.body || n.message || '')}</p>
+            ${formatNotificationContent(n.body || n.message || '')}
           </div>
         </div>
       </div>
@@ -12605,7 +12894,7 @@ function renderAdminWaivers() {
         <div>
           <div class="text-[10px] uppercase font-semibold text-neutral-500 mb-1">Explanation</div>
           <div class="p-2.5 rounded-lg bg-black/30 text-neutral-200 leading-relaxed">${esc(w.reason)}</div>
-          ${w.status !== 'pending' && w.adminNote ? `<div class="text-[10px] text-neutral-400 mt-1.5">Saved note: ${esc(w.adminNote)}</div>` : ''}
+          ${w.adminNote ? `<div class="notification-admin-note mt-2">💬 Admin Note: "${esc(w.adminNote)}"</div>` : ''}
         </div>
 
         ${w.status === 'pending' ? `
@@ -12710,17 +12999,35 @@ function renderAdminWaivers() {
       }
 
       // In-app notification for the member
-      const notifBody = newStatus === 'approved'
-        ? `Your attendance excuse request for ${waiver.sessionTitle} on ${targetDate} was approved.`
-        : `Your attendance excuse status for ${waiver.sessionTitle} on ${targetDate} was updated to ${newStatus.charAt(0).toUpperCase() + newStatus.slice(1)}.`;
+      const statusLabel = newStatus === 'approved' ? 'Approved ✅' : (newStatus === 'rejected' ? 'Rejected ❌' : 'Moved to Pending');
+      const serviceName = waiver.serviceName || waiver.sessionTitle || 'Service';
+      const baseBody = `Your attendance excuse for ${serviceName} on ${targetDate} was ${statusLabel}.`;
+      const fullBody = adminNote ? `${baseBody}\n💬 Admin Note: "${adminNote}"` : baseBody;
 
       createNotification(batch, {
         uid: waiver.uid,
-        title: 'Attendance Excuse Update',
-        body: notifBody,
+        title: `Excuse Request ${newStatus === 'approved' ? 'Approved' : 'Rejected'}`,
+        body: fullBody,
         type: 'attendance',
         targetAction: { route: 'attendance' }
       });
+
+      try {
+        await addDoc(collection(db, 'users', waiver.uid, 'notifications'), {
+          type: 'waiver_decision',
+          waiverId: waiver.id,
+          status: newStatus,
+          adminNote: adminNote,
+          title: `Excuse Request ${newStatus === 'approved' ? 'Approved' : 'Rejected'}`,
+          body: fullBody,
+          read: false,
+          timestamp: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          createdAtMs: Date.now()
+        });
+      } catch (err) {
+        console.warn('Error writing to users/{uid}/notifications:', err);
+      }
 
       logAdminAction(batch, {
         action: `waiver_${newStatus}`,
@@ -12775,6 +13082,15 @@ function renderAdminWaivers() {
     inp.ontouchstart = stopProp;
     inp.onfocus = stopProp;
   });
+}
+
+export async function handleWaiverDecision(waiverId, newStatus) {
+  const cardEl = document.querySelector(`[data-waiver-id="${waiverId}"]`);
+  if (!cardEl) return;
+  const btn = cardEl.querySelector(`.btn-${newStatus}-waiver`);
+  if (btn) {
+    btn.click();
+  }
 }
 
 function openAdminEditSubmissionModal(submission) {
@@ -14917,383 +15233,355 @@ function renderAdminBroadcasts() {
   });
 }
 
+export function renderBroadcastModal(broadcast = null) {
+  return openAdminBroadcastModal(broadcast);
+}
+
 function openAdminBroadcastModal(broadcast = null) {
   state.editingBroadcastId = broadcast ? broadcast.id : null;
-  const now = serverNow();
-  const defaultStart = broadcast ? broadcast.startDateTime : now;
-  const defaultEnd = broadcast ? broadcast.endDateTime : (now + 7 * 24 * 3600 * 1000);
+  const now = typeof serverNow === "function" ? serverNow() : Date.now();
 
-  let selectedIcon = broadcast?.icon || 'megaphone';
-  let targetType = broadcast?.targetType === 'badge' ? 'badge' : 'all';
+  function parseEpoch(v, fallback) {
+    if (!v) return fallback;
+    if (typeof v.toMillis === "function") return v.toMillis();
+    if (typeof v === "number") return v;
+    if (typeof v.seconds === "number") return v.seconds * 1000;
+    if (typeof v === "string") {
+      const p = new Date(v).getTime();
+      return isNaN(p) ? fallback : p;
+    }
+    if (v instanceof Date) return v.getTime();
+    return fallback;
+  }
+
+  const startMs = parseEpoch(broadcast?.startDateTime, now);
+  const endMs = parseEpoch(broadcast?.endDateTime, now + 7 * 24 * 3600 * 1000);
+
+  function toDateInputStr(ms) {
+    const d = new Date(ms);
+    const pad = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  function toTimeInputStr(ms) {
+    const d = new Date(ms);
+    const pad = n => String(n).padStart(2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  let selectedIcon = broadcast?.icon || "megaphone";
+  let targetType = broadcast?.targetType === "badge" ? "badge" : "all";
   let selectedBadgeIds = Array.isArray(broadcast?.badgeIds) ? [...broadcast.badgeIds] : [];
-  let durationSeconds = typeof broadcast?.durationSeconds === 'number' && broadcast.durationSeconds >= 3 && broadcast.durationSeconds <= 30
+  let durationSeconds = typeof broadcast?.durationSeconds === "number" && broadcast.durationSeconds >= 3 && broadcast.durationSeconds <= 30
     ? broadcast.durationSeconds
-    : (broadcast?.durationSeconds || 5);
-  let broadcastStartMs = defaultStart;
-  let broadcastEndMs = defaultEnd;
+    : 5;
 
-  const modalBody = document.createElement('div');
-  modalBody.className = 'space-y-4 text-xs';
+  const modalBody = document.createElement("div");
+  modalBody.className = "space-y-3.5 text-xs";
 
   function renderForm() {
     modalBody.innerHTML = `
-      <!-- Section 1: Icon & Identity -->
-      <div class="ios-inset-group">
-        <div class="ios-inset-header">ANNOUNCEMENT IDENTITY</div>
-        <div class="p-3.5 space-y-3.5">
-          <!-- Icon Picker Row -->
-          <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/5 border border-white/10">
-            <div class="flex items-center gap-3 min-w-0">
-              <div id="broadcast-icon-preview" class="w-10 h-10 rounded-xl bg-[#0A84FF]/20 border border-[#0A84FF]/30 flex items-center justify-center text-[#0A84FF] flex-shrink-0">
-                ${getIconSvg(selectedIcon, 'w-5 h-5')}
-              </div>
-              <div class="min-w-0">
-                <div class="font-semibold text-white text-xs truncate">Broadcast Icon</div>
-                <div class="text-[11px] text-neutral-400 capitalize truncate">${esc(selectedIcon)}</div>
-              </div>
+      <!-- Card 1: Announcement Identity -->
+      <div class="ios-card space-y-3">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider">ANNOUNCEMENT IDENTITY</div>
+        
+        <!-- Broadcast Icon Row -->
+        <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/5 border border-white/10">
+          <div class="flex items-center gap-3 min-w-0">
+            <div id="broadcastIconPreview" class="w-10 h-10 rounded-xl bg-[#0A84FF]/20 border border-[#0A84FF]/30 flex items-center justify-center text-[#0A84FF] shrink-0">
+              ${getIconSvg(selectedIcon, "w-5 h-5")}
             </div>
-            <button type="button" id="btn-change-broadcast-icon" class="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition text-xs flex-shrink-0">
-              Change Icon
-            </button>
+            <div class="min-w-0">
+              <div class="font-semibold text-white text-xs truncate">Broadcast Icon</div>
+              <div id="broadcastIconName" class="text-[11px] text-neutral-400 capitalize truncate">${esc(selectedIcon)}</div>
+            </div>
           </div>
+          <button type="button" id="btnChangeBroadcastIcon" class="text-xs font-semibold text-[#0A84FF] hover:opacity-80 transition shrink-0">
+            Change ›
+          </button>
+        </div>
 
-          <!-- Title -->
-          <div>
-            <label class="block text-neutral-300 font-semibold mb-1">Title *</label>
-            <input id="input-broadcast-title" type="text" maxlength="120" class="ios-input text-white text-sm" value="${esc(broadcast?.title || '')}" placeholder="e.g. Media Team General Meeting" required />
+        <!-- Title -->
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Title *</label>
+          <input type="text" id="broadcastTitle" class="ios-input" placeholder="Announcement title..." maxlength="120" value="${esc(broadcast?.title || "")}" required />
+        </div>
+
+        <!-- Description -->
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Description (Optional)</label>
+          <textarea id="broadcastDesc" class="ios-input" rows="3" placeholder="Details or instructions...">${esc(broadcast?.description || "")}</textarea>
+        </div>
+      </div>
+
+      <!-- Card 2: Audience & Rotation -->
+      <div class="ios-card space-y-3">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider">AUDIENCE &amp; ROTATION</div>
+        
+        <!-- Target Audience -->
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1.5">Target Audience</label>
+          <div class="ios-segmented-control mb-2.5" id="broadcastAudienceControl">
+            <button type="button" class="btn-seg-audience ${targetType === "all" ? "active" : ""}" data-type="all">All Team</button>
+            <button type="button" class="btn-seg-audience ${targetType === "badge" ? "active" : ""}" data-type="badge">Specific Badges</button>
           </div>
+          <div id="broadcastBadgesContainer" class="${targetType === "badge" ? "" : "hidden"} space-y-2 p-2.5 rounded-xl bg-white/5 border border-white/10">
+            <div class="text-[11px] text-neutral-400">Select target badges:</div>
+            <div id="broadcastBadgePills" class="flex flex-wrap gap-1.5"></div>
+          </div>
+        </div>
 
-          <!-- Description -->
-          <div>
-            <label class="block text-neutral-300 font-semibold mb-1">Description (Optional)</label>
-            <textarea id="input-broadcast-desc" rows="3" class="ios-input text-white text-xs" placeholder="Full announcement notes or details shown when tapped...">${esc(broadcast?.description || '')}</textarea>
+        <!-- Carousel Rotation Duration (NO STEPPERS!) -->
+        <div class="pt-2 border-t border-white/5 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-neutral-200">Carousel Rotation Duration</span>
+            <span class="text-[11px] text-neutral-400">3-30 seconds</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="flex items-center gap-1.5 flex-1" id="broadcastDurationPresets">
+              ${["3s", "5s", "8s", "10s", "15s"].map(p => {
+                const s = parseInt(p, 10);
+                return `<button type="button" class="duration-pill ${durationSeconds === s ? "active" : ""}" data-sec="${s}">${p}</button>`;
+              }).join("")}
+            </div>
+            <div class="w-20 shrink-0">
+              <input type="number" id="broadcastDurationInput" class="ios-input text-center text-xs font-bold" min="3" max="30" value="${durationSeconds}" />
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Section 2: Audience & Rotation Duration -->
-      <div class="ios-inset-group">
-        <div class="ios-inset-header">AUDIENCE &amp; ROTATION</div>
-        <div class="p-3.5 space-y-3.5">
-          <!-- Audience Selector -->
-          <div>
-            <label class="block text-neutral-300 font-semibold mb-1">Target Audience</label>
-            <div id="broadcast-audience-seg-wrap"></div>
-            <p class="text-[10px] text-neutral-400 mt-1">Select whether this broadcast is shown to everyone or specific badges.</p>
+      <!-- Card 3: Schedule / Active Window -->
+      <div class="ios-card space-y-3">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider">SCHEDULE (ACTIVE WINDOW)</div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Starts</label>
+          <div class="grid grid-cols-2 gap-2">
+            <input type="date" id="broadcastStartDate" class="ios-input" value="${toDateInputStr(startMs)}" />
+            <input type="time" id="broadcastStartTime" class="ios-input" value="${toTimeInputStr(startMs)}" />
           </div>
-
-          <!-- Badge Selector (shown if Badges chosen) -->
-          <div id="broadcast-badges-section" class="${targetType === 'badge' ? '' : 'hidden'} space-y-2 p-2.5 rounded-xl bg-white/5 border border-white/10">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold text-white">Target Badges *</span>
-              <button type="button" id="btn-select-broadcast-badges" class="text-[#0A84FF] text-xs font-semibold hover:underline">
-                + Select Badges
-              </button>
-            </div>
-            <div id="broadcast-badges-chips" class="flex flex-wrap gap-1.5 min-h-6 items-center">
-              <!-- Rendered dynamically -->
-            </div>
-          </div>
-
-          <!-- Rotation Duration Stepper -->
-          <div class="flex items-center justify-between gap-3 pt-1">
-            <div class="min-w-0 flex-1">
-              <span class="block text-neutral-200 font-semibold text-xs">Carousel Rotation Duration</span>
-              <span class="block text-[10px] text-neutral-400">Display duration before rotating to next banner (3-30s)</span>
-            </div>
-            <div id="broadcast-stepper-wrap" class="flex-shrink-0"></div>
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Ends</label>
+          <div class="grid grid-cols-2 gap-2">
+            <input type="date" id="broadcastEndDate" class="ios-input" value="${toDateInputStr(endMs)}" />
+            <input type="time" id="broadcastEndTime" class="ios-input" value="${toTimeInputStr(endMs)}" />
           </div>
         </div>
       </div>
 
-      <!-- Section 3: Schedule -->
-      <div class="ios-inset-group">
-        <div class="ios-inset-header">SCHEDULE (ACTIVE WINDOW)</div>
-        <div class="p-3.5 space-y-3">
-          <div id="field-broadcast-start"></div>
-          <div id="field-broadcast-end"></div>
-        </div>
-      </div>
-
-      <!-- Section 4: Custom Footer -->
-      <div class="ios-inset-group">
-        <div class="ios-inset-header">FOOTER NOTE (OPTIONAL)</div>
-        <div class="p-3.5 space-y-1.5">
-          <label class="block text-neutral-300 font-semibold mb-1">Custom Footer (max 80 chars)</label>
-          <input id="input-broadcast-footer" type="text" maxlength="80" class="ios-input text-white text-xs" value="${esc(broadcast?.customFooter || '')}" placeholder="e.g. Bring your laptop and badges" />
-          <p class="text-[10px] text-neutral-400">Displayed at the bottom of the member detail card. Leave empty to omit the footer entirely.</p>
-        </div>
+      <!-- Card 4: Footer Note -->
+      <div class="ios-card space-y-2">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider">FOOTER NOTE (OPTIONAL)</div>
+        <input type="text" id="broadcastFooter" class="ios-input text-white text-xs" maxlength="80" placeholder="e.g. Bring your laptop and ID badge" value="${esc(broadcast?.customFooter || "")}" />
+        <p class="text-[10px] text-neutral-400">Displayed at the bottom of the member detail card. Leave empty to omit the footer.</p>
       </div>
     `;
 
-    wireComponents();
+    wireForm();
   }
 
-  function wireComponents() {
+  function wireForm() {
     // 1. Icon Change Button
-    const changeIconBtn = modalBody.querySelector('#btn-change-broadcast-icon');
-    if (changeIconBtn) {
-      changeIconBtn.onclick = () => {
-        openUnifiedIconPicker(selectedIcon, (newKey) => {
-          selectedIcon = newKey;
-          const previewEl = modalBody.querySelector('#broadcast-icon-preview');
-          if (previewEl) previewEl.innerHTML = getIconSvg(selectedIcon, 'w-5 h-5');
-          const nameEl = previewEl?.parentElement?.querySelector('.capitalize');
+    const changeBtn = modalBody.querySelector("#btnChangeBroadcastIcon");
+    if (changeBtn) {
+      changeBtn.onclick = () => {
+        openUnifiedIconPicker(selectedIcon, (newIcon) => {
+          selectedIcon = newIcon;
+          const preview = modalBody.querySelector("#broadcastIconPreview");
+          const nameEl = modalBody.querySelector("#broadcastIconName");
+          if (preview) preview.innerHTML = getIconSvg(selectedIcon, "w-5 h-5");
           if (nameEl) nameEl.textContent = selectedIcon;
         });
       };
     }
 
-    // 2. Audience Segmented
-    const audWrap = modalBody.querySelector('#broadcast-audience-seg-wrap');
-    if (audWrap) {
-      audWrap.innerHTML = '';
-      audWrap.appendChild(renderSegmented({
-        id: 'broadcast-audience-seg',
-        options: [
-          { value: 'all', label: 'All Team' },
-          { value: 'badge', label: 'Badges' }
-        ],
-        value: targetType,
-        onChange: (val) => {
-          targetType = val;
-          const badgeSec = modalBody.querySelector('#broadcast-badges-section');
-          if (badgeSec) {
-            if (val === 'badge') {
-              badgeSec.classList.remove('hidden');
-              if (selectedBadgeIds.length === 0) {
-                openBadgeMultiPickerModal();
-              }
-            } else {
-              badgeSec.classList.add('hidden');
-            }
+    // 2. Audience Segmented Buttons
+    const segButtons = modalBody.querySelectorAll(".btn-seg-audience");
+    const badgesSection = modalBody.querySelector("#broadcastBadgesContainer");
+    segButtons.forEach(btn => {
+      btn.onclick = () => {
+        targetType = btn.dataset.type;
+        segButtons.forEach(b => b.classList.toggle("active", b === btn));
+        if (badgesSection) {
+          if (targetType === "badge") {
+            badgesSection.classList.remove("hidden");
+          } else {
+            badgesSection.classList.add("hidden");
           }
         }
-      }));
-    }
-
-    // 3. Badge chips and Selector button
-    renderBadgeChips();
-    const selectBadgesBtn = modalBody.querySelector('#btn-select-broadcast-badges');
-    if (selectBadgesBtn) {
-      selectBadgesBtn.onclick = () => openBadgeMultiPickerModal();
-    }
-
-    // 4. Stepper for Duration
-    const stepperWrap = modalBody.querySelector('#broadcast-stepper-wrap');
-    if (stepperWrap) {
-      stepperWrap.innerHTML = '';
-      stepperWrap.appendChild(renderStepper({
-        id: 'broadcast-stepper',
-        value: durationSeconds,
-        min: 3,
-        max: 30,
-        step: 1,
-        unit: 's',
-        onChange: (v) => {
-          durationSeconds = v;
-        }
-      }));
-    }
-
-    // 5. DateTime fields
-    const startBox = modalBody.querySelector('#field-broadcast-start');
-    if (startBox) {
-      startBox.replaceWith(renderDateTimeField({
-        label: 'Start Date & Time',
-        valueMs: broadcastStartMs,
-        mode: 'datetime',
-        onChange: (ms) => { broadcastStartMs = ms; }
-      }));
-    }
-    const endBox = modalBody.querySelector('#field-broadcast-end');
-    if (endBox) {
-      endBox.replaceWith(renderDateTimeField({
-        label: 'End Date & Time',
-        valueMs: broadcastEndMs,
-        mode: 'datetime',
-        onChange: (ms) => { broadcastEndMs = ms; }
-      }));
-    }
-  }
-
-  function renderBadgeChips() {
-    const chipsContainer = modalBody.querySelector('#broadcast-badges-chips');
-    if (!chipsContainer) return;
-    if (selectedBadgeIds.length === 0) {
-      chipsContainer.innerHTML = '<span class="text-neutral-500 italic text-[11px]">No badges selected yet.</span>';
-      return;
-    }
-    const allBadges = getAllAvailableBadges();
-    chipsContainer.innerHTML = selectedBadgeIds.map(bId => {
-      const bObj = allBadges.find(b => b.id === bId) || { id: bId, label: bId, color: '#3A3A3C' };
-      return `
-        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${bObj.color || '#3A3A3C'}40">
-          <span class="w-2 h-2 rounded-full" style="background-color: ${bObj.color || '#3A3A3C'}"></span>
-          <span>${esc(bObj.label)}</span>
-          <button type="button" class="btn-remove-broadcast-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(bObj.id)}" aria-label="Remove badge">&times;</button>
-        </span>
-      `;
-    }).join('');
-
-    chipsContainer.querySelectorAll('.btn-remove-broadcast-badge').forEach(btn => {
-      btn.onclick = () => {
-        const idToRemove = btn.dataset.badgeId;
-        selectedBadgeIds = selectedBadgeIds.filter(id => id !== idToRemove);
-        renderBadgeChips();
       };
     });
+
+    renderBadgePills();
+
+    // 3. Rotation Duration Presets & Input
+    const presetBtns = modalBody.querySelectorAll("#broadcastDurationPresets .duration-pill");
+    const durationInput = modalBody.querySelector("#broadcastDurationInput");
+
+    presetBtns.forEach(btn => {
+      btn.onclick = () => {
+        const sec = parseInt(btn.dataset.sec, 10);
+        durationSeconds = sec;
+        if (durationInput) durationInput.value = sec;
+        presetBtns.forEach(b => b.classList.toggle("active", b === btn));
+      };
+    });
+
+    if (durationInput) {
+      durationInput.oninput = (e) => {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val)) {
+          durationSeconds = val;
+          presetBtns.forEach(b => {
+            b.classList.toggle("active", parseInt(b.dataset.sec, 10) === val);
+          });
+        }
+      };
+    }
   }
 
-  function openBadgeMultiPickerModal() {
-    const allBadges = getAllAvailableBadges();
-    const tempSelected = new Set(selectedBadgeIds);
-
-    const bodyEl = document.createElement('div');
-    bodyEl.className = 'space-y-3';
-
-    function renderPickerRows() {
-      bodyEl.innerHTML = `
-        <div class="space-y-1.5 max-h-72 overflow-y-auto">
-          ${allBadges.map(b => {
-            const isSelected = tempSelected.has(b.id);
-            return `
-              <button type="button" class="btn-toggle-badge-row w-full p-2.5 rounded-xl flex items-center justify-between text-left transition ${isSelected ? 'bg-[#0A84FF]/20 border border-[#0A84FF]/40 text-white' : 'bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-300'}" data-badge-id="${esc(b.id)}">
-                <div class="flex items-center gap-2.5 min-w-0">
-                  <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${b.color || '#0A84FF'}"></span>
-                  <span class="font-semibold text-xs truncate">${esc(b.label)}</span>
-                </div>
-                ${isSelected ? `
-                  <svg class="w-4 h-4 text-[#0A84FF] flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
-                  </svg>
-                ` : ''}
-              </button>
-            `;
-          }).join('')}
-        </div>
-      `;
-
-      bodyEl.querySelectorAll('.btn-toggle-badge-row').forEach(btn => {
-        btn.onclick = () => {
-          const id = btn.dataset.badgeId;
-          if (tempSelected.has(id)) {
-            tempSelected.delete(id);
-          } else {
-            tempSelected.add(id);
-          }
-          renderPickerRows();
-        };
-      });
+  function renderBadgePills() {
+    const container = modalBody.querySelector("#broadcastBadgePills");
+    if (!container) return;
+    const allBadges = typeof getAllAvailableBadges === "function" ? getAllAvailableBadges() : (state.badges || []);
+    if (allBadges.length === 0) {
+      container.innerHTML = '<span class="text-neutral-500 italic text-[11px]">No badges available</span>';
+      return;
     }
+    container.innerHTML = allBadges.map(b => {
+      const isSelected = selectedBadgeIds.includes(b.id);
+      return `
+        <button type="button" class="btn-toggle-badge-pill px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${isSelected ? "bg-[#0A84FF]/25 border border-[#0A84FF] text-white shadow-sm" : "bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10"}" data-badge-id="${esc(b.id)}">
+          <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${b.color || "#0A84FF"}"></span>
+          <span>${esc(b.label || b.name || b.id)}</span>
+          ${isSelected ? '<span class="text-[#0A84FF] text-xs font-bold">✓</span>' : ""}
+        </button>
+      `;
+    }).join("");
 
-    renderPickerRows();
-
-    openModal({
-      title: 'Select Target Badges',
-      body: bodyEl,
-      saveLabel: 'Done',
-      onSave: async () => {
-        selectedBadgeIds = Array.from(tempSelected);
-        renderBadgeChips();
-        return true;
-      }
+    container.querySelectorAll(".btn-toggle-badge-pill").forEach(btn => {
+      btn.onclick = () => {
+        const bId = btn.dataset.badgeId;
+        if (selectedBadgeIds.includes(bId)) {
+          selectedBadgeIds = selectedBadgeIds.filter(id => id !== bId);
+        } else {
+          selectedBadgeIds.push(bId);
+        }
+        renderBadgePills();
+      };
     });
   }
 
   renderForm();
 
   openModal({
-    title: broadcast ? 'Edit Broadcast' : 'New Broadcast',
+    title: broadcast ? "Edit Broadcast" : "New Broadcast",
     body: modalBody,
-    saveLabel: broadcast ? 'Save Changes' : 'Publish Broadcast',
+    saveLabel: broadcast ? "Save Changes" : "Publish Broadcast",
     onClose: () => {
       state.editingBroadcastId = null;
     },
     onSave: async () => {
-      const titleInput = modalBody.querySelector('#input-broadcast-title');
-      const descInput = modalBody.querySelector('#input-broadcast-desc');
-      const footerInput = modalBody.querySelector('#input-broadcast-footer');
-      const saveBtn = document.getElementById('shared-modal-save');
+      const titleInput = modalBody.querySelector("#broadcastTitle");
+      const descInput = modalBody.querySelector("#broadcastDesc");
+      const footerInput = modalBody.querySelector("#broadcastFooter");
+      const startDateInput = modalBody.querySelector("#broadcastStartDate");
+      const startTimeInput = modalBody.querySelector("#broadcastStartTime");
+      const endDateInput = modalBody.querySelector("#broadcastEndDate");
+      const endTimeInput = modalBody.querySelector("#broadcastEndTime");
+      const durationInput = modalBody.querySelector("#broadcastDurationInput");
+      const saveBtn = document.getElementById("shared-modal-save");
 
-      const title = titleInput?.value.trim() || '';
-      const desc = descInput?.value.trim() || '';
-      const customFooter = footerInput?.value.trim() || '';
+      const title = titleInput?.value.trim() || "";
+      const desc = descInput?.value.trim() || "";
+      const customFooter = footerInput?.value.trim() || "";
 
       if (!title) {
-        toast('Broadcast title is required', 'error');
+        toast("Broadcast title is required", "error");
         return false;
       }
       if (title.length > 120) {
-        toast('Title cannot exceed 120 characters', 'error');
+        toast("Title cannot exceed 120 characters", "error");
         return false;
       }
       if (customFooter.length > 80) {
-        toast('Custom footer cannot exceed 80 characters', 'error');
+        toast("Custom footer cannot exceed 80 characters", "error");
         return false;
       }
-      if (targetType === 'badge' && selectedBadgeIds.length === 0) {
-        toast('Please select at least one badge for the target audience', 'error');
+      if (targetType === "badge" && selectedBadgeIds.length === 0) {
+        toast("Please select at least one badge for the target audience", "error");
         return false;
       }
-      if (isNaN(durationSeconds) || durationSeconds < 3 || durationSeconds > 30) {
-        toast('Rotation duration must be between 3 and 30 seconds', 'error');
+
+      const durVal = parseInt(durationInput?.value || durationSeconds, 10);
+      if (isNaN(durVal) || durVal < 3 || durVal > 30) {
+        toast("Rotation duration must be between 3 and 30 seconds", "error");
         return false;
       }
-      if (isNaN(broadcastStartMs) || isNaN(broadcastEndMs)) {
-        toast('Invalid date/time provided', 'error');
+
+      const sDate = startDateInput?.value || "";
+      const sTime = startTimeInput?.value || "00:00";
+      const eDate = endDateInput?.value || "";
+      const eTime = endTimeInput?.value || "23:59";
+
+      const sMs = new Date(`${sDate}T${sTime}`).getTime();
+      const eMs = new Date(`${eDate}T${eTime}`).getTime();
+
+      if (isNaN(sMs) || isNaN(eMs)) {
+        toast("Invalid date or time provided", "error");
         return false;
       }
-      if (broadcastEndMs <= broadcastStartMs) {
-        toast('End date/time must be strictly after start date/time', 'error');
+      if (eMs <= sMs) {
+        toast("End date/time must be strictly after start date/time", "error");
         return false;
       }
 
       if (saveBtn) {
         saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving...';
+        saveBtn.textContent = "Saving...";
       }
 
       try {
         const payload = {
           title,
-          description: desc || '',
+          description: desc || "",
           icon: selectedIcon,
           targetType,
-          badgeIds: targetType === 'badge' ? selectedBadgeIds : [],
-          durationSeconds,
-          startDateTime: Timestamp.fromMillis(broadcastStartMs),
-          endDateTime: Timestamp.fromMillis(broadcastEndMs),
+          badgeIds: targetType === "badge" ? selectedBadgeIds : [],
+          durationSeconds: durVal,
+          startDateTime: Timestamp.fromMillis(sMs),
+          endDateTime: Timestamp.fromMillis(eMs),
           customFooter,
           updatedAt: serverTimestamp()
         };
 
         if (state.editingBroadcastId) {
           const bId = state.editingBroadcastId;
-          await updateDoc(doc(db, 'broadcasts', bId), payload);
+          await updateDoc(doc(db, "broadcasts", bId), payload);
 
           const batch = writeBatch(db);
           logAdminAction(batch, {
-            action: 'update_broadcast',
+            action: "update_broadcast",
             details: { id: bId, title }
           });
           await batch.commit();
 
-          toast('Broadcast updated successfully', 'success');
+          toast("Broadcast updated successfully", "success");
         } else {
           payload.archived = false;
           payload.createdAt = serverTimestamp();
-          const docRef = await addDoc(collection(db, 'broadcasts'), payload);
+          const docRef = await addDoc(collection(db, "broadcasts"), payload);
 
           // Write matching notifications_broadcast doc(s)
-          if (targetType === 'badge') {
+          if (targetType === "badge") {
             for (const bId of selectedBadgeIds) {
-              await addDoc(collection(db, 'notifications_broadcast'), {
+              await addDoc(collection(db, "notifications_broadcast"), {
                 title,
                 message: desc || title,
                 body: desc || title,
-                type: 'broadcast',
-                targetType: 'badge',
+                type: "broadcast",
+                targetType: "badge",
                 badgeId: bId,
                 broadcastId: docRef.id,
                 icon: selectedIcon,
@@ -15303,12 +15591,12 @@ function openAdminBroadcastModal(broadcast = null) {
               });
             }
           } else {
-            await addDoc(collection(db, 'notifications_broadcast'), {
+            await addDoc(collection(db, "notifications_broadcast"), {
               title,
               message: desc || title,
               body: desc || title,
-              type: 'broadcast',
-              targetType: 'all',
+              type: "broadcast",
+              targetType: "all",
               broadcastId: docRef.id,
               icon: selectedIcon,
               archived: false,
@@ -15319,30 +15607,29 @@ function openAdminBroadcastModal(broadcast = null) {
 
           const batch = writeBatch(db);
           logAdminAction(batch, {
-            action: 'create_broadcast',
+            action: "create_broadcast",
             details: { id: docRef.id, title }
           });
           await batch.commit();
 
-          toast('Broadcast published & notified to team!', 'success');
+          toast("Broadcast published & notified to team!", "success");
         }
 
         state.editingBroadcastId = null;
         closeAllModals();
         return true;
       } catch (err) {
-        console.error('Error saving broadcast:', err);
-        toast('Failed to save broadcast: ' + err.message, 'error');
+        console.error("Error saving broadcast:", err);
+        toast("Failed to save broadcast: " + err.message, "error");
         if (saveBtn) {
           saveBtn.disabled = false;
-          saveBtn.textContent = broadcast ? 'Save Changes' : 'Publish Broadcast';
+          saveBtn.textContent = broadcast ? "Save Changes" : "Publish Broadcast";
         }
         return false;
       }
     }
   });
 }
-
 async function handleDeleteBroadcast(broadcast) {
   const confirm = await confirmSheet({
     title: 'Delete Broadcast',
@@ -15859,6 +16146,12 @@ function attachEventHandlers() {
   // Waiver Buttons Wiring
   const btnOpenWaiver = document.getElementById('btn-open-waiver-modal');
   if (btnOpenWaiver) btnOpenWaiver.onclick = () => openRequestWaiverModal();
+  // Side Menu Refresh Button Wiring
+  const sideMenuRefreshBtn = document.getElementById('sideMenuRefreshBtn');
+  if (sideMenuRefreshBtn) {
+    sideMenuRefreshBtn.onclick = () => handleManualDataRefresh();
+  }
+
   const drawerBtnWaiver = document.getElementById('drawer-btn-waiver');
   if (drawerBtnWaiver) drawerBtnWaiver.onclick = () => {
     closeDrawer();
@@ -16295,11 +16588,146 @@ if ('serviceWorker' in navigator) {
   }, 5000);
 }
 
+/* ==========================================================================
+   RELEASE v2.2.0: MANUAL DATA REFRESH & PUBLIC LEADERBOARD SYNC
+   ========================================================================== */
+export async function fetchPublicLeaderboard() {
+  if (!db) return;
+  try {
+    const snap = await getDocs(query(collection(db, 'users'), where('status', '==', 'approved'), limit(250)));
+    state.members = snap.docs.map(d => normalizeUser({ uid: d.id, ...d.data() }));
+    renderLeaderboard();
+  } catch (err) {
+    console.warn('fetchPublicLeaderboard error:', err);
+  }
+}
+
+export async function handleManualDataRefresh() {
+  const btn = document.getElementById('sideMenuRefreshBtn');
+  if (btn && btn.dataset.syncing === 'true') return;
+
+  const iconWrap = btn?.querySelector('.side-menu-refresh-icon');
+  const labelEl = btn?.querySelector('.refresh-btn-label');
+  const originalLabel = labelEl ? labelEl.textContent : 'Refresh / Sync Data';
+
+  if (btn) {
+    btn.dataset.syncing = 'true';
+    if (iconWrap) iconWrap.classList.add('spin-anim');
+    if (labelEl) labelEl.textContent = 'Syncing...';
+  }
+
+  try {
+    const syncOps = [];
+
+    // 1. Public Member Roster & Leaderboard
+    syncOps.push(fetchPublicLeaderboard());
+
+    // 2. Current User Profile, Points, Quotas & Activity Rings
+    if (state.user?.uid) {
+      syncOps.push(
+        getDoc(doc(db, 'users', state.user.uid)).then(snap => {
+          if (snap.exists()) {
+            state.user = { ...state.user, ...snap.data() };
+            updateHeroStats();
+            updateHeroStats(); renderProfileSubmissions(); renderProfileAttendance(); renderProfileTransactions();
+          }
+        }).catch(e => console.warn('User profile sync:', e))
+      );
+    }
+
+    // 3. Active Tasks & User Submissions
+    syncOps.push(
+      getDocs(query(collection(db, 'tasks'), limit(200))).then(snap => {
+        state.tasks = snap.docs.map(d => normalizeTask({ id: d.id, ...d.data() }));
+        renderTasks();
+        renderAdminTasks();
+      }).catch(e => console.warn('Tasks sync:', e))
+    );
+    if (state.user?.uid) {
+      syncOps.push(
+        getDocs(query(collection(db, 'submissions'), where('uid', '==', state.user.uid), limit(200))).then(snap => {
+          state.mySubmissions = snap.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
+          if (!state.user?.isAdmin) state.submissions = state.mySubmissions;
+          renderTasks();
+          renderProfileSubmissions();
+        }).catch(e => console.warn('Submissions sync:', e))
+      );
+    }
+
+    // 4. Live Attendance Sessions & Member Check-in Status
+    syncOps.push(
+      getDocs(query(collection(db, 'attendance_sessions'), limit(50))).then(snap => {
+        state.attendanceSessions = snap.docs.map(d => normalizeSession({ id: d.id, ...d.data() }));
+        renderAttendanceView();
+        renderAdminSessions();
+      }).catch(e => console.warn('Sessions sync:', e))
+    );
+    if (state.user?.uid) {
+      syncOps.push(
+        getDocs(query(collection(db, 'attendance_logs'), where('uid', '==', state.user.uid), limit(100))).then(snap => {
+          state.myAttendanceLogs = snap.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+          renderAttendanceView();
+        }).catch(e => console.warn('Attendance logs sync:', e))
+      );
+    }
+
+    // 5. Active Broadcast Banners
+    syncOps.push(
+      getDocs(query(collection(db, 'broadcasts'), limit(50))).then(snap => {
+        state.broadcasts = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(b => b.archived !== true);
+        renderHomeBroadcastBanner();
+        renderAdminBroadcasts();
+      }).catch(e => console.warn('Broadcasts sync:', e))
+    );
+
+    // 6. User Notifications & Unread Counts (plus Admin Waivers if Admin)
+    if (state.user?.uid) {
+      syncOps.push(
+        getDocs(query(collection(db, 'notifications'), where('uid', '==', state.user.uid), limit(100))).then(snap => {
+          state.personalNotifications = snap.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
+          mergeAndRenderNotifications();
+        }).catch(e => console.warn('Notifications sync:', e))
+      );
+      syncOps.push(
+        getDocs(query(collection(db, 'users', state.user.uid, 'notifications'), limit(50))).then(snap => {
+          userNotifications = snap.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
+          mergeAndRenderNotifications();
+        }).catch(e => console.warn('User notifications sync:', e))
+      );
+    }
+    if (state.user?.isAdmin) {
+      syncOps.push(
+        getDocs(query(collection(db, 'waiver_requests'), limit(100))).then(snap => {
+          state.waiverRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          renderAdminWaivers();
+        }).catch(e => console.warn('Admin waivers sync:', e))
+      );
+    }
+
+    await Promise.allSettled(syncOps);
+
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration().then(reg => reg?.update()).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('Manual refresh error:', err);
+  } finally {
+    if (btn) {
+      btn.dataset.syncing = 'false';
+      if (iconWrap) iconWrap.classList.remove('spin-anim');
+      if (labelEl) labelEl.textContent = originalLabel;
+    }
+    closeDrawer();
+    toast('All data synced & up to date', 'success');
+  }
+}
+
 // BOOTSTRAP WORKSPACE
 window.addEventListener('DOMContentLoaded', () => {
   initErrorBoundary();
   safeInit('offlineBanner', initOfflineBanner);
   initNavigation();
+  safeInit('sheetGestures', initSheetDragGestures);
   safeInit('adminPushConsole', initAdminPushConsole);
   attachEventHandlers();
   // Cold-start cache: immediately attach listeners so local cache renders instantly before auth/network completes
@@ -16360,4 +16788,12 @@ if (typeof window !== 'undefined') {
   window.updateLiveAppLogo = updateLiveAppLogo;
   window.handleChangeAppLogo = handleChangeAppLogo;
   window.openBadgePickerSheet = openBadgePickerSheet;
+  window.initSheetDragGestures = initSheetDragGestures;
+  window.showNotificationToast = showNotificationToast;
+  window.handleManualDataRefresh = handleManualDataRefresh;
+  window.fetchPublicLeaderboard = fetchPublicLeaderboard;
+  window.handleWaiverDecision = handleWaiverDecision;
+  window.renderBroadcastModal = renderBroadcastModal;
+  window.unsubscribeUserNotifications = unsubscribeUserNotifications;
+  window.userNotifications = userNotifications;
 }

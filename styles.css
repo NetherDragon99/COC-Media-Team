@@ -694,26 +694,55 @@ body.selection-mode-active .bulk-select-card.selected {
   pointer-events: auto;
 }
 
+.modal-sheet, .sub-modal-sheet {
+  display: flex;
+  flex-direction: column;
+  height: 68vh;
+  max-height: 68vh;
+  transition: height 0.32s cubic-bezier(0.32, 0.72, 0, 1), max-height 0.32s cubic-bezier(0.32, 0.72, 0, 1), transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: height, transform;
+  touch-action: pan-y;
+}
+
 .modal-sheet {
   width: 100%;
   max-width: 480px;
-  max-height: 90dvh;
   background: var(--bg-grouped-secondary);
   border-top-left-radius: 20px;
   border-top-right-radius: 20px;
   border: 0.5px solid var(--border-glass);
   box-shadow: var(--shadow-elevated);
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
   transform: translateY(100%);
-  transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.modal-sheet.sheet-detent-large, .sub-modal-sheet.sheet-detent-large {
+  height: 94vh !important;
+  max-height: 94vh !important;
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+}
+
+.modal-sheet.is-dragging, .sub-modal-sheet.is-dragging {
+  transition: none !important;
+  user-select: none !important;
+}
+
+.sheet-grabber-hitarea {
+  padding: 10px 0 6px;
+  cursor: grab;
+  touch-action: none;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 @media (min-width: 640px) {
   .modal-sheet {
     border-radius: 20px;
     transform: scale(0.96);
+    height: 72vh;
     max-height: 85vh;
   }
 }
@@ -728,13 +757,14 @@ body.selection-mode-active .bulk-select-card.selected {
   }
 }
 
-.modal-grabber {
+.modal-grabber, .sheet-grabber {
   width: 36px;
   height: 5px;
   border-radius: 2.5px;
   background: rgba(255, 255, 255, 0.3);
   margin: 8px auto 12px;
   flex-shrink: 0;
+  cursor: grab;
 }
 
 .modal-header {
@@ -743,6 +773,7 @@ body.selection-mode-active .bulk-select-card.selected {
   align-items: center;
   justify-content: space-between;
   border-bottom: 0.5px solid var(--separator);
+  cursor: grab;
 }
 
 .modal-title {
@@ -754,11 +785,11 @@ body.selection-mode-active .bulk-select-card.selected {
 
 .modal-body {
   padding: 16px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  max-height: calc(90dvh - 120px);
 }
-
 /* Action Sheet (confirmSheet) */
 .action-sheet-wrapper {
   width: 100%;
@@ -1923,7 +1954,8 @@ textarea:focus-visible {
   background: var(--bg-grouped-secondary);
   border-top-left-radius: 20px;
   border-top-right-radius: 20px;
-  max-height: 80vh;
+  height: 68vh;
+  max-height: 68vh;
   display: flex;
   flex-direction: column;
   padding-bottom: env(safe-area-inset-bottom, 16px);
@@ -2168,9 +2200,9 @@ select:focus,
 }
 .icon-grid-scrollable {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  max-height: 48vh;
   padding-right: 2px;
 }
 .icon-picker-grid {
@@ -2224,4 +2256,107 @@ select:focus,
 .icon-picker-item.active span {
   color: #FFFFFF;
   font-weight: 600;
+}
+
+/* ==========================================================================
+   RELEASE v2.2.0: iOS BANNER TOAST, ADMIN NOTE CALLOUT, SPINNER & BROADCAST HIG
+   ========================================================================== */
+@keyframes iosSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin-anim {
+  animation: iosSpin 0.75s linear infinite;
+}
+
+.notification-admin-note {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(10, 132, 255, 0.1);
+  border-left: 3px solid #0A84FF;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #EBEBF5;
+  white-space: pre-line;
+}
+
+.ios-banner-toast {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: 16px;
+  right: 16px;
+  max-width: 440px;
+  margin: 0 auto;
+  z-index: 99999;
+  background: rgba(28, 28, 30, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  padding: 12px 14px;
+  transform: translateY(-130%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.3s ease;
+}
+
+.ios-banner-toast.visible {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.duration-pill {
+  flex: 1;
+  padding: 8px 0;
+  text-align: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.duration-pill:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.duration-pill.active {
+  background: #0A84FF !important;
+  border-color: #0A84FF !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 2px 8px rgba(10, 132, 255, 0.35) !important;
+}
+
+.ios-segmented-control {
+  background: rgba(118, 118, 128, 0.24);
+  border-radius: 9px;
+  padding: 2px;
+  display: flex;
+  gap: 2px;
+}
+
+.ios-segmented-control button {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: rgba(235, 235, 245, 0.6);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.ios-segmented-control button.active {
+  background: rgba(255, 255, 255, 0.18);
+  color: #FFFFFF;
+  font-weight: 600;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
