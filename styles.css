@@ -2005,10 +2005,10 @@ button:active,
   width: 32px;
   height: 32px;
   border-radius: 9999px;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
   cursor: pointer;
   border: none;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, outline 0.15s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
   position: relative;
   flex-shrink: 0;
   -webkit-tap-highlight-color: transparent;
@@ -2018,9 +2018,9 @@ button:active,
 }
 .color-swatch.active,
 .color-swatch.selected {
-  outline: 2px solid #FFFFFF;
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #1C1C1E, 0 0 0 4px #FFFFFF !important;
   transform: scale(1.08);
+  outline: none !important;
 }
 
 
@@ -2105,4 +2105,123 @@ select:focus,
   font-weight: 700;
   line-height: 16px;
   text-align: center;
+}
+
+
+/* ==========================================================================
+   v2.1.10 Additions: .you-badge, Unified Icon Picker & Modal Utilities
+   ========================================================================== */
+.you-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 9999px;
+  background: #0A84FF;
+  color: #FFFFFF;
+  margin-left: 6px;
+}
+
+.sub-modal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 10px;
+}
+.sub-modal-text-btn {
+  background: transparent !important;
+  border: none !important;
+  color: #0A84FF !important;
+  font-size: 15px !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+  padding: 4px 6px !important;
+  box-shadow: none !important;
+}
+.sub-modal-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #FFFFFF;
+  margin: 0;
+  text-align: center;
+}
+.sub-modal-search-row {
+  margin-bottom: 8px;
+}
+.ios-pill-scroll {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+}
+.ios-pill-scroll::-webkit-scrollbar {
+  display: none;
+}
+.icon-grid-scrollable {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  max-height: 48vh;
+  padding-right: 2px;
+}
+.icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding-bottom: 16px;
+}
+@media (min-width: 480px) {
+  .icon-picker-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+.icon-picker-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-height: 68px;
+}
+.icon-picker-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.icon-picker-item.selected,
+.icon-picker-item.active {
+  background: rgba(10, 132, 255, 0.25) !important;
+  border-color: #0A84FF !important;
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.4) !important;
+  color: #0A84FF !important;
+}
+.icon-picker-item span {
+  font-size: 10px;
+  line-height: 1.2;
+  color: rgba(235, 235, 245, 0.7);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.icon-picker-item.selected span,
+.icon-picker-item.active span {
+  color: #FFFFFF;
+  font-weight: 600;
 }

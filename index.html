@@ -7,7 +7,7 @@
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
     <!-- PWA Configuration (GitHub Pages Relative Paths) -->
-    <link rel="manifest" href="./manifest.json?v=2.1.9" />
+    <link rel="manifest" href="./manifest.json?v=2.1.10" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -80,7 +80,7 @@
     </script>
 
     <!-- Apple iOS 17/18 Design System Stylesheet -->
-    <link rel="stylesheet" href="./styles.css?v=2.1.9" />
+    <link rel="stylesheet" href="./styles.css?v=2.1.10" />
 
     <!-- Confetti & Lucide CDN for Interactions & Icons -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
@@ -1295,6 +1295,28 @@
     <!-- REUSABLE SHARED MODAL & ACTION SHEET ROOTS -->
 
     <!-- SUB-MODAL OVERLAY (FOR NESTED PICKERS LIKE ICON PICKER) -->
+    <!-- UNIFIED 100-ICON PICKER SUB-MODAL OVERLAY -->
+    <div id="unifiedIconPickerOverlay" class="sub-modal-overlay is-hidden" role="dialog" aria-modal="true">
+      <div class="sub-modal-sheet">
+        <div class="modal-grabber"></div>
+        <div class="sub-modal-toolbar">
+          <button type="button" id="closeIconPickerBtn" class="sub-modal-text-btn">Cancel</button>
+          <h3 class="sub-modal-title">Choose Icon</h3>
+          <span style="width: 44px;"></span>
+        </div>
+        <div class="sub-modal-search-row">
+          <input type="search" id="iconPickerSearch" placeholder="Search 100 icons..." />
+        </div>
+        <div class="ios-pill-scroll" id="iconCategoryPills">
+          <!-- Pills: All, Media, Tasks, Rewards, People, System -->
+        </div>
+        <div class="icon-grid-scrollable">
+          <div class="icon-picker-grid" id="iconPickerGrid"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LEGACY SUB-MODAL OVERLAY (FOR NESTED PICKERS LIKE ITEM PICKER) -->
     <div id="subModalOverlay" class="sub-modal-overlay is-hidden" role="dialog" aria-modal="true">
       <div class="sub-modal-sheet modal-sheet">
         <div class="modal-grabber"></div>
@@ -1665,7 +1687,7 @@
     </script>
 
     <!-- CORE VANILLA JS APPLICATION MODULE -->
-    <script type="module" src="./app.js?v=2.1.9"></script>
+    <script type="module" src="./app.js?v=2.1.10"></script>
 
   </body>
 </html>

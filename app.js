@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.9)
+ * COC Media Team - Production Web App (v2.1.10)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.9';
+export const APP_VERSION = '2.1.10';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -419,6 +419,7 @@ export let editingTaskId = null;
 export let editingCategoryId = null;
 export let editingSessionId = null;
 export let editingBroadcastId = null;
+export const waiverDraftNotes = new Map();
 
 /* ==========================================================================
    CATEGORY ICONS & COLOR SWATCHES
@@ -433,11 +434,11 @@ export const IOS_SYSTEM_COLORS = [
   { name: 'Purple', hex: '#BF5AF2' },
   { name: 'Teal', hex: '#64D2FF' },
   { name: 'Indigo', hex: '#5E5CE6' },
-  { name: 'Brown', hex: '#A2845E' },
-  { name: 'Mint', hex: '#00C7BE' },
+  { name: 'Brown', hex: '#AC8E68' },
+  { name: 'Mint', hex: '#63E6E2' },
   { name: 'Cyan', hex: '#32ADE6' },
   { name: 'Gray', hex: '#8E8E93' },
-  { name: 'Dark Gray', hex: '#636366' }
+  { name: 'Dark Gray', hex: '#48484A' }
 ];
 
 export const CATEGORY_COLORS = IOS_SYSTEM_COLORS.map(c => c.hex);
@@ -5467,18 +5468,29 @@ async function setupAuthLifecycle() {
 
       // Start authenticated Firestore listeners
       initFirestoreListeners();
-    } else {
+        } else {
       state.user = null;
       state.userPrivate = null;
       state.isAdminUnlocked = false;
-      listeners.clear(); // Unsubscribe all listeners on sign-out
+
+      // Clear only private & personal auth-dependent listeners
+      listeners.clear('users_private');
+      listeners.clear('notifications_personal');
+      listeners.clear('my_attendance_logs');
+      listeners.clear('waiver_requests');
+      listeners.clear('submissions');
+      listeners.clear('admin_attendance_logs');
+
       usersPrivate.clear();
-      usersMap.clear();
-      state.members = [];
       state.notifications = [];
       state.personalNotifications = [];
-      state.broadcastNotificationsAll = [];
       state.broadcastNotificationsBadge = [];
+
+      // Ensure public member listener remains active for Guest/Visitor leaderboard
+      if (!listeners.has('users')) {
+        setupMembersListeners();
+      }
+      renderLeaderboard();
     }
 
     updateProfileUI();
@@ -8059,278 +8071,269 @@ function updateNotificationBadges() {
    TASK 8: 50+ VECTOR SVG ICON LIBRARY (ZERO EMOJIS)
    ========================================================================== */
 
-// EXACTLY 50 CURATED SVG ICONS (10 Media, 10 Tasks, 10 Rewards, 10 People, 10 System)
-export const ICON_CATALOG = new Map([
-  // 1. Media & Production (10 icons)
-  ['camera', {
-    category: 'media',
-    label: 'Camera',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>'
-  }],
-  ['video', {
-    category: 'media',
-    label: 'Video',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>'
-  }],
-  ['mic', {
-    category: 'media',
-    label: 'Microphone',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>'
-  }],
-  ['waveform', {
-    category: 'media',
-    label: 'Waveform',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 10v4"></path><path d="M6 7v10"></path><path d="M10 4v16"></path><path d="M14 7v10"></path><path d="M18 10v4"></path><path d="M22 12v0"></path></svg>'
-  }],
-  ['tv', {
-    category: 'media',
-    label: 'Monitor / TV',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>'
-  }],
-  ['antenna', {
-    category: 'media',
-    label: 'Live Broadcast',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.48"></path><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.48"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>'
-  }],
-  ['sliders', {
-    category: 'media',
-    label: 'Audio Mixer',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>'
-  }],
-  ['play', {
-    category: 'media',
-    label: 'Play Media',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>'
-  }],
-  ['headphones', {
-    category: 'media',
-    label: 'Headphones',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>'
-  }],
-  ['film', {
-    category: 'media',
-    label: 'Film Roll',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>'
-  }],
+/* ==========================================================================
+   UNIFIED 100-ICON CATALOG (v2.1.10)
+   5 Categories x 20 Curated SVG Icons
+   Media (20), Tasks (20), Rewards (20), People (20), System (20)
+   ========================================================================== */
+export const UNIFIED_ICON_KEYS = [
+  "mic",
+  "camera",
+  "video",
+  "film",
+  "music",
+  "radio",
+  "play",
+  "podcast",
+  "projector",
+  "sliders",
+  "volume",
+  "headphones",
+  "disc",
+  "aperture",
+  "live",
+  "lens",
+  "monitor",
+  "screen",
+  "broadcast",
+  "airplay",
+  "checkmark",
+  "clipboard",
+  "list",
+  "calendar",
+  "clock",
+  "flag",
+  "target",
+  "bookmark",
+  "pin",
+  "folder",
+  "tag",
+  "archive",
+  "timer",
+  "alarm",
+  "hourglass",
+  "sparkler",
+  "scissors",
+  "paperclip",
+  "tray",
+  "ribbon",
+  "trophy",
+  "star",
+  "medal",
+  "crown",
+  "gem",
+  "flame",
+  "lightning",
+  "heart",
+  "thumbsup",
+  "smile",
+  "rocket",
+  "shield",
+  "award",
+  "bolt",
+  "gift",
+  "sparkle",
+  "sun",
+  "diamond",
+  "compass",
+  "key",
+  "person",
+  "person-2",
+  "person-3",
+  "person-crop-circle",
+  "hand-wave",
+  "hand-raised",
+  "person-badge",
+  "person-text",
+  "person-bubble",
+  "message",
+  "envelope",
+  "phone",
+  "share",
+  "chat",
+  "group",
+  "handshake",
+  "eye",
+  "face-id",
+  "voice",
+  "walking",
+  "gear",
+  "wrench",
+  "sliders-horizontal",
+  "hammer",
+  "key-fill",
+  "lock",
+  "unlock",
+  "bell",
+  "globe",
+  "wifi",
+  "cloud",
+  "bolt-horizontal",
+  "cpu",
+  "terminal",
+  "cube",
+  "layers",
+  "square-grid",
+  "switch",
+  "circle-stack",
+  "sliders-vertical"
+];
 
-  // 2. Tasks & Production Flow (10 icons)
-  ['checklist', {
-    category: 'tasks',
-    label: 'Checklist',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>'
-  }],
-  ['clock', {
-    category: 'tasks',
-    label: 'Clock',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>'
-  }],
-  ['hourglass', {
-    category: 'tasks',
-    label: 'Hourglass',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path></svg>'
-  }],
-  ['target', {
-    category: 'tasks',
-    label: 'Target',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>'
-  }],
-  ['flag', {
-    category: 'tasks',
-    label: 'Milestone Flag',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>'
-  }],
-  ['clipboard', {
-    category: 'tasks',
-    label: 'Clipboard',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>'
-  }],
-  ['inbox', {
-    category: 'tasks',
-    label: 'Submissions Inbox',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>'
-  }],
-  ['upload', {
-    category: 'tasks',
-    label: 'Upload Work',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>'
-  }],
-  ['folder', {
-    category: 'tasks',
-    label: 'Project Folder',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
-  }],
-  ['check-circle', {
-    category: 'tasks',
-    label: 'Completed',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>'
-  }],
+export const ICON_ALIASES = {
+  "checklist": "list",
+  "inbox": "tray",
+  "upload": "cloud",
+  "check-circle": "checkmark",
+  "sparkles": "sparkle",
+  "zap": "lightning",
+  "coins": "diamond",
+  "alert-triangle": "bell",
+  "slash-circle": "archive",
+  "user": "person",
+  "users": "person-2",
+  "badge": "person-badge",
+  "id": "person-badge",
+  "settings": "gear",
+  "database": "circle-stack",
+  "refresh": "bolt-horizontal",
+  "trash": "archive",
+  "link": "globe",
+  "info": "bell",
+  "tv": "monitor",
+  "antenna": "broadcast",
+  "waveform": "music",
+  "clapperboard": "film",
+  "palette": "sparkle",
+  "pen": "clipboard",
+  "wand": "sparkle",
+  "megaphone": "broadcast"
+};
 
-  // 3. Rewards & Achievements (10 icons)
-  ['trophy', {
-    category: 'rewards',
-    label: 'Trophy',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1 .45-1 1v1h12v-1c0-.55-.45-1-1-1h-2c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 4H6v7a6 6 0 0 0 12 0V4z"></path></svg>'
-  }],
-  ['medal', {
-    category: 'rewards',
-    label: 'Medal',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>'
-  }],
-  ['star', {
-    category: 'rewards',
-    label: 'Star',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>'
-  }],
-  ['sparkles', {
-    category: 'rewards',
-    label: 'Sparkles',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 3v3m0 12v3m9-9h-3M6 12H3m14.5-6.5l-2.1 2.1M8.6 15.4l-2.1 2.1m11-2.1l-2.1-2.1M8.6 8.6L6.5 6.5"></path></svg>'
-  }],
-  ['flame', {
-    category: 'rewards',
-    label: 'Streak Fire',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>'
-  }],
-  ['crown', {
-    category: 'rewards',
-    label: 'Crown',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14v2H5v-2z"></path></svg>'
-  }],
-  ['zap', {
-    category: 'rewards',
-    label: 'Lightning / Bonus',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>'
-  }],
-  ['coins', {
-    category: 'rewards',
-    label: 'Points / Coins',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="8" cy="8" r="6"></circle><path d="M18.09 10.37A6 6 0 1 1 10.34 18"></path><path d="M7 6h1v4"></path><path d="M16.7 13.3l.6.6"></path></svg>'
-  }],
-  ['alert-triangle', {
-    category: 'rewards',
-    label: 'Penalty Alert',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
-  }],
-  ['slash-circle', {
-    category: 'rewards',
-    label: 'Deduction / Fine',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>'
-  }],
-
-  // 4. People & Membership (10 icons)
-  ['user', {
-    category: 'people',
-    label: 'Member',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>'
-  }],
-  ['users', {
-    category: 'people',
-    label: 'Team Members',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>'
-  }],
-  ['badge', {
-    category: 'people',
-    label: 'Role Badge',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76z"></path></svg>'
-  }],
-  ['id', {
-    category: 'people',
-    label: 'ID Card',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="18" rx="2"></rect><circle cx="8" cy="10" r="3"></circle><line x1="14" y1="8" x2="18" y2="8"></line><line x1="14" y1="12" x2="18" y2="12"></line><line x1="6" y1="17" x2="18" y2="17"></line></svg>'
-  }],
-  ['handshake', {
-    category: 'people',
-    label: 'Partnership',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M11 17a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-2z"></path><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>'
-  }],
-  ['chat', {
-    category: 'people',
-    label: 'Chat Message',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'
-  }],
-  ['smile', {
-    category: 'people',
-    label: 'Smile / Friendly',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>'
-  }],
-  ['shield', {
-    category: 'people',
-    label: 'Admin Shield',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>'
-  }],
-  ['key', {
-    category: 'people',
-    label: 'Access Key',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l-1.5-1.5L10 7M3 13a7 7 0 1 0 14 0 7 7 0 0 0-14 0z"></path></svg>'
-  }],
-  ['heart', {
-    category: 'people',
-    label: 'Gratitude',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>'
-  }],
-
-  // 5. System & Navigation (10 icons)
-  ['bell', {
-    category: 'system',
-    label: 'Notification Bell',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>'
-  }],
-  ['calendar', {
-    category: 'system',
-    label: 'Calendar / Schedule',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>'
-  }],
-  ['compass', {
-    category: 'system',
-    label: 'Explore / Hub',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>'
-  }],
-  ['settings', {
-    category: 'system',
-    label: 'Settings',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
-  }],
-  ['layers', {
-    category: 'system',
-    label: 'Layers',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>'
-  }],
-  ['database', {
-    category: 'system',
-    label: 'Database',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>'
-  }],
-  ['refresh', {
-    category: 'system',
-    label: 'Sync / Refresh',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>'
-  }],
-  ['trash', {
-    category: 'system',
-    label: 'Trash / Purge',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>'
-  }],
-  ['link', {
-    category: 'system',
-    label: 'External Link',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>'
-  }],
-  ['info', {
-    category: 'system',
-    label: 'Info / Notice',
-    svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
-  }]
+export const UNIFIED_ICONS = new Map([
+  ['mic', { category: 'media', label: 'Microphone', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>' }],
+  ['camera', { category: 'media', label: 'Camera', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>' }],
+  ['video', { category: 'media', label: 'Video Camera', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>' }],
+  ['film', { category: 'media', label: 'Film Roll', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>' }],
+  ['music', { category: 'media', label: 'Music', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>' }],
+  ['radio', { category: 'media', label: 'Radio', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="14" r="4"></circle><path d="M4 10h16v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V10z"></path><line x1="6" y1="6" x2="18" y2="6"></line><line x1="12" y1="2" x2="12" y2="6"></line></svg>' }],
+  ['play', { category: 'media', label: 'Play', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>' }],
+  ['podcast', { category: 'media', label: 'Podcast', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="11" r="1"></circle><path d="M12 1a10 10 0 0 0-7.07 17.07"></path><path d="M12 5a6 6 0 0 0-4.24 10.24"></path><path d="M19.07 18.07A10 10 0 0 0 12 1"></path><path d="M16.24 15.24A6 6 0 0 0 12 5"></path><path d="M12 12v9"></path></svg>' }],
+  ['projector', { category: 'media', label: 'Projector', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="2"></rect><circle cx="9" cy="12.5" r="2.5"></circle><line x1="16" y1="11" x2="18" y2="11"></line><line x1="16" y1="14" x2="18" y2="14"></line><line x1="5" y1="18" x2="4" y2="21"></line><line x1="19" y1="18" x2="20" y2="21"></line></svg>' }],
+  ['sliders', { category: 'media', label: 'Audio Mixer', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>' }],
+  ['volume', { category: 'media', label: 'Volume', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>' }],
+  ['headphones', { category: 'media', label: 'Headphones', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>' }],
+  ['disc', { category: 'media', label: 'Compact Disc', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>' }],
+  ['aperture', { category: 'media', label: 'Aperture', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="14.31" y1="8" x2="20.05" y2="17.94"></line><line x1="9.69" y1="8" x2="21.17" y2="8"></line><line x1="7.38" y1="12" x2="13.12" y2="2.06"></line><line x1="9.69" y1="16" x2="3.95" y2="6.06"></line><line x1="14.31" y1="16" x2="2.83" y2="16"></line><line x1="16.62" y1="12" x2="10.88" y2="21.94"></line></svg>' }],
+  ['live', { category: 'media', label: 'Live', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.48"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.48"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path></svg>' }],
+  ['lens', { category: 'media', label: 'Camera Lens', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="12" r="1"></circle></svg>' }],
+  ['monitor', { category: 'media', label: 'Studio Monitor', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>' }],
+  ['screen', { category: 'media', label: 'Screen Display', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><polyline points="8 21 12 17 16 21"></polyline></svg>' }],
+  ['broadcast', { category: 'media', label: 'Broadcast', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.48"></path><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.48"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>' }],
+  ['airplay', { category: 'media', label: 'AirPlay', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"></path><polygon points="12 15 17 21 7 21 12 15"></polygon></svg>' }],
+  ['checkmark', { category: 'tasks', label: 'Checkmark', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' }],
+  ['clipboard', { category: 'tasks', label: 'Clipboard', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>' }],
+  ['list', { category: 'tasks', label: 'Task List', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>' }],
+  ['calendar', { category: 'tasks', label: 'Calendar', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>' }],
+  ['clock', { category: 'tasks', label: 'Clock', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' }],
+  ['flag', { category: 'tasks', label: 'Milestone Flag', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>' }],
+  ['target', { category: 'tasks', label: 'Target Goal', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>' }],
+  ['bookmark', { category: 'tasks', label: 'Bookmark', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>' }],
+  ['pin', { category: 'tasks', label: 'Pin', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>' }],
+  ['folder', { category: 'tasks', label: 'Folder', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' }],
+  ['tag', { category: 'tasks', label: 'Tag', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>' }],
+  ['archive', { category: 'tasks', label: 'Archive', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>' }],
+  ['timer', { category: 'tasks', label: 'Timer', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="10" y1="2" x2="14" y2="2"></line><line x1="12" y1="14" x2="15" y2="11"></line><circle cx="12" cy="14" r="8"></circle></svg>' }],
+  ['alarm', { category: 'tasks', label: 'Alarm', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2 2"></path><path d="M5 3L2 6"></path><path d="M22 6l-3-3"></path><path d="M6.38 18.7L4 21"></path><path d="M17.64 18.67L20 21"></path></svg>' }],
+  ['hourglass', { category: 'tasks', label: 'Hourglass', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path></svg>' }],
+  ['sparkler', { category: 'tasks', label: 'Sparkler', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="m15 4 5 5"></path><path d="m18 1 5 5"></path><path d="M2 22 17 7"></path><path d="M8 2l.7 2.1L11 5l-2.3.9L8 8l-.7-2.1L5 5l2.3-.9Z"></path></svg>' }],
+  ['scissors', { category: 'tasks', label: 'Scissors', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><line x1="20" y1="4" x2="8.12" y2="15.88"></line><line x1="14.47" y1="14.48" x2="20" y2="20"></line><line x1="8.12" y1="8.12" x2="12" y2="12"></line></svg>' }],
+  ['paperclip', { category: 'tasks', label: 'Paperclip', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>' }],
+  ['tray', { category: 'tasks', label: 'Inbox Tray', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>' }],
+  ['ribbon', { category: 'tasks', label: 'Ribbon', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>' }],
+  ['trophy', { category: 'rewards', label: 'Trophy', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1 .45-1 1v1h12v-1c0-.55-.45-1-1-1h-2c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 4H6v7a6 6 0 0 0 12 0V4z"></path></svg>' }],
+  ['star', { category: 'rewards', label: 'Star', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' }],
+  ['medal', { category: 'rewards', label: 'Medal', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="6"></circle><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"></path></svg>' }],
+  ['crown', { category: 'rewards', label: 'Crown', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14v2H5v-2z"></path></svg>' }],
+  ['gem', { category: 'rewards', label: 'Gem', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 3h12l4 6-10 12L2 9z"></path><path d="M11 3 8 9l4 12 4-12-3-6"></path><path d="M2 9h20"></path></svg>' }],
+  ['flame', { category: 'rewards', label: 'Streak Fire', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>' }],
+  ['lightning', { category: 'rewards', label: 'Lightning', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>' }],
+  ['heart', { category: 'rewards', label: 'Heart', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>' }],
+  ['thumbsup', { category: 'rewards', label: 'Thumbs Up', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>' }],
+  ['smile', { category: 'rewards', label: 'Smile', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>' }],
+  ['rocket', { category: 'rewards', label: 'Rocket', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></svg>' }],
+  ['shield', { category: 'rewards', label: 'Shield', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>' }],
+  ['award', { category: 'rewards', label: 'Award', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>' }],
+  ['bolt', { category: 'rewards', label: 'Energy Bolt', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>' }],
+  ['gift', { category: 'rewards', label: 'Gift', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="20 12 20 22 4 22 4 12"></polyline><rect x="2" y="7" width="20" height="5"></rect><line x1="12" y1="22" x2="12" y2="7"></line><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path></svg>' }],
+  ['sparkle', { category: 'rewards', label: 'Sparkle', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 3v3m0 12v3m9-9h-3M6 12H3m14.5-6.5l-2.1 2.1M8.6 15.4l-2.1 2.1m11-2.1l-2.1-2.1M8.6 8.6L6.5 6.5"></path></svg>' }],
+  ['sun', { category: 'rewards', label: 'Sun', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>' }],
+  ['diamond', { category: 'rewards', label: 'Diamond', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 22 8.5 12 22 2 8.5 12 2"></polygon></svg>' }],
+  ['compass', { category: 'rewards', label: 'Compass', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>' }],
+  ['key', { category: 'rewards', label: 'Key', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l-1.5-1.5L10 7M3 13a7 7 0 1 0 14 0 7 7 0 0 0-14 0z"></path></svg>' }],
+  ['person', { category: 'people', label: 'Member', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>' }],
+  ['person-2', { category: 'people', label: 'Two Members', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>' }],
+  ['person-3', { category: 'people', label: 'Group', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>' }],
+  ['person-crop-circle', { category: 'people', label: 'Profile Circle', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="10" r="3"></circle><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"></path></svg>' }],
+  ['hand-wave', { category: 'people', label: 'Wave', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>' }],
+  ['hand-raised', { category: 'people', label: 'Hand Raised', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0v5"></path><path d="M14 10V4a2 2 0 0 0-4 0v6"></path><path d="M10 10V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>' }],
+  ['person-badge', { category: 'people', label: 'ID Badge', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="12" cy="10" r="2.5"></circle><path d="M8 17a4 4 0 0 1 8 0"></path><line x1="9" y1="2" x2="15" y2="2"></line></svg>' }],
+  ['person-text', { category: 'people', label: 'Member Notes', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><circle cx="12" cy="11" r="2"></circle><path d="M9 16a3 3 0 0 1 6 0"></path></svg>' }],
+  ['person-bubble', { category: 'people', label: 'Testimonial', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>' }],
+  ['message', { category: 'people', label: 'Message', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>' }],
+  ['envelope', { category: 'people', label: 'Mail', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>' }],
+  ['phone', { category: 'people', label: 'Phone', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>' }],
+  ['share', { category: 'people', label: 'Share', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>' }],
+  ['chat', { category: 'people', label: 'Chat Bubble', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>' }],
+  ['group', { category: 'people', label: 'Team Group', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>' }],
+  ['handshake', { category: 'people', label: 'Partnership', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M11 17a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-2z"></path><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>' }],
+  ['eye', { category: 'people', label: 'Audience Eye', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>' }],
+  ['face-id', { category: 'people', label: 'Face ID', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M7 3H5a2 2 0 0 0-2 2v2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M3 17v2a2 2 0 0 0 2 2h2"></path><path d="M9 10h.01"></path><path d="M15 10h.01"></path><path d="M9.5 15a3.5 3.5 0 0 0 5 0"></path></svg>' }],
+  ['voice', { category: 'people', label: 'Voice', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>' }],
+  ['walking', { category: 'people', label: 'Field Crew', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="13" cy="4" r="2"></circle><path d="m14.5 9-3 4-2.5-1.5-3 5"></path><path d="m10 14.5 1.5 5.5 3.5-1"></path><path d="m9 9 2-2 3.5 1 2.5 3"></path></svg>' }],
+  ['gear', { category: 'system', label: 'Settings', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>' }],
+  ['wrench', { category: 'system', label: 'Wrench', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>' }],
+  ['sliders-horizontal', { category: 'system', label: 'Horizontal Sliders', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="21" y1="4" x2="14" y2="4"></line><line x1="10" y1="4" x2="3" y2="4"></line><line x1="21" y1="12" x2="12" y2="12"></line><line x1="8" y1="12" x2="3" y2="12"></line><line x1="21" y1="20" x2="16" y2="20"></line><line x1="12" y1="20" x2="3" y2="20"></line><line x1="14" y1="2" x2="14" y2="6"></line><line x1="8" y1="10" x2="8" y2="14"></line><line x1="16" y1="18" x2="16" y2="22"></line></svg>' }],
+  ['hammer', { category: 'system', label: 'Hammer', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0 0 0 0 0 0 0a2.12 2.12 0 0 1 0-3L12 9"></path><path d="m17.64 4.36 2-2a2 2 0 0 1 2.83 0l1.17 1.17a2 2 0 0 1 0 2.83l-2 2"></path><path d="m14 8 4 4"></path></svg>' }],
+  ['key-fill', { category: 'system', label: 'Master Key', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l-1.5-1.5L10 7M3 13a7 7 0 1 0 14 0 7 7 0 0 0-14 0z"></path></svg>' }],
+  ['lock', { category: 'system', label: 'Lock', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>' }],
+  ['unlock', { category: 'system', label: 'Unlock', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>' }],
+  ['bell', { category: 'system', label: 'Notification', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>' }],
+  ['globe', { category: 'system', label: 'Globe', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>' }],
+  ['wifi', { category: 'system', label: 'WiFi', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>' }],
+  ['cloud', { category: 'system', label: 'Cloud Sync', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>' }],
+  ['bolt-horizontal', { category: 'system', label: 'Fast Sync', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>' }],
+  ['cpu', { category: 'system', label: 'Processor', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>' }],
+  ['terminal', { category: 'system', label: 'Console', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' }],
+  ['cube', { category: 'system', label: 'Cube Component', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>' }],
+  ['layers', { category: 'system', label: 'Layers', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>' }],
+  ['square-grid', { category: 'system', label: 'Grid Dashboard', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>' }],
+  ['switch', { category: 'system', label: 'Toggle Switch', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="1" y="5" width="22" height="14" rx="7" ry="7"></rect><circle cx="8" cy="12" r="3"></circle></svg>' }],
+  ['circle-stack', { category: 'system', label: 'Database', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>' }],
+  ['sliders-vertical', { category: 'system', label: 'Sliders Vertical', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>' }]
 ]);
 
-export const ICON_LIBRARY = Object.fromEntries(ICON_CATALOG);
+// Register legacy aliases for backward compatibility
+for (const [alias, targetKey] of Object.entries(ICON_ALIASES)) {
+  const target = UNIFIED_ICONS.get(targetKey);
+  if (target) {
+    UNIFIED_ICONS.set(alias, target);
+  }
+}
+
+export const ICON_CATALOG = UNIFIED_ICONS;
+export const ICON_LIBRARY = Object.fromEntries(UNIFIED_ICONS);
 
 export function getIconSvg(iconKey, className = 'w-5 h-5') {
-  const item = ICON_CATALOG.get(iconKey) || ICON_LIBRARY[iconKey] || ICON_CATALOG.get('bell') || ICON_LIBRARY.bell;
+  const resolved = ICON_ALIASES[iconKey] || iconKey;
+  const item = UNIFIED_ICONS.get(resolved) || ICON_LIBRARY[resolved] || UNIFIED_ICONS.get('star') || UNIFIED_ICONS.get('bell');
+  if (!item || !item.svg) {
+    return '<svg class="' + className + '" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+  }
   return item.svg.replace('{CLASS}', className);
 }
 
 export function openSubModal({ title = 'Select Icon', body, onClose }) {
-  const overlay = document.getElementById('subModalOverlay');
+  const overlay = document.getElementById('subModalOverlay') || document.getElementById('unifiedIconPickerOverlay');
   const titleEl = document.getElementById('sub-modal-title');
   const bodyEl = document.getElementById('sub-modal-body');
   const cancelBtn = document.getElementById('subModalCancelBtn') || document.getElementById('sub-modal-cancel');
@@ -8358,7 +8361,7 @@ export function openSubModal({ title = 'Select Icon', body, onClose }) {
 }
 
 export function closeSubModal() {
-  const overlay = document.getElementById('subModalOverlay');
+  const overlay = document.getElementById('subModalOverlay') || document.getElementById('unifiedIconPickerOverlay');
   if (overlay) {
     overlay.classList.add('is-hidden');
     const bodyEl = document.getElementById('sub-modal-body');
@@ -8367,17 +8370,29 @@ export function closeSubModal() {
 }
 
 export function openUnifiedIconPicker(param1, onSelectParam) {
-  let selectedKey = 'bell';
+  let selectedKey = 'star';
   let onSelect = null;
   if (typeof param1 === 'object' && param1 !== null) {
-    selectedKey = param1.selectedKey || 'bell';
+    selectedKey = param1.selectedKey || param1.currentIconId || 'star';
     onSelect = param1.onSelect;
   } else if (typeof param1 === 'string') {
     selectedKey = param1;
     onSelect = onSelectParam;
   }
 
+  const overlay = document.getElementById('unifiedIconPickerOverlay') || document.getElementById('subModalOverlay');
+  if (!overlay) return;
+
+  const searchInput = overlay.querySelector('#iconPickerSearch');
+  const pillsContainer = overlay.querySelector('#iconCategoryPills');
+  const gridContainer = overlay.querySelector('#iconPickerGrid') || overlay.querySelector('#sub-modal-body');
+  const closeBtn = overlay.querySelector('#closeIconPickerBtn') || overlay.querySelector('#subModalCancelBtn');
+
+  let activeCategory = 'all';
+  let searchQuery = '';
+
   const categories = [
+    { id: 'all', label: 'All' },
     { id: 'media', label: 'Media' },
     { id: 'tasks', label: 'Tasks' },
     { id: 'rewards', label: 'Rewards' },
@@ -8385,107 +8400,94 @@ export function openUnifiedIconPicker(param1, onSelectParam) {
     { id: 'system', label: 'System' }
   ];
 
-  let activeCategory = 'all';
-  let searchQuery = '';
+  function renderPills() {
+    if (!pillsContainer) return;
+    pillsContainer.innerHTML = categories.map(cat => {
+      const isActive = cat.id === activeCategory;
+      return '<button type="button" class="btn-picker-cat px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ' + (isActive ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/10 text-neutral-400 hover:text-white') + '" data-cat="' + cat.id + '">' + cat.label + '</button>';
+    }).join('');
 
-  const bodyEl = document.createElement('div');
-  bodyEl.className = 'space-y-3';
+    pillsContainer.querySelectorAll('.btn-picker-cat').forEach(b => {
+      b.onclick = () => {
+        activeCategory = b.dataset.cat;
+        renderPills();
+        renderGrid();
+      };
+    });
+  }
 
-  bodyEl.innerHTML = `
-    <div class="space-y-3">
-      <input type="text" id="icon-picker-search" class="ios-input text-xs w-full text-white placeholder-neutral-500" placeholder="Search 50 curated SVG icons..." value="" />
-      <div class="task-filter-bar flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px]">
-        <button type="button" class="btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap bg-[#0A84FF] text-white font-bold" data-cat="all">All</button>
-        ${categories.map(c => `
-          <button type="button" class="btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap bg-white/10 text-neutral-400" data-cat="${c.id}">${c.label}</button>
-        `).join('')}
-      </div>
-      <div id="iconGridContainer" class="icon-picker-grid max-h-[300px] overflow-y-auto pr-1"></div>
-    </div>
-  `;
-
-  function renderGridChunks() {
-    const gridContainer = bodyEl.querySelector('#iconGridContainer');
+  function renderGrid() {
     if (!gridContainer) return;
     gridContainer.innerHTML = '';
 
-    const matchingKeys = Array.from(ICON_CATALOG.keys()).filter(key => {
-      const item = ICON_CATALOG.get(key) || ICON_LIBRARY[key];
+    const q = searchQuery.toLowerCase().trim();
+    const matching = UNIFIED_ICON_KEYS.filter(key => {
+      const item = UNIFIED_ICONS.get(key);
+      if (!item) return false;
       const matchCat = activeCategory === 'all' || item.category === activeCategory;
-      const matchQuery = !searchQuery || key.toLowerCase().includes(searchQuery.toLowerCase()) || item.label.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchCat && matchQuery;
+      const matchQ = !q || key.toLowerCase().includes(q) || (item.label && item.label.toLowerCase().includes(q));
+      return matchCat && matchQ;
     });
 
-    if (matchingKeys.length === 0) {
+    if (matching.length === 0) {
       gridContainer.innerHTML = '<div class="col-span-4 py-8 text-center text-xs text-neutral-400">No matching icons found</div>';
       return;
     }
 
-    const CHUNK_SIZE = 15;
-    let index = 0;
-
-    function appendChunk() {
-      const fragment = document.createDocumentFragment();
-      const end = Math.min(index + CHUNK_SIZE, matchingKeys.length);
-      for (; index < end; index++) {
-        const key = matchingKeys[index];
-        const item = ICON_CATALOG.get(key) || ICON_LIBRARY[key];
-        const isSelected = key === selectedKey;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `icon-picker-item ${isSelected ? 'selected' : ''}`;
-        btn.dataset.iconKey = key;
-        btn.title = item.label;
-        btn.innerHTML = `
-          ${getIconSvg(key, 'w-6 h-6 stroke-current')}
-          <span class="text-[10px] text-neutral-300 truncate w-full text-center">${esc(item.label)}</span>
-        `;
-        btn.onclick = () => {
-          if (typeof onSelect === 'function') onSelect(key);
-          const previewEl = document.getElementById('badgeIconPreview') || document.getElementById('badge-icon-preview');
-          if (previewEl) previewEl.innerHTML = getIconSvg(key, 'w-4 h-4');
-          const nameEl = document.getElementById('badge-icon-name');
-          if (nameEl) nameEl.textContent = key;
-          closeSubModal();
-        };
-        fragment.appendChild(btn);
-      }
-      gridContainer.appendChild(fragment);
-      if (index < matchingKeys.length) {
-        requestAnimationFrame(appendChunk);
-      }
-    }
-    appendChunk();
+    const fragment = document.createDocumentFragment();
+    matching.forEach(key => {
+      const item = UNIFIED_ICONS.get(key);
+      const isSelected = key === selectedKey || ICON_ALIASES[selectedKey] === key;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'icon-picker-item ' + (isSelected ? 'selected' : '');
+      btn.dataset.iconKey = key;
+      btn.title = item.label;
+      btn.innerHTML = getIconSvg(key, 'w-6 h-6 stroke-current') + '<span>' + esc(item.label) + '</span>';
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        selectedKey = key;
+        if (typeof onSelect === 'function') {
+          onSelect(key);
+        }
+        closeUnifiedIconPicker();
+      };
+      fragment.appendChild(btn);
+    });
+    gridContainer.appendChild(fragment);
   }
 
-  const searchInput = bodyEl.querySelector('#icon-picker-search');
   if (searchInput) {
+    searchInput.value = '';
+    searchQuery = '';
     searchInput.oninput = (e) => {
-      searchQuery = e.target.value.trim();
-      renderGridChunks();
+      searchQuery = e.target.value;
+      renderGrid();
     };
   }
 
-  bodyEl.querySelectorAll('.btn-picker-cat').forEach(b => {
-    b.onclick = () => {
-      activeCategory = b.dataset.cat;
-      bodyEl.querySelectorAll('.btn-picker-cat').forEach(btn => {
-        const isActive = btn.dataset.cat === activeCategory;
-        btn.className = `btn-picker-cat px-2.5 py-1 rounded-full whitespace-nowrap ${isActive ? 'bg-[#0A84FF] text-white font-bold' : 'bg-white/10 text-neutral-400'}`;
-      });
-      renderGridChunks();
-    };
-  });
+  const handleClose = () => closeUnifiedIconPicker();
+  if (closeBtn) closeBtn.onclick = handleClose;
 
-  renderGridChunks();
+  overlay.onclick = (e) => {
+    if (e.target === overlay) handleClose();
+  };
 
-  openSubModal({
-    title: 'Select Icon',
-    body: bodyEl
-  });
+  renderPills();
+  renderGrid();
+
+  overlay.classList.remove('is-hidden');
+}
+
+export function closeUnifiedIconPicker() {
+  const overlay = document.getElementById('unifiedIconPickerOverlay') || document.getElementById('subModalOverlay');
+  if (overlay) {
+    overlay.classList.add('is-hidden');
+  }
 }
 
 export const openIconPicker = openUnifiedIconPicker;
+
 
 function getSquircleColorClass(type) {
   if (type === 'reward' || type === 'bonus' || type === 'points' || type === 'attendance_approved') return 'notification-squircle-green';
@@ -8982,7 +8984,7 @@ function openCategoryModal(categoryId = null) {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
 
-  function renderCategoryModalContent() {
+    function renderCategoryModalContent() {
     bodyEl.innerHTML = `
       <div>
         <label class="block text-xs font-semibold text-neutral-200 mb-1">Category Name *</label>
@@ -8991,26 +8993,28 @@ function openCategoryModal(categoryId = null) {
 
       <div>
         <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Color Theme</label>
-        <div class="flex items-center gap-2 overflow-x-auto pb-1" id="cat-color-swatches">
+        <div class="flex flex-wrap items-center gap-2.5" id="cat-color-swatches">
           ${CATEGORY_COLORS.map(c => `
-            <button type="button" class="cat-color-swatch-btn w-7 h-7 rounded-full border-2 transition flex-shrink-0 ${currentColor === c ? 'border-white scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'}" style="background-color: ${c};" data-color="${c}"></button>
+            <button type="button" class="color-swatch cat-color-swatch-btn ${currentColor === c ? 'selected active' : ''}" style="background-color: ${c};" data-color="${c}"></button>
           `).join('')}
-          <div class="relative w-7 h-7 rounded-full overflow-hidden border border-white/20 flex-shrink-0 flex items-center justify-center cursor-pointer" title="Custom Color">
+          <div class="relative w-8 h-8 rounded-full overflow-hidden border border-white/20 flex-shrink-0 flex items-center justify-center cursor-pointer hover:scale-105 transition" title="Custom Color">
             <input id="cat-modal-custom-color" type="color" value="${currentColor}" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
-            <svg class="w-3.5 h-3.5 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 8 12 12 14 14"></polyline></svg>
+            <svg class="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 8 12 12 14 14"></polyline></svg>
           </div>
         </div>
       </div>
 
       <div>
-        <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Choose Icon (${Object.keys(CATEGORY_ICONS).length} Icons)</label>
-        <div class="grid grid-cols-6 gap-2 max-h-48 overflow-y-auto p-1.5 rounded-xl bg-black/20 border border-white/10" id="cat-icon-grid">
-          ${Object.keys(CATEGORY_ICONS).map(iconKey => `
-            <button type="button" class="cat-icon-grid-btn p-2 rounded-xl flex items-center justify-center border transition ${currentIconKey === iconKey ? 'border-[#0A84FF] bg-[#0A84FF]/25 text-[#0A84FF] ring-2 ring-[#0A84FF]/40 scale-105' : 'border-white/5 bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10'}" data-icon-key="${iconKey}" title="${iconKey}">
-              ${getCategorySvg(iconKey, 'w-5 h-5')}
-            </button>
-          `).join('')}
-        </div>
+        <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Category Icon</label>
+        <button type="button" id="btn-cat-icon-picker" class="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-between transition">
+          <div class="flex items-center gap-2.5">
+            <div id="cat-icon-picker-preview" class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background-color: ${currentColor}25; color: ${currentColor};">
+              ${getCategorySvg(currentIconKey, 'w-5 h-5')}
+            </div>
+            <span id="cat-icon-picker-name" class="text-xs text-white capitalize font-medium">${esc(currentIconKey)}</span>
+          </div>
+          <span class="text-[11px] text-[#0A84FF] font-semibold">Change &rarr;</span>
+        </button>
       </div>
 
       <div>
@@ -9037,11 +9041,9 @@ function openCategoryModal(categoryId = null) {
         updatePreviewStyles();
         bodyEl.querySelectorAll('.cat-color-swatch-btn').forEach(b => {
           if (b.dataset.color === currentColor) {
-            b.classList.add('border-white', 'scale-110');
-            b.classList.remove('border-transparent');
+            b.classList.add('selected', 'active');
           } else {
-            b.classList.remove('border-white', 'scale-110');
-            b.classList.add('border-transparent');
+            b.classList.remove('selected', 'active');
           }
         });
       };
@@ -9056,21 +9058,21 @@ function openCategoryModal(categoryId = null) {
       };
     }
 
-    bodyEl.querySelectorAll('.cat-icon-grid-btn').forEach(btn => {
-      btn.onclick = () => {
-        currentIconKey = btn.dataset.iconKey;
-        isDirty = true;
-        bodyEl.querySelectorAll('.cat-icon-grid-btn').forEach(b => {
-          if (b.dataset.iconKey === currentIconKey) {
-            b.className = 'cat-icon-grid-btn p-2 rounded-xl flex items-center justify-center border transition border-[#0A84FF] bg-[#0A84FF]/25 text-[#0A84FF] ring-2 ring-[#0A84FF]/40 scale-105';
-          } else {
-            b.className = 'cat-icon-grid-btn p-2 rounded-xl flex items-center justify-center border transition border-white/5 bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10';
-          }
+    const catIconBtn = bodyEl.querySelector('#btn-cat-icon-picker');
+    if (catIconBtn) {
+      catIconBtn.onclick = () => {
+        openUnifiedIconPicker(currentIconKey, (newKey) => {
+          currentIconKey = newKey;
+          isDirty = true;
+          const previewIcon = bodyEl.querySelector('#cat-icon-picker-preview');
+          if (previewIcon) previewIcon.innerHTML = getCategorySvg(newKey, 'w-5 h-5');
+          const nameEl = bodyEl.querySelector('#cat-icon-picker-name');
+          if (nameEl) nameEl.textContent = newKey;
+          const livePreviewIcon = bodyEl.querySelector('#cat-modal-preview-icon');
+          if (livePreviewIcon) livePreviewIcon.innerHTML = getCategorySvg(newKey, 'w-5 h-5');
         });
-        const previewIcon = bodyEl.querySelector('#cat-modal-preview-icon');
-        if (previewIcon) previewIcon.innerHTML = getCategorySvg(currentIconKey, 'w-5 h-5');
       };
-    });
+    }
 
     function updatePreviewStyles() {
       const previewEl = bodyEl.querySelector('#cat-modal-preview');
@@ -9078,6 +9080,11 @@ function openCategoryModal(categoryId = null) {
         previewEl.style.backgroundColor = `${currentColor}20`;
         previewEl.style.borderColor = `${currentColor}40`;
         previewEl.style.color = currentColor;
+      }
+      const iconWrap = bodyEl.querySelector('#cat-icon-picker-preview');
+      if (iconWrap) {
+        iconWrap.style.backgroundColor = `${currentColor}25`;
+        iconWrap.style.color = currentColor;
       }
     }
   }
@@ -9547,7 +9554,7 @@ function openAdminTaskModal(taskId = null) {
    </div>
           </div>
           <div>
-            <label class="block text-xs font-semibold text-neutral-200 mb-1">On-Time Points</label>
+            <label class="block text-xs font-semibold text-neutral-200 mb-1">Base Task Points</label>
             <input id="adm-task-points" type="number" min="1" placeholder="5" class="w-full glass-input text-xs font-mono" value="${esc(currentPoints)}" />
           </div>
         </div>
@@ -9585,22 +9592,24 @@ function openAdminTaskModal(taskId = null) {
           </div>
         </div>
 
-        <!-- Deadlines & Tiers Container (Hidden if Permanent Task is ON) -->
-        <div id="adm-nonpermanent-container" class="${currentIsPermanent ? 'hidden' : ''} space-y-3.5">
-          <div class="ios-card space-y-3" style="margin-bottom:0">
-            <div class="text-xs font-bold text-white uppercase tracking-wider">Task Deadline</div>
-            <div class="grid grid-cols-2 gap-2">
-              <div>
-                <label class="block text-[11px] text-neutral-300 mb-1">Deadline Date</label>
-                <input id="adm-dl-date" type="date" class="ios-input" value="${deadlineDateStr}" />
-              </div>
-              <div>
-                <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
-                <input id="adm-dl-time" type="time" class="ios-input" value="${deadlineTimeStr}" />
-              </div>
+        <!-- Task Deadline Section (Hidden if Permanent Task is ON) -->
+        <div id="taskDeadlineSection" class="ios-card space-y-3 ${currentIsPermanent ? 'hidden' : ''}" style="margin-bottom:0">
+          <div class="text-xs font-bold text-white uppercase tracking-wider">Task Deadline</div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[11px] text-neutral-300 mb-1">Deadline Date</label>
+              <input id="adm-dl-date" type="date" class="ios-input" value="${deadlineDateStr}" />
             </div>
-            <div id="adm-deadline-words" class="hidden"></div>
+            <div>
+              <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
+              <input id="adm-dl-time" type="time" class="ios-input" value="${deadlineTimeStr}" />
+            </div>
           </div>
+          <div id="adm-deadline-words" class="hidden"></div>
+        </div>
+
+        <!-- Tiers Container (Always visible, regardless of Permanent Task toggle) -->
+        <div class="space-y-3.5">
 
           <!-- Tier 1: Early Bonus Card -->
           <div class="ios-card space-y-3" style="margin-bottom:0">
@@ -9784,8 +9793,8 @@ function openAdminTaskModal(taskId = null) {
         checked: currentIsPermanent,
         onChange: (chk) => {
           currentIsPermanent = chk;
-          const nonperm = bodyEl.querySelector('#adm-nonpermanent-container');
-          if (nonperm) nonperm.classList.toggle('hidden', currentIsPermanent);
+          const dlSection = bodyEl.querySelector('#taskDeadlineSection');
+          if (dlSection) dlSection.classList.toggle('hidden', currentIsPermanent);
         }
       }));
     }
@@ -10082,7 +10091,7 @@ function openAdminTaskModal(taskId = null) {
       const reqRow = document.createElement('div');
       reqRow.className = 'flex items-center';
       reqRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
-      reqRow.innerHTML = '<span class="text-[12px] text-neutral-200 font-medium">Required</span>';
+      reqRow.innerHTML = '<span class="text-[12px] text-neutral-200 font-medium">Required Question</span>';
       reqRow.appendChild(renderSwitch({
         id: `q-req-sw-${q.id}`,
         checked: Boolean(q.isRequired),
@@ -11165,8 +11174,6 @@ export function openBadgeModal(badge = null) {
   let selectedColor = badge ? (badge.color || '#0A84FF') : '#0A84FF';
   let selectedIcon = badge ? (badge.icon || 'star') : 'star';
 
-  const PRESET_COLORS = ['#0A84FF', '#30D158', '#FF9F0A', '#FF453A', '#BF5AF2', '#64D2FF', '#FF375F', '#FFD60A', '#5E5CE6', '#98989D'];
-
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
 
@@ -11195,18 +11202,16 @@ export function openBadgeModal(badge = null) {
               </div>
               <span id="badge-icon-name" class="text-xs text-white capitalize font-medium">${esc(selectedIcon)}</span>
             </div>
-            <span class="text-[11px] text-neutral-400">Change &rarr;</span>
+            <span class="text-[11px] text-[#0A84FF] font-semibold">Change &rarr;</span>
           </button>
         </div>
 
-        <!-- Color Swatches -->
+        <!-- 14 System Color Swatches -->
         <div>
           <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Badge Color</label>
-          <div class="flex flex-wrap gap-2 pt-0.5">
-            ${PRESET_COLORS.map(c => `
-              <button type="button" class="btn-color-swatch w-7 h-7 rounded-full transition transform hover:scale-110 flex items-center justify-center ${selectedColor === c ? 'ring-2 ring-white ring-offset-2 ring-offset-black scale-110' : ''}" style="background-color: ${c};" data-color="${c}">
-                ${selectedColor === c ? '<span class="w-2 h-2 rounded-full bg-white"></span>' : ''}
-              </button>
+          <div class="flex flex-wrap gap-2.5 pt-0.5">
+            ${CATEGORY_COLORS.map(c => `
+              <button type="button" class="color-swatch btn-color-swatch ${selectedColor === c ? 'selected active' : ''}" style="background-color: ${c};" data-color="${c}"></button>
             `).join('')}
           </div>
         </div>
@@ -11230,12 +11235,12 @@ export function openBadgeModal(badge = null) {
     if (iconBtn) {
       iconBtn.onclick = (e) => {
         e.preventDefault();
-        openIconPicker({
-          selectedKey: selectedIcon,
-          onSelect: (newKey) => {
-            selectedIcon = newKey;
-            renderForm();
-          }
+        openUnifiedIconPicker(selectedIcon, (newKey) => {
+          selectedIcon = newKey;
+          const previewEl = bodyEl.querySelector('#badge-icon-preview');
+          if (previewEl) previewEl.innerHTML = getIconSvg(selectedIcon, 'w-4 h-4');
+          const nameEl = bodyEl.querySelector('#badge-icon-name');
+          if (nameEl) nameEl.textContent = selectedIcon;
         });
       };
     }
@@ -11244,7 +11249,18 @@ export function openBadgeModal(badge = null) {
       btn.onclick = (e) => {
         e.preventDefault();
         selectedColor = btn.dataset.color;
-        renderForm();
+        const previewEl = bodyEl.querySelector('#badge-icon-preview');
+        if (previewEl) {
+          previewEl.style.backgroundColor = `${selectedColor}25`;
+          previewEl.style.color = selectedColor;
+        }
+        bodyEl.querySelectorAll('.btn-color-swatch').forEach(b => {
+          if (b.dataset.color === selectedColor) {
+            b.classList.add('selected', 'active');
+          } else {
+            b.classList.remove('selected', 'active');
+          }
+        });
       };
     });
 
@@ -12371,10 +12387,12 @@ export function openRequestWaiverModal() {
       const listContainer = step2Box.querySelector('#excuseOccurrencesList');
       function renderOccurrencesRows() {
         if (!listContainer) return;
+        const q = (dateSearchQuery || '').toLowerCase().trim();
+        const tokens = q.split(/\s+/).filter(Boolean);
         const filtered = futureOccs.filter(occ => {
-          if (!dateSearchQuery) return true;
-          const q = dateSearchQuery.toLowerCase().trim();
-          return (occ.searchTerms || '').includes(q);
+          if (tokens.length === 0) return true;
+          const terms = (occ.searchTerms || '').toLowerCase();
+          return tokens.every(token => terms.includes(token));
         });
 
         if (filtered.length === 0) {
@@ -12515,6 +12533,11 @@ function renderAdminWaivers() {
   const segMount = document.getElementById('admin-waivers-segmented-mount');
   if (!container) return;
 
+  // Prevent re-rendering and tearing down DOM while admin is actively typing in a note field
+  if (document.activeElement && container.contains(document.activeElement)) {
+    return;
+  }
+
   const filter = state.adminWaiverFilter || 'pending';
   const all = state.waiverRequests || [];
   updateWaiversBadge(all.filter(w => w.status === 'pending').length);
@@ -12550,8 +12573,11 @@ function renderAdminWaivers() {
 
   container.innerHTML = waivers.map(w => {
     const prof = getUserProfile(w.uid, w.userName, w.userAvatar);
-    const isPending = w.status === 'pending';
     const statusCls = w.status === 'approved' ? 'waiver-status-approved' : w.status === 'rejected' ? 'waiver-status-rejected' : 'waiver-status-pending';
+    const targetDateMs = Number(w.targetDateMs || w.occurrenceDateMs || (w.occurrenceStart ? parseDateTimeToMs(w.occurrenceStart) : 0));
+    const isFutureSession = targetDateMs > Date.now();
+    const draftNote = waiverDraftNotes.get(w.id) ?? (w.adminNote || '');
+
     return `
       <div class="ios-card space-y-3 text-xs" style="margin-bottom:0" data-waiver-id="${esc(w.id)}">
         <div class="flex items-center justify-between gap-2">
@@ -12579,16 +12605,40 @@ function renderAdminWaivers() {
         <div>
           <div class="text-[10px] uppercase font-semibold text-neutral-500 mb-1">Explanation</div>
           <div class="p-2.5 rounded-lg bg-black/30 text-neutral-200 leading-relaxed">${esc(w.reason)}</div>
-          ${!isPending && w.adminNote ? `<div class="text-[10px] text-neutral-400 mt-1.5">Admin note: ${esc(w.adminNote)}</div>` : ''}
+          ${w.status !== 'pending' && w.adminNote ? `<div class="text-[10px] text-neutral-400 mt-1.5">Saved note: ${esc(w.adminNote)}</div>` : ''}
         </div>
 
-        ${isPending ? `
-          <input type="text" class="input-waiver-note ios-input" placeholder="Optional note for the member..." />
+        ${w.status === 'pending' ? `
+          <input type="text" class="input-waiver-note ios-input" placeholder="Optional note for the member..." value="${esc(draftNote)}" data-id="${esc(w.id)}" />
           <div class="grid grid-cols-2 gap-2">
             <button type="button" class="btn-reject-waiver py-2.5 rounded-xl font-bold text-white text-sm transition" style="background:#FF453A" data-id="${esc(w.id)}">Reject</button>
             <button type="button" class="btn-approve-waiver py-2.5 rounded-xl font-bold text-black text-sm transition" style="background:#30D158" data-id="${esc(w.id)}">Approve</button>
           </div>
-        ` : ''}
+        ` : w.status === 'approved' ? `
+          ${isFutureSession ? `
+            <input type="text" class="input-waiver-note ios-input" placeholder="Optional note for update..." value="${esc(draftNote)}" data-id="${esc(w.id)}" />
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" class="btn-reject-waiver py-2 rounded-xl font-bold text-white text-xs transition" style="background:#FF453A" data-id="${esc(w.id)}">Change to Rejected</button>
+              <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
+            </div>
+          ` : `
+            <div class="pt-1 flex items-center justify-between">
+              <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-neutral-800 text-neutral-400">Locked (Past Session)</span>
+            </div>
+          `}
+        ` : `
+          ${isFutureSession ? `
+            <input type="text" class="input-waiver-note ios-input" placeholder="Optional note for update..." value="${esc(draftNote)}" data-id="${esc(w.id)}" />
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" class="btn-approve-waiver py-2 rounded-xl font-bold text-black text-xs transition" style="background:#30D158" data-id="${esc(w.id)}">Change to Approved</button>
+              <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
+            </div>
+          ` : `
+            <div class="pt-1 flex items-center justify-between">
+              <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-neutral-800 text-neutral-400">Locked (Past Session)</span>
+            </div>
+          `}
+        `}
       </div>`;
   }).join('');
 
@@ -12597,10 +12647,9 @@ function renderAdminWaivers() {
     if (!waiver || !cardEl) return;
 
     const noteInput = cardEl.querySelector('.input-waiver-note');
-    const adminNote = noteInput?.value.trim() || '';
+    const adminNote = noteInput?.value.trim() || waiverDraftNotes.get(waiverId) || '';
     cardEl.querySelectorAll('button').forEach(b => { b.disabled = true; });
 
-    const verb = newStatus === 'approved' ? 'Approved' : 'Rejected';
     const targetDate = formatWaiverTargetDate(waiver);
 
     try {
@@ -12616,45 +12665,59 @@ function renderAdminWaivers() {
         updatedAt: serverTimestamp()
       });
 
-      // System Impact: On Approve, flag member attendance as Excused for that session
-      if (newStatus === 'approved' && waiver.sessionId && waiver.occurrenceKey && waiver.uid) {
+      // System Impact on attendance log
+      if (waiver.sessionId && waiver.occurrenceKey && waiver.uid) {
         const logId = `${waiver.sessionId}_${waiver.occurrenceKey}_${waiver.uid}`;
         const logRef = doc(db, 'attendance_logs', logId);
-        const existingLog = (state.attendanceLogs || []).find(l => l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey);
-        if (existingLog && existingLog.penalty > 0) {
-          batch.update(doc(db, 'users', waiver.uid), {
-            penalties: increment(-existingLog.penalty),
-            updatedAt: serverTimestamp()
-          });
-        }
-        if (existingLog && existingLog.fineEGP > 0) {
-          batch.set(doc(db, 'users_private', waiver.uid), {
-            finesEGP: increment(-existingLog.fineEGP),
+
+        if (newStatus === 'approved') {
+          const existingLog = (state.attendanceLogs || []).find(l => l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey);
+          if (existingLog && existingLog.penalty > 0) {
+            batch.update(doc(db, 'users', waiver.uid), {
+              penalties: increment(-existingLog.penalty),
+              updatedAt: serverTimestamp()
+            });
+          }
+          if (existingLog && existingLog.fineEGP > 0) {
+            batch.set(doc(db, 'users_private', waiver.uid), {
+              finesEGP: increment(-existingLog.fineEGP),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+          batch.set(logRef, {
+            sessionId: waiver.sessionId,
+            sessionTitle: waiver.sessionTitle || '',
+            uid: waiver.uid,
+            userName: waiver.userName || '',
+            userAvatar: waiver.userAvatar || '',
+            occurrenceKey: waiver.occurrenceKey,
+            status: 'excused',
+            excused: true,
+            penalty: 0,
+            fineEGP: 0,
+            excusedAt: serverTimestamp(),
+            adminNote: adminNote || '',
+            resolvedBy: state.user.uid
+          }, { merge: true });
+        } else {
+          // Reverting from approved to rejected or pending: remove excused status
+          batch.set(logRef, {
+            status: 'unexcused',
+            excused: false,
             updatedAt: serverTimestamp()
           }, { merge: true });
         }
-        batch.set(logRef, {
-          sessionId: waiver.sessionId,
-          sessionTitle: waiver.sessionTitle || '',
-          uid: waiver.uid,
-          userName: waiver.userName || '',
-          userAvatar: waiver.userAvatar || '',
-          occurrenceKey: waiver.occurrenceKey,
-          status: 'excused',
-          excused: true,
-          penalty: 0,
-          fineEGP: 0,
-          excusedAt: serverTimestamp(),
-          adminNote: adminNote || '',
-          resolvedBy: state.user.uid
-        }, { merge: true });
       }
 
       // In-app notification for the member
+      const notifBody = newStatus === 'approved'
+        ? `Your attendance excuse request for ${waiver.sessionTitle} on ${targetDate} was approved.`
+        : `Your attendance excuse status for ${waiver.sessionTitle} on ${targetDate} was updated to ${newStatus.charAt(0).toUpperCase() + newStatus.slice(1)}.`;
+
       createNotification(batch, {
         uid: waiver.uid,
         title: 'Attendance Excuse Update',
-        body: `Your excuse request for ${waiver.sessionTitle} on ${targetDate} was ${verb}.`,
+        body: notifBody,
         type: 'attendance',
         targetAction: { route: 'attendance' }
       });
@@ -12668,15 +12731,21 @@ function renderAdminWaivers() {
       await batch.commit();
       waiver.status = newStatus;
       waiver.adminNote = adminNote;
-      if (newStatus === 'approved') {
-        const existingLog = (state.attendanceLogs || []).find(l => l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey);
-        if (existingLog) {
+      waiverDraftNotes.delete(waiverId);
+
+      const existingLog = (state.attendanceLogs || []).find(l => l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey);
+      if (existingLog) {
+        if (newStatus === 'approved') {
           existingLog.status = 'excused';
           existingLog.excused = true;
           existingLog.penalty = 0;
           existingLog.fineEGP = 0;
+        } else {
+          existingLog.status = 'unexcused';
+          existingLog.excused = false;
         }
       }
+
       toast(`Excuse ${newStatus}`, 'success');
       renderAdminWaivers();
     } catch (err) {
@@ -12692,8 +12761,21 @@ function renderAdminWaivers() {
   container.querySelectorAll('.btn-reject-waiver').forEach(btn => {
     btn.onclick = () => resolveWaiver(btn.dataset.id, 'rejected', btn.closest('[data-waiver-id]'));
   });
-}
+  container.querySelectorAll('.btn-pending-waiver').forEach(btn => {
+    btn.onclick = () => resolveWaiver(btn.dataset.id, 'pending', btn.closest('[data-waiver-id]'));
+  });
 
+  // Attach stopPropagation and draft persistence on note inputs
+  container.querySelectorAll('.input-waiver-note').forEach(inp => {
+    inp.oninput = (e) => {
+      waiverDraftNotes.set(inp.dataset.id, e.target.value);
+    };
+    const stopProp = (e) => e.stopPropagation();
+    inp.onclick = stopProp;
+    inp.ontouchstart = stopProp;
+    inp.onfocus = stopProp;
+  });
+}
 
 function openAdminEditSubmissionModal(submission) {
   openModal({
@@ -14952,15 +15034,12 @@ function openAdminBroadcastModal(broadcast = null) {
     const changeIconBtn = modalBody.querySelector('#btn-change-broadcast-icon');
     if (changeIconBtn) {
       changeIconBtn.onclick = () => {
-        openIconPicker({
-          selectedKey: selectedIcon,
-          onSelect: (newKey) => {
-            selectedIcon = newKey;
-            const previewEl = modalBody.querySelector('#broadcast-icon-preview');
-            if (previewEl) previewEl.innerHTML = getIconSvg(selectedIcon, 'w-5 h-5');
-            const nameEl = previewEl?.nextElementSibling?.querySelector('.capitalize');
-            if (nameEl) nameEl.textContent = selectedIcon;
-          }
+        openUnifiedIconPicker(selectedIcon, (newKey) => {
+          selectedIcon = newKey;
+          const previewEl = modalBody.querySelector('#broadcast-icon-preview');
+          if (previewEl) previewEl.innerHTML = getIconSvg(selectedIcon, 'w-5 h-5');
+          const nameEl = previewEl?.parentElement?.querySelector('.capitalize');
+          if (nameEl) nameEl.textContent = selectedIcon;
         });
       };
     }
