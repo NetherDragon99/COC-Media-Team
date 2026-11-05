@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.4)
+ * COC Media Team - Production Web App (v2.1.5)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.4';
+export const APP_VERSION = '2.1.5';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -3573,7 +3573,7 @@ function initErrorBoundary() {
 
   const handleError = (error) => {
     if (isIgnoredError(error)) {
-      console.warn('Ignored transient dev-server/WebSocket error:', error?.message || error);
+      console.warn('Ignored transient layout/WebSocket warning:', error?.message || error);
       return;
     }
     console.error('Captured by global error boundary:', error);
@@ -3590,21 +3590,29 @@ function initErrorBoundary() {
       e?.preventDefault?.();
       boundary.classList.add('hidden');
       boundary.style.display = 'none';
+      document.body.style.overflow = '';
       if (msgEl) msgEl.textContent = '';
     };
   }
 
+  window.onerror = function(msg, url, lineNo, columnNo, error) {
+    if (isIgnoredError(error || msg)) return true;
+  };
+
   window.addEventListener('error', (event) => {
     if (isIgnoredError(event) || isIgnoredError(event.error)) {
       event.preventDefault?.();
-      return;
+      event.stopImmediatePropagation?.();
+      return true;
     }
     handleError(event.error || event);
   });
+
   window.addEventListener('unhandledrejection', (event) => {
     if (isIgnoredError(event) || isIgnoredError(event.reason)) {
       event.preventDefault?.();
-      return;
+      event.stopImmediatePropagation?.();
+      return true;
     }
     handleError(event.reason || event);
   });
@@ -5115,11 +5123,18 @@ function openAdminPortal() {
   }
 }
 
-function showAdminDashboard(targetPage = 'overview') {
+export function showAdminDashboard(targetPage = 'overview') {
   const overlay = document.getElementById('modal-admin-dashboard');
   if (overlay) {
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    const backBtn = document.getElementById('adminHubBackBtn') || document.getElementById('btn-exit-admin');
+    if (backBtn) {
+      backBtn.onclick = (e) => {
+        e?.preventDefault?.();
+        closeAdminDashboard();
+      };
+    }
     if (adminPagerInstance) {
       adminPagerInstance.goTo(targetPage);
     }
@@ -5132,12 +5147,15 @@ function showAdminDashboard(targetPage = 'overview') {
   }
 }
 
-function closeAdminDashboard() {
+export function closeAdminDashboard() {
   if (selectionState.active) exitSelectionMode();
   const overlay = document.getElementById('modal-admin-dashboard');
   if (overlay) {
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
+    if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.currentPage) {
+      userPagerInstance.goTo(userPagerInstance.currentPage);
+    }
     // Clean up admin-only listeners on close to preserve bandwidth/reads
     listeners.clear('submissions');
     listeners.clear('attendance_logs');
@@ -7203,9 +7221,22 @@ function openTaskDetailsModal(taskId) {
         }
 
         const occurrenceKey = (task.schedule?.type === 'once') ? 'once' : (currentWin?.occurrenceKey || 'once');
-        const subId = `${task.id}_${state.user.uid}_${occurrenceKey}`;
+        const policy = task.claimPolicy || 'once_per_cycle';
+        let subId;
+        let pointsAwarded = currentWin.pointsForNow;
+
+        if (policy === 'milestone') {
+          const hasPriorSub = (state.submissions || []).some(s => s.taskId === task.id && s.uid === state.user.uid);
+          if (hasPriorSub) {
+            pointsAwarded = 0;
+          }
+          subId = `${task.id}_${state.user.uid}_milestone`;
+        } else if (policy === 'every_submission') {
+          subId = `${task.id}_${state.user.uid}_${Date.now()}`;
+        } else {
+          subId = `${task.id}_${state.user.uid}_${occurrenceKey}`;
+        }
         const comment = bodyEl.querySelector('#task-detail-comment')?.value || '';
-        const pointsAwarded = currentWin.pointsForNow;
 
         const batch = writeBatch(db);
         const subRef = doc(db, 'submissions', subId);
@@ -7807,6 +7838,7 @@ function updateLeaderboardPeriodButtons() {
 function renderLeaderboard() {
   const listEl = document.getElementById('leaderboard-list');
   const countEl = document.getElementById('leaderboard-total-count');
+  const podiumEl = document.getElementById('leaderboard-podium');
   if (!listEl) return;
 
   updateLeaderboardPeriodButtons();
@@ -7832,62 +7864,83 @@ function renderLeaderboard() {
 
   if (countEl) countEl.textContent = `${sorted.length} Members`;
 
-  updatePodiumSlot(sorted[0], 'podium-first', 'podium-1', period);
-  updatePodiumSlot(sorted[1], 'podium-second', 'podium-2', period);
-  updatePodiumSlot(sorted[2], 'podium-third', 'podium-3', period);
+  // Zero-Point rule: Only members with >0 points qualify for podium ranking
+  const rankedMembers = sorted.filter(m => (m.periodPoints || 0) > 0);
 
-  if (sorted.length === 0) {
-    listEl.innerHTML = '<p class="text-xs text-neutral-400 py-4 text-center">No members listed yet.</p>';
-    return;
+  function renderRows(membersToRender, startRank = 1) {
+    if (membersToRender.length === 0) {
+      listEl.innerHTML = '<p class="text-xs text-neutral-400 py-6 text-center">No points awarded yet.</p>';
+      return;
+    }
+
+    listEl.innerHTML = membersToRender.map((member, idx) => {
+      const isMe = state.user?.uid === member.uid;
+      const rankNum = startRank + idx;
+      const taskCount = (state.submissions || []).filter(s => s.userId === member.uid || s.uid === member.uid).length;
+
+      return `
+        <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''}" data-member-uid="${esc(member.uid)}">
+          <div class="flex items-center gap-3 min-w-0 flex-1 mr-2">
+            <span class="w-5 text-center font-mono font-bold text-xs shrink-0 ${rankNum <= 3 ? 'text-amber-400' : 'text-neutral-500'}">
+              ${rankNum}
+            </span>
+            <div class="shrink-0">
+              ${renderAvatar(member, 'w-8 h-8')}
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="font-semibold text-xs text-white flex items-center gap-1.5 min-w-0">
+                <span class="truncate shrink-0 max-w-[100px]">${esc(member.displayName || member.name || 'Member')}</span>
+                ${isMe ? '<span class="text-[9px] px-1 rounded bg-[#0A84FF] text-white shrink-0">You</span>' : ''}
+                <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
+              </div>
+              <div class="text-[10px] text-neutral-400">${taskCount} quotas</div>
+            </div>
+          </div>
+
+          <div class="text-right shrink-0">
+            <div class="font-bold font-mono text-xs text-amber-400">${member.periodPoints || 0} pts</div>
+            <div class="text-[10px] text-neutral-500">${member.role || 'member'}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    listEl.querySelectorAll('.badge-row-container').forEach(c => {
+      const uid = c.dataset.uid;
+      const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+      if (mem) {
+        renderBadgeRow(c, mem.badges, mem);
+      }
+    });
+
+    listEl.querySelectorAll('.leaderboard-member-row').forEach(row => {
+      row.onclick = () => {
+        if (selectionState && selectionState.active) return;
+        const uid = row.dataset.memberUid;
+        if (uid) openMiniProfileSheet(uid);
+      };
+    });
   }
 
-  // Full rankings re-rendered dynamically with zero extra Firestore reads
-  listEl.innerHTML = sorted.map((member, idx) => {
-    const isMe = state.user?.uid === member.uid;
-    const taskCount = state.submissions.filter(s => s.userId === member.uid || s.uid === member.uid).length;
+  if (rankedMembers.length < 3) {
+    // If < 3 members have points, hide podium boxes and display clean sleek list
+    if (podiumEl) podiumEl.classList.add('hidden');
+    renderRows(sorted, 1);
+  } else {
+    // If >= 3 members have points, show organic podium
+    if (podiumEl) podiumEl.classList.remove('hidden');
+    updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
+    updatePodiumSlot(rankedMembers[1], 'podium-second', 'podium-2', period);
+    updatePodiumSlot(rankedMembers[2], 'podium-third', 'podium-3', period);
 
-    return `
-      <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''}" data-member-uid="${esc(member.uid)}">
-        <div class="flex items-center gap-3 min-w-0 flex-1 mr-2">
-          <span class="w-5 text-center font-mono font-bold text-xs shrink-0 ${idx < 3 ? 'text-amber-400' : 'text-neutral-500'}">
-            ${idx + 1}
-          </span>
-          <div class="shrink-0">
-            ${renderAvatar(member, 'w-8 h-8')}
-          </div>
-          <div class="min-w-0 flex-1">
-            <div class="font-semibold text-xs text-white flex items-center gap-1.5 min-w-0">
-              <span class="truncate shrink-0 max-w-[100px]">${esc(member.displayName || member.name || 'Member')}</span>
-              ${isMe ? '<span class="text-[9px] px-1 rounded bg-[#0A84FF] text-white shrink-0">You</span>' : ''}
-              <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
-            </div>
-            <div class="text-[10px] text-neutral-400">${taskCount} quotas</div>
-          </div>
-        </div>
-
-        <div class="text-right shrink-0">
-          <div class="font-bold font-mono text-xs text-amber-400">${member.periodPoints || 0} pts</div>
-          <div class="text-[10px] text-neutral-500">${member.role || 'member'}</div>
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  listEl.querySelectorAll('.badge-row-container').forEach(c => {
-    const uid = c.dataset.uid;
-    const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-    if (mem) {
-      renderBadgeRow(c, mem.badges, mem);
-    }
-  });
-
-  listEl.querySelectorAll('.leaderboard-member-row').forEach(row => {
-    row.onclick = () => {
-      if (selectionState && selectionState.active) return;
-      const uid = row.dataset.memberUid;
-      if (uid) openMiniProfileSheet(uid);
-    };
-  });
+    // Deduplicate: Members on podium must NOT be re-rendered in the list below
+    const remainingMembers = sorted.filter(m =>
+      m.uid !== rankedMembers[0].uid &&
+      m.uid !== rankedMembers[1].uid &&
+      m.uid !== rankedMembers[2].uid
+    );
+    renderRows(remainingMembers, 4);
+  }
 }
 
 function updatePodiumSlot(member, slotId, prefix, period) {
@@ -8237,7 +8290,54 @@ export function getIconSvg(iconKey, className = 'w-5 h-5') {
   return item.svg.replace('{CLASS}', className);
 }
 
-export function openIconPicker({ selectedKey = 'bell', onSelect }) {
+export function openSubModal({ title = 'Select Icon', body, onClose }) {
+  const overlay = document.getElementById('subModalOverlay');
+  const titleEl = document.getElementById('sub-modal-title');
+  const bodyEl = document.getElementById('sub-modal-body');
+  const cancelBtn = document.getElementById('sub-modal-cancel');
+  if (!overlay || !bodyEl) return;
+
+  if (titleEl) titleEl.textContent = title;
+  bodyEl.innerHTML = '';
+  if (typeof body === 'string') {
+    bodyEl.innerHTML = body;
+  } else if (body instanceof Node) {
+    bodyEl.appendChild(body);
+  }
+
+  const cleanup = () => {
+    closeSubModal();
+    if (typeof onClose === 'function') onClose();
+  };
+
+  if (cancelBtn) cancelBtn.onclick = cleanup;
+  overlay.onclick = (e) => {
+    if (e.target === overlay) cleanup();
+  };
+
+  overlay.classList.remove('is-hidden');
+}
+
+export function closeSubModal() {
+  const overlay = document.getElementById('subModalOverlay');
+  if (overlay) {
+    overlay.classList.add('is-hidden');
+    const bodyEl = document.getElementById('sub-modal-body');
+    if (bodyEl) bodyEl.innerHTML = '';
+  }
+}
+
+export function openIconPicker(param1, onSelectParam) {
+  let selectedKey = 'bell';
+  let onSelect = null;
+  if (typeof param1 === 'object' && param1 !== null) {
+    selectedKey = param1.selectedKey || 'bell';
+    onSelect = param1.onSelect;
+  } else if (typeof param1 === 'string') {
+    selectedKey = param1;
+    onSelect = onSelectParam;
+  }
+
   const categories = [
     { id: 'media', label: 'Media' },
     { id: 'tasks', label: 'Tasks' },
@@ -8310,17 +8410,16 @@ export function openIconPicker({ selectedKey = 'bell', onSelect }) {
       b.onclick = () => {
         const key = b.dataset.iconKey;
         if (typeof onSelect === 'function') onSelect(key);
-        closeAllModals();
+        closeSubModal();
       };
     });
   }
 
   renderGrid();
 
-  openModal({
+  openSubModal({
     title: 'Select Icon',
-    body: bodyEl,
-    saveLabel: null
+    body: bodyEl
   });
 }
 
@@ -9279,6 +9378,7 @@ function openAdminTaskModal(taskId = null) {
   let currentCategoryId = task ? (task.categoryId || task.category || (state.categories[0]?.id || '')) : (state.categories[0]?.id || '');
   let currentPoints = task ? (task.points !== undefined ? String(task.points) : '') : '';
   let currentLink = task ? (task.link || '') : '';
+  let currentClaimPolicy = task ? (task.claimPolicy || 'once_per_cycle') : 'once_per_cycle';
   let currentIsPermanent = task ? Boolean(task.isPermanent) : false;
 
   // Normalized tiers & schedule
@@ -9429,6 +9529,13 @@ function openAdminTaskModal(taskId = null) {
           <div id="adm-sched-subform" class="space-y-3 pt-1"></div>
         </div>
 
+        <!-- Points Claim Policy Card -->
+        <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-2">
+          <label class="block text-xs font-bold text-white uppercase tracking-wider">Points Claim Policy</label>
+          <p class="text-[11px] text-neutral-400">Rules for how points are awarded for submissions.</p>
+          <div id="mount-task-claim-policy"></div>
+        </div>
+
         <!-- Permanent Task Switch Card -->
         <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-2">
           <div class="flex items-center justify-between">
@@ -9446,7 +9553,7 @@ function openAdminTaskModal(taskId = null) {
           <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
               <span>Task Deadline</span>
-              <span class="text-[10px] text-[#0A84FF] font-mono">APP_TIMEZONE: ${APP_TIMEZONE}</span>
+              
             </div>
 
             ${schedType === 'once' ? `
@@ -9626,6 +9733,21 @@ function openAdminTaskModal(taskId = null) {
       };
     }
 
+    // Points Claim Policy Segmented control
+    const mountClaimPolicy = bodyEl.querySelector('#mount-task-claim-policy');
+    if (mountClaimPolicy) {
+      mountClaimPolicy.appendChild(renderSegmented({
+        id: 'segmented-task-claim-policy',
+        options: [
+          { value: 'once_per_cycle', label: 'Once per cycle' },
+          { value: 'every_submission', label: 'Every submission' },
+          { value: 'milestone', label: 'One-time milestone' }
+        ],
+        value: currentClaimPolicy,
+        onChange: (val) => { currentClaimPolicy = val; }
+      }));
+    }
+
     // Schedule Type Segmented control
     const mountTaskSchedType = bodyEl.querySelector('#adm-task-sched-type-wrap');
     if (mountTaskSchedType) {
@@ -9635,7 +9757,8 @@ function openAdminTaskModal(taskId = null) {
         options: [
           { value: 'once', label: 'One-Time' },
           { value: 'daily', label: 'Daily' },
-          { value: 'weekly', label: 'Weekly' }
+          { value: 'weekly', label: 'Weekly' },
+          { value: 'monthlyDates', label: 'Monthly' }
         ],
         value: schedType,
         onChange: (val) => {
@@ -9855,7 +9978,7 @@ function openAdminTaskModal(taskId = null) {
     if (graceWords && graceEnabled) {
       const [gh, gm] = graceTimeStr.split(':').map(Number);
       if (schedType === 'once') {
-        graceWords.textContent = `Grace period cutoff is ${graceDateStr} at ${formatTimeDisplayWords(gh, gm)} (standard points, stored with inGrace: true)`;
+        graceWords.textContent = `Grace period cutoff is ${graceDateStr} at ${formatTimeDisplayWords(gh, gm)} (standard points)`;
       } else {
         graceWords.textContent = `Grace period cutoff is ${graceDaysAfter === 0 ? 'same day' : `${graceDaysAfter}d after start`} at ${formatTimeDisplayWords(gh, gm)} (standard points, stored with inGrace: true)`;
       }
@@ -10314,6 +10437,7 @@ function openAdminTaskModal(taskId = null) {
         missedPenalty: finalMissedPenalty,
         schedule: finalSchedule,
         isPermanent: currentIsPermanent,
+        claimPolicy: currentClaimPolicy || 'once_per_cycle',
         durationMinutes: currentIsPermanent ? null : finalDurationMinutes,
         questions: validQuestions,
         active: true,
@@ -10521,8 +10645,6 @@ function openAdminSessionModal(sessionId = null) {
 
   let weeklyDays = new Set(Array.isArray(sched.days) ? sched.days : ['Sun']);
   let monthlyDates = new Set(Array.isArray(sched.dates || sched.monthDates) ? (sched.dates || sched.monthDates) : [1]);
-  let monthlyWeeks = new Set(Array.isArray(sched.weeks) ? sched.weeks : ['1st']);
-  let monthlyWeekdays = new Set(Array.isArray(sched.weekdays) ? sched.weekdays : ['Sun']);
 
   const pad2 = n => String(n).padStart(2, '0');
   let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
@@ -10577,461 +10699,395 @@ function openAdminSessionModal(sessionId = null) {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
 
-  function renderModalBody() {
-    bodyEl.innerHTML = '';
+  // Build the entire DOM once without innerHTML destruction on toggle
+  // 1. Title
+  const titleBox = document.createElement('div');
+  titleBox.innerHTML = `
+    <label class="block text-xs font-semibold text-neutral-200 mb-1">Session Title *</label>
+    <input id="adm-session-title" type="text" class="w-full glass-input text-xs" placeholder="e.g. Sunday Production Service" value="${esc(currentTitle)}" />
+  `;
+  const titleInp = titleBox.querySelector('#adm-session-title');
+  titleInp.oninput = (e) => { currentTitle = e.target.value; };
+  bodyEl.appendChild(titleBox);
 
-    // Title
-    const titleBox = document.createElement('div');
-    titleBox.innerHTML = `
-      <label class="block text-xs font-semibold text-neutral-200 mb-1">Session Title *</label>
-      <input id="adm-session-title" type="text" class="w-full glass-input text-xs" placeholder="e.g. Sunday Production Service" value="${esc(currentTitle)}" />
-    `;
-    const titleInp = titleBox.querySelector('#adm-session-title');
-    titleInp.oninput = (e) => { currentTitle = e.target.value; };
-    bodyEl.appendChild(titleBox);
-
-    // Recurrence & Schedule Type
-    const schedBox = document.createElement('div');
-    schedBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
-    schedBox.innerHTML = `
-      <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</label>
-      <div>
-        <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
-        <div id="adm-session-sched-type-wrap"></div>
+  // 2. Recurrence & Schedule Type
+  const schedBox = document.createElement('div');
+  schedBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
+  schedBox.innerHTML = `
+    <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</label>
+    <div>
+      <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
+      <div id="adm-session-sched-type-wrap"></div>
+    </div>
+    <div id="adm-session-sched-weekly-box" class="space-y-1.5 pt-1" style="display: ${schedType === 'weekly' ? 'block' : 'none'};">
+      <label class="block text-[11px] text-neutral-300 font-medium">Days of the Week:</label>
+      <div class="flex flex-wrap gap-1.5" id="adm-weekly-days-wrap">
+        ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => `
+          <button type="button" class="btn-att-wday px-2.5 py-1 text-xs rounded-lg font-medium transition ${weeklyDays.has(d) ? 'bg-[#0A84FF] text-white' : 'bg-white/5 text-neutral-400'}" data-day="${d}">${d}</button>
+        `).join('')}
       </div>
-      <div id="adm-session-sched-subform" class="space-y-3 pt-1"></div>
-    `;
-    const schedTypeWrap = schedBox.querySelector('#adm-session-sched-type-wrap');
-    if (schedTypeWrap) {
-      schedTypeWrap.appendChild(renderSegmented({
-        id: 'segmented-session-sched-type',
-        options: [
-          { value: 'once', label: 'One-Time' },
-          { value: 'daily', label: 'Daily' },
-          { value: 'weekly', label: 'Weekly' },
-          { value: 'monthlyDates', label: 'Monthly' }
-        ],
-        value: schedType === 'monthlyDates' || schedType === 'monthlyWeekdays' ? 'monthlyDates' : schedType,
-        onChange: (val) => {
-          schedType = val;
-          renderSchedSubform();
-        }
-      }));
-    }
-    bodyEl.appendChild(schedBox);
-
-    // Section 2 Item 2: Native Clean Date & Time Pickers in iOS Inset Rows
-    const timeCard = document.createElement('div');
-    timeCard.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-2.5';
-    timeCard.innerHTML = `
-      <label class="block text-xs font-bold text-white uppercase tracking-wider">Session Time &amp; Check-In Window</label>
-      <div class="ios-inset-group bg-white/[0.03] border border-white/10 rounded-xl p-2.5 space-y-2.5">
-        <div class="flex items-center justify-between gap-3">
-          <label for="attSessionDate" class="text-xs font-medium text-neutral-300">Session Date</label>
-          <input type="date" id="attSessionDate" value="${selectedDateStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
-        </div>
-        <div class="h-px bg-white/5"></div>
-        <div class="flex items-center justify-between gap-3">
-          <label for="attSessionTime" class="text-xs font-medium text-neutral-300">Start Time</label>
-          <input type="time" id="attSessionTime" value="${selectedTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
-        </div>
-        <div class="h-px bg-white/5"></div>
-        <div class="flex items-center justify-between gap-3">
-          <label for="attOpensTime" class="text-xs font-medium text-neutral-300">Check-in Opens</label>
-          <input type="time" id="attOpensTime" value="${opensTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
-        </div>
-        <div class="h-px bg-white/5"></div>
-        <div class="flex items-center justify-between gap-3">
-          <label for="attClosesTime" class="text-xs font-medium text-neutral-300">Check-in Closes</label>
-          <input type="time" id="attClosesTime" value="${closesTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
-        </div>
+    </div>
+    <div id="adm-session-sched-monthly-box" class="space-y-1.5 pt-1" style="display: ${schedType === 'monthlyDates' ? 'block' : 'none'};">
+      <label class="block text-[11px] text-neutral-300 font-medium">Days of the Month (1-31):</label>
+      <div class="grid grid-cols-7 gap-1" id="adm-monthly-dates-wrap">
+        ${Array.from({ length: 31 }, (_, i) => i + 1).map(day => `
+          <button type="button" class="btn-att-mdate p-1 text-[11px] rounded font-mono transition ${monthlyDates.has(day) ? 'bg-[#0A84FF] text-white font-bold' : 'bg-white/5 text-neutral-400'}" data-day="${day}">${day}</button>
+        `).join('')}
       </div>
-    `;
+    </div>
+  `;
 
-    const inpDate = timeCard.querySelector('#attSessionDate');
-    const inpTime = timeCard.querySelector('#attSessionTime');
-    const inpOpens = timeCard.querySelector('#attOpensTime');
-    const inpCloses = timeCard.querySelector('#attClosesTime');
+  const weeklyBox = schedBox.querySelector('#adm-session-sched-weekly-box');
+  const monthlyBox = schedBox.querySelector('#adm-session-sched-monthly-box');
 
-    if (inpDate) inpDate.onchange = (e) => { selectedDateStr = e.target.value; };
-    if (inpTime) inpTime.onchange = (e) => { selectedTimeStr = e.target.value; };
-    if (inpOpens) inpOpens.onchange = (e) => { opensTimeStr = e.target.value; };
-    if (inpCloses) inpCloses.onchange = (e) => { closesTimeStr = e.target.value; };
-
-    bodyEl.appendChild(timeCard);
-
-    // Section 2 Item 3: 3-Way Attendee Assignment Selector
-    const assignBox = document.createElement('div');
-    assignBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
-    assignBox.innerHTML = `
-      <div class="space-y-1">
-        <label class="block text-xs font-bold text-white uppercase tracking-wider">Attendee Assignment</label>
-        <p class="text-[11px] text-neutral-400">Choose who is eligible and rostered for this attendance session.</p>
-      </div>
-      <div id="session-target-type-segmented-wrap"></div>
-      <div id="session-target-details-wrap" class="pt-1"></div>
-    `;
-
-    const segWrap = assignBox.querySelector('#session-target-type-segmented-wrap');
-    const detailsWrap = assignBox.querySelector('#session-target-details-wrap');
-
-    function renderAttendeeDetails() {
-      if (!detailsWrap) return;
-      detailsWrap.innerHTML = '';
-
-      if (targetType === 'all') {
-        detailsWrap.innerHTML = `
-          <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 text-[11px] text-neutral-300 flex items-center gap-2">
-            <svg class="w-4 h-4 text-[#0A84FF] shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-            <span>All active team members are automatically rostered and eligible.</span>
-          </div>
-        `;
-      } else if (targetType === 'badge') {
-        const allBadges = getAllAvailableBadges();
-        detailsWrap.innerHTML = `
-          <div class="space-y-2">
-            <div class="flex items-center justify-between text-xs">
-              <span class="text-neutral-400">Select Badges:</span>
-              <span class="text-[#0A84FF] font-semibold">${selectedBadgeIds.size} selected</span>
-            </div>
-            <div class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1.5 rounded-xl bg-black/20 border border-white/5">
-              ${allBadges.map(b => {
-                const isChecked = selectedBadgeIds.has(b.id);
-                return `
-                  <button type="button" class="btn-att-badge-pill px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${isChecked ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-300 border border-white/5'}" data-badge-id="${esc(b.id)}">
-                    <span class="w-2 h-2 rounded-full" style="background-color: ${b.color || '#0A84FF'};"></span>
-                    <span>${esc(b.label || b.name || b.id)}</span>
-                  </button>
-                `;
-              }).join('')}
-            </div>
-            ${selectedBadgeIds.size === 0 ? '<p class="text-[10px] text-amber-400 italic">Select at least one badge to limit roster by role.</p>' : ''}
-          </div>
-        `;
-
-        detailsWrap.querySelectorAll('.btn-att-badge-pill').forEach(btn => {
-          btn.onclick = (e) => {
-            e.preventDefault();
-            const bId = btn.dataset.badgeId;
-            if (selectedBadgeIds.has(bId)) selectedBadgeIds.delete(bId);
-            else selectedBadgeIds.add(bId);
-            renderAttendeeDetails();
-          };
-        });
-      } else if (targetType === 'custom') {
-        const membersList = state.members || [];
-        detailsWrap.innerHTML = `
-          <div class="space-y-2">
-            <div class="flex items-center justify-between text-xs">
-              <span class="text-neutral-400">Select Individual Members:</span>
-              <span class="text-[#0A84FF] font-semibold">${assignedUids.size} selected</span>
-            </div>
-            <div class="max-h-48 overflow-y-auto rounded-xl bg-black/20 border border-white/5 divide-y divide-white/5">
-              ${membersList.map(m => {
-                const isSelected = assignedUids.has(m.uid);
-                return `
-                  <label class="flex items-center justify-between p-2 hover:bg-white/5 transition cursor-pointer text-xs">
-                    <div class="flex items-center gap-2 min-w-0">
-                      <span class="font-medium text-white truncate">${esc(m.displayName || m.name || m.email || m.uid)}</span>
-                      ${m.role === 'admin' ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Admin</span>' : ''}
-                    </div>
-                    <input type="checkbox" class="att-member-cb rounded bg-white/10 border-white/20 text-[#0A84FF] focus:ring-0" data-uid="${esc(m.uid)}" ${isSelected ? 'checked' : ''} />
-                  </label>
-                `;
-              }).join('')}
-            </div>
-            ${assignedUids.size === 0 ? '<p class="text-[10px] text-amber-400 italic">Select at least one member for specific roster assignment.</p>' : ''}
-          </div>
-        `;
-
-        detailsWrap.querySelectorAll('.att-member-cb').forEach(cb => {
-          cb.onchange = (e) => {
-            const uid = cb.dataset.uid;
-            if (e.target.checked) assignedUids.add(uid);
-            else assignedUids.delete(uid);
-            renderAttendeeDetails();
-          };
-        });
-      }
-    }
-
-    if (segWrap) {
-      segWrap.appendChild(renderSegmented({
-        id: 'segmented-att-target-type',
-        options: [
-          { value: 'all', label: 'All' },
-          { value: 'badge', label: 'By Badge' },
-          { value: 'custom', label: 'Specific' }
-        ],
-        value: targetType,
-        onChange: (val) => {
-          targetType = val;
-          renderAttendeeDetails();
-        }
-      }));
-    }
-    renderAttendeeDetails();
-    bodyEl.appendChild(assignBox);
-
-    // Section 2 Item 4: Visually Separate Step Unit from Stepper Matrix
-    function renderPenaltySystemSection(sysKey, title, subtitle, unitLabel, sysObj) {
-      const card = document.createElement('div');
-      card.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
-
-      const header = document.createElement('div');
-      header.className = 'flex items-center justify-between';
-      header.innerHTML = `
-        <div>
-          <span class="text-xs font-bold text-white block uppercase tracking-wider">${esc(title)}</span>
-          <span class="text-[11px] text-neutral-400">${esc(subtitle)}</span>
-        </div>
-        <div id="switch-${sysKey}-wrap"></div>
-      `;
-
-      const switchWrap = header.querySelector(`#switch-${sysKey}-wrap`);
-      switchWrap.appendChild(renderSwitch({
-        id: `adm-session-${sysKey}-toggle`,
-        checked: sysObj.enabled,
-        onChange: (chk) => {
-          sysObj.enabled = chk;
-          renderModalBody();
-        }
-      }));
-      card.appendChild(header);
-
-      if (!sysObj.enabled) return card;
-
-      const matrixBox = document.createElement('div');
-      matrixBox.className = 'space-y-3 pt-2 border-t border-white/5';
-
-      // Mode: Fixed vs Stepped
-      const modeWrap = document.createElement('div');
-      modeWrap.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-semibold">Calculation Mode</label>`;
-      modeWrap.appendChild(renderSegmented({
-        id: `seg-${sysKey}-mode`,
-        options: [
-          { value: 'fixed', label: 'Fixed Amount' },
-          { value: 'stepped', label: 'Stepped Rate' }
-        ],
-        value: sysObj.mode,
-        onChange: (mVal) => {
-          sysObj.mode = mVal;
-          renderModalBody();
-        }
-      }));
-      matrixBox.appendChild(modeWrap);
-
-      if (sysObj.mode === 'fixed') {
-        const fixedDiv = document.createElement('div');
-        fixedDiv.innerHTML = `
-          <label class="block text-[11px] text-neutral-300 mb-1">Fixed Late Penalty (${unitLabel})</label>
-          <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.fixed}" />
-        `;
-        const fixedInp = fixedDiv.querySelector('input');
-        if (fixedInp) {
-          fixedInp.oninput = (e) => {
-            sysObj.fixed = Math.max(0, Number(e.target.value) || 0);
-          };
-        }
-        matrixBox.appendChild(fixedDiv);
+  schedBox.querySelectorAll('.btn-att-wday').forEach(b => {
+    b.onclick = () => {
+      const d = b.dataset.day;
+      if (weeklyDays.has(d)) {
+        if (weeklyDays.size > 1) weeklyDays.delete(d);
       } else {
-        // Distinct Row 1: Step Unit (Minutes vs Seconds)
-        const unitRow = document.createElement('div');
-        unitRow.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Unit</label>`;
-        unitRow.appendChild(renderSegmented({
-          id: `seg-${sysKey}-unit`,
-          options: [
-            { value: 'minutes', label: 'Minutes' },
-            { value: 'seconds', label: 'Seconds' }
-          ],
-          value: sysObj.stepUnit,
-          onChange: (uVal) => {
-            sysObj.stepUnit = uVal;
-          }
-        }));
-        matrixBox.appendChild(unitRow);
-
-        // Distinct Row 2: Step Interval Stepper (with min 44x44px targets) & Fee Per Step
-        const stepRow = document.createElement('div');
-        stepRow.className = 'grid grid-cols-2 gap-3 items-center pt-1';
-        stepRow.innerHTML = `
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Interval</label>
-            <div id="stepper-${sysKey}-wrap" class="stepper-control"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-300 mb-1 font-medium">Fee / Step (${unitLabel})</label>
-            <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.perStep}" />
-          </div>
-        `;
-
-        const stWrap = stepRow.querySelector(`#stepper-${sysKey}-wrap`);
-        stWrap.appendChild(renderStepper({
-          id: `step-${sysKey}-size`,
-          value: sysObj.stepSize,
-          min: 1,
-          max: 3600,
-          onChange: (newSize) => {
-            sysObj.stepSize = newSize;
-          }
-        }));
-
-        const feeInp = stepRow.querySelector('input');
-        if (feeInp) {
-          feeInp.oninput = (e) => {
-            sysObj.perStep = Math.max(0, Number(e.target.value) || 0);
-          };
-        }
-        matrixBox.appendChild(stepRow);
+        weeklyDays.add(d);
       }
+      b.className = `btn-att-wday px-2.5 py-1 text-xs rounded-lg font-medium transition ${weeklyDays.has(d) ? 'bg-[#0A84FF] text-white' : 'bg-white/5 text-neutral-400'}`;
+    };
+  });
 
-      // Min & Max Bounds
-      const boundsGrid = document.createElement('div');
-      boundsGrid.className = 'grid grid-cols-2 gap-3 pt-1';
-      boundsGrid.innerHTML = `
-        <div>
-          <label class="block text-[11px] text-neutral-300 mb-1">Minimum Late (${unitLabel})</label>
-          <input type="number" min="0" class="w-full glass-input text-xs font-mono inp-min" value="${sysObj.min}" />
-        </div>
-        <div>
-          <label class="block text-[11px] text-neutral-300 mb-1">Maximum Late (${unitLabel})</label>
-          <input type="number" min="0" class="w-full glass-input text-xs font-mono inp-max" value="${sysObj.max}" />
-        </div>
-      `;
-      const inpMin = boundsGrid.querySelector('.inp-min');
-      if (inpMin) inpMin.oninput = (e) => { sysObj.min = Math.max(0, Number(e.target.value) || 0); };
-      const inpMax = boundsGrid.querySelector('.inp-max');
-      if (inpMax) inpMax.oninput = (e) => { sysObj.max = Math.max(0, Number(e.target.value) || 0); };
-      matrixBox.appendChild(boundsGrid);
+  schedBox.querySelectorAll('.btn-att-mdate').forEach(b => {
+    b.onclick = () => {
+      const d = Number(b.dataset.day);
+      if (monthlyDates.has(d)) {
+        if (monthlyDates.size > 1) monthlyDates.delete(d);
+      } else {
+        monthlyDates.add(d);
+      }
+      b.className = `btn-att-mdate p-1 text-[11px] rounded font-mono transition ${monthlyDates.has(d) ? 'bg-[#0A84FF] text-white font-bold' : 'bg-white/5 text-neutral-400'}`;
+    };
+  });
 
-      // Unexcused Absence
-      const absenceBox = document.createElement('div');
-      absenceBox.className = 'pt-2 border-t border-white/5';
-      absenceBox.innerHTML = `
-        <label class="block text-[11px] text-neutral-300 mb-1">Unexcused Absence (${unitLabel})</label>
-        <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.absence}" />
-      `;
-      const inpAbsence = absenceBox.querySelector('input');
-      if (inpAbsence) inpAbsence.oninput = (e) => { sysObj.absence = Math.max(0, Number(e.target.value) || 0); };
-      matrixBox.appendChild(absenceBox);
-
-      card.appendChild(matrixBox);
-      return card;
-    }
-
-    bodyEl.appendChild(renderPenaltySystemSection(
-      'pts',
-      'Points Penalty Matrix',
-      'Subtract penalty points for late check-in & absence',
-      'pts',
-      pointsPenalty
-    ));
-
-    bodyEl.appendChild(renderPenaltySystemSection(
-      'fines',
-      'Financial Fines (EGP)',
-      'Issue EGP fine charges for late check-in & absence',
-      'EGP',
-      finePenalty
-    ));
-
-    // Active Switch & Cancel Handler
-    const activeBox = document.createElement('div');
-    activeBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 flex items-center justify-between';
-    activeBox.innerHTML = `
-      <div>
-        <span class="text-xs font-bold text-white block">Active for Check-In</span>
-        <span class="text-[11px] text-neutral-400">Members can only check in while active</span>
-      </div>
-      <div id="switch-active-wrap"></div>
-    `;
-    activeBox.querySelector('#switch-active-wrap').appendChild(renderSwitch({
-      id: 'adm-session-active',
-      checked: active,
-      onChange: (chk) => { active = chk; }
+  const schedTypeWrap = schedBox.querySelector('#adm-session-sched-type-wrap');
+  if (schedTypeWrap) {
+    schedTypeWrap.appendChild(renderSegmented({
+      id: 'segmented-session-sched-type',
+      options: [
+        { value: 'once', label: 'One-Time' },
+        { value: 'daily', label: 'Daily' },
+        { value: 'weekly', label: 'Weekly' },
+        { value: 'monthlyDates', label: 'Monthly' }
+      ],
+      value: schedType === 'monthlyDates' || schedType === 'monthlyWeekdays' ? 'monthlyDates' : schedType,
+      onChange: (val) => {
+        schedType = val;
+        weeklyBox.style.display = (val === 'weekly') ? 'block' : 'none';
+        monthlyBox.style.display = (val === 'monthlyDates') ? 'block' : 'none';
+      }
     }));
-    bodyEl.appendChild(activeBox);
+  }
+  bodyEl.appendChild(schedBox);
 
-    // Cancel Button in modal
-    const cancelBox = document.createElement('div');
-    cancelBox.className = 'pt-2 flex justify-end';
-    cancelBox.innerHTML = `
-      <button type="button" id="attCancelBtn" class="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-300 text-xs font-semibold transition">
-        Cancel
-      </button>
+  // 3. Clean Native Date & Time Pickers (Stripped of "(Africa/Cairo)" and "308m")
+  const timeCard = document.createElement('div');
+  timeCard.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-2.5';
+  timeCard.innerHTML = `
+    <label class="block text-xs font-bold text-white uppercase tracking-wider">Session Time &amp; Check-In Window</label>
+    <div class="ios-inset-group bg-white/[0.03] border border-white/10 rounded-xl p-2.5 space-y-2.5">
+      <div class="flex items-center justify-between gap-3">
+        <label for="attSessionDate" class="text-xs font-medium text-neutral-300">Session Date</label>
+        <input type="date" id="attSessionDate" value="${selectedDateStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
+      </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="flex items-center justify-between gap-3">
+        <label for="attSessionTime" class="text-xs font-medium text-neutral-300">Start Time</label>
+        <input type="time" id="attSessionTime" value="${selectedTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
+      </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="flex items-center justify-between gap-3">
+        <label for="attOpensTime" class="text-xs font-medium text-neutral-300">Check-in Opens</label>
+        <input type="time" id="attOpensTime" value="${opensTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
+      </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="flex items-center justify-between gap-3">
+        <label for="attClosesTime" class="text-xs font-medium text-neutral-300">Check-in Closes</label>
+        <input type="time" id="attClosesTime" value="${closesTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
+      </div>
+    </div>
+  `;
+
+  const inpDate = timeCard.querySelector('#attSessionDate');
+  const inpTime = timeCard.querySelector('#attSessionTime');
+  const inpOpens = timeCard.querySelector('#attOpensTime');
+  const inpCloses = timeCard.querySelector('#attClosesTime');
+
+  if (inpDate) inpDate.onchange = (e) => { selectedDateStr = e.target.value; };
+  if (inpTime) inpTime.onchange = (e) => { selectedTimeStr = e.target.value; };
+  if (inpOpens) inpOpens.onchange = (e) => { opensTimeStr = e.target.value; };
+  if (inpCloses) inpCloses.onchange = (e) => { closesTimeStr = e.target.value; };
+  bodyEl.appendChild(timeCard);
+
+  // 4. 3-Way Attendee Assignment Selector (All Members | By Badge | Specific Members)
+  const assignBox = document.createElement('div');
+  assignBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
+  assignBox.innerHTML = `
+    <div class="space-y-1">
+      <label class="block text-xs font-bold text-white uppercase tracking-wider">Attendee Assignment</label>
+      <p class="text-[11px] text-neutral-400">Choose who is eligible and rostered for this attendance session.</p>
+    </div>
+    <div id="session-target-type-segmented-wrap"></div>
+    <div id="target-all-box" class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 text-[11px] text-neutral-300 flex items-center gap-2" style="display: ${targetType === 'all' ? 'flex' : 'none'};">
+      <svg class="w-4 h-4 text-[#0A84FF] shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+      <span>All active team members are automatically rostered and eligible.</span>
+    </div>
+    <div id="target-badge-box" class="space-y-2" style="display: ${targetType === 'badge' ? 'block' : 'none'};">
+      <div class="flex items-center justify-between text-xs">
+        <span class="text-neutral-400">Select Badges:</span>
+        <span id="att-badge-count-label" class="text-[#0A84FF] font-semibold">${selectedBadgeIds.size} selected</span>
+      </div>
+      <div class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1.5 rounded-xl bg-black/20 border border-white/5">
+        ${getAllAvailableBadges().map(b => {
+          const isChecked = selectedBadgeIds.has(b.id);
+          return `
+            <button type="button" class="btn-att-badge-pill px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${isChecked ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-300 border border-white/5'}" data-badge-id="${esc(b.id)}">
+              <span class="w-2 h-2 rounded-full" style="background-color: ${b.color || '#0A84FF'};"></span>
+              <span>${esc(b.label || b.name || b.id)}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+    </div>
+    <div id="target-custom-box" class="space-y-2" style="display: ${targetType === 'custom' ? 'block' : 'none'};">
+      <div class="flex items-center justify-between text-xs">
+        <span class="text-neutral-400">Select Individual Members:</span>
+        <span id="att-custom-count-label" class="text-[#0A84FF] font-semibold">${assignedUids.size} selected</span>
+      </div>
+      <div class="max-h-48 overflow-y-auto rounded-xl bg-black/20 border border-white/5 divide-y divide-white/5">
+        ${(state.members || []).map(m => {
+          const isSelected = assignedUids.has(m.uid);
+          return `
+            <label class="flex items-center justify-between p-2 hover:bg-white/5 transition cursor-pointer text-xs">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="font-medium text-white truncate">${esc(m.displayName || m.name || m.email || m.uid)}</span>
+                ${m.role === 'admin' ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Admin</span>' : ''}
+              </div>
+              <input type="checkbox" class="att-member-cb rounded bg-white/10 border-white/20 text-[#0A84FF] focus:ring-0" data-uid="${esc(m.uid)}" ${isSelected ? 'checked' : ''} />
+            </label>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+
+  const targetAllBox = assignBox.querySelector('#target-all-box');
+  const targetBadgeBox = assignBox.querySelector('#target-badge-box');
+  const targetCustomBox = assignBox.querySelector('#target-custom-box');
+  const badgeCountLabel = assignBox.querySelector('#att-badge-count-label');
+  const customCountLabel = assignBox.querySelector('#att-custom-count-label');
+
+  assignBox.querySelectorAll('.btn-att-badge-pill').forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      const bId = btn.dataset.badgeId;
+      if (selectedBadgeIds.has(bId)) selectedBadgeIds.delete(bId);
+      else selectedBadgeIds.add(bId);
+      btn.className = `btn-att-badge-pill px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${selectedBadgeIds.has(bId) ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-300 border border-white/5'}`;
+      if (badgeCountLabel) badgeCountLabel.textContent = `${selectedBadgeIds.size} selected`;
+    };
+  });
+
+  assignBox.querySelectorAll('.att-member-cb').forEach(cb => {
+    cb.onchange = (e) => {
+      const uid = cb.dataset.uid;
+      if (e.target.checked) assignedUids.add(uid);
+      else assignedUids.delete(uid);
+      if (customCountLabel) customCountLabel.textContent = `${assignedUids.size} selected`;
+    };
+  });
+
+  const segWrap = assignBox.querySelector('#session-target-type-segmented-wrap');
+  if (segWrap) {
+    segWrap.appendChild(renderSegmented({
+      id: 'segmented-att-target-type',
+      options: [
+        { value: 'all', label: 'All Members' },
+        { value: 'badge', label: 'By Badge' },
+        { value: 'custom', label: 'Specific Members' }
+      ],
+      value: targetType,
+      onChange: (val) => {
+        targetType = val;
+        targetAllBox.style.display = (val === 'all') ? 'flex' : 'none';
+        targetBadgeBox.style.display = (val === 'badge') ? 'block' : 'none';
+        targetCustomBox.style.display = (val === 'custom') ? 'block' : 'none';
+      }
+    }));
+  }
+  bodyEl.appendChild(assignBox);
+
+  // 5. Penalty Systems (Points & Fines) with attendance-grid-2 and zero-scroll-jump
+  function renderPenaltySystemSection(sysKey, title, subtitle, unitLabel, sysObj) {
+    const card = document.createElement('div');
+    card.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
+
+    const header = document.createElement('div');
+    header.className = 'flex items-center justify-between';
+    header.innerHTML = `
+      <div>
+        <span class="text-xs font-bold text-white block uppercase tracking-wider">${esc(title)}</span>
+        <span class="text-[11px] text-neutral-400">${esc(subtitle)}</span>
+      </div>
+      <div id="switch-${sysKey}-wrap"></div>
     `;
-    const cancelBtn = cancelBox.querySelector('#attCancelBtn');
-    if (cancelBtn) {
-      cancelBtn.onclick = (e) => {
-        e.preventDefault();
-        closeModal();
+
+    const matrixBox = document.createElement('div');
+    matrixBox.className = 'space-y-3 pt-2 border-t border-white/5';
+    matrixBox.style.display = sysObj.enabled ? 'block' : 'none';
+
+    const switchWrap = header.querySelector(`#switch-${sysKey}-wrap`);
+    switchWrap.appendChild(renderSwitch({
+      id: `adm-session-${sysKey}-toggle`,
+      checked: sysObj.enabled,
+      onChange: (chk) => {
+        sysObj.enabled = chk;
+        matrixBox.style.display = chk ? 'block' : 'none';
+      }
+    }));
+    card.appendChild(header);
+
+    // Mode: Fixed vs Stepped
+    const modeWrap = document.createElement('div');
+    modeWrap.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-semibold">Calculation Mode</label>`;
+
+    const fixedDiv = document.createElement('div');
+    fixedDiv.style.display = (sysObj.mode === 'fixed') ? 'block' : 'none';
+    fixedDiv.innerHTML = `
+      <label class="block text-[11px] text-neutral-300 mb-1">Fixed Late Penalty (${unitLabel})</label>
+      <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.fixed}" />
+    `;
+    const fixedInp = fixedDiv.querySelector('input');
+    if (fixedInp) {
+      fixedInp.oninput = (e) => {
+        sysObj.fixed = Math.max(0, Number(e.target.value) || 0);
       };
     }
-    bodyEl.appendChild(cancelBox);
 
-    renderSchedSubform();
-  }
+    const steppedContainer = document.createElement('div');
+    steppedContainer.className = 'space-y-3';
+    steppedContainer.style.display = (sysObj.mode === 'stepped') ? 'block' : 'none';
 
-  function renderSchedSubform() {
-    const subContainer = bodyEl.querySelector('#adm-session-sched-subform');
-    if (!subContainer) return;
+    // Step Unit (Minutes vs Seconds)
+    const unitRow = document.createElement('div');
+    unitRow.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Unit</label>`;
+    unitRow.appendChild(renderSegmented({
+      id: `seg-${sysKey}-unit`,
+      options: [
+        { value: 'minutes', label: 'Minutes' },
+        { value: 'seconds', label: 'Seconds' }
+      ],
+      value: sysObj.stepUnit,
+      onChange: (uVal) => {
+        sysObj.stepUnit = uVal;
+      }
+    }));
+    steppedContainer.appendChild(unitRow);
 
-    if (schedType === 'weekly') {
-      subContainer.innerHTML = `
-        <div>
-          <label class="block text-[11px] text-neutral-400 mb-1.5 font-medium">Select Active Weekdays</label>
-          <div class="flex flex-wrap gap-1.5">
-            ${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(wd => `
-              <button type="button" class="btn-session-wd px-2.5 py-1 rounded-lg text-xs font-semibold transition ${weeklyDays.has(wd) ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-400 border border-white/5'}" data-wd="${wd}">
-                ${wd}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-      `;
-      subContainer.querySelectorAll('.btn-session-wd').forEach(btn => {
-        btn.onclick = (e) => {
-          e.preventDefault();
-          const wd = btn.dataset.wd;
-          if (weeklyDays.has(wd)) {
-            if (weeklyDays.size > 1) weeklyDays.delete(wd);
-          } else {
-            weeklyDays.add(wd);
-          }
-          renderSchedSubform();
-        };
-      });
-    } else if (schedType === 'monthlyDates') {
-      subContainer.innerHTML = `
-        <div>
-          <label class="block text-[11px] text-neutral-400 mb-1.5 font-medium">Select Days of Month</label>
-          <div class="grid grid-cols-7 gap-1">
-            ${Array.from({ length: 31 }, (_, i) => i + 1).map(d => `
-              <button type="button" class="btn-session-mdate py-1 rounded text-xs font-mono font-semibold transition ${monthlyDates.has(d) ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-400 border border-white/5'}" data-date="${d}">
-                ${d}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-      `;
-      subContainer.querySelectorAll('.btn-session-mdate').forEach(btn => {
-        btn.onclick = (e) => {
-          e.preventDefault();
-          const d = Number(btn.dataset.date);
-          if (monthlyDates.has(d)) {
-            if (monthlyDates.size > 1) monthlyDates.delete(d);
-          } else {
-            monthlyDates.add(d);
-          }
-          renderSchedSubform();
-        };
-      });
-    } else {
-      subContainer.innerHTML = '';
+    // Stepped Rate: Strict 2-column grid (.attendance-grid-2)
+    const stepRow = document.createElement('div');
+    stepRow.className = 'attendance-grid-2 pt-1';
+    stepRow.innerHTML = `
+      <div>
+        <label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Interval</label>
+        <div id="stepper-${sysKey}-wrap" class="stepper-control"></div>
+      </div>
+      <div>
+        <label class="block text-[11px] text-neutral-300 mb-1 font-medium">Fee / Step (${unitLabel})</label>
+        <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.perStep}" />
+      </div>
+    `;
+
+    const stWrap = stepRow.querySelector(`#stepper-${sysKey}-wrap`);
+    stWrap.appendChild(renderStepper({
+      id: `step-${sysKey}-size`,
+      value: sysObj.stepSize,
+      min: 1,
+      max: 3600,
+      onChange: (newSize) => {
+        sysObj.stepSize = newSize;
+      }
+    }));
+
+    const feeInp = stepRow.querySelector('input');
+    if (feeInp) {
+      feeInp.oninput = (e) => {
+        sysObj.perStep = Math.max(0, Number(e.target.value) || 0);
+      };
     }
+    steppedContainer.appendChild(stepRow);
+
+    modeWrap.appendChild(renderSegmented({
+      id: `seg-${sysKey}-mode`,
+      options: [
+        { value: 'fixed', label: 'Fixed Amount' },
+        { value: 'stepped', label: 'Stepped Rate' }
+      ],
+      value: sysObj.mode,
+      onChange: (mVal) => {
+        sysObj.mode = mVal;
+        fixedDiv.style.display = (mVal === 'fixed') ? 'block' : 'none';
+        steppedContainer.style.display = (mVal === 'stepped') ? 'block' : 'none';
+      }
+    }));
+
+    matrixBox.appendChild(modeWrap);
+    matrixBox.appendChild(fixedDiv);
+    matrixBox.appendChild(steppedContainer);
+
+    // Min & Max Bounds (in attendance-grid-2)
+    const boundsGrid = document.createElement('div');
+    boundsGrid.className = 'attendance-grid-2 pt-1';
+    boundsGrid.innerHTML = `
+      <div>
+        <label class="block text-[11px] text-neutral-300 mb-1">Minimum Late (${unitLabel})</label>
+        <input type="number" min="0" class="w-full glass-input text-xs font-mono inp-min" value="${sysObj.min}" />
+      </div>
+      <div>
+        <label class="block text-[11px] text-neutral-300 mb-1">Maximum Late (${unitLabel})</label>
+        <input type="number" min="0" class="w-full glass-input text-xs font-mono inp-max" value="${sysObj.max}" />
+      </div>
+    `;
+    const inpMin = boundsGrid.querySelector('.inp-min');
+    if (inpMin) inpMin.oninput = (e) => { sysObj.min = Math.max(0, Number(e.target.value) || 0); };
+    const inpMax = boundsGrid.querySelector('.inp-max');
+    if (inpMax) inpMax.oninput = (e) => { sysObj.max = Math.max(0, Number(e.target.value) || 0); };
+    matrixBox.appendChild(boundsGrid);
+
+    // Unexcused Absence
+    const absenceBox = document.createElement('div');
+    absenceBox.className = 'pt-2 border-t border-white/5';
+    absenceBox.innerHTML = `
+      <label class="block text-[11px] text-neutral-300 mb-1">Unexcused Absence (${unitLabel})</label>
+      <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.absence}" />
+    `;
+    const inpAbsence = absenceBox.querySelector('input');
+    if (inpAbsence) inpAbsence.oninput = (e) => { sysObj.absence = Math.max(0, Number(e.target.value) || 0); };
+    matrixBox.appendChild(absenceBox);
+
+    card.appendChild(matrixBox);
+    return card;
   }
 
-  renderModalBody();
+  bodyEl.appendChild(renderPenaltySystemSection(
+    'pts',
+    'Points Penalty Matrix',
+    'Subtract penalty points for late check-in & absence',
+    'pts',
+    pointsPenalty
+  ));
+
+  bodyEl.appendChild(renderPenaltySystemSection(
+    'fine',
+    'Financial Fine Matrix (EGP)',
+    'Deduct EGP balance for late check-in & absence',
+    'EGP',
+    finePenalty
+  ));
 
   openModal({
     title: sessionId ? 'Edit Attendance Session' : 'New Attendance Session',
@@ -12255,47 +12311,25 @@ export function openRequestWaiverModal() {
   const nowMs = serverNow();
   const endWindowMs = nowMs + 14 * 86400000; // Next 14 days
 
-  // Compute eligible sessions:
-  // 1. Next 14 days via getOccurrences
-  // 2. assignedUids contains user OR assignedUids is empty/missing
-  // 3. active and not archived
-  // 4. Exclude occurrences already past late cutoff, already checked in, or having pending/approved waiver
-  const eligibleOccurrences = [];
-  (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived).forEach(session => {
+  // STEP 1: Find UNIQUE service templates the user is rostered for (no duplicates)
+  const assignedSessions = (state.attendanceSessions || []).filter(session => {
+    if (session.active === false || session.archived) return false;
     const targetType = session.targetType || (Array.isArray(session.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
     if (targetType === 'badge') {
       const uBadges = new Set([...(state.user?.badgeIds || []), ...(state.user?.badges || []).map(b => typeof b === 'string' ? b : b?.id).filter(Boolean)]);
       const sBadges = session.badgeIds || [];
-      if (sBadges.length > 0 && !sBadges.some(bid => uBadges.has(bid))) return;
+      if (sBadges.length > 0 && !sBadges.some(bid => uBadges.has(bid))) return false;
     } else if (targetType === 'custom') {
-      if (Array.isArray(session.assignedUids) && !session.assignedUids.includes(state.user.uid)) return;
+      if (Array.isArray(session.assignedUids) && !session.assignedUids.includes(state.user.uid)) return false;
     }
-    const occs = getOccurrences(session.schedule, nowMs, endWindowMs, APP_TIMEZONE);
-    occs.forEach(occ => {
-      const lateCutoffMinutes = typeof session.lateCutoffMinutes === 'number' ? session.lateCutoffMinutes : 120;
-      const cutoffMs = occ.start + lateCutoffMinutes * 60000;
-      if (nowMs > cutoffMs) return; // past late cutoff
-
-      const alreadyCheckedIn = (state.myAttendanceLogs || []).some(l =>
-        l.sessionId === session.id && (l.occurrenceKey === occ.key || (session.schedule?.type === 'once' && l.occurrenceKey === 'once'))
-      );
-      if (alreadyCheckedIn) return;
-
-      const existingWaiver = (state.myWaiverRequests || []).find(w =>
-        w.sessionId === session.id &&
-        (w.occurrenceKey === occ.key || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) &&
-        (w.status === 'pending' || w.status === 'approved')
-      );
-      if (existingWaiver) return;
-
-      eligibleOccurrences.push({ session, occ });
-    });
+    return true;
   });
 
-  eligibleOccurrences.sort((a, b) => a.occ.start - b.occ.start);
-
-  let selectedIndex = 0;
+  let currentStep = 1;
+  let selectedSession = null;
+  let selectedOccurrence = null;
   let selectedCategory = 'Exams / Study';
+
   const WAIVER_REASON_CATEGORIES = [
     { id: 'Exams / Study', label: 'Exams / Study', icon: 'clipboard', prefill: 'Exams and academic study preparation.' },
     { id: 'Medical', label: 'Medical', icon: 'heart', prefill: 'Medical appointment or health condition.' },
@@ -12307,235 +12341,207 @@ export function openRequestWaiverModal() {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4 text-xs';
 
-  function renderModal() {
-    const myWaivers = state.myWaiverRequests || [];
-    const hasEligible = eligibleOccurrences.length > 0;
+  function renderView() {
+    bodyEl.innerHTML = '';
 
-    bodyEl.innerHTML = `
-      <div class="space-y-4">
-        <!-- New Excuse / Waiver Request Card -->
-        <div class="ios-inset-group">
-          <div class="ios-inset-header">NEW EXCUSE / WAIVER REQUEST</div>
-          <div class="p-3.5 space-y-3.5">
-            ${!hasEligible ? `
-              <div class="glass-card p-6 text-center space-y-2 border border-dashed border-white/10 rounded-2xl">
-                <div class="w-12 h-12 mx-auto rounded-full bg-white/[0.05] flex items-center justify-center text-neutral-400">
-                  <svg class="w-6 h-6 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="8" x2="12" y2="12"></line>
-                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                  </svg>
-                </div>
-                <div class="font-bold text-white text-sm">No Upcoming Assigned Duties</div>
-                <p class="text-xs text-neutral-400 leading-relaxed max-w-xs mx-auto">
-                  You have no scheduled attendance sessions requiring an excuse right now.
-                </p>
-              </div>
-            ` : `
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-2">Select Upcoming Duty Session</label>
-                <div id="waiver-session-cards" class="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  ${eligibleOccurrences.map((item, idx) => {
-                    const isSelected = idx === selectedIndex;
-                    const dateFormatted = formatDateTime(item.occ.start);
-                    return `
-                      <button type="button" class="waiver-session-card w-full p-3 rounded-xl border text-left transition flex items-center justify-between gap-3 ${isSelected ? 'bg-[#0A84FF]/15 border-[#0A84FF] shadow-sm' : 'bg-white/5 border-white/10 hover:bg-white/[0.08]'}" data-idx="${idx}">
-                        <div class="min-w-0 flex-1">
-                          <div class="font-bold text-white text-xs truncate">${esc(item.session.title)}</div>
-                          <div class="flex items-center gap-2 mt-1">
-                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-[#0A84FF]">
-                              ${esc(dateFormatted)}
-                            </span>
-                          </div>
-                        </div>
-                        <div class="w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF] text-white' : 'border-white/30 text-transparent'}">
-                          <svg class="w-3 h-3 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                          </svg>
-                        </div>
-                      </button>
-                    `;
-                  }).join('')}
-                </div>
-              </div>
+    if (currentStep === 1) {
+      // STEP 1: Unique Service Templates Selection
+      const headerBox = document.createElement('div');
+      headerBox.className = 'space-y-1 mb-2';
+      headerBox.innerHTML = `
+        <div class="ios-title-3 text-white font-bold text-sm">Step 1: Select Service Template</div>
+        <p class="text-neutral-400 text-xs">Choose the assigned service you need to request an excuse for.</p>
+      `;
+      bodyEl.appendChild(headerBox);
 
-              <!-- Quick Reason Chips with SVG Icons -->
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-1.5">Reason Category</label>
-                <div class="flex flex-wrap gap-1.5" id="waiver-reason-chips">
-                  ${WAIVER_REASON_CATEGORIES.map(cat => {
-                    const isSelected = cat.id === selectedCategory;
-                    const iconSvg = typeof getIconSvg === 'function' ? getIconSvg(cat.icon, 'w-3.5 h-3.5') : '';
-                    return `
-                      <button type="button" class="waiver-reason-chip px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition inline-flex items-center gap-1.5 ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF] text-white shadow-sm' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-category="${esc(cat.id)}">
-                        ${iconSvg}
-                        <span>${esc(cat.label)}</span>
-                      </button>
-                    `;
-                  }).join('')}
-                </div>
-              </div>
+      if (assignedSessions.length === 0) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'glass-card p-6 text-center space-y-2 border border-dashed border-white/10 rounded-2xl';
+        emptyDiv.innerHTML = `
+          <div class="w-12 h-12 mx-auto rounded-full bg-white/[0.05] flex items-center justify-center text-neutral-400">
+            <svg class="w-6 h-6 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          </div>
+          <div class="font-bold text-white text-sm">No Assigned Services</div>
+          <p class="text-xs text-neutral-400 leading-relaxed max-w-xs mx-auto">
+            You are not rostered for any active attendance sessions.
+          </p>
+        `;
+        bodyEl.appendChild(emptyDiv);
+      } else {
+        const listDiv = document.createElement('div');
+        listDiv.className = 'space-y-2 max-h-72 overflow-y-auto pr-1';
 
-              <!-- Dark Glass Textarea -->
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-1">
-                  Reason Explanation <span class="text-rose-400">*</span>
-                </label>
-                <textarea id="waiver-reason-input" class="w-full p-3 rounded-xl bg-black/40 border border-white/10 text-white placeholder-neutral-500 text-xs leading-relaxed focus:outline-none focus:border-[#0A84FF] transition" rows="3" placeholder="Explain why you cannot attend this session..." required></textarea>
-              </div>
+        assignedSessions.forEach(session => {
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'w-full p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-left transition flex items-center justify-between gap-3';
+          card.innerHTML = `
+            <div class="min-w-0 flex-1">
+              <div class="font-bold text-white text-sm truncate">${esc(session.title)}</div>
+              <div class="text-[11px] text-neutral-400 mt-0.5 capitalize">Schedule: ${session.schedule?.type || 'Standard'}</div>
+            </div>
+            <div class="text-[#0A84FF] text-xs font-semibold shrink-0 flex items-center gap-1">
+              <span>Choose</span>
+              <span>&rarr;</span>
+            </div>
+          `;
+          card.onclick = () => {
+            selectedSession = session;
+            const occs = getOccurrences(session.schedule, nowMs, endWindowMs, APP_TIMEZONE);
+            selectedOccurrence = occs[0] || null;
+            currentStep = 2;
+            renderView();
+          };
+          listDiv.appendChild(card);
+        });
+        bodyEl.appendChild(listDiv);
+      }
+    } else {
+      // STEP 2: Pick Specific Date Occurrence & Fill Excuse Details
+      const topRow = document.createElement('div');
+      topRow.className = 'flex items-center justify-between pb-2 border-b border-white/10';
+      topRow.innerHTML = `
+        <button type="button" id="btn-waiver-back" class="text-xs text-[#0A84FF] font-semibold flex items-center gap-1 hover:underline">
+          &larr; Back to Services
+        </button>
+        <span class="font-semibold text-white truncate max-w-[180px] text-xs">${esc(selectedSession.title)}</span>
+      `;
+      const backBtn = topRow.querySelector('#btn-waiver-back');
+      backBtn.onclick = () => {
+        currentStep = 1;
+        renderView();
+      };
+      bodyEl.appendChild(topRow);
 
-              <div class="pt-1">
-                <button type="button" id="btn-submit-waiver" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold transition flex items-center justify-center gap-1.5 shadow-sm">
-                  <span>Submit Excuse Request</span>
-                </button>
-              </div>
-            `}
+      const occs = getOccurrences(selectedSession.schedule, nowMs, endWindowMs, APP_TIMEZONE);
+
+      const step2Box = document.createElement('div');
+      step2Box.className = 'space-y-3.5 pt-1';
+
+      let occPickerHtml = '';
+      if (occs.length > 0) {
+        occPickerHtml = `
+          <div>
+            <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Select Which Occurrence Date</label>
+            <div class="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+              ${occs.map((occ, idx) => {
+                const isSelected = selectedOccurrence?.key === occ.key || (!selectedOccurrence && idx === 0);
+                const occDate = new Date(occ.start);
+                const dateLabel = occDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: APP_TIMEZONE });
+                const timeLabel = occDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: APP_TIMEZONE });
+                return `
+                  <button type="button" class="btn-occ-pick w-full p-2.5 rounded-xl border text-left text-xs transition flex items-center justify-between ${isSelected ? 'bg-[#0A84FF]/20 border-[#0A84FF] text-white font-semibold' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-occ-key="${occ.key}">
+                    <span>${dateLabel} at ${timeLabel}</span>
+                    ${isSelected ? '<span class="text-[#0A84FF] font-bold text-xs">✓</span>' : ''}
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      } else {
+        occPickerHtml = `
+          <div>
+            <label class="block text-xs font-semibold text-neutral-200 mb-1">Occurrence Date</label>
+            <input type="date" id="waiver-custom-date" class="w-full glass-input text-xs text-white font-mono" value="${new Date().toISOString().slice(0, 10)}" />
+          </div>
+        `;
+      }
+
+      step2Box.innerHTML = `
+        ${occPickerHtml}
+        <div>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Reason Category</label>
+          <div class="flex flex-wrap gap-1.5" id="waiver-cat-chips">
+            ${WAIVER_REASON_CATEGORIES.map(cat => `
+              <button type="button" class="btn-waiver-cat px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition ${selectedCategory === cat.id ? 'bg-[#0A84FF] border-[#0A84FF] text-white shadow-sm' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-cat="${esc(cat.id)}">
+                ${esc(cat.label)}
+              </button>
+            `).join('')}
           </div>
         </div>
-
-        <!-- My Past & Active Waiver Requests -->
-        <div class="ios-inset-group">
-          <div class="ios-inset-header flex items-center justify-between">
-            <span>MY REQUESTS HISTORY</span>
-            <span class="text-[10px] text-neutral-400 font-normal">${myWaivers.length} records</span>
-          </div>
-          <div class="p-3 space-y-2 max-h-56 overflow-y-auto">
-            ${myWaivers.length === 0 ? `
-              <div class="p-4 text-center text-neutral-500 text-xs italic">
-                You have not submitted any excuse requests yet.
-              </div>
-            ` : myWaivers.map(w => {
-              let statusBadge = '';
-              if (w.status === 'approved') {
-                statusBadge = '<span class="waiver-status-approved px-2 py-0.5 rounded-full text-[10px] font-bold font-mono">Approved</span>';
-              } else if (w.status === 'rejected') {
-                statusBadge = '<span class="waiver-status-rejected px-2 py-0.5 rounded-full text-[10px] font-bold font-mono">Rejected</span>';
-              } else {
-                statusBadge = '<span class="waiver-status-pending px-2 py-0.5 rounded-full text-[10px] font-bold font-mono">Pending Review</span>';
-              }
-
-              return `
-                <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="font-bold text-white text-[12px] truncate">${esc(w.sessionTitle)}</span>
-                    ${statusBadge}
-                  </div>
-                  ${w.reasonCategory ? `
-                    <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-white/10 text-neutral-300">
-                      ${esc(w.reasonCategory)}
-                    </div>
-                  ` : ''}
-                  <p class="text-neutral-300 text-[11px] leading-relaxed">"${esc(w.reason)}"</p>
-                  ${w.adminNote ? `
-                    <div class="p-2 rounded-lg bg-black/30 border border-white/5 text-[11px] text-neutral-300">
-                      <span class="text-neutral-400 font-semibold block text-[10px]">Admin Note:</span>
-                      ${esc(w.adminNote)}
-                    </div>
-                  ` : ''}
-                  <div class="text-[10px] text-neutral-500 font-mono pt-1 border-t border-white/5">
-                    Submitted: ${formatDateTime(w.createdAt)}
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
+        <div>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Explanation Note *</label>
+          <textarea id="waiver-reason-input" class="w-full p-3 rounded-xl bg-black/40 border border-white/10 text-white placeholder-neutral-500 text-xs leading-relaxed focus:outline-none focus:border-[#0A84FF] transition" rows="3" placeholder="Explain why you cannot attend this session...">${esc(WAIVER_REASON_CATEGORIES.find(c => c.id === selectedCategory)?.prefill || '')}</textarea>
         </div>
-      </div>
-    `;
+        <button type="button" id="btn-submit-waiver" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold transition flex items-center justify-center gap-1.5 shadow-sm">
+          Submit Excuse Request
+        </button>
+      `;
 
-    // Wire session card selection
-    bodyEl.querySelectorAll('.waiver-session-card').forEach(btn => {
-      btn.onclick = () => {
-        selectedIndex = Number(btn.dataset.idx);
-        renderModal();
-      };
-    });
+      step2Box.querySelectorAll('.btn-occ-pick').forEach(b => {
+        b.onclick = () => {
+          const key = b.dataset.occKey;
+          selectedOccurrence = occs.find(o => o.key === key) || null;
+          renderView();
+        };
+      });
 
-    // Wire reason category chips
-    bodyEl.querySelectorAll('.waiver-reason-chip').forEach(chip => {
-      chip.onclick = () => {
-        selectedCategory = chip.dataset.category;
-        const cat = WAIVER_REASON_CATEGORIES.find(c => c.id === selectedCategory);
-        const reasonInput = bodyEl.querySelector('#waiver-reason-input');
-        if (reasonInput && cat && cat.prefill) {
-          reasonInput.value = cat.prefill;
-        }
-        renderModal();
-      };
-    });
+      step2Box.querySelectorAll('.btn-waiver-cat').forEach(b => {
+        b.onclick = () => {
+          selectedCategory = b.dataset.cat;
+          const prefill = WAIVER_REASON_CATEGORIES.find(c => c.id === selectedCategory)?.prefill || '';
+          const reasonInp = step2Box.querySelector('#waiver-reason-input');
+          if (reasonInp) reasonInp.value = prefill;
+          renderView();
+        };
+      });
 
-    // Wire submit
-    const submitBtn = bodyEl.querySelector('#btn-submit-waiver');
-    if (submitBtn) {
-      submitBtn.onclick = async () => {
-        const item = eligibleOccurrences[selectedIndex];
-        if (!item) {
-          toast('Please select an upcoming duty session', 'error');
-          return;
-        }
+      const submitBtn = step2Box.querySelector('#btn-submit-waiver');
+      if (submitBtn) {
+        submitBtn.onclick = async () => {
+          const reasonVal = step2Box.querySelector('#waiver-reason-input')?.value.trim();
+          if (!reasonVal) {
+            toast('Please provide a reason for the excuse request', 'error');
+            return;
+          }
+          const occKey = selectedOccurrence?.key || (selectedSession.schedule?.type === 'once' ? 'once' : (step2Box.querySelector('#waiver-custom-date')?.value || 'once'));
+          const deterministicId = `waiver_${selectedSession.id}_${occKey}_${state.user.uid}`;
 
-        const reasonVal = bodyEl.querySelector('#waiver-reason-input')?.value.trim();
-        if (!reasonVal) {
-          toast('Please provide a reason for the excuse request', 'error');
-          return;
-        }
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Submitting...';
 
-        const deterministicId = `waiver_${item.session.id}_${item.occ.key}_${state.user.uid}`;
+          try {
+            await setDoc(doc(db, 'waiver_requests', deterministicId), {
+              sessionId: selectedSession.id,
+              sessionTitle: selectedSession.title,
+              occurrenceKey: occKey,
+              occurrenceStart: selectedOccurrence ? Timestamp.fromMillis(selectedOccurrence.start) : serverTimestamp(),
+              uid: state.user.uid,
+              userName: state.user.name || state.user.displayName || 'Member',
+              userEmail: state.user.email || '',
+              userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+              category: selectedCategory,
+              reason: reasonVal,
+              status: 'pending',
+              adminNote: '',
+              reviewedBy: '',
+              reviewedAt: null,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
 
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Submitting...';
+            toast('Excuse request submitted for admin review', 'success');
+            closeModal();
+          } catch (err) {
+            console.error('Error submitting waiver:', err);
+            toast('Failed to submit: ' + err.message, 'error');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Submit Excuse Request';
+          }
+        };
+      }
 
-        try {
-          await setDoc(doc(db, 'waiver_requests', deterministicId), {
-            sessionId: item.session.id,
-            sessionTitle: item.session.title,
-            occurrenceKey: item.occ.key,
-            occurrenceStart: Timestamp.fromMillis(item.occ.start),
-            uid: state.user.uid,
-            userName: state.user.name || state.user.displayName || 'Member',
-            userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-            reason: reasonVal,
-            reasonCategory: selectedCategory || 'Other',
-            status: 'pending',
-            adminNote: '',
-            createdAt: serverTimestamp(),
-            resolvedAt: null,
-            resolvedBy: null
-          });
-
-          toast('Excuse request submitted for review!', 'success');
-          const newWaiver = normalizeWaiverRequest({
-            id: deterministicId,
-            sessionId: item.session.id,
-            sessionTitle: item.session.title,
-            occurrenceKey: item.occ.key,
-            occurrenceStart: Timestamp.fromMillis(item.occ.start),
-            uid: state.user.uid,
-            userName: state.user.name || state.user.displayName || 'Member',
-            userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-            reason: reasonVal,
-            reasonCategory: selectedCategory || 'Other',
-            status: 'pending',
-            createdAt: new Date()
-          });
-          state.myWaiverRequests = [newWaiver, ...(state.myWaiverRequests || [])];
-          renderAttendance();
-          closeAllModals();
-        } catch (err) {
-          console.error('Error submitting waiver request:', err);
-          toast(err.message || 'Failed to submit excuse request', 'error');
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Submit Excuse Request';
-        }
-      };
+      bodyEl.appendChild(step2Box);
     }
   }
 
-  renderModal();
+  renderView();
 
   openModal({
     title: 'Attendance Excuse Request',
-    body: bodyEl
+    body: bodyEl,
+    saveLabel: null
   });
 }
 

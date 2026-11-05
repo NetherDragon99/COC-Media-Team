@@ -1695,7 +1695,15 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
-.admin-header-btn-exit {
+.admin-header-btn-exit,
+#adminHubBackBtn,
+#btn-exit-admin,
+.admin-back-btn {
+  pointer-events: auto !important;
+  z-index: 9999 !important;
+  cursor: pointer;
+  position: relative;
+  touch-action: manipulation;
   width: 36px;
   height: 36px;
   border-radius: var(--radius-full);
@@ -1877,4 +1885,52 @@ textarea:focus-visible {
   transition: background-color 0.12s ease, opacity 0.12s ease;
   -webkit-tap-highlight-color: transparent;
   border-radius: 8px;
+}
+
+/* ==========================================================================
+   RELEASE v2.1.5 STYLES
+   ========================================================================== */
+.sub-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000 !important;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  transition: opacity 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sub-modal-overlay.is-hidden {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  display: none !important;
+}
+
+.sub-modal-sheet {
+  width: 100%;
+  max-width: 480px;
+  background: var(--bg-grouped-secondary);
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.6);
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  border-bottom: none;
+}
+
+.attendance-grid-2 {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 16px !important;
+  align-items: start !important;
+}
+
+#podium-first {
+  transform: translateY(-10px);
 }
