@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.2)
+ * COC Media Team - Production Web App (v2.1.3)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.2';
+export const APP_VERSION = '2.1.3';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -717,6 +717,17 @@ function normalizeNotification(raw) {
 export function getAllAvailableBadges() {
   const badgeMap = new Map();
   PRESET_BADGES.forEach(b => badgeMap.set(b.id, { ...b }));
+  (state.badges || []).forEach(b => {
+    if (b && b.id) {
+      badgeMap.set(b.id, {
+        id: b.id,
+        label: b.label || b.name || b.nameEn || b.id,
+        description: b.description || '',
+        color: b.color || '#0A84FF',
+        icon: b.icon || 'star'
+      });
+    }
+  });
   (state.members || []).forEach(m => {
     (m.badges || []).forEach(b => {
       const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
@@ -1536,11 +1547,14 @@ function normalizeSession(s) {
     };
   }
 
+  const targetType = s.targetType || (Array.isArray(s.assignedUids) && s.assignedUids.length > 0 ? 'custom' : (Array.isArray(s.badgeIds) && s.badgeIds.length > 0 ? 'badge' : 'all'));
   return {
     ...s,
     id: s.id || '',
     title: s.title || 'Attendance Session',
     schedule: s.schedule || { type: 'once', startDateTime: s.startTime || s.startDateTime || Date.now() },
+    targetType,
+    badgeIds: Array.isArray(s.badgeIds) ? s.badgeIds : [],
     assignedUids: Array.isArray(s.assignedUids) ? s.assignedUids : [],
     active: s.active !== false && s.status !== 'closed' && s.status !== 'archived',
     archived: Boolean(s.archived || s.status === 'archived'),
@@ -3546,6 +3560,8 @@ function initErrorBoundary() {
     const combined = `${msg} ${stack} ${filename} ${target}`.toLowerCase();
 
     return (
+      combined.includes('resizeobserver') ||
+      combined.includes('loop completed with undelivered notifications') ||
       combined.includes('websocket') ||
       combined.includes('@vite/client') ||
       combined.includes('ws://') ||
@@ -3565,7 +3581,18 @@ function initErrorBoundary() {
       msgEl.textContent = error?.message || 'An unexpected error occurred while executing the workspace.';
     }
     boundary.classList.remove('hidden');
+    boundary.style.display = '';
   };
+
+  const dismissBtn = document.getElementById('dismissErrorBtn');
+  if (dismissBtn) {
+    dismissBtn.onclick = (e) => {
+      e?.preventDefault?.();
+      boundary.classList.add('hidden');
+      boundary.style.display = 'none';
+      if (msgEl) msgEl.textContent = '';
+    };
+  }
 
   window.addEventListener('error', (event) => {
     if (isIgnoredError(event) || isIgnoredError(event.error)) {
@@ -4906,6 +4933,7 @@ function initNavigation() {
     { id: 'overview', hash: '#admin-overview' },
     { id: 'tasks', hash: '#admin-tasks' },
     { id: 'categories', hash: '#admin-categories' },
+    { id: 'badges', hash: '#admin-badges' },
     { id: 'attendance', hash: '#admin-attendance' },
     { id: 'submissions', hash: '#admin-submissions' },
     { id: 'members', hash: '#admin-members' },
@@ -6697,6 +6725,15 @@ function initFirestoreListeners() {
     listeners.add('attendance_sessions', unsubSessions);
   } catch (e) { console.warn(e); }
 
+  // Badges Realtime Listener (Section 3)
+  try {
+    const unsubBadges = onSnapshot(collection(db, 'badges'), (snapshot) => {
+      state.badges = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderAdminBadges();
+    }, (err) => console.warn('Badges listener:', err));
+    listeners.add('badges', unsubBadges);
+  } catch (e) { console.warn(e); }
+
   // 4. Attendance Logs (User live attendance & Admin oversight)
   setupAttendanceListeners();
 
@@ -7250,11 +7287,26 @@ function renderAttendanceView() {
 
   const userUid = state.user?.uid;
   const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin' || state.isAdminUnlocked);
+  const userBadgeIds = new Set([
+    ...(Array.isArray(state.user?.badgeIds) ? state.user.badgeIds : []),
+    ...(Array.isArray(state.user?.badges) ? state.user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : [])
+  ]);
+
   const activeSessions = (state.attendanceSessions || []).filter(s => {
     if (!s.active || s.archived) return false;
-    // Section A: Assigned Attendees Per Session
-    if (Array.isArray(s.assignedUids) && s.assignedUids.length > 0 && !isAdmin && userUid) {
-      return s.assignedUids.includes(userUid);
+    if (isAdmin) return true;
+    if (!userUid) return false;
+
+    const targetType = s.targetType || (Array.isArray(s.assignedUids) && s.assignedUids.length > 0 ? 'custom' : (Array.isArray(s.badgeIds) && s.badgeIds.length > 0 ? 'badge' : 'all'));
+    if (targetType === 'all') return true;
+    if (targetType === 'badge') {
+      const bIds = Array.isArray(s.badgeIds) ? s.badgeIds : [];
+      if (bIds.length === 0) return true;
+      return bIds.some(bid => userBadgeIds.has(bid));
+    }
+    if (targetType === 'custom') {
+      const uids = Array.isArray(s.assignedUids) ? s.assignedUids : [];
+      return uids.includes(userUid);
     }
     return true;
   });
@@ -10448,18 +10500,28 @@ function openAdminSessionModal(sessionId = null) {
   let monthlyWeekdays = new Set(Array.isArray(sched.weekdays) ? sched.weekdays : ['Sun']);
 
   const pad2 = n => String(n).padStart(2, '0');
-  let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
   let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
+  let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
 
-  // Window boundaries via time pickers
+  // Window boundaries
   let earlyCheckInMinutes = session ? session.earlyCheckInMinutes : 30;
   let lateCutoffMinutes = session ? session.lateCutoffMinutes : 120;
 
-  // Attendees
-  let assignedUids = Array.isArray(session?.assignedUids) ? [...session.assignedUids] : [];
-  let assignSpecific = assignedUids.length > 0;
+  const [sH, sM] = selectedTimeStr.split(':').map(Number);
+  const startMinsOfDay = (sH || 0) * 60 + (sM || 0);
 
-  // SYSTEM 1: Points Deductions (mirrored)
+  const openMins = ((startMinsOfDay - earlyCheckInMinutes) % 1440 + 1440) % 1440;
+  const closeMins = (startMinsOfDay + lateCutoffMinutes) % 1440;
+
+  let opensTimeStr = `${pad2(Math.floor(openMins / 60))}:${pad2(openMins % 60)}`;
+  let closesTimeStr = `${pad2(Math.floor(closeMins / 60))}:${pad2(closeMins % 60)}`;
+
+  // 3-Way Attendee Assignment State: 'all' | 'badge' | 'custom'
+  let targetType = session?.targetType || (Array.isArray(session?.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session?.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
+  let selectedBadgeIds = new Set(Array.isArray(session?.badgeIds) ? session.badgeIds : []);
+  let assignedUids = new Set(Array.isArray(session?.assignedUids) ? session.assignedUids : []);
+
+  // SYSTEM 1: Points Deductions
   let pointsPenalty = {
     enabled: session ? session.pointsPenalty.enabled : true,
     mode: session ? session.pointsPenalty.mode : 'stepped',
@@ -10472,7 +10534,7 @@ function openAdminSessionModal(sessionId = null) {
     absence: session ? session.pointsPenalty.absence : 20
   };
 
-  // SYSTEM 2: Financial Fines (EGP) (mirrored)
+  // SYSTEM 2: Financial Fines (EGP)
   let finePenalty = {
     enabled: session ? session.finePenalty.enabled : false,
     mode: session ? session.finePenalty.mode : 'stepped',
@@ -10503,20 +10565,19 @@ function openAdminSessionModal(sessionId = null) {
     titleInp.oninput = (e) => { currentTitle = e.target.value; };
     bodyEl.appendChild(titleBox);
 
-    // Recurrence & Schedule
+    // Recurrence & Schedule Type
     const schedBox = document.createElement('div');
-    schedBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
+    schedBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
     schedBox.innerHTML = `
       <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</label>
       <div>
         <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
-        <div id="adm-session-sched-type-wrap"></div><input type="hidden" id="adm-session-sched-type" value="once" />
+        <div id="adm-session-sched-type-wrap"></div>
       </div>
       <div id="adm-session-sched-subform" class="space-y-3 pt-1"></div>
     `;
     const schedTypeWrap = schedBox.querySelector('#adm-session-sched-type-wrap');
     if (schedTypeWrap) {
-      schedTypeWrap.innerHTML = '';
       schedTypeWrap.appendChild(renderSegmented({
         id: 'segmented-session-sched-type',
         options: [
@@ -10532,133 +10593,165 @@ function openAdminSessionModal(sessionId = null) {
         }
       }));
     }
-
-    const schedSelect = schedBox.querySelector('#adm-session-sched-type');
-    if (schedSelect) {
-      schedSelect.onchange = (e) => {
-        schedType = e.target.value;
-        renderSchedSubform();
-      };
-    }
     bodyEl.appendChild(schedBox);
 
-    // Window Boundaries via Time Pickers
-    const windowBox = document.createElement('div');
-    windowBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
-    windowBox.innerHTML = `
-      <label class="block text-xs font-bold text-white uppercase tracking-wider">Window Boundaries</label>
-      <div class="grid grid-cols-2 gap-3">
-        <div id="box-picker-opens"></div>
-        <div id="box-picker-closes"></div>
-      </div>
-      <div id="session-window-words" class="text-[11px] text-[#0A84FF] font-medium pt-0.5"></div>
-    `;
-
-    const [sh, sm] = selectedTimeStr.split(':').map(Number);
-    const startMinsOfDay = (sh || 0) * 60 + (sm || 0);
-
-    const opensBox = windowBox.querySelector('#box-picker-opens');
-    const closesBox = windowBox.querySelector('#box-picker-closes');
-    const wordsEl = windowBox.querySelector('#session-window-words');
-
-    function updateWords() {
-      if (wordsEl) {
-        wordsEl.textContent = `Opens ${earlyCheckInMinutes}m before start, closes ${lateCutoffMinutes}m after start.`;
-      }
-    }
-    updateWords();
-
-    const opensMins = ((startMinsOfDay - earlyCheckInMinutes) % 1440 + 1440) % 1440;
-    const closesMins = (startMinsOfDay + lateCutoffMinutes) % 1440;
-
-    opensBox.appendChild(renderDateTimeField({
-      label: 'Check-in opens at',
-      valueMs: opensMins,
-      mode: 'time',
-      onChange: (newOpensMins) => {
-        let diff = startMinsOfDay - newOpensMins;
-        if (diff < 0) diff += 1440;
-        earlyCheckInMinutes = Math.min(720, Math.max(0, diff));
-        updateWords();
-      }
-    }));
-
-    closesBox.appendChild(renderDateTimeField({
-      label: 'Check-in closes at',
-      valueMs: closesMins,
-      mode: 'time',
-      onChange: (newClosesMins) => {
-        let diff = newClosesMins - startMinsOfDay;
-        if (diff < 0) diff += 1440;
-        lateCutoffMinutes = Math.min(720, Math.max(0, diff));
-        updateWords();
-      }
-    }));
-
-    bodyEl.appendChild(windowBox);
-
-    // Attendee Assignment Switch
-    const assignBox = document.createElement('div');
-    assignBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
-    assignBox.innerHTML = `
-      <div class="flex items-center justify-between">
-        <div>
-          <span class="text-xs font-bold text-white block uppercase tracking-wider">Attendee Assignment</span>
-          <span class="text-[11px] text-neutral-400">Limit check-in &amp; roster to specific members</span>
+    // Section 2 Item 2: Native Clean Date & Time Pickers in iOS Inset Rows
+    const timeCard = document.createElement('div');
+    timeCard.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-2.5';
+    timeCard.innerHTML = `
+      <label class="block text-xs font-bold text-white uppercase tracking-wider">Session Time &amp; Check-In Window</label>
+      <div class="ios-inset-group bg-white/[0.03] border border-white/10 rounded-xl p-2.5 space-y-2.5">
+        <div class="flex items-center justify-between gap-3">
+          <label for="attSessionDate" class="text-xs font-medium text-neutral-300">Session Date</label>
+          <input type="date" id="attSessionDate" value="${selectedDateStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
         </div>
-        <div id="switch-assign-wrapper"></div>
-      </div>
-      <div id="adm-session-assign-box" class="${assignSpecific ? '' : 'hidden'} space-y-2 pt-1 border-t border-white/5">
-        <button type="button" id="btn-pick-session-members" class="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-white flex items-center justify-between transition">
-          <span class="font-medium">Selected Members: <strong class="text-[#0A84FF] font-mono">${assignedUids.length}</strong></span>
-          <span class="text-neutral-400 text-[11px] flex items-center gap-1">Change &rarr;</span>
-        </button>
-        ${assignedUids.length > 0 ? `
-          <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1.5 rounded-lg bg-black/20">
-            ${assignedUids.map(uid => {
-              const u = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-              return `<span class="px-2 py-0.5 rounded-md bg-white/10 text-[10px] text-neutral-200">${esc(u?.displayName || uid)}</span>`;
-            }).join('')}
-          </div>
-        ` : `
-          <p class="text-[10px] text-amber-400/80 italic">No specific members selected. Toggle off to include all active members.</p>
-        `}
+        <div class="h-px bg-white/5"></div>
+        <div class="flex items-center justify-between gap-3">
+          <label for="attSessionTime" class="text-xs font-medium text-neutral-300">Start Time</label>
+          <input type="time" id="attSessionTime" value="${selectedTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
+        </div>
+        <div class="h-px bg-white/5"></div>
+        <div class="flex items-center justify-between gap-3">
+          <label for="attOpensTime" class="text-xs font-medium text-neutral-300">Check-in Opens</label>
+          <input type="time" id="attOpensTime" value="${opensTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
+        </div>
+        <div class="h-px bg-white/5"></div>
+        <div class="flex items-center justify-between gap-3">
+          <label for="attClosesTime" class="text-xs font-medium text-neutral-300">Check-in Closes</label>
+          <input type="time" id="attClosesTime" value="${closesTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
+        </div>
       </div>
     `;
 
-    const assignSwitchWrap = assignBox.querySelector('#switch-assign-wrapper');
-    assignSwitchWrap.appendChild(renderSwitch({
-      id: 'adm-session-assign-toggle',
-      checked: assignSpecific,
-      onChange: (chk) => {
-        assignSpecific = chk;
-        if (!assignSpecific) assignedUids = [];
-        renderModalBody();
-      }
-    }));
+    const inpDate = timeCard.querySelector('#attSessionDate');
+    const inpTime = timeCard.querySelector('#attSessionTime');
+    const inpOpens = timeCard.querySelector('#attOpensTime');
+    const inpCloses = timeCard.querySelector('#attClosesTime');
 
-    const pickBtn = assignBox.querySelector('#btn-pick-session-members');
-    if (pickBtn) {
-      pickBtn.onclick = () => {
-        openMemberPicker({
-          multi: true,
-          includeAllOption: false,
-          selectedUids: assignedUids,
-          onConfirm: (selected) => {
-            assignedUids = selected;
-            renderModalBody();
-          }
+    if (inpDate) inpDate.onchange = (e) => { selectedDateStr = e.target.value; };
+    if (inpTime) inpTime.onchange = (e) => { selectedTimeStr = e.target.value; };
+    if (inpOpens) inpOpens.onchange = (e) => { opensTimeStr = e.target.value; };
+    if (inpCloses) inpCloses.onchange = (e) => { closesTimeStr = e.target.value; };
+
+    bodyEl.appendChild(timeCard);
+
+    // Section 2 Item 3: 3-Way Attendee Assignment Selector
+    const assignBox = document.createElement('div');
+    assignBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
+    assignBox.innerHTML = `
+      <div class="space-y-1">
+        <label class="block text-xs font-bold text-white uppercase tracking-wider">Attendee Assignment</label>
+        <p class="text-[11px] text-neutral-400">Choose who is eligible and rostered for this attendance session.</p>
+      </div>
+      <div id="session-target-type-segmented-wrap"></div>
+      <div id="session-target-details-wrap" class="pt-1"></div>
+    `;
+
+    const segWrap = assignBox.querySelector('#session-target-type-segmented-wrap');
+    const detailsWrap = assignBox.querySelector('#session-target-details-wrap');
+
+    function renderAttendeeDetails() {
+      if (!detailsWrap) return;
+      detailsWrap.innerHTML = '';
+
+      if (targetType === 'all') {
+        detailsWrap.innerHTML = `
+          <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 text-[11px] text-neutral-300 flex items-center gap-2">
+            <svg class="w-4 h-4 text-[#0A84FF] shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+            <span>All active team members are automatically rostered and eligible.</span>
+          </div>
+        `;
+      } else if (targetType === 'badge') {
+        const allBadges = getAllAvailableBadges();
+        detailsWrap.innerHTML = `
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-neutral-400">Select Badges:</span>
+              <span class="text-[#0A84FF] font-semibold">${selectedBadgeIds.size} selected</span>
+            </div>
+            <div class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1.5 rounded-xl bg-black/20 border border-white/5">
+              ${allBadges.map(b => {
+                const isChecked = selectedBadgeIds.has(b.id);
+                return `
+                  <button type="button" class="btn-att-badge-pill px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${isChecked ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-300 border border-white/5'}" data-badge-id="${esc(b.id)}">
+                    <span class="w-2 h-2 rounded-full" style="background-color: ${b.color || '#0A84FF'};"></span>
+                    <span>${esc(b.label || b.name || b.id)}</span>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+            ${selectedBadgeIds.size === 0 ? '<p class="text-[10px] text-amber-400 italic">Select at least one badge to limit roster by role.</p>' : ''}
+          </div>
+        `;
+
+        detailsWrap.querySelectorAll('.btn-att-badge-pill').forEach(btn => {
+          btn.onclick = (e) => {
+            e.preventDefault();
+            const bId = btn.dataset.badgeId;
+            if (selectedBadgeIds.has(bId)) selectedBadgeIds.delete(bId);
+            else selectedBadgeIds.add(bId);
+            renderAttendeeDetails();
+          };
         });
-      };
+      } else if (targetType === 'custom') {
+        const membersList = state.members || [];
+        detailsWrap.innerHTML = `
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-neutral-400">Select Individual Members:</span>
+              <span class="text-[#0A84FF] font-semibold">${assignedUids.size} selected</span>
+            </div>
+            <div class="max-h-48 overflow-y-auto rounded-xl bg-black/20 border border-white/5 divide-y divide-white/5">
+              ${membersList.map(m => {
+                const isSelected = assignedUids.has(m.uid);
+                return `
+                  <label class="flex items-center justify-between p-2 hover:bg-white/5 transition cursor-pointer text-xs">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="font-medium text-white truncate">${esc(m.displayName || m.name || m.email || m.uid)}</span>
+                      ${m.role === 'admin' ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Admin</span>' : ''}
+                    </div>
+                    <input type="checkbox" class="att-member-cb rounded bg-white/10 border-white/20 text-[#0A84FF] focus:ring-0" data-uid="${esc(m.uid)}" ${isSelected ? 'checked' : ''} />
+                  </label>
+                `;
+              }).join('')}
+            </div>
+            ${assignedUids.size === 0 ? '<p class="text-[10px] text-amber-400 italic">Select at least one member for specific roster assignment.</p>' : ''}
+          </div>
+        `;
+
+        detailsWrap.querySelectorAll('.att-member-cb').forEach(cb => {
+          cb.onchange = (e) => {
+            const uid = cb.dataset.uid;
+            if (e.target.checked) assignedUids.add(uid);
+            else assignedUids.delete(uid);
+            renderAttendeeDetails();
+          };
+        });
+      }
     }
+
+    if (segWrap) {
+      segWrap.appendChild(renderSegmented({
+        id: 'segmented-att-target-type',
+        options: [
+          { value: 'all', label: 'All' },
+          { value: 'badge', label: 'By Badge' },
+          { value: 'custom', label: 'Specific' }
+        ],
+        value: targetType,
+        onChange: (val) => {
+          targetType = val;
+          renderAttendeeDetails();
+        }
+      }));
+    }
+    renderAttendeeDetails();
     bodyEl.appendChild(assignBox);
 
-    // =======================================================================
-    // HELPER: RENDER PENALTY SYSTEM MATRIX (POINTS & FINES IDENTICAL)
-    // =======================================================================
-    function renderSystemSection(sysKey, title, subtitle, unitLabel, sysObj) {
+    // Section 2 Item 4: Visually Separate Step Unit from Stepper Matrix
+    function renderPenaltySystemSection(sysKey, title, subtitle, unitLabel, sysObj) {
       const card = document.createElement('div');
-      card.className = 'p-3 rounded-xl bg-black/20 border border-white/10 space-y-3';
+      card.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
 
       const header = document.createElement('div');
       header.className = 'flex items-center justify-between';
@@ -10681,18 +10774,14 @@ function openAdminSessionModal(sessionId = null) {
       }));
       card.appendChild(header);
 
+      if (!sysObj.enabled) return card;
+
       const matrixBox = document.createElement('div');
       matrixBox.className = 'space-y-3 pt-2 border-t border-white/5';
 
-      // If disabled: completely unmount/clear the container (no lingering inputs!)
-      if (!sysObj.enabled) {
-        matrixBox.innerHTML = '';
-        return card;
-      }
-
-      // Mode Segmented: Fixed vs Stepped
+      // Mode: Fixed vs Stepped
       const modeWrap = document.createElement('div');
-      modeWrap.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-semibold">Penalty Calculation Mode</label>`;
+      modeWrap.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-semibold">Calculation Mode</label>`;
       modeWrap.appendChild(renderSegmented({
         id: `seg-${sysKey}-mode`,
         options: [
@@ -10710,7 +10799,7 @@ function openAdminSessionModal(sessionId = null) {
       if (sysObj.mode === 'fixed') {
         const fixedDiv = document.createElement('div');
         fixedDiv.innerHTML = `
-          <label class="block text-[11px] text-neutral-300 mb-1">Fixed Late Amount (${unitLabel})</label>
+          <label class="block text-[11px] text-neutral-300 mb-1">Fixed Late Penalty (${unitLabel})</label>
           <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.fixed}" />
         `;
         const fixedInp = fixedDiv.querySelector('input');
@@ -10721,13 +10810,10 @@ function openAdminSessionModal(sessionId = null) {
         }
         matrixBox.appendChild(fixedDiv);
       } else {
-        // Stepped: Unit (Seconds|Minutes), Step Size stepper, Amount per Step
-        const steppedGrid = document.createElement('div');
-        steppedGrid.className = 'grid grid-cols-3 gap-2';
-
-        const unitCol = document.createElement('div');
-        unitCol.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1">Step Unit</label>`;
-        unitCol.appendChild(renderSegmented({
+        // Distinct Row 1: Step Unit (Minutes vs Seconds)
+        const unitRow = document.createElement('div');
+        unitRow.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Unit</label>`;
+        unitRow.appendChild(renderSegmented({
           id: `seg-${sysKey}-unit`,
           options: [
             { value: 'minutes', label: 'Minutes' },
@@ -10738,10 +10824,24 @@ function openAdminSessionModal(sessionId = null) {
             sysObj.stepUnit = uVal;
           }
         }));
+        matrixBox.appendChild(unitRow);
 
-        const sizeCol = document.createElement('div');
-        sizeCol.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1">Step Size</label>`;
-        sizeCol.appendChild(renderStepper({
+        // Distinct Row 2: Step Interval Stepper (with min 44x44px targets) & Fee Per Step
+        const stepRow = document.createElement('div');
+        stepRow.className = 'grid grid-cols-2 gap-3 items-center pt-1';
+        stepRow.innerHTML = `
+          <div>
+            <label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Interval</label>
+            <div id="stepper-${sysKey}-wrap" class="stepper-control"></div>
+          </div>
+          <div>
+            <label class="block text-[11px] text-neutral-300 mb-1 font-medium">Fee / Step (${unitLabel})</label>
+            <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.perStep}" />
+          </div>
+        `;
+
+        const stWrap = stepRow.querySelector(`#stepper-${sysKey}-wrap`);
+        stWrap.appendChild(renderStepper({
           id: `step-${sysKey}-size`,
           value: sysObj.stepSize,
           min: 1,
@@ -10751,22 +10851,13 @@ function openAdminSessionModal(sessionId = null) {
           }
         }));
 
-        const perStepCol = document.createElement('div');
-        perStepCol.innerHTML = `
-          <label class="block text-[11px] text-neutral-300 mb-1">Fee / Step (${unitLabel})</label>
-          <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.perStep}" />
-        `;
-        const perStepInp = perStepCol.querySelector('input');
-        if (perStepInp) {
-          perStepInp.oninput = (e) => {
+        const feeInp = stepRow.querySelector('input');
+        if (feeInp) {
+          feeInp.oninput = (e) => {
             sysObj.perStep = Math.max(0, Number(e.target.value) || 0);
           };
         }
-
-        steppedGrid.appendChild(unitCol);
-        steppedGrid.appendChild(sizeCol);
-        steppedGrid.appendChild(perStepCol);
-        matrixBox.appendChild(steppedGrid);
+        matrixBox.appendChild(stepRow);
       }
 
       // Min & Max Bounds
@@ -10783,60 +10874,45 @@ function openAdminSessionModal(sessionId = null) {
         </div>
       `;
       const inpMin = boundsGrid.querySelector('.inp-min');
-      if (inpMin) {
-        inpMin.oninput = (e) => {
-          sysObj.min = Math.max(0, Number(e.target.value) || 0);
-        };
-      }
+      if (inpMin) inpMin.oninput = (e) => { sysObj.min = Math.max(0, Number(e.target.value) || 0); };
       const inpMax = boundsGrid.querySelector('.inp-max');
-      if (inpMax) {
-        inpMax.oninput = (e) => {
-          sysObj.max = Math.max(0, Number(e.target.value) || 0);
-        };
-      }
+      if (inpMax) inpMax.oninput = (e) => { sysObj.max = Math.max(0, Number(e.target.value) || 0); };
       matrixBox.appendChild(boundsGrid);
 
       // Unexcused Absence
       const absenceBox = document.createElement('div');
       absenceBox.className = 'pt-2 border-t border-white/5';
       absenceBox.innerHTML = `
-        <label class="block text-[11px] text-neutral-300 mb-1">Unexcused Absence Amount (${unitLabel})</label>
+        <label class="block text-[11px] text-neutral-300 mb-1">Unexcused Absence (${unitLabel})</label>
         <input type="number" min="0" class="w-full glass-input text-xs font-mono" value="${sysObj.absence}" />
-        <span class="text-[10px] text-neutral-500">Applied when member is marked absent</span>
       `;
       const inpAbsence = absenceBox.querySelector('input');
-      if (inpAbsence) {
-        inpAbsence.oninput = (e) => {
-          sysObj.absence = Math.max(0, Number(e.target.value) || 0);
-        };
-      }
+      if (inpAbsence) inpAbsence.oninput = (e) => { sysObj.absence = Math.max(0, Number(e.target.value) || 0); };
       matrixBox.appendChild(absenceBox);
 
       card.appendChild(matrixBox);
       return card;
     }
 
-    // SYSTEM 1: Points Deductions
-    bodyEl.appendChild(renderSystemSection(
+    bodyEl.appendChild(renderPenaltySystemSection(
       'pts',
       'Points Penalty Matrix',
-      'Subtract penalty points for late check-in & unexcused absence',
+      'Subtract penalty points for late check-in & absence',
       'pts',
       pointsPenalty
     ));
 
-    // SYSTEM 2: Financial Fines (EGP)
-    bodyEl.appendChild(renderSystemSection(
+    bodyEl.appendChild(renderPenaltySystemSection(
       'fines',
       'Financial Fines (EGP)',
-      'Issue EGP fine charges for late check-in & unexcused absence',
+      'Issue EGP fine charges for late check-in & absence',
       'EGP',
       finePenalty
     ));
 
-    // Active Switch
+    // Active Switch & Cancel Handler
     const activeBox = document.createElement('div');
-    activeBox.className = 'p-3 rounded-xl bg-black/20 border border-white/10 flex items-center justify-between';
+    activeBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 flex items-center justify-between';
     activeBox.innerHTML = `
       <div>
         <span class="text-xs font-bold text-white block">Active for Check-In</span>
@@ -10851,6 +10927,23 @@ function openAdminSessionModal(sessionId = null) {
     }));
     bodyEl.appendChild(activeBox);
 
+    // Cancel Button in modal
+    const cancelBox = document.createElement('div');
+    cancelBox.className = 'pt-2 flex justify-end';
+    cancelBox.innerHTML = `
+      <button type="button" id="attCancelBtn" class="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-300 text-xs font-semibold transition">
+        Cancel
+      </button>
+    `;
+    const cancelBtn = cancelBox.querySelector('#attCancelBtn');
+    if (cancelBtn) {
+      cancelBtn.onclick = (e) => {
+        e.preventDefault();
+        closeModal();
+      };
+    }
+    bodyEl.appendChild(cancelBox);
+
     renderSchedSubform();
   }
 
@@ -10858,83 +10951,22 @@ function openAdminSessionModal(sessionId = null) {
     const subContainer = bodyEl.querySelector('#adm-session-sched-subform');
     if (!subContainer) return;
 
-    function wireSessionDateTimeFields() {
-      const dBox = subContainer.querySelector('#field-sched-session-date, #field-session-sched-inp-date');
-      const tBox = subContainer.querySelector('#field-sched-session-time, #field-session-sched-inp-time');
-      if (dBox) {
-        dBox.replaceWith(renderDateTimeField({
-          label: 'Session Date',
-          valueMs: parseDateTimeToMs(selectedDateStr, APP_TIMEZONE) || parseDateTimeToMs(selectedDateStr) || Date.now(),
-          mode: 'date',
-          onChange: (ms) => { selectedDateStr = formatZonedDateKey(ms, APP_TIMEZONE); }
-        }));
-      }
-      if (tBox) {
-        const [th, tm] = selectedTimeStr.split(':').map(Number);
-        tBox.replaceWith(renderDateTimeField({
-          label: 'Session Time',
-          valueMs: (th || 0) * 60 + (tm || 0),
-          mode: 'time',
-          onChange: (mins) => {
-            const h = Math.floor(mins / 60) % 24;
-            const m = mins % 60;
-            selectedTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-          }
-        }));
-      }
-      const dateInp = subContainer.querySelector('#session-sched-inp-date');
-      if (dateInp) dateInp.onchange = (e) => { selectedDateStr = e.target.value; };
-      const timeInp = subContainer.querySelector('#session-sched-inp-time');
-      if (timeInp) timeInp.onchange = (e) => { selectedTimeStr = e.target.value; };
-    }
-
-    if (schedType === 'once') {
-      subContainer.innerHTML = `
-        <div class="grid grid-cols-2 gap-2">
-          <div id="field-sched-session-date"></div>
-          <div id="field-sched-session-time"></div>
-        </div>
-      `;
-      wireSessionDateTimeFields();
-    } else if (schedType === 'daily') {
-      subContainer.innerHTML = `
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-session-sched-inp-date"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Daily Time (${APP_TIMEZONE})</label>
-            <div id="field-session-sched-inp-time"></div>
-          </div>
-        </div>
-      `;
-      wireSessionDateTimeFields();
-    } else if (schedType === 'weekly') {
+    if (schedType === 'weekly') {
       subContainer.innerHTML = `
         <div>
-          <label class="block text-[11px] text-neutral-400 mb-1.5">Select Weekdays</label>
+          <label class="block text-[11px] text-neutral-400 mb-1.5 font-medium">Select Active Weekdays</label>
           <div class="flex flex-wrap gap-1.5">
             ${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(wd => `
-              <button type="button" class="btn-session-wd px-2.5 py-1 rounded-lg text-xs font-semibold transition ${weeklyDays.has(wd) ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400'}" data-wd="${wd}">
+              <button type="button" class="btn-session-wd px-2.5 py-1 rounded-lg text-xs font-semibold transition ${weeklyDays.has(wd) ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-400 border border-white/5'}" data-wd="${wd}">
                 ${wd}
               </button>
             `).join('')}
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-2 pt-1">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-session-sched-inp-date"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <div id="field-session-sched-inp-time"></div>
-          </div>
-        </div>
       `;
       subContainer.querySelectorAll('.btn-session-wd').forEach(btn => {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          e.preventDefault();
           const wd = btn.dataset.wd;
           if (weeklyDays.has(wd)) {
             if (weeklyDays.size > 1) weeklyDays.delete(wd);
@@ -10944,32 +10976,22 @@ function openAdminSessionModal(sessionId = null) {
           renderSchedSubform();
         };
       });
-      wireSessionDateTimeFields();
     } else if (schedType === 'monthlyDates') {
       subContainer.innerHTML = `
         <div>
-          <label class="block text-[11px] text-neutral-400 mb-1.5">Select Days of Month</label>
+          <label class="block text-[11px] text-neutral-400 mb-1.5 font-medium">Select Days of Month</label>
           <div class="grid grid-cols-7 gap-1">
             ${Array.from({ length: 31 }, (_, i) => i + 1).map(d => `
-              <button type="button" class="btn-session-mdate py-1 rounded text-xs font-mono font-semibold transition ${monthlyDates.has(d) ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400'}" data-date="${d}">
+              <button type="button" class="btn-session-mdate py-1 rounded text-xs font-mono font-semibold transition ${monthlyDates.has(d) ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/5 hover:bg-white/10 text-neutral-400 border border-white/5'}" data-date="${d}">
                 ${d}
               </button>
             `).join('')}
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-2 pt-1">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-session-sched-inp-date"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <div id="field-session-sched-inp-time"></div>
-          </div>
-        </div>
       `;
       subContainer.querySelectorAll('.btn-session-mdate').forEach(btn => {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          e.preventDefault();
           const d = Number(btn.dataset.date);
           if (monthlyDates.has(d)) {
             if (monthlyDates.size > 1) monthlyDates.delete(d);
@@ -10979,65 +11001,8 @@ function openAdminSessionModal(sessionId = null) {
           renderSchedSubform();
         };
       });
-      wireSessionDateTimeFields();
-    } else if (schedType === 'monthlyWeekdays') {
-      subContainer.innerHTML = `
-        <div class="space-y-2">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Select Weeks</label>
-            <div class="flex flex-wrap gap-1.5">
-              ${['1st', '2nd', '3rd', '4th', 'Last'].map(w => `
-                <button type="button" class="btn-session-mweek px-2 py-1 rounded-lg text-xs font-semibold transition ${monthlyWeeks.has(w) ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400'}" data-week="${w}">
-                  ${w}
-                </button>
-              `).join('')}
-            </div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Select Weekdays</label>
-            <div class="flex flex-wrap gap-1.5">
-              ${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(wd => `
-                <button type="button" class="btn-session-mweekday px-2.5 py-1 rounded-lg text-xs font-semibold transition ${monthlyWeekdays.has(wd) ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-400'}" data-wd="${wd}">
-                  ${wd}
-                </button>
-              `).join('')}
-            </div>
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-2 pt-1">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-session-sched-inp-date"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Time (${APP_TIMEZONE})</label>
-            <div id="field-session-sched-inp-time"></div>
-          </div>
-        </div>
-      `;
-      subContainer.querySelectorAll('.btn-session-mweek').forEach(btn => {
-        btn.onclick = () => {
-          const w = btn.dataset.week;
-          if (monthlyWeeks.has(w)) {
-            if (monthlyWeeks.size > 1) monthlyWeeks.delete(w);
-          } else {
-            monthlyWeeks.add(w);
-          }
-          renderSchedSubform();
-        };
-      });
-      subContainer.querySelectorAll('.btn-session-mweekday').forEach(btn => {
-        btn.onclick = () => {
-          const wd = btn.dataset.wd;
-          if (monthlyWeekdays.has(wd)) {
-            if (monthlyWeekdays.size > 1) monthlyWeekdays.delete(wd);
-          } else {
-            monthlyWeekdays.add(wd);
-          }
-          renderSchedSubform();
-        };
-      });
-      wireSessionDateTimeFields();
+    } else {
+      subContainer.innerHTML = '';
     }
   }
 
@@ -11053,35 +11018,26 @@ function openAdminSessionModal(sessionId = null) {
         toast('Session title is required', 'error');
         return false;
       }
-      if (pointsPenalty.enabled) {
-        if (pointsPenalty.mode === 'stepped' && pointsPenalty.stepSize < 1) {
-          toast('Points step size must be at least 1', 'error');
-          return false;
-        }
-        if (pointsPenalty.min > pointsPenalty.max) {
-          toast('Points min penalty cannot exceed max penalty', 'error');
-          return false;
-        }
-      }
-      if (finePenalty.enabled) {
-        if (finePenalty.mode === 'stepped' && finePenalty.stepSize < 1) {
-          toast('Fines step size must be at least 1', 'error');
-          return false;
-        }
-        if (finePenalty.min > finePenalty.max) {
-          toast('Fines min fine cannot exceed max fine', 'error');
-          return false;
-        }
-      }
+
+      // Calculate clean relative offsets in JS
+      const [sHour, sMin] = selectedTimeStr.split(':').map(Number);
+      const [oHour, oMin] = opensTimeStr.split(':').map(Number);
+      const [cHour, cMin] = closesTimeStr.split(':').map(Number);
+
+      const startTotalMins = (sHour || 0) * 60 + (sMin || 0);
+      const openTotalMins = (oHour || 0) * 60 + (oMin || 0);
+      const closeTotalMins = (cHour || 0) * 60 + (cMin || 0);
+
+      const earlyCheckInMinutes = (startTotalMins - openTotalMins + 1440) % 1440;
+      const lateCutoffMinutes = (closeTotalMins - startTotalMins + 1440) % 1440;
 
       const dateParts = selectedDateStr.split('-').map(Number);
-      const timeParts = selectedTimeStr.split(':').map(Number);
       const startDateTimeMs = zonedDateToMs(
         dateParts[0] || 2026,
         dateParts[1] || 1,
         dateParts[2] || 1,
-        timeParts[0] || 0,
-        timeParts[1] || 0,
+        sHour || 0,
+        sMin || 0,
         0,
         APP_TIMEZONE
       );
@@ -11095,9 +11051,6 @@ function openAdminSessionModal(sessionId = null) {
       } else if (schedType === 'monthlyDates') {
         finalSchedule.dates = Array.from(monthlyDates).sort((a, b) => a - b);
         finalSchedule.monthDates = finalSchedule.dates;
-      } else if (schedType === 'monthlyWeekdays') {
-        finalSchedule.weeks = Array.from(monthlyWeeks);
-        finalSchedule.weekdays = Array.from(monthlyWeekdays);
       }
 
       const payload = {
@@ -11105,6 +11058,9 @@ function openAdminSessionModal(sessionId = null) {
         schedule: finalSchedule,
         earlyCheckInMinutes,
         lateCutoffMinutes,
+        targetType,
+        badgeIds: targetType === 'badge' ? Array.from(selectedBadgeIds) : [],
+        assignedUids: targetType === 'custom' ? Array.from(assignedUids) : [],
         pointsPenalty: {
           enabled: Boolean(pointsPenalty.enabled),
           mode: pointsPenalty.mode,
@@ -11127,10 +11083,9 @@ function openAdminSessionModal(sessionId = null) {
           max: Number(finePenalty.max) || 999999,
           absence: Number(finePenalty.absence) || 0
         },
-        assignedUids: assignSpecific ? assignedUids : [],
         active: Boolean(active),
 
-        // Legacy compatibility
+        // Legacy compatibility fields
         penaltyPointsEnabled: Boolean(pointsPenalty.enabled),
         penaltyFinesEnabled: Boolean(finePenalty.enabled),
         penaltyUnit: pointsPenalty.stepUnit || 'minutes',
@@ -11148,7 +11103,7 @@ function openAdminSessionModal(sessionId = null) {
             ...payload,
             updatedAt: serverTimestamp()
           });
-          toast('Session updated successfully', 'success');
+          toast('Attendance session updated', 'success');
         } else {
           await addDoc(collection(db, 'attendance_sessions'), {
             ...payload,
@@ -11156,13 +11111,258 @@ function openAdminSessionModal(sessionId = null) {
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
-          toast('Session created successfully', 'success');
+          toast('Attendance session created', 'success');
         }
-        editingSessionId = null;
+        renderAdminSessions();
+        renderAttendanceView();
+        closeModal();
         return true;
       } catch (err) {
-        console.error('Save session error:', err);
-        toast(err.message || 'Failed to save session', 'error');
+        console.error('Error saving attendance session:', err);
+        toast('Failed to save session: ' + (err.message || err), 'error');
+        return false;
+      }
+    }
+  });
+}
+
+// =========================================================================
+// SECTION 3: ADMIN "BADGES" MANAGEMENT DASHBOARD
+// =========================================================================
+
+export function renderAdminBadges() {
+  const container = document.getElementById('admin-badges-list');
+  if (!container) return;
+
+  const allBadges = getAllAvailableBadges();
+  if (allBadges.length === 0) {
+    container.innerHTML = `
+      <div class="col-span-full glass-card p-8 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-2xl">
+        No team badges created yet. Tap "+ New Badge" to create one.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = allBadges.map(badge => {
+    const memberCount = (state.members || []).filter(m => {
+      const uBadgeIds = Array.isArray(m.badgeIds) ? m.badgeIds : (
+        Array.isArray(m.badges) ? m.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : []
+      );
+      return uBadgeIds.includes(badge.id);
+    }).length;
+
+    const color = badge.color || '#0A84FF';
+    const iconSvg = getIconSvg(badge.icon || 'star', 'w-5 h-5');
+
+    return `
+      <div class="glass-card p-4 rounded-2xl border border-white/10 space-y-3 relative overflow-hidden" data-badge-id="${esc(badge.id)}">
+        <div class="flex items-start justify-between gap-3">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-md" style="background-color: ${color}25; border: 1px solid ${color}50; color: ${color};">
+              ${iconSvg}
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <h3 class="font-bold text-white text-sm truncate">${esc(badge.label || badge.name || badge.id)}</h3>
+                <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${color};"></span>
+              </div>
+              <p class="text-[11px] text-neutral-400 line-clamp-2 mt-0.5">${esc(badge.description || 'No description provided.')}</p>
+            </div>
+          </div>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-neutral-300 shrink-0">
+            ${memberCount} ${memberCount === 1 ? 'member' : 'members'}
+          </span>
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-2 border-t border-white/5">
+          <button type="button" class="btn-edit-badge px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs text-white font-medium transition" data-badge-id="${esc(badge.id)}">
+            Edit
+          </button>
+          <button type="button" class="btn-delete-badge px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 text-xs font-medium transition" data-badge-id="${esc(badge.id)}">
+            Delete
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.btn-edit-badge').forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      const bId = btn.dataset.badgeId;
+      const b = allBadges.find(x => x.id === bId);
+      if (b) openBadgeModal(b);
+    };
+  });
+
+  container.querySelectorAll('.btn-delete-badge').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.preventDefault();
+      const bId = btn.dataset.badgeId;
+      const b = allBadges.find(x => x.id === bId);
+      if (!b) return;
+
+      const confirmed = await confirmSheet({
+        title: 'Delete Badge',
+        message: `Delete badge "${b.label || b.name || b.id}"? Existing members and past activity logs will be kept.`,
+        confirmLabel: 'Delete Badge',
+        destructive: true
+      });
+      if (!confirmed) return;
+
+      try {
+        await deleteDoc(doc(db, 'badges', b.id));
+        state.badges = (state.badges || []).filter(x => x.id !== b.id);
+        renderAdminBadges();
+        toast('Badge deleted', 'info');
+      } catch (err) {
+        console.error('Error deleting badge:', err);
+        toast('Failed to delete badge: ' + (err.message || err), 'error');
+      }
+    };
+  });
+}
+
+export function openBadgeModal(badge = null) {
+  let name = badge ? (badge.label || badge.name || '') : '';
+  let description = badge ? (badge.description || '') : '';
+  let selectedColor = badge ? (badge.color || '#0A84FF') : '#0A84FF';
+  let selectedIcon = badge ? (badge.icon || 'star') : 'star';
+
+  const PRESET_COLORS = ['#0A84FF', '#30D158', '#FF9F0A', '#FF453A', '#BF5AF2', '#64D2FF', '#FF375F', '#FFD60A', '#5E5CE6', '#98989D'];
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4';
+
+  function renderForm() {
+    bodyEl.innerHTML = `
+      <div class="space-y-3">
+        <!-- Badge Name -->
+        <div>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Badge Name *</label>
+          <input type="text" id="badge-input-name" class="w-full glass-input text-xs" placeholder="e.g. Master Video Editor" value="${esc(name)}" />
+        </div>
+
+        <!-- Description -->
+        <div>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Description</label>
+          <textarea id="badge-input-desc" rows="2" class="w-full glass-input text-xs" placeholder="e.g. Awarded for editing top production videos.">${esc(description)}</textarea>
+        </div>
+
+        <!-- Icon Picker Row -->
+        <div>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1">Badge Icon</label>
+          <button type="button" id="btn-badge-icon-picker" class="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-between transition">
+            <div class="flex items-center gap-2.5">
+              <div id="badge-icon-preview" class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background-color: ${selectedColor}25; color: ${selectedColor};">
+                ${getIconSvg(selectedIcon, 'w-4 h-4')}
+              </div>
+              <span id="badge-icon-name" class="text-xs text-white capitalize font-medium">${esc(selectedIcon)}</span>
+            </div>
+            <span class="text-[11px] text-neutral-400">Change &rarr;</span>
+          </button>
+        </div>
+
+        <!-- Color Swatches -->
+        <div>
+          <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Badge Color</label>
+          <div class="flex flex-wrap gap-2 pt-0.5">
+            ${PRESET_COLORS.map(c => `
+              <button type="button" class="btn-color-swatch w-7 h-7 rounded-full transition transform hover:scale-110 flex items-center justify-center ${selectedColor === c ? 'ring-2 ring-white ring-offset-2 ring-offset-black scale-110' : ''}" style="background-color: ${c};" data-color="${c}">
+                ${selectedColor === c ? '<span class="w-2 h-2 rounded-full bg-white"></span>' : ''}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+
+        <!-- Explicit Cancel Button -->
+        <div class="pt-2 flex justify-end">
+          <button type="button" id="badgeCancelBtn" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-300 text-xs font-semibold transition">
+            Cancel
+          </button>
+        </div>
+      </div>
+    `;
+
+    const nameInp = bodyEl.querySelector('#badge-input-name');
+    if (nameInp) nameInp.oninput = (e) => { name = e.target.value; };
+
+    const descInp = bodyEl.querySelector('#badge-input-desc');
+    if (descInp) descInp.oninput = (e) => { description = e.target.value; };
+
+    const iconBtn = bodyEl.querySelector('#btn-badge-icon-picker');
+    if (iconBtn) {
+      iconBtn.onclick = (e) => {
+        e.preventDefault();
+        openIconPicker({
+          selectedKey: selectedIcon,
+          onSelect: (newKey) => {
+            selectedIcon = newKey;
+            renderForm();
+          }
+        });
+      };
+    }
+
+    bodyEl.querySelectorAll('.btn-color-swatch').forEach(btn => {
+      btn.onclick = (e) => {
+        e.preventDefault();
+        selectedColor = btn.dataset.color;
+        renderForm();
+      };
+    });
+
+    const cancelBtn = bodyEl.querySelector('#badgeCancelBtn');
+    if (cancelBtn) {
+      cancelBtn.onclick = (e) => {
+        e.preventDefault();
+        closeModal();
+      };
+    }
+  }
+
+  renderForm();
+
+  openModal({
+    title: badge ? 'Edit Badge' : 'New Badge',
+    body: bodyEl,
+    saveLabel: badge ? 'Save Changes' : 'Create Badge',
+    onSave: async () => {
+      const trimmedName = name.trim();
+      if (!trimmedName) {
+        toast('Badge name is required', 'error');
+        return false;
+      }
+
+      const badgeId = badge ? badge.id : (trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `badge_${Date.now()}`);
+
+      const payload = {
+        id: badgeId,
+        label: trimmedName,
+        name: trimmedName,
+        description: description.trim(),
+        color: selectedColor,
+        icon: selectedIcon,
+        updatedAt: serverTimestamp()
+      };
+
+      try {
+        await setDoc(doc(db, 'badges', badgeId), payload, { merge: true });
+
+        const idx = (state.badges || []).findIndex(b => b.id === badgeId);
+        if (idx !== -1) {
+          state.badges[idx] = { ...state.badges[idx], ...payload };
+        } else {
+          state.badges = [...(state.badges || []), payload];
+        }
+
+        renderAdminBadges();
+        toast(badge ? 'Badge updated' : 'Badge created', 'success');
+        closeModal();
+        return true;
+      } catch (err) {
+        console.error('Error saving badge:', err);
+        toast('Failed to save badge: ' + (err.message || err), 'error');
         return false;
       }
     }
@@ -12037,8 +12237,13 @@ export function openRequestWaiverModal() {
   // 4. Exclude occurrences already past late cutoff, already checked in, or having pending/approved waiver
   const eligibleOccurrences = [];
   (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived).forEach(session => {
-    if (Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-      if (!session.assignedUids.includes(state.user.uid)) return;
+    const targetType = session.targetType || (Array.isArray(session.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
+    if (targetType === 'badge') {
+      const uBadges = new Set([...(state.user?.badgeIds || []), ...(state.user?.badges || []).map(b => typeof b === 'string' ? b : b?.id).filter(Boolean)]);
+      const sBadges = session.badgeIds || [];
+      if (sBadges.length > 0 && !sBadges.some(bid => uBadges.has(bid))) return;
+    } else if (targetType === 'custom') {
+      if (Array.isArray(session.assignedUids) && !session.assignedUids.includes(state.user.uid)) return;
     }
     const occs = getOccurrences(session.schedule, nowMs, endWindowMs, APP_TIMEZONE);
     occs.forEach(occ => {
@@ -15336,6 +15541,12 @@ function attachEventHandlers() {
   const btnAdminAddSession = document.getElementById('btn-admin-add-session');
   if (btnAdminAddSession) {
     btnAdminAddSession.onclick = () => openAdminSessionModal();
+  }
+
+  // Admin Badges Add Button (Section 3)
+  const btnAdminAddBadge = document.getElementById('btn-admin-add-badge');
+  if (btnAdminAddBadge) {
+    btnAdminAddBadge.onclick = () => openBadgeModal();
   }
 
   const filterSessionActive = document.getElementById('filter-session-active');

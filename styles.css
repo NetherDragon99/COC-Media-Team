@@ -1841,3 +1841,38 @@ textarea:focus-visible {
 
 /* Cropper stacking above admin overlay */
 .cropper-modal-sheet, #shared-modal-root.has-cropper { z-index: 2500 !important; }
+
+/* Stepper Control and iOS Stepper Touch Target Fix (Task 2 / Section 2) */
+.stepper-control, .ios-stepper {
+  display: inline-flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  min-width: 120px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 2px 4px;
+}
+
+.stepper-control .ios-stepper-btn, .ios-stepper-btn {
+  min-width: 44px;
+  min-height: 44px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #0A84FF;
+  font-size: 20px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease, opacity 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 8px;
+}
