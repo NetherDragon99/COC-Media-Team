@@ -234,8 +234,8 @@
             </button>
           </div>
 
-          <!-- BROADCAST CAROUSEL BANNER (Task 6) -->
-          <div id="home-broadcast-banner" class="hidden p-3.5 rounded-2xl glass-card border border-[#0A84FF]/30 bg-gradient-to-r from-[#0A84FF]/15 via-white/5 to-transparent flex items-center justify-between gap-3 text-xs broadcast-carousel-banner cursor-pointer shadow-lg shadow-[#0A84FF]/5" role="button" tabindex="0" aria-label="Broadcast details">
+          <!-- BROADCAST CAROUSEL BANNER (Task 4 Single Progress Bar) -->
+          <div id="home-broadcast-banner" class="hidden p-3.5 rounded-2xl glass-card border border-[#0A84FF]/30 bg-gradient-to-r from-[#0A84FF]/15 via-white/5 to-transparent flex items-center justify-between gap-3 text-xs broadcast-carousel-banner cursor-pointer shadow-lg shadow-[#0A84FF]/5 relative overflow-hidden" role="button" tabindex="0" aria-label="Broadcast details">
             <div class="flex items-center gap-2.5 min-w-0 flex-1">
               <div id="broadcast-banner-icon" class="w-7 h-7 rounded-lg bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center flex-shrink-0">
                 <span class="w-2.5 h-2.5 rounded-full bg-[#0A84FF] flex-shrink-0 animate-pulse"></span>
@@ -247,11 +247,9 @@
                 </div>
               </div>
             </div>
-            <div class="flex items-center gap-2 flex-shrink-0">
-              <div class="broadcast-progress-bar">
-                <div id="broadcast-progress-fill" class="broadcast-progress-fill"></div>
-              </div>
-              <div id="broadcast-carousel-dots" class="flex items-center gap-1.5 flex-shrink-0"></div>
+            <!-- Bottom-edge unified progress bar -->
+            <div id="broadcast-progress-track" class="broadcast-progress-track">
+              <div id="broadcast-progress-fill" class="broadcast-progress-fill"></div>
             </div>
           </div>
 

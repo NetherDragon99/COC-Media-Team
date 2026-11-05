@@ -331,17 +331,13 @@ button:active {
   min-width: 100%;
   max-width: 100%;
   height: 100%;
-  max-height: 100%;
-  min-height: 0;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-x pan-y;
+  position: relative;
   box-sizing: border-box;
-  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(env(safe-area-inset-bottom, 0px) + 96px) 16px;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(110px + env(safe-area-inset-bottom, 0px)) 16px;
+  padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px));
   scrollbar-width: none;
 }
 
@@ -1297,20 +1293,23 @@ textarea:focus-visible {
   color: #8E8E93;
 }
 
-/* Home Broadcast Progress Bar */
-.broadcast-progress-bar {
-  width: 28px;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.16);
+/* Home Broadcast Single Unified Bottom-Edge Progress Bar (Task 4) */
+.broadcast-progress-track {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
   overflow: hidden;
-  position: relative;
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
 }
 
 .broadcast-progress-fill {
   height: 100%;
   width: 0%;
-  background: #FFFFFF;
+  background: #0A84FF;
   border-radius: 2px;
   transition: width 0.1s linear;
 }

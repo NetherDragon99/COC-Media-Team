@@ -238,7 +238,7 @@ export const ticker = {
     }
     this._subscribers.set(id, {
       fn,
-      intervalMs: Math.max(250, interval),
+      intervalMs: Math.max(50, interval),
       lastRun: Date.now()
     });
     this._ensureRunning();
@@ -254,7 +254,10 @@ export const ticker = {
 
   _ensureRunning() {
     if (this._timer || this._isPaused) return;
-    this._timer = setInterval(() => this._tick(), this._baseInterval);
+    const minInterval = this._subscribers.size > 0
+      ? Math.min(...Array.from(this._subscribers.values()).map(s => s.intervalMs))
+      : this._baseInterval;
+    this._timer = setInterval(() => this._tick(), Math.max(50, Math.min(1000, minInterval)));
   },
 
   _stop() {
@@ -14024,53 +14027,113 @@ function toDatetimeLocalString(val) {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
-function getActiveBroadcasts() {
+export function getActiveBroadcasts() {
   const now = serverNow();
   const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin');
 
-  return state.broadcasts.filter(b => {
-    // Archived broadcasts never appear to members
-    if (b.archived === true) return false;
+  const userBadgeIds = new Set([
+    ...(Array.isArray(state.user?.badgeIds) ? state.user.badgeIds : []),
+    ...(Array.isArray(state.user?.badges) ? state.user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : [])
+  ]);
 
-    // Check time window
-    if (now < b.startDateTime || now > b.endDateTime) return false;
+  return (state.broadcasts || []).filter(b => {
+    // 1. Exclude archived broadcasts
+    if (b.archived === true || b.status === 'archived') return false;
 
-    // Admins see all active broadcasts
-    if (isAdmin) return true;
+    // 2. Ensure serverNow() is strictly within start/end limits
+    const startMs = typeof b.startDateTime === 'number' ? b.startDateTime : (b.startDateTime?.toMillis ? b.startDateTime.toMillis() : new Date(b.startDateTime || 0).getTime());
+    const endMs = typeof b.endDateTime === 'number' ? b.endDateTime : (b.endDateTime?.toMillis ? b.endDateTime.toMillis() : new Date(b.endDateTime || 0).getTime());
+    if (startMs && now < startMs) return false;
+    if (endMs && now > endMs) return false;
 
-    // Audience filtering for members
+    // 3. Strictly match audience: badgeIds or 'all'
     const targetType = b.targetType || 'all';
     if (targetType === 'all') return true;
 
     if (targetType === 'badge') {
       const bBadgeIds = Array.isArray(b.badgeIds) ? b.badgeIds : [];
       if (bBadgeIds.length === 0) return true;
-      const userBadgeIds = Array.isArray(state.user?.badgeIds) ? state.user.badgeIds : (
-        Array.isArray(state.user?.badges) ? state.user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : []
-      );
-      return bBadgeIds.some(id => userBadgeIds.includes(id));
+      if (isAdmin) return true;
+      return bBadgeIds.some(id => userBadgeIds.has(id));
     }
 
     return true;
   });
 }
 
-function renderHomeBroadcastBanner() {
+let broadcastProgressMs = 0;
+let lastBroadcastTickMs = 0;
+let isBannerHeldOrHovered = false;
+let isBroadcastTickerInitialized = false;
+
+function ensureBroadcastTicker() {
+  if (isBroadcastTickerInitialized) return;
+  isBroadcastTickerInitialized = true;
+
+  ticker.subscribe('home_broadcast_progress', () => {
+    const active = getActiveBroadcasts();
+    const fillEl = document.getElementById('broadcast-progress-fill') || document.querySelector('.broadcast-progress-fill');
+
+    // If active <= 1: do not rotate, reset width to 0%
+    if (active.length <= 1) {
+      broadcastProgressMs = 0;
+      lastBroadcastTickMs = Date.now();
+      if (fillEl) fillEl.style.width = '0%';
+      return;
+    }
+
+    // Pause on modal open, touch/hold, hover, or document.hidden
+    if (isBroadcastModalOpen || isBannerHeldOrHovered || (typeof document !== 'undefined' && document.hidden)) {
+      lastBroadcastTickMs = Date.now();
+      return;
+    }
+
+    const now = Date.now();
+    const delta = lastBroadcastTickMs > 0 ? Math.min(now - lastBroadcastTickMs, 500) : 100;
+    lastBroadcastTickMs = now;
+
+    if (currentBroadcastIndex >= active.length) {
+      currentBroadcastIndex = 0;
+    }
+    const current = active[currentBroadcastIndex];
+    const durationMs = Math.max(3000, ((Number(current?.durationSeconds) || 5) * 1000));
+
+    broadcastProgressMs += delta;
+
+    if (broadcastProgressMs >= durationMs) {
+      // 100% reached: advance immediately to next broadcast, reset width to 0%, repeat
+      broadcastProgressMs = 0;
+      if (fillEl) {
+        fillEl.style.transition = 'none';
+        fillEl.style.width = '0%';
+      }
+      advanceBroadcast();
+    } else {
+      const pct = Math.min(100, (broadcastProgressMs / durationMs) * 100);
+      if (fillEl) {
+        fillEl.style.transition = 'width 0.1s linear';
+        fillEl.style.width = `${pct}%`;
+      }
+    }
+  }, 100);
+}
+
+export function renderHomeBroadcastBanner() {
+  ensureBroadcastTicker();
   const banner = document.getElementById('home-broadcast-banner');
   const titleEl = document.getElementById('broadcast-banner-title');
-  const dotsEl = document.getElementById('broadcast-carousel-dots');
-  const progressFill = document.getElementById('broadcast-progress-fill');
   const iconEl = document.getElementById('broadcast-banner-icon');
-  if (!banner || !titleEl || !dotsEl) return;
+  const trackEl = document.getElementById('broadcast-progress-track') || banner?.querySelector('.broadcast-progress-track');
+  const fillEl = document.getElementById('broadcast-progress-fill') || banner?.querySelector('.broadcast-progress-fill');
+  if (!banner || !titleEl) return;
 
   const active = getActiveBroadcasts();
 
+  // If activeBroadcasts.length === 0: hide banner
   if (active.length === 0) {
     banner.classList.add('hidden');
-    if (broadcastTimer) {
-      clearTimeout(broadcastTimer);
-      broadcastTimer = null;
-    }
+    if (fillEl) fillEl.style.width = '0%';
+    broadcastProgressMs = 0;
     return;
   }
 
@@ -14078,56 +14141,42 @@ function renderHomeBroadcastBanner() {
 
   if (currentBroadcastIndex >= active.length) {
     currentBroadcastIndex = 0;
+    broadcastProgressMs = 0;
   }
 
   const current = active[currentBroadcastIndex];
-  titleEl.textContent = current.title;
+  titleEl.textContent = current.title || 'Notice';
 
-  // Render broadcast icon
   if (iconEl) {
     iconEl.innerHTML = getIconSvg(current.icon || 'megaphone', 'w-4 h-4 text-[#0A84FF]');
   }
 
-  // Render dots
-  if (active.length > 1) {
-    dotsEl.innerHTML = active.map((_, i) => `
-      <span class="carousel-dot ${i === currentBroadcastIndex ? 'active' : ''}"></span>
-    `).join('');
-  } else {
-    dotsEl.innerHTML = '';
-  }
-
-  // Tapping banner opens Broadcast Detail modal with this specific broadcast ID
+  // Tapping banner opens Broadcast Detail modal
   banner.onclick = () => {
     openBroadcastDetailModal(current.id);
   };
 
-  // Smooth live progress bar animation across duration
-  if (progressFill) {
-    progressFill.style.transition = 'none';
-    progressFill.style.width = '0%';
-    requestAnimationFrame(() => {
-      const durSec = Number(current.durationSeconds) || 5;
-      progressFill.style.transition = `width ${durSec}s linear`;
-      progressFill.style.width = '100%';
-    });
+  // Wire pause listeners on touch/hold and mouse hover
+  if (!banner.dataset.touchWired) {
+    banner.dataset.touchWired = 'true';
+    banner.addEventListener('touchstart', () => { isBannerHeldOrHovered = true; }, { passive: true });
+    banner.addEventListener('touchend', () => { isBannerHeldOrHovered = false; lastBroadcastTickMs = Date.now(); }, { passive: true });
+    banner.addEventListener('touchcancel', () => { isBannerHeldOrHovered = false; lastBroadcastTickMs = Date.now(); }, { passive: true });
+    banner.addEventListener('mouseenter', () => { isBannerHeldOrHovered = true; });
+    banner.addEventListener('mouseleave', () => { isBannerHeldOrHovered = false; lastBroadcastTickMs = Date.now(); });
   }
 
-  // Schedule rotation if multiple and modal not open
-  if (broadcastTimer) {
-    clearTimeout(broadcastTimer);
-    broadcastTimer = null;
-  }
-
-  if (active.length > 1 && !isBroadcastModalOpen) {
-    const duration = (current.durationSeconds || 5) * 1000;
-    broadcastTimer = setTimeout(() => {
-      advanceBroadcast();
-    }, duration);
+  // If active.length === 1: hide track, do not run rotation
+  if (active.length === 1) {
+    if (trackEl) trackEl.classList.add('hidden');
+    if (fillEl) fillEl.style.width = '0%';
+    broadcastProgressMs = 0;
+  } else {
+    if (trackEl) trackEl.classList.remove('hidden');
   }
 }
 
-function advanceBroadcast() {
+export function advanceBroadcast() {
   if (isBroadcastModalOpen) return;
   const active = getActiveBroadcasts();
   if (active.length <= 1) return;
@@ -14138,13 +14187,19 @@ function advanceBroadcast() {
   banner.classList.add('fade-out');
   setTimeout(() => {
     currentBroadcastIndex = (currentBroadcastIndex + 1) % active.length;
+    broadcastProgressMs = 0;
+    const fillEl = document.getElementById('broadcast-progress-fill') || banner.querySelector('.broadcast-progress-fill');
+    if (fillEl) {
+      fillEl.style.transition = 'none';
+      fillEl.style.width = '0%';
+    }
     renderHomeBroadcastBanner();
     banner.classList.remove('fade-out');
     banner.classList.add('fade-in');
     setTimeout(() => {
       banner.classList.remove('fade-in');
-    }, 300);
-  }, 300);
+    }, 250);
+  }, 200);
 }
 
 function openBroadcastDetailModal(initialBroadcastOrId) {
@@ -15763,6 +15818,8 @@ if (typeof window !== 'undefined') {
   window.renderTasksView = renderTasksView;
   window.renderAdminTasks = renderAdminTasks;
   window.renderBroadcastBanner = renderBroadcastBanner;
+  window.getActiveBroadcasts = getActiveBroadcasts;
+  window.advanceBroadcast = advanceBroadcast;
   window.renderHomeBroadcastBanner = renderHomeBroadcastBanner;
   window.renderSubmissionsInspector = renderSubmissionsInspector;
   window.closeModal = closeModal;
