@@ -2360,3 +2360,232 @@ select:focus,
   font-weight: 600;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
+
+
+/* ==========================================================================
+   RELEASE v2.2.1: SEARCH LENS FIX, SETTINGS PALETTE, COMPACT CARDS & CROPPING
+   ========================================================================== */
+
+/* 1. Search Lens Icon Fix & Universal Search Padding */
+.ios-search-wrapper,
+.search-box,
+.search-input-wrap {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+.ios-search-wrapper svg,
+.search-box svg,
+.search-input-wrap svg,
+.search-icon {
+  position: absolute !important;
+  left: 14px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 17px !important;
+  height: 17px !important;
+  color: rgba(235, 235, 245, 0.45) !important;
+  pointer-events: none !important;
+  z-index: 2 !important;
+}
+
+input[type="search"],
+.ios-search-wrapper input,
+.search-box input,
+.search-input-wrap input,
+.ios-search-field {
+  padding-left: 42px !important;
+}
+
+/* 2. Side Menu Apple HIG Curated Icon Palette */
+.drawer-icon-push {
+  background: rgba(255, 55, 95, 0.18) !important;
+  color: #FF375F !important;
+  border: 1px solid rgba(255, 55, 95, 0.28) !important;
+}
+.drawer-icon-refresh {
+  background: rgba(50, 173, 230, 0.18) !important;
+  color: #32ADE6 !important;
+  border: 1px solid rgba(50, 173, 230, 0.28) !important;
+}
+.drawer-icon-waiver {
+  background: rgba(48, 209, 88, 0.18) !important;
+  color: #30D158 !important;
+  border: 1px solid rgba(48, 209, 88, 0.28) !important;
+}
+.drawer-icon-admin {
+  background: rgba(255, 159, 10, 0.18) !important;
+  color: #FF9F0A !important;
+  border: 1px solid rgba(255, 159, 10, 0.28) !important;
+}
+.drawer-icon-pwa {
+  background: rgba(10, 132, 255, 0.18) !important;
+  color: #0A84FF !important;
+  border: 1px solid rgba(10, 132, 255, 0.28) !important;
+}
+.drawer-icon-version {
+  background: rgba(94, 92, 230, 0.18) !important;
+  color: #5E5CE6 !important;
+  border: 1px solid rgba(94, 92, 230, 0.28) !important;
+}
+.drawer-icon-signout {
+  background: rgba(255, 69, 58, 0.16) !important;
+  color: #FF453A !important;
+  border: 1px solid rgba(255, 69, 58, 0.25) !important;
+}
+
+/* 3. Uniform Compact Notification Cards in Updates Tab */
+.notification-card {
+  height: 76px !important;
+  min-height: 72px !important;
+  max-height: 82px !important;
+  overflow: hidden !important;
+  padding: 10px 14px !important;
+  display: flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+}
+.notification-card .bulk-card-content {
+  align-items: center !important;
+}
+.notification-card.read {
+  opacity: 0.82;
+}
+.notification-card.unread {
+  background: rgba(10, 132, 255, 0.06);
+}
+
+/* 4. Permanent Apple 3-Pillar Podium Stage */
+.podium-stage-container {
+  display: grid;
+  grid-template-columns: 1fr 1.12fr 1fr;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 16px 8px 0;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.podium-pillar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  border-radius: 18px 18px 10px 10px;
+  padding: 12px 6px 14px;
+  text-align: center;
+  position: relative;
+  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.2s ease;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.podium-pillar:hover {
+  transform: translateY(-2px);
+}
+.podium-pillar-gold {
+  min-height: 176px;
+  background: linear-gradient(180deg, rgba(255, 214, 10, 0.2) 0%, rgba(255, 214, 10, 0.04) 100%);
+  border: 1.5px solid rgba(255, 214, 10, 0.5);
+  box-shadow: 0 8px 24px -4px rgba(255, 214, 10, 0.25);
+}
+.podium-pillar-silver {
+  min-height: 148px;
+  background: linear-gradient(180deg, rgba(229, 229, 234, 0.18) 0%, rgba(229, 229, 234, 0.03) 100%);
+  border: 1.5px solid rgba(229, 229, 234, 0.4);
+  box-shadow: 0 6px 20px -4px rgba(229, 229, 234, 0.15);
+}
+.podium-pillar-bronze {
+  min-height: 132px;
+  background: linear-gradient(180deg, rgba(255, 159, 10, 0.18) 0%, rgba(255, 159, 10, 0.03) 100%);
+  border: 1.5px solid rgba(255, 159, 10, 0.4);
+  box-shadow: 0 6px 20px -4px rgba(255, 159, 10, 0.15);
+}
+.podium-pillar-vacant {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1.5px dashed rgba(255, 255, 255, 0.16) !important;
+  box-shadow: none !important;
+  cursor: default !important;
+}
+.podium-pillar-vacant:hover {
+  transform: none !important;
+}
+
+/* 5. Avatar Cropper Modal & Controls */
+#avatarCropperOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: #000000;
+  display: flex;
+  flex-direction: column;
+  touch-action: none;
+  overflow: hidden;
+}
+#avatarCropperOverlay.hidden {
+  display: none !important;
+}
+.cropper-viewport-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0A0A0C;
+}
+.cropper-circle-mask {
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  border: 2px solid #0A84FF;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.76);
+  pointer-events: none;
+  position: absolute;
+  z-index: 10;
+}
+.cropper-target-img {
+  position: absolute;
+  max-width: none;
+  max-height: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-drag: none;
+  transform-origin: center center;
+  will-change: transform;
+}
+.cropper-target-img:active {
+  cursor: grabbing;
+}
+.cropper-header {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 12px);
+  background: rgba(20, 20, 22, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.1);
+}
+.cropper-controls {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  background: rgba(20, 20, 22, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 0.5px solid rgba(255, 255, 255, 0.1);
+}
+.preset-avatar-btn {
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid transparent;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+  aspect-ratio: 1 / 1;
+  background: rgba(255, 255, 255, 0.05);
+}
+.preset-avatar-btn:hover {
+  transform: scale(1.08);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.preset-avatar-btn.active,
+.preset-avatar-btn.selected {
+  border-color: #0A84FF !important;
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.5);
+  transform: scale(1.1);
+}

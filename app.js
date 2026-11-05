@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.0';
+export const APP_VERSION = '2.2.1';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -5115,6 +5115,641 @@ export const PAGE_ORDER = [
   { id: 'profile', label: 'Profile', hash: '#profile', sectionId: 'page-profile' }
 ];
 
+
+/* ==========================================================================
+   RELEASE v2.2.1: CENTRALIZED 3-BUCKET ADJUST HUB & ATOMIC ADJUSTMENT ENGINE
+   ========================================================================== */
+
+export async function applyAccountAdjustment({ targetUid, bucket, direction, amount, reason }) {
+  if (!state.user) throw new Error('Authentication required');
+  if (!targetUid) throw new Error('Target member is required');
+  const validBuckets = ['points', 'penalties', 'fines'];
+  if (!validBuckets.includes(bucket)) throw new Error('Invalid bucket: ' + bucket);
+  const validDirections = ['add', 'deduct'];
+  if (!validDirections.includes(direction)) throw new Error('Invalid direction: ' + direction);
+  const cleanAmount = Math.abs(Number(amount));
+  if (isNaN(cleanAmount) || cleanAmount <= 0) throw new Error('Amount must be greater than 0');
+  const cleanReason = String(reason || '').trim();
+  if (!cleanReason) throw new Error('Reason is required');
+
+  let newPoints = undefined;
+  let newPenalties = undefined;
+  let newFinesDue = undefined;
+
+  await runTransaction(db, async (t) => {
+    const userDocRef = doc(db, 'users', targetUid);
+    const userSnap = await t.get(userDocRef);
+    if (!userSnap.exists()) throw new Error('Target user does not exist');
+    const userData = userSnap.data();
+
+    const currentPoints = Number(userData.points || 0);
+    const currentPenalties = Number(userData.penalties || 0);
+    const currentFines = Number(userData.finesDue || 0);
+
+    const userUpdates = { updatedAt: serverTimestamp() };
+
+    if (bucket === 'points') {
+      if (direction === 'add') {
+        newPoints = currentPoints + cleanAmount;
+      } else {
+        newPoints = Math.max(0, currentPoints - cleanAmount);
+      }
+      userUpdates.points = newPoints;
+      t.update(userDocRef, userUpdates);
+    } else if (bucket === 'penalties') {
+      if (direction === 'add') {
+        newPenalties = currentPenalties + cleanAmount;
+      } else {
+        newPenalties = Math.max(0, currentPenalties - cleanAmount);
+      }
+      userUpdates.penalties = newPenalties;
+      t.update(userDocRef, userUpdates);
+    } else if (bucket === 'fines') {
+      const privDocRef = doc(db, 'users_private', targetUid);
+      const privSnap = await t.get(privDocRef);
+      const privData = privSnap.exists() ? privSnap.data() : {};
+      const actualPrivFines = Number(privData.finesEGP != null ? privData.finesEGP : currentFines);
+
+      if (direction === 'add') {
+        newFinesDue = actualPrivFines + cleanAmount;
+      } else {
+        newFinesDue = Math.max(0, actualPrivFines - cleanAmount);
+      }
+      t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
+      userUpdates.finesDue = newFinesDue;
+      t.update(userDocRef, userUpdates);
+    }
+
+    // Write transaction ledger entry
+    const txDocRef = doc(collection(db, 'users', targetUid, 'transactions'));
+    const txData = {
+      bucket,
+      direction,
+      type: `${bucket}_${direction}`,
+      category: bucket === 'fines' ? 'financial' : bucket,
+      amount: cleanAmount,
+      reason: cleanReason,
+      adminUid: state.user.uid,
+      adminName: state.user.displayName || 'Admin',
+      status: 'active',
+      createdAt: serverTimestamp()
+    };
+    t.set(txDocRef, txData);
+
+    // Send notification
+    const notifDocRef = doc(collection(db, 'users', targetUid, 'notifications'));
+    const notifUnit = bucket === 'fines' ? 'EGP' : 'pts';
+    const notifAction = direction === 'add' ? 'added to' : 'deducted from';
+    const notifType = direction === 'add' ? (bucket === 'penalties' ? 'penalty' : 'bonus') : (bucket === 'penalties' ? 'bonus' : 'warning');
+    const notifData = {
+      uid: targetUid,
+      title: 'Account Adjusted',
+      message: `Admin ${direction === 'add' ? 'added' : 'deducted'} ${cleanAmount} ${notifUnit} ${notifAction} your ${bucket} balance.`,
+      body: `Admin ${direction === 'add' ? 'added' : 'deducted'} ${cleanAmount} ${notifUnit} ${notifAction} your ${bucket} balance.\n💬 Admin Note: ${cleanReason}`,
+      adminNote: cleanReason,
+      type: notifType,
+      read: false,
+      createdAt: serverTimestamp()
+    };
+    t.set(notifDocRef, notifData);
+  });
+
+  // Update local memory
+  const localMem = usersMap.get(targetUid) || (state.members || []).find(m => m.uid === targetUid);
+  if (localMem) {
+    if (newPoints !== undefined) localMem.points = newPoints;
+    if (newPenalties !== undefined) localMem.penalties = newPenalties;
+    if (newFinesDue !== undefined) localMem.finesDue = newFinesDue;
+  }
+  if (state.user && state.user.uid === targetUid) {
+    if (newPoints !== undefined) state.user.points = newPoints;
+    if (newPenalties !== undefined) state.user.penalties = newPenalties;
+    if (newFinesDue !== undefined) state.user.finesDue = newFinesDue;
+    updateHeroStats();
+  }
+
+  invalidateEgpCache(targetUid);
+  return { newPoints, newPenalties, newFinesDue };
+}
+
+let currentHubSelectedMember = null;
+let currentHubBucket = 'points';
+let currentHubDirection = 'add';
+
+export function renderAdminAdjustments() {
+  const panel = document.getElementById('admin-panel-adjustments');
+  if (!panel) return;
+
+  const searchInput = document.getElementById('hubMemberSearchInput');
+  const resultsContainer = document.getElementById('hubMemberSearchResults');
+  const selectedBanner = document.getElementById('hubSelectedMemberCard');
+  const formContainer = document.getElementById('hubAdjustmentFormContainer');
+  const bucketSegmented = document.getElementById('hubBucketSegmented');
+  const directionSegmented = document.getElementById('hubDirectionSegmented');
+  const operationDesc = document.getElementById('hubOperationDesc');
+  const amountUnit = document.getElementById('hubAmountUnit');
+  const amountInput = document.getElementById('hubAdjustAmount');
+  const reasonInput = document.getElementById('hubAdjustReason');
+  const submitBtn = document.getElementById('btnHubSubmitAdjustment');
+  const reasonChipsContainer = document.getElementById('hubReasonChipsContainer');
+
+  function updateDirectionUI() {
+    if (directionSegmented) {
+      directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
+        const isDir = btn.dataset.direction === currentHubDirection;
+        if (isDir) {
+          btn.className = `hub-direction-btn py-2 rounded-lg text-xs font-semibold transition shadow-sm ${currentHubDirection === 'add' ? 'text-emerald-400 bg-emerald-500/15 border border-emerald-500/25' : 'text-rose-400 bg-rose-500/15 border border-rose-500/25'}`;
+        } else {
+          btn.className = 'hub-direction-btn py-2 rounded-lg text-xs font-semibold transition text-neutral-400 hover:text-white border border-transparent';
+        }
+      });
+    }
+
+    if (operationDesc) {
+      const descriptions = {
+        'points_add': { text: '+ Add bonus points to balance', color: 'text-amber-400' },
+        'points_deduct': { text: '- Deduct points from balance', color: 'text-rose-400' },
+        'penalties_add': { text: '+ Add misconduct penalty points', color: 'text-rose-400' },
+        'penalties_deduct': { text: '- Clear / Deduct penalty points', color: 'text-emerald-400' },
+        'fines_add': { text: '+ Add fine balance (EGP)', color: 'text-rose-400' },
+        'fines_deduct': { text: '- Deduct / Record payment / Waive fine (EGP)', color: 'text-emerald-400' }
+      };
+      const info = descriptions[`${currentHubBucket}_${currentHubDirection}`] || { text: 'Apply balance change', color: 'text-white' };
+      operationDesc.textContent = info.text;
+      operationDesc.className = `text-[11px] font-medium ${info.color}`;
+    }
+
+    if (amountUnit) {
+      amountUnit.textContent = currentHubBucket === 'fines' ? 'EGP' : 'Points';
+    }
+  }
+
+  function updateBucketUI() {
+    if (bucketSegmented) {
+      bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
+        const isBucket = btn.dataset.bucket === currentHubBucket;
+        if (isBucket) {
+          btn.className = 'hub-bucket-btn py-2 rounded-lg text-xs font-semibold transition text-white bg-white/20 shadow-sm border border-white/15';
+        } else {
+          btn.className = 'hub-bucket-btn py-2 rounded-lg text-xs font-semibold transition text-neutral-400 hover:text-white border border-transparent';
+        }
+      });
+    }
+    updateDirectionUI();
+  }
+
+  function renderSelectedBanner() {
+    if (!selectedBanner) return;
+    if (!currentHubSelectedMember) {
+      selectedBanner.classList.add('hidden');
+      if (formContainer) formContainer.classList.add('hidden');
+      return;
+    }
+
+    const m = currentHubSelectedMember;
+    const memPoints = m.points || 0;
+    const memPenalties = m.penalties || 0;
+    const memFines = m.finesDue || 0;
+
+    selectedBanner.classList.remove('hidden');
+    if (formContainer) formContainer.classList.remove('hidden');
+
+    selectedBanner.innerHTML = `
+      <div class="flex items-center justify-between gap-3 pb-2 border-b border-white/5">
+        <div class="flex items-center gap-2.5 min-w-0">
+          ${renderAvatar(m, 'w-10 h-10')}
+          <div class="min-w-0">
+            <div class="font-bold text-white text-xs truncate">${esc(m.displayName || m.name || 'Member')}</div>
+            <div class="text-[11px] text-neutral-400 truncate">${esc(m.email || 'No email')}</div>
+          </div>
+        </div>
+        <button type="button" id="btnHubDeselectMember" class="text-xs text-neutral-400 hover:text-white px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 transition">
+          Change
+        </button>
+      </div>
+
+      <!-- Live 3-Bucket Balance Strip -->
+      <div class="grid grid-cols-3 gap-2 pt-1 text-center font-mono">
+        <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
+          <div class="text-[9px] uppercase tracking-wider text-amber-300 font-bold">Points</div>
+          <div id="hubBannerPoints" class="text-sm font-bold text-amber-400 mt-0.5">${memPoints} pts</div>
+        </div>
+        <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
+          <div class="text-[9px] uppercase tracking-wider text-rose-300 font-bold">Penalties</div>
+          <div id="hubBannerPenalties" class="text-sm font-bold text-rose-400 mt-0.5">${memPenalties} pts</div>
+        </div>
+        <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
+          <div class="text-[9px] uppercase tracking-wider text-blue-300 font-bold">Fines Due</div>
+          <div id="hubBannerFines" class="text-sm font-bold text-blue-400 mt-0.5">${memFines} EGP</div>
+        </div>
+      </div>
+    `;
+
+    const deselectBtn = document.getElementById('btnHubDeselectMember');
+    if (deselectBtn) {
+      deselectBtn.onclick = () => {
+        currentHubSelectedMember = null;
+        renderSelectedBanner();
+        if (searchInput) {
+          searchInput.value = '';
+          searchInput.focus();
+        }
+      };
+    }
+  }
+
+  // Search input handler (4 dimensions: Name, Email, Badges, Role)
+  if (searchInput && resultsContainer) {
+    searchInput.oninput = () => {
+      const q = searchInput.value.trim().toLowerCase();
+      if (!q) {
+        resultsContainer.innerHTML = '';
+        resultsContainer.classList.add('hidden');
+        return;
+      }
+
+      const all = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
+      const matches = all.filter(m => {
+        const name = (m.displayName || m.name || '').toLowerCase();
+        const email = (m.email || '').toLowerCase();
+        const role = (m.role || '').toLowerCase();
+        const badges = (m.badges || []).map(b => (b.name || b.label || b.id || '').toLowerCase()).join(' ');
+        return name.includes(q) || email.includes(q) || role.includes(q) || badges.includes(q);
+      }).slice(0, 8);
+
+      if (matches.length === 0) {
+        resultsContainer.innerHTML = '<div class="p-3 text-center text-xs text-neutral-400">No team members match your search.</div>';
+        resultsContainer.classList.remove('hidden');
+        return;
+      }
+
+      resultsContainer.innerHTML = matches.map(m => `
+        <div class="hub-search-result-item flex items-center justify-between p-2 rounded-xl hover:bg-white/10 cursor-pointer transition" data-uid="${esc(m.uid)}">
+          <div class="flex items-center gap-2.5 min-w-0">
+            ${renderAvatar(m, 'w-8 h-8')}
+            <div class="min-w-0">
+              <div class="font-semibold text-white text-xs truncate">${esc(m.displayName || m.name || 'Member')}</div>
+              <div class="text-[10px] text-neutral-400 truncate">${esc(m.email || m.role || 'Member')}</div>
+            </div>
+          </div>
+          <div class="text-right shrink-0 font-mono text-[11px]">
+            <span class="text-amber-400 font-bold">${m.points || 0} pts</span>
+            ${Number(m.finesDue || 0) > 0 ? `<span class="text-blue-400 ml-1.5 font-bold">${m.finesDue} EGP</span>` : ''}
+          </div>
+        </div>
+      `).join('');
+
+      resultsContainer.classList.remove('hidden');
+
+      resultsContainer.querySelectorAll('.hub-search-result-item').forEach(item => {
+        item.onclick = () => {
+          const uid = item.dataset.uid;
+          const found = usersMap.get(uid) || (state.members || []).find(x => x.uid === uid);
+          if (found) {
+            currentHubSelectedMember = found;
+            resultsContainer.classList.add('hidden');
+            searchInput.value = '';
+            renderSelectedBanner();
+          }
+        };
+      });
+    };
+  }
+
+  // Bucket segmented control
+  if (bucketSegmented) {
+    bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
+      btn.onclick = () => {
+        currentHubBucket = btn.dataset.bucket;
+        updateBucketUI();
+      };
+    });
+  }
+
+  // Direction segmented control
+  if (directionSegmented) {
+    directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
+      btn.onclick = () => {
+        currentHubDirection = btn.dataset.direction;
+        updateDirectionUI();
+      };
+    });
+  }
+
+  // Presets
+  panel.querySelectorAll('.hub-preset-btn').forEach(btn => {
+    btn.onclick = () => {
+      if (amountInput) amountInput.value = btn.dataset.amount;
+    };
+  });
+
+  // Reason quick chips
+  if (reasonChipsContainer) {
+    reasonChipsContainer.querySelectorAll('.hub-quick-chip').forEach(chip => {
+      chip.onclick = () => {
+        if (reasonInput) reasonInput.value = chip.dataset.reason;
+      };
+    });
+  }
+
+  // Submit button
+  if (submitBtn) {
+    submitBtn.onclick = async () => {
+      if (!currentHubSelectedMember) {
+        toast('Please select a member first', 'warning');
+        return;
+      }
+
+      const amtVal = Math.abs(Number(amountInput?.value));
+      if (isNaN(amtVal) || amtVal <= 0) {
+        toast('Please enter a valid amount greater than 0', 'error');
+        return;
+      }
+
+      const reasonVal = String(reasonInput?.value || '').trim();
+      if (!reasonVal) {
+        toast('Audit reason is required for the ledger', 'error');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Recording adjustment...';
+
+      try {
+        const result = await applyAccountAdjustment({
+          targetUid: currentHubSelectedMember.uid,
+          bucket: currentHubBucket,
+          direction: currentHubDirection,
+          amount: amtVal,
+          reason: reasonVal
+        });
+
+        if (amountInput) amountInput.value = '';
+        if (reasonInput) reasonInput.value = '';
+
+        // Update selected banner balances
+        if (result.newPoints !== undefined) currentHubSelectedMember.points = result.newPoints;
+        if (result.newPenalties !== undefined) currentHubSelectedMember.penalties = result.newPenalties;
+        if (result.newFinesDue !== undefined) currentHubSelectedMember.finesDue = result.newFinesDue;
+        renderSelectedBanner();
+
+        toast(`Successfully applied ${currentHubDirection === 'add' ? '+' : '-'}${amtVal} ${currentHubBucket} adjustment`, 'success');
+        if (typeof renderAdminMembers === 'function') renderAdminMembers();
+        if (typeof renderLeaderboard === 'function') renderLeaderboard();
+      } catch (err) {
+        console.error('Adjust Hub Error:', err);
+        toast(err.message || 'Failed to apply adjustment', 'error');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Apply & Record in Ledger';
+      }
+    };
+  }
+
+  updateBucketUI();
+  renderSelectedBanner();
+}
+
+/* ==========================================================================
+   24 PRESET SVG AVATARS & INTERACTIVE CROPPER ENGINE (v2.2.1)
+   ========================================================================== */
+
+export function getPresetAvatars() {
+  const personas = [
+    { label: 'Camera Pro', bg1: '#0A84FF', bg2: '#5E5CE6', path: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>' },
+    { label: 'Director', bg1: '#FF2D55', bg2: '#FF9500', path: '<rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/>' },
+    { label: 'Audio Pro', bg1: '#FF9F0A', bg2: '#FF375F', path: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>' },
+    { label: 'Live Streamer', bg1: '#32ADE6', bg2: '#007AFF', path: '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>' },
+    { label: 'Lighting Lead', bg1: '#FFD60A', bg2: '#FF9500', path: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>' },
+    { label: 'Drone Pilot', bg1: '#30D158', bg2: '#0A84FF', path: '<polygon points="3 11 22 2 13 21 11 13 3 11"/>' },
+    { label: 'Motion Lead', bg1: '#AF52DE', bg2: '#5856D6', path: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>' },
+    { label: 'Editor', bg1: '#30D158', bg2: '#34C759', path: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>' },
+    { label: 'Sound FX', bg1: '#FF375F', bg2: '#BF5AF2', path: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>' },
+    { label: 'Creative Lead', bg1: '#FFD60A', bg2: '#FF375F', path: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>' },
+    { label: 'Scriptwriter', bg1: '#64D2FF', bg2: '#5E5CE6', path: '<path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/>' },
+    { label: 'Photographer', bg1: '#5E5CE6', bg2: '#BF5AF2', path: '<circle cx="12" cy="12" r="10"/><line x1="14.31" y1="8" x2="20.05" y2="17.94"/><line x1="9.69" y1="8" x2="21.17" y2="8"/><line x1="7.38" y1="12" x2="13.12" y2="2.06"/><line x1="9.69" y1="16" x2="3.95" y2="6.06"/><line x1="14.31" y1="16" x2="2.83" y2="16"/><line x1="16.62" y1="12" x2="10.88" y2="21.94"/>' },
+    { label: 'Tech Lead', bg1: '#1C1C1E', bg2: '#3A3A3C', path: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>' },
+    { label: 'Producer', bg1: '#FFD60A', bg2: '#B48B00', path: '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>' },
+    { label: 'Colorist', bg1: '#FF453A', bg2: '#30D158', path: '<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>' },
+    { label: 'VFX Artist', bg1: '#BF5AF2', bg2: '#FF2D55', path: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>' },
+    { label: 'Broadcast Ops', bg1: '#32ADE6', bg2: '#30D158', path: '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>' },
+    { label: 'Content Lead', bg1: '#FF375F', bg2: '#FF9F0A', path: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>' },
+    { label: 'Neon Star', bg1: '#00F2FE', bg2: '#4FACFE', path: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' },
+    { label: 'Aurora', bg1: '#667EEA', bg2: '#764BA2', path: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>' },
+    { label: 'Sunset Glow', bg1: '#FA709A', bg2: '#FEE140', path: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>' },
+    { label: 'Forest Dawn', bg1: '#0BA360', bg2: '#3CBA92', path: '<circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>' },
+    { label: 'Obsidian Shield', bg1: '#232526', bg2: '#414345', path: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>' },
+    { label: 'Cyber Pulse', bg1: '#F857A6', bg2: '#FF5858', path: '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/>' }
+  ];
+
+  return personas.map((p, idx) => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="g${idx}" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="${p.bg1}"/>
+          <stop offset="100%" stop-color="${p.bg2}"/>
+        </linearGradient>
+      </defs>
+      <rect width="100" height="100" rx="50" fill="url(#g${idx})"/>
+      <g transform="translate(24, 24) scale(2.16)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        ${p.path}
+      </g>
+    </svg>`;
+    return {
+      id: `preset-avatar-${idx + 1}`,
+      label: p.label,
+      dataUrl: `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+    };
+  });
+}
+
+let cropperState = {
+  scale: 1,
+  panX: 0,
+  panY: 0,
+  isDragging: false,
+  dragStartX: 0,
+  dragStartY: 0,
+  initialPanX: 0,
+  initialPanY: 0,
+  initialPinchDist: 0,
+  initialPinchScale: 1
+};
+
+export function openAvatarCropper(imageSrc, onDone) {
+  const overlay = document.getElementById('avatarCropperOverlay');
+  const cropperImg = document.getElementById('cropperImage');
+  const slider = document.getElementById('cropZoomSlider');
+  const cancelBtn = document.getElementById('btnCancelCropper');
+  const doneBtn = document.getElementById('btnDoneCropper');
+  const container = document.getElementById('cropperViewportContainer');
+
+  if (!overlay || !cropperImg) return;
+
+  cropperState.scale = 1;
+  cropperState.panX = 0;
+  cropperState.panY = 0;
+  if (slider) slider.value = 1;
+
+  function applyTransform() {
+    cropperImg.style.transform = `translate(${cropperState.panX}px, ${cropperState.panY}px) scale(${cropperState.scale})`;
+  }
+
+  cropperImg.onload = () => {
+    overlay.classList.remove('hidden');
+    applyTransform();
+  };
+  cropperImg.src = imageSrc;
+
+  if (slider) {
+    slider.oninput = () => {
+      cropperState.scale = parseFloat(slider.value) || 1;
+      applyTransform();
+    };
+  }
+
+  if (container) {
+    container.onpointerdown = (e) => {
+      e.preventDefault();
+      cropperState.isDragging = true;
+      cropperState.dragStartX = e.clientX;
+      cropperState.dragStartY = e.clientY;
+      cropperState.initialPanX = cropperState.panX;
+      cropperState.initialPanY = cropperState.panY;
+      try { container.setPointerCapture(e.pointerId); } catch (_) {}
+    };
+
+    container.onpointermove = (e) => {
+      if (!cropperState.isDragging) return;
+      e.preventDefault();
+      const dx = e.clientX - cropperState.dragStartX;
+      const dy = e.clientY - cropperState.dragStartY;
+      cropperState.panX = cropperState.initialPanX + dx;
+      cropperState.panY = cropperState.initialPanY + dy;
+      applyTransform();
+    };
+
+    const endDrag = (e) => {
+      if (cropperState.isDragging) {
+        cropperState.isDragging = false;
+        try { container.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+    };
+    container.onpointerup = endDrag;
+    container.onpointercancel = endDrag;
+
+    // Pinch-to-zoom support
+    container.ontouchstart = (e) => {
+      if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        cropperState.initialPinchDist = Math.hypot(dx, dy);
+        cropperState.initialPinchScale = cropperState.scale;
+      }
+    };
+
+    container.ontouchmove = (e) => {
+      if (e.touches.length === 2 && cropperState.initialPinchDist > 0) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.hypot(dx, dy);
+        const factor = dist / cropperState.initialPinchDist;
+        const newScale = Math.min(3.5, Math.max(1, cropperState.initialPinchScale * factor));
+        cropperState.scale = newScale;
+        if (slider) slider.value = newScale;
+        applyTransform();
+      }
+    };
+  }
+
+  if (cancelBtn) {
+    cancelBtn.onclick = () => {
+      overlay.classList.add('hidden');
+    };
+  }
+
+  if (doneBtn) {
+    doneBtn.onclick = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+
+        const factor = 256 / 260;
+        ctx.translate(128, 128);
+        ctx.scale(cropperState.scale * factor, cropperState.scale * factor);
+        ctx.translate(cropperState.panX / cropperState.scale, cropperState.panY / cropperState.scale);
+
+        const nw = cropperImg.naturalWidth || 260;
+        const nh = cropperImg.naturalHeight || 260;
+        ctx.drawImage(cropperImg, -nw / 2, -nh / 2, nw, nh);
+
+        const exportedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        overlay.classList.add('hidden');
+        if (typeof onDone === 'function') onDone(exportedDataUrl);
+      } catch (err) {
+        console.error('Cropper export error:', err);
+        overlay.classList.add('hidden');
+      }
+    };
+  }
+}
+
+export function initEditProfileModal() {
+  const avatarInput = document.getElementById('input-edit-profile-avatar');
+  const previewImg = document.getElementById('edit-profile-preview');
+  const uploadBtn = document.getElementById('btnUploadProfilePhoto');
+  const fileInput = document.getElementById('profilePhotoFileInput');
+  const togglePresetsBtn = document.getElementById('btnTogglePresetsGallery');
+  const presetsGallery = document.getElementById('profilePresetsGallery');
+  const presetsGrid = document.getElementById('profilePresetsGrid');
+
+  if (presetsGrid && (!presetsGrid.children || presetsGrid.children.length === 0)) {
+    const presets = getPresetAvatars();
+    presetsGrid.innerHTML = presets.map(p => `
+      <button type="button" class="preset-avatar-btn w-9 h-9 rounded-full overflow-hidden hover:scale-105 transition" data-avatar-url="${esc(p.dataUrl)}" title="${esc(p.label)}">
+        <img src="${esc(p.dataUrl)}" alt="${esc(p.label)}" class="w-full h-full object-cover" />
+      </button>
+    `).join('');
+
+    presetsGrid.querySelectorAll('.preset-avatar-btn').forEach(btn => {
+      btn.onclick = () => {
+        presetsGrid.querySelectorAll('.preset-avatar-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const url = btn.dataset.avatarUrl;
+        if (avatarInput) avatarInput.value = url;
+        if (previewImg) previewImg.src = url;
+      };
+    });
+  }
+
+  if (togglePresetsBtn && presetsGallery) {
+    togglePresetsBtn.onclick = () => {
+      presetsGallery.classList.toggle('hidden');
+    };
+  }
+
+  if (uploadBtn && fileInput) {
+    uploadBtn.onclick = () => fileInput.click();
+
+    fileInput.onchange = () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const rawUrl = e.target.result;
+        openAvatarCropper(rawUrl, (croppedUrl) => {
+          if (avatarInput) avatarInput.value = croppedUrl;
+          if (previewImg) previewImg.src = croppedUrl;
+        });
+      };
+      reader.readAsDataURL(file);
+      fileInput.value = '';
+    };
+  }
+}
+
 function initNavigation() {
   const userPagerEl = document.getElementById('user-pager');
   const userDockEl = document.getElementById('user-dock');
@@ -5137,6 +5772,7 @@ function initNavigation() {
     { id: 'submissions', hash: '#admin-submissions' },
     { id: 'waivers', hash: '#admin-waivers' },
     { id: 'members', hash: '#admin-members' },
+    { id: 'adjustments', hash: '#admin-adjustments' },
     { id: 'broadcasts', hash: '#admin-broadcasts' }
   ];
 
@@ -5146,6 +5782,7 @@ function initNavigation() {
       else if (pageId === 'submissions') renderAdminSubmissions();
       else if (pageId === 'attendance') renderAttendanceView();
       else if (pageId === 'members') renderAdminMembers();
+      else if (pageId === 'adjustments') renderAdminAdjustments();
       else if (pageId === 'broadcasts') renderAdminBroadcasts();
     });
   }
@@ -5343,6 +5980,7 @@ export function showAdminDashboard(targetPage = 'overview') {
     }
     updateAdminOverviewStats();
     if (targetPage === 'waivers') renderAdminWaivers();
+    else if (targetPage === 'adjustments') renderAdminAdjustments();
   }
 }
 
@@ -8148,7 +8786,7 @@ function updateLeaderboardPeriodButtons() {
   setupLeaderboardSegmented();
 }
 
-function renderLeaderboard() {
+export function renderLeaderboard() {
   const listEl = document.getElementById('leaderboard-list');
   const countEl = document.getElementById('leaderboard-total-count');
   const podiumEl = document.getElementById('leaderboard-podium') || document.getElementById('leaderboardPodium');
@@ -8159,7 +8797,7 @@ function renderLeaderboard() {
   const nowMs = serverNow();
   const period = state.leaderboardPeriod || 'all';
 
-  // Zero-Extra-Reads: compute directly from usersMap in memory (identical for guests and signed-in users)
+  // Zero-Extra-Reads: compute directly from usersMap in memory
   const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
 
   const sorted = (allMembers || []).map(m => {
@@ -8178,6 +8816,16 @@ function renderLeaderboard() {
       if (penDiff !== 0) return penDiff;
       return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
     });
+
+  // Calculate tie-aware ranks: members with equal periodPoints share the exact same rank
+  rankedMembers.forEach((m, idx) => {
+    if (idx > 0 && m.periodPoints === rankedMembers[idx - 1].periodPoints) {
+      m.rank = rankedMembers[idx - 1].rank;
+    } else {
+      m.rank = idx + 1;
+    }
+  });
+
   const unrankedMembers = sorted
     .filter(m => Number(m.periodPoints || 0) <= 0)
     .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
@@ -8186,52 +8834,77 @@ function renderLeaderboard() {
 
   const taskCountOf = (uid) => (state.submissions || []).filter(s => s.userId === uid || s.uid === uid).length;
 
-  function podiumCard(member, place) {
-    const cfg = {
-      1: { label: '#1', border: 'border-amber-400', text: 'text-amber-400', sub: 'text-amber-300/80', ring: 'border-amber-400', size: 'w-14 h-14', pad: 'p-3.5', extra: 'shadow-xl bg-gradient-to-b from-amber-500/10 to-transparent' },
-      2: { label: '#2', border: 'border-slate-300', text: 'text-slate-300', sub: 'text-neutral-400', ring: 'border-slate-300', size: 'w-12 h-12', pad: 'p-3', extra: '' },
-      3: { label: '#3', border: 'border-amber-700', text: 'text-amber-500', sub: 'text-neutral-400', ring: 'border-amber-700', size: 'w-12 h-12', pad: 'p-3', extra: '' }
-    }[place];
-    const name = member.displayName || member.name || 'Member';
-    return `
-      <div id="podium-${place === 1 ? 'first' : place === 2 ? 'second' : 'third'}" class="podium-card glass-card ${cfg.pad} text-center border-t-2 ${cfg.border} ${cfg.extra} rounded-xl cursor-pointer hover:bg-white/5 transition" data-member-uid="${esc(member.uid)}">
-        <div class="text-xs font-bold ${cfg.text} mb-1">${cfg.label}</div>
-        <div class="mx-auto mb-1.5 flex justify-center">${renderAvatar(member, cfg.size)}</div>
-        <div class="font-bold text-xs text-white truncate">${esc(name)}</div>
-        <div class="text-xs font-bold ${cfg.text} font-mono mt-0.5">${member.periodPoints} pts</div>
-        <div class="text-[10px] ${cfg.sub}">${taskCountOf(member.uid)} tasks</div>
-      </div>`;
-  }
-
-  // ----- Podium / Spotlight / Empty state (built dynamically, no static fallback HTML) -----
-  if (podiumEl) {
-    if (rankedMembers.length === 0) {
-      podiumEl.className = 'pt-4 pb-2';
-      podiumEl.innerHTML = `
-        <div class="ios-card text-center py-6" id="leaderboard-empty-state">
-          <p class="text-sm font-semibold text-white">No points awarded yet.</p>
-          <p class="text-xs text-neutral-400 mt-1">Complete tasks to climb the leaderboard.</p>
-        </div>`;
-    } else if (rankedMembers.length === 1) {
-      podiumEl.className = 'flex justify-center items-center pt-4 pb-2';
-      const m = rankedMembers[0];
-      podiumEl.innerHTML = `
-        <div id="podium-first" class="podium-card glass-card p-4 text-center border-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/15 to-transparent rounded-2xl w-full max-w-[260px] cursor-pointer hover:scale-[1.02] transition" data-member-uid="${esc(m.uid)}">
-          <div class="text-sm font-bold text-amber-400 mb-1">#1</div>
-          <div class="mx-auto mb-2 flex justify-center">${renderAvatar(m, 'w-16 h-16')}</div>
-          <div class="font-bold text-sm text-white truncate">${esc(m.displayName || m.name || 'Member')}</div>
-          <div class="text-sm font-bold text-amber-400 font-mono mt-0.5">${m.periodPoints} pts</div>
-          <div class="text-[10px] text-amber-300/80">${taskCountOf(m.uid)} tasks</div>
-        </div>`;
-    } else if (rankedMembers.length === 2) {
-      podiumEl.className = 'grid grid-cols-2 gap-3 max-w-sm mx-auto items-end pt-4 pb-2';
-      podiumEl.innerHTML = podiumCard(rankedMembers[1], 2) + podiumCard(rankedMembers[0], 1);
-    } else {
-      podiumEl.className = 'grid grid-cols-3 gap-2 items-end pt-4 pb-2';
-      podiumEl.innerHTML = podiumCard(rankedMembers[1], 2) + podiumCard(rankedMembers[0], 1) + podiumCard(rankedMembers[2], 3);
+  function renderStagePillar(member, defaultPlace, pillarClass) {
+    if (!member) {
+      // Vacant Stage Pedestal
+      return `
+        <div class="podium-pillar podium-pillar-vacant ${pillarClass} flex flex-col items-center justify-end pb-3 text-center">
+          <div class="text-[11px] font-mono font-bold text-neutral-500 mb-2">#${defaultPlace}</div>
+          <div class="w-11 h-11 rounded-full border border-dashed border-white/20 flex items-center justify-center text-neutral-500 mb-2">
+            <svg class="w-5 h-5 stroke-current fill-none" stroke-width="1.5" viewBox="0 0 24 24">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </div>
+          <div class="text-xs font-semibold text-neutral-400">Open Spot</div>
+          <div class="text-[11px] font-mono text-neutral-500 mt-0.5">0 pts</div>
+        </div>
+      `;
     }
 
-    podiumEl.querySelectorAll('.podium-card').forEach(card => {
+    // Dynamic rank styling based on actual tied rank
+    const actualRank = member.rank;
+    let rankColor = 'text-neutral-400';
+    let ringColor = 'border-white/20';
+    let tierClass = pillarClass;
+
+    if (actualRank === 1) {
+      rankColor = 'text-amber-400';
+      ringColor = 'border-amber-400';
+      tierClass = 'podium-pillar-gold';
+    } else if (actualRank === 2) {
+      rankColor = 'text-slate-300';
+      ringColor = 'border-slate-300';
+      tierClass = 'podium-pillar-silver';
+    } else if (actualRank === 3) {
+      rankColor = 'text-amber-500';
+      ringColor = 'border-amber-600';
+      tierClass = 'podium-pillar-bronze';
+    }
+
+    const name = member.displayName || member.name || 'Member';
+    const isFirst = defaultPlace === 1;
+    const avatarSize = isFirst ? 'w-14 h-14' : 'w-11 h-11';
+
+    return `
+      <div class="podium-pillar ${tierClass} ${pillarClass} cursor-pointer" data-member-uid="${esc(member.uid)}">
+        <div class="text-xs font-bold font-mono ${rankColor} mb-1.5 flex items-center gap-1 justify-center">
+          <span>#${actualRank}</span>
+        </div>
+        <div class="mx-auto mb-1.5 flex justify-center">${renderAvatar(member, avatarSize)}</div>
+        <div class="font-bold text-xs text-white truncate max-w-[95%]">${esc(name)}</div>
+        <div class="text-xs font-bold font-mono ${rankColor} mt-0.5">${member.periodPoints} pts</div>
+        <div class="text-[10px] text-neutral-400">${taskCountOf(member.uid)} tasks</div>
+      </div>
+    `;
+  }
+
+  // Permanent 3-Pillar Podium Stage
+  if (podiumEl) {
+    const firstMember = rankedMembers[0] || null;
+    const secondMember = rankedMembers[1] || null;
+    const thirdMember = rankedMembers[2] || null;
+
+    podiumEl.className = 'w-full pt-3 pb-2';
+    podiumEl.innerHTML = `
+      <div class="podium-stage-container">
+        ${renderStagePillar(secondMember, 2, 'podium-pillar-2')}
+        ${renderStagePillar(firstMember, 1, 'podium-pillar-1')}
+        ${renderStagePillar(thirdMember, 3, 'podium-pillar-3')}
+      </div>
+    `;
+
+    podiumEl.querySelectorAll('.podium-pillar[data-member-uid]').forEach(card => {
       card.onclick = () => {
         if (selectionState && selectionState.active) return;
         const uid = card.dataset.memberUid;
@@ -8240,21 +8913,21 @@ function renderLeaderboard() {
     });
   }
 
-  // ----- "All Members" list: only members NOT already shown in the podium -----
-  const podiumCount = Math.min(rankedMembers.length, 3);
-  const restRanked = rankedMembers.slice(podiumCount);
-
-  function rowHtml(member, rankNum, muted) {
+  // "ALL MEMBERS" Roster directly beneath the podium stage
+  function memberRowHtml(member, rankDisplay, muted = false) {
     const isMe = state.user?.uid === member.uid;
+    const isPodiumTop = member.rank && member.rank <= 3;
+    const rankColorClass = isPodiumTop ? (member.rank === 1 ? 'text-amber-400' : member.rank === 2 ? 'text-slate-300' : 'text-amber-500') : 'text-neutral-500';
+
     return `
       <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''} ${muted ? 'opacity-60' : ''}" data-member-uid="${esc(member.uid)}">
         <div class="flex items-center gap-3 min-w-0 flex-1 mr-2">
-          <span class="w-5 text-center font-mono font-bold text-xs shrink-0 ${rankNum && rankNum <= 3 ? 'text-amber-400' : 'text-neutral-500'}">${rankNum || '–'}</span>
+          <span class="w-6 text-center font-mono font-bold text-xs shrink-0 ${rankColorClass}">${rankDisplay}</span>
           <div class="shrink-0">${renderAvatar(member, 'w-8 h-8')}</div>
           <div class="min-w-0 flex-1">
             <div class="font-semibold text-xs text-white flex items-center gap-1.5 min-w-0">
-              <span class="truncate shrink-0 max-w-[100px]">${esc(member.displayName || member.name || 'Member')}</span>
-              ${isMe ? '<span class="text-[9px] px-1 rounded bg-[#0A84FF] text-white shrink-0">You</span>' : ''}
+              <span class="truncate shrink-0 max-w-[120px]">${esc(member.displayName || member.name || 'Member')}</span>
+              ${isMe ? '<span class="you-badge shrink-0">You</span>' : ''}
               <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
             </div>
             <div class="text-[10px] text-neutral-400">${taskCountOf(member.uid)} quotas</div>
@@ -8264,29 +8937,25 @@ function renderLeaderboard() {
           <div class="font-bold font-mono text-xs ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} pts</div>
           <div class="text-[10px] text-neutral-500">${member.role || 'member'}</div>
         </div>
-      </div>`;
+      </div>
+    `;
   }
 
   let listHtml = '';
-  if (restRanked.length > 0) {
-    listHtml += restRanked.map((m, i) => rowHtml(m, podiumCount + 1 + i, false)).join('');
+  if (rankedMembers.length > 0) {
+    listHtml += rankedMembers.map(m => memberRowHtml(m, `#${m.rank}`, false)).join('');
   }
   if (unrankedMembers.length > 0) {
     if (rankedMembers.length > 0) {
-      if (restRanked.length > 0) {
-        listHtml += `<div class="pt-3 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">Other Members</div>`;
-      } else {
-        listHtml += `<div class="pt-1 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">Other Members</div>`;
-      }
-      listHtml += unrankedMembers.map(m => rowHtml(m, null, true)).join('');
-    } else {
-      listHtml += unrankedMembers.map(m => rowHtml(m, null, true)).join('');
+      listHtml += `<div class="pt-3 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">Other Members</div>`;
     }
+    listHtml += unrankedMembers.map(m => memberRowHtml(m, '–', true)).join('');
   }
+
   listEl.innerHTML = listHtml;
 
   const listGroup = listEl.closest('.inset-group');
-  if (listGroup) listGroup.classList.toggle('hidden', listHtml.trim() === '');
+  if (listGroup) listGroup.classList.remove('hidden');
 
   listEl.querySelectorAll('.badge-row-container').forEach(c => {
     const uid = c.dataset.uid;
@@ -8770,6 +9439,26 @@ function getSquircleColorClass(type) {
   return 'notification-squircle-blue';
 }
 
+function getNotificationSnippet(notif) {
+  const fullText = (notif.body || notif.message || '').trim();
+  const marker = '💬 Admin Note:';
+  const hasMarker = fullText.includes(marker);
+  const hasAdminNote = Boolean(notif.adminNote || hasMarker);
+
+  let preview = fullText;
+  if (hasMarker) {
+    preview = fullText.substring(0, fullText.indexOf(marker)).trim();
+  }
+  preview = preview.replace(/\s+/g, ' ').trim();
+  if (preview.length > 75) {
+    preview = preview.substring(0, 72) + '...';
+  }
+  return {
+    snippet: preview || 'Tap to view details',
+    hasNote: hasAdminNote
+  };
+}
+
 function formatNotificationContent(bodyText) {
   if (!bodyText) return '';
   const marker = '💬 Admin Note:';
@@ -8785,7 +9474,7 @@ function formatNotificationContent(bodyText) {
   return `<p class="text-neutral-300 text-xs mt-1" style="white-space: pre-line;">${esc(bodyText)}</p>`;
 }
 
-function renderNotifications() {
+export function renderNotifications() {
   const container = document.getElementById('notifications-container');
   if (!container) return;
 
@@ -8809,24 +9498,27 @@ function renderNotifications() {
     const timeFormatted = formatDateTime(n.timestamp || n.createdAt);
     const isSelected = selectionState.active && selectionState.type === 'notifications' && selectionState.selectedIds.has(n.id);
     const squircleClass = getSquircleColorClass(n.type);
-    const iconSvg = getIconSvg(n.icon || n.type || 'bell', 'w-5 h-5 stroke-current');
+    const iconSvg = getIconSvg(n.icon || n.type || 'bell', 'w-4 h-4 stroke-current');
+    const { snippet, hasNote } = getNotificationSnippet(n);
 
     return `
       <div class="notification-card bulk-select-card ${isUnread ? 'unread border-l-4 border-l-[#0A84FF]' : 'read opacity-85'}${isSelected ? ' selected' : ''}" data-notif-id="${esc(n.id)}" data-bulk-id="${esc(n.id)}" role="button" tabindex="0">
         ${BULK_INDICATOR_HTML}
-        <div class="bulk-card-content flex items-start gap-3 w-full min-w-0">
-          <div class="notification-squircle ${squircleClass} shrink-0">
+        <div class="bulk-card-content flex items-center gap-3 w-full min-w-0">
+          <div class="notification-squircle ${squircleClass} !w-9 !h-9 shrink-0 flex items-center justify-center">
             ${iconSvg}
           </div>
           <div class="min-w-0 flex-1">
             <div class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-1.5 truncate">
+              <div class="flex items-center gap-1.5 min-w-0 truncate">
                 ${isUnread ? '<span class="w-1.5 h-1.5 rounded-full bg-[#0A84FF] shrink-0"></span>' : ''}
                 <div class="font-bold text-white text-xs truncate">${esc(n.title)}</div>
               </div>
-              <span class="text-[10px] text-neutral-400 flex-shrink-0 font-mono">${timeFormatted}</span>
+              <span class="text-[10px] text-neutral-400 shrink-0 font-mono">${timeFormatted}</span>
             </div>
-            ${formatNotificationContent(n.body || n.message || '')}
+            <div class="text-neutral-400 text-xs truncate mt-0.5">
+              ${esc(snippet)}${hasNote ? ' <span class="text-[#0A84FF] font-semibold text-[10px]">[💬 Note]</span>' : ''}
+            </div>
           </div>
         </div>
       </div>
@@ -8851,7 +9543,7 @@ function renderNotifications() {
   });
 }
 
-function openNotificationDetailModal(notif) {
+export function openNotificationDetailModal(notif) {
   // Mark as read in Firestore
   if (!notif.read && state.user) {
     notif.read = true;
@@ -8892,6 +9584,28 @@ function openNotificationDetailModal(notif) {
     `;
   }
 
+  const fullText = (notif.body || notif.message || '').trim();
+  const marker = '💬 Admin Note:';
+  let mainText = fullText;
+  let adminNoteText = (notif.adminNote || '').trim();
+
+  if (fullText.includes(marker)) {
+    const parts = fullText.split(marker);
+    mainText = parts[0].trim();
+    if (!adminNoteText) {
+      adminNoteText = parts.slice(1).join(marker).trim();
+    }
+  }
+
+  const adminNoteCard = adminNoteText ? `
+    <div class="notification-admin-note p-3 rounded-xl bg-[#0A84FF]/10 border-l-4 border-[#0A84FF] text-white text-xs space-y-1 mt-2">
+      <div class="font-bold text-[#0A84FF] text-[11px] flex items-center gap-1.5">
+        <span>💬 Admin Note</span>
+      </div>
+      <p class="text-neutral-200 whitespace-pre-line leading-relaxed">${esc(adminNoteText)}</p>
+    </div>
+  ` : '';
+
   openModal({
     title: 'Notification Details',
     body: `
@@ -8910,8 +9624,10 @@ function openNotificationDetailModal(notif) {
         </div>
 
         <div class="p-4 rounded-xl bg-white/5 border border-white/10 text-neutral-200 leading-relaxed whitespace-pre-wrap">
-          ${esc(notif.body || notif.message || '')}
+          ${esc(mainText || fullText)}
         </div>
+
+        ${adminNoteCard}
 
         <div class="pt-2 space-y-2">
           ${ctaBtnHtml}
@@ -8922,9 +9638,6 @@ function openNotificationDetailModal(notif) {
       </div>
     `
   });
-
-  const closeBtn = document.querySelector('.modal-close-btn');
-  if (closeBtn) closeBtn.onclick = closeAllModals;
 
   const actionBtn = document.getElementById('btn-notif-action-cta');
   if (actionBtn && targetAction) {
@@ -9138,44 +9851,68 @@ function updateActivityRings() {
   const legQuotas = document.getElementById('ring-legend-quotas');
   const legPen = document.getElementById('ring-legend-penalties');
 
-  const userPts = state.user?.points || 0;
-  const userPen = state.user?.penalties || 0;
+  const P = Math.max(0, Number(state.user?.points || 0));
+  const Pen = Math.max(0, Number(state.user?.penalties || 0));
+  const netPoints = P - Pen;
 
-  const activeCount = state.tasks.filter(t => t.active && !t.archived).length;
-  const todayKey = formatZonedDateKey(serverNow(), APP_TIMEZONE);
-  const completedToday = state.submissions.filter(s => {
-    if (!s.submittedAt) return false;
-    const subUid = s.uid || s.userId;
-    if (subUid !== state.user?.uid) return false;
-    const ms = s.submittedAt.toMillis ? s.submittedAt.toMillis() : (s.submittedAt.seconds ? s.submittedAt.seconds * 1000 : Number(new Date(s.submittedAt)));
-    if (!ms || isNaN(ms)) return false;
-    return formatZonedDateKey(ms, APP_TIMEZONE) === todayKey;
-  }).length;
+  // Attendance Commitment Percentage (Z%)
+  const logs = state.myAttendanceLogs || [];
+  let attendancePct = 100;
+  if (logs.length > 0) {
+    const onTimeCount = logs.filter(l => l.status === 'on_time' || (!l.penalty && l.status !== 'late' && l.status !== 'missed')).length;
+    attendancePct = Math.min(100, Math.max(0, Math.round((onTimeCount / logs.length) * 100)));
+  }
 
-  // 1. Points Ring (circumference 251.32)
-  const ptsGoal = 50;
-  const ptsProgress = Math.min(userPts / ptsGoal, 1);
-  const ptsOffset = 251.32 * (1 - ptsProgress);
-  if (ringPts) ringPts.style.strokeDashoffset = ptsOffset;
+  // Relative Rings Proportions (Yellow Points: 251.32, Red Penalties: 125.66)
+  let ptsOffset = 251.32;
+  let penOffset = 125.66;
+  let ptsOpacity = 1;
+  let penOpacity = 1;
 
-  // 2. Quotas Ring (circumference 188.49)
-  const quotasGoal = Math.max(activeCount, 1);
-  const quotasProgress = Math.min(completedToday / quotasGoal, 1);
+  if (P === 0 && Pen === 0) {
+    // Both 100% closed, dimmed
+    ptsOffset = 0;
+    penOffset = 0;
+    ptsOpacity = 0.35;
+    penOpacity = 0.35;
+  } else if (P > 0 && Pen === 0) {
+    // Points 100% closed, Penalties tiny dot
+    ptsOffset = 0;
+    penOffset = 125.66 * (1 - 0.008);
+  } else if (P === 0 && Pen > 0) {
+    // Penalties 100% closed, Points tiny dot
+    penOffset = 0;
+    ptsOffset = 251.32 * (1 - 0.008);
+  } else {
+    // Both > 0: proportional to sum
+    const total = P + Pen;
+    const ptsRatio = P / total;
+    const penRatio = Pen / total;
+    ptsOffset = 251.32 * (1 - ptsRatio);
+    penOffset = 125.66 * (1 - penRatio);
+  }
+
+  if (ringPts) {
+    ringPts.style.strokeDashoffset = ptsOffset;
+    ringPts.style.opacity = ptsOpacity;
+  }
+  if (ringPen) {
+    ringPen.style.strokeDashoffset = penOffset;
+    ringPen.style.opacity = penOpacity;
+  }
+
+  // Middle Ring: Attendance Commitment (188.49)
+  const quotasProgress = attendancePct / 100;
   const quotasOffset = 188.49 * (1 - quotasProgress);
-  if (ringQuotas) ringQuotas.style.strokeDashoffset = quotasOffset;
+  if (ringQuotas) {
+    ringQuotas.style.strokeDashoffset = quotasOffset;
+    ringQuotas.style.opacity = 1;
+  }
 
-  // 3. Penalties Ring (circumference 125.66)
-  const penProgress = userPen === 0 ? 1 : Math.max(0, 1 - (userPen / 50));
-  const penOffset = 125.66 * (1 - penProgress);
-  if (ringPen) ringPen.style.strokeDashoffset = penOffset;
-
-  if (centerPts) centerPts.textContent = userPts;
-  if (legPts) legPts.textContent = `${userPts} pts`;
-  if (legQuotas) legQuotas.textContent = `${completedToday}/${activeCount}`;
-  const cachedFineSum = (state.user?.uid && egpAggregateCache.get(state.user.uid)?.fineSum) || 0;
-  const adminAdj = state.user?.uid ? (usersPrivate.get(state.user.uid)?.finesEGP || 0) : 0;
-  const userFines = adminAdj + cachedFineSum;
-  if (legPen) legPen.textContent = `${userFines} EGP`;
+  if (centerPts) centerPts.textContent = netPoints;
+  if (legPts) legPts.textContent = `${P} pts`;
+  if (legQuotas) legQuotas.textContent = `${attendancePct}%`;
+  if (legPen) legPen.textContent = `${Pen} pts`;
 }
 
 function renderHomeDueTasks() {
@@ -13604,26 +14341,35 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
 
             const userUpdates = { updatedAt: serverTimestamp() };
 
-            if (txData.category === 'points' || txData.type === 'bonus' || txData.type === 'penalty') {
-              if (txData.type === 'bonus') {
+            // Handling both new bucket/direction schema and legacy types
+            if (txData.bucket === 'points' || txData.category === 'points' || txData.type === 'bonus' || txData.type === 'points_add' || txData.type === 'points_deduct') {
+              const isAdd = txData.direction === 'add' || txData.type === 'bonus' || txData.type === 'points_add';
+              if (isAdd) {
                 newPoints = Math.max(0, userPoints - amount);
-                userUpdates.points = newPoints;
-              } else if (txData.type === 'penalty') {
+              } else {
                 newPoints = userPoints + amount;
-                newPenalties = Math.max(0, userPenalties - amount);
-                userUpdates.points = newPoints;
-                userUpdates.penalties = newPenalties;
               }
+              userUpdates.points = newPoints;
               t.update(userDocRef, userUpdates);
-            } else if (txData.category === 'financial' || txData.type === 'fine' || txData.type === 'payment' || txData.type === 'waive') {
+            } else if (txData.bucket === 'penalties' || txData.category === 'penalties' || txData.type === 'penalty' || txData.type === 'penalties_add' || txData.type === 'penalties_deduct') {
+              const isAdd = txData.direction === 'add' || txData.type === 'penalty' || txData.type === 'penalties_add';
+              if (isAdd) {
+                newPenalties = Math.max(0, userPenalties - amount);
+              } else {
+                newPenalties = userPenalties + amount;
+              }
+              userUpdates.penalties = newPenalties;
+              t.update(userDocRef, userUpdates);
+            } else if (txData.bucket === 'fines' || txData.category === 'financial' || txData.type === 'fine' || txData.type === 'payment' || txData.type === 'waive' || txData.type === 'fines_add' || txData.type === 'fines_deduct') {
               const privDocRef = doc(db, 'users_private', uid);
               const privSnap = await t.get(privDocRef);
               const privData = privSnap.exists() ? privSnap.data() : {};
-              const currentFines = Number(privData.finesEGP || userFines);
+              const currentFines = Number(privData.finesEGP != null ? privData.finesEGP : userFines);
 
-              if (txData.type === 'fine') {
+              const isAdd = txData.direction === 'add' || txData.type === 'fine' || txData.type === 'fines_add';
+              if (isAdd) {
                 newFinesDue = Math.max(0, currentFines - amount);
-              } else if (txData.type === 'payment' || txData.type === 'waive') {
+              } else {
                 newFinesDue = currentFines + amount;
               }
               t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
@@ -14354,121 +15100,69 @@ function openMemberControlModal(member) {
   const submitAdjustBtn = modalBody.querySelector('#btn-submit-adjust');
   if (submitAdjustBtn) {
     submitAdjustBtn.onclick = async () => {
-      const amountVal = parseInt(modalBody.querySelector('#ctrl-adjust-amount')?.value, 10);
-      const reasonVal = modalBody.querySelector('#ctrl-adjust-reason')?.value.trim();
-
-      if (isNaN(amountVal) || amountVal <= 0) {
-        toast('Please enter a valid amount greater than 0', 'error');
-        return;
-      }
-
-      if (!reasonVal) {
-        toast('Adjustment reason is mandatory for the ledger', 'error');
-        return;
-      }
-
-      submitAdjustBtn.disabled = true;
-      submitAdjustBtn.textContent = 'Recording adjustment...';
-
-      try {
-        const batch = writeBatch(db);
-        const txRef = doc(collection(db, 'users', currentMember.uid, 'transactions'));
-        const txData = {
-          type: adjusterType,
-          category: adjusterCategory,
-          amount: amountVal,
-          reason: reasonVal,
-          adminUid: state.user.uid,
-          adminName: state.user.displayName || 'Admin',
-          createdAt: serverTimestamp()
-        };
-        batch.set(txRef, txData);
-
-        let actionLabel = 'adjustment';
-        if (adjusterCategory === 'points') {
-          if (adjusterType === 'bonus') {
-            const pointsUpdate = buildPointsUpdate(usersMap.get(currentMember.uid) || currentMember, amountVal);
-            batch.update(doc(db, 'users', currentMember.uid), {
-              ...pointsUpdate,
-              updatedAt: serverTimestamp()
-            });
-            actionLabel = `+${amountVal} bonus points`;
-            currentMember.points = (currentMember.points || 0) + amountVal;
-          } else if (adjusterType === 'penalty') {
-            batch.update(doc(db, 'users', currentMember.uid), {
-              penalties: increment(amountVal),
-              updatedAt: serverTimestamp()
-            });
-            actionLabel = `-${amountVal} penalty points`;
-            currentMember.penalties = (currentMember.penalties || 0) + amountVal;
-          }
-        } else {
-          const pRef = doc(db, 'users_private', currentMember.uid);
-          let newFineDue = currentMember.finesDue || 0;
-          if (adjusterType === 'fine') {
-            batch.set(pRef, { finesEGP: increment(amountVal), updatedAt: serverTimestamp() }, { merge: true });
-            actionLabel = `+${amountVal} EGP fine`;
-            newFineDue += amountVal;
-          } else if (adjusterType === 'payment') {
-            batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
-            actionLabel = `payment of ${amountVal} EGP`;
-            newFineDue = Math.max(0, newFineDue - amountVal);
-          } else if (adjusterType === 'waive') {
-            batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
-            actionLabel = `waive of ${amountVal} EGP fine`;
-            newFineDue = Math.max(0, newFineDue - amountVal);
-          }
-          currentMember.finesDue = newFineDue;
+        const amtVal = Math.abs(Number(modalBody.querySelector('#ctrl-adjust-amount')?.value));
+        if (isNaN(amtVal) || amtVal <= 0) {
+          toast('Please enter a valid amount greater than 0', 'error');
+          return;
         }
 
-        createNotification(batch, {
-          uid: currentMember.uid,
-          title: 'Account Adjusted',
-          message: `Admin adjusted your account: ${actionLabel}. Reason: "${reasonVal}"`,
-          type: 'system'
-        });
+        const reasonVal = String(modalBody.querySelector('#ctrl-adjust-reason')?.value || '').trim();
+        if (!reasonVal) {
+          toast('Adjustment reason is mandatory for the ledger', 'error');
+          return;
+        }
 
-        logAdminAction(batch, {
-          action: 'member_adjusted',
-          targetUid: currentMember.uid,
-          details: { type: adjusterType, category: adjusterCategory, amount: amountVal, reason: reasonVal }
-        });
+        submitAdjustBtn.disabled = true;
+        submitAdjustBtn.textContent = 'Recording adjustment...';
 
-        await batch.commit();
+        try {
+          let bucket = 'points';
+          let direction = 'add';
+          if (adjusterCategory === 'points') {
+            bucket = adjusterType === 'bonus' ? 'points' : 'penalties';
+            direction = adjusterType === 'bonus' ? 'add' : 'add';
+          } else {
+            bucket = 'fines';
+            direction = adjusterType === 'fine' ? 'add' : 'deduct';
+          }
 
-        invalidateEgpCache(currentMember.uid);
-        getMemberDerivedEgpBalance(currentMember.uid, true).then((latestEgp) => {
+          const result = await applyAccountAdjustment({
+            targetUid: currentMember.uid,
+            bucket,
+            direction,
+            amount: amtVal,
+            reason: reasonVal
+          });
+
+          // Update Summary metrics in place
+          const ptsEl = modalBody.querySelector('#ctrl-summary-points');
+          if (ptsEl && result.newPoints !== undefined) ptsEl.textContent = result.newPoints;
+          const penEl = modalBody.querySelector('#ctrl-summary-penalties');
+          if (penEl && result.newPenalties !== undefined) penEl.textContent = result.newPenalties;
           const finEl = modalBody.querySelector('#ctrl-summary-fines');
-          if (finEl) finEl.textContent = `${latestEgp} EGP`;
-          const prevEl = modalBody.querySelector('#ctrl-adj-fines-preview');
-          if (prevEl) prevEl.textContent = `${latestEgp} EGP`;
-        });
+          if (finEl && result.newFinesDue !== undefined) finEl.textContent = `${result.newFinesDue} EGP`;
 
-        // Update Summary metrics in place
-        const ptsEl = modalBody.querySelector('#ctrl-summary-points');
-        if (ptsEl) ptsEl.textContent = currentMember.points || 0;
-        const penEl = modalBody.querySelector('#ctrl-summary-penalties');
-        if (penEl) penEl.textContent = currentMember.penalties || 0;
+          // Reset inputs
+          const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
+          if (amtInput) amtInput.value = '';
+          const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
+          if (reasonInput) reasonInput.value = '';
 
-        // Reset inputs
-        const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
-        if (amtInput) amtInput.value = '';
-        const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
-        if (reasonInput) reasonInput.value = '';
+          if (ledgerLoaded) {
+            loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
+          }
 
-        if (ledgerLoaded) {
-          loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
+          toast('Successfully applied adjustment', 'success');
+          if (typeof renderAdminMembers === 'function') renderAdminMembers();
+          if (typeof renderLeaderboard === 'function') renderLeaderboard();
+        } catch (err) {
+          console.error('Adjuster error:', err);
+          toast('Failed to record adjustment: ' + err.message, 'error');
+        } finally {
+          submitAdjustBtn.disabled = false;
+          submitAdjustBtn.textContent = 'Apply & Record in Ledger';
         }
-
-        toast(`Successfully applied ${actionLabel}`, 'success');
-      } catch (err) {
-        console.error('Adjuster error:', err);
-        toast('Failed to record adjustment: ' + err.message, 'error');
-      } finally {
-        submitAdjustBtn.disabled = false;
-        submitAdjustBtn.textContent = 'Apply & Record in Ledger';
-      }
-    };
+      };
   }
 
   openModal({
@@ -16434,7 +17128,7 @@ function attachEventHandlers() {
     };
   }
 
-  // Edit Profile Form
+  // Edit Profile Form (v2.2.1 Apple HIG)
   const editProfileBtn = document.getElementById('btn-open-edit-profile');
   if (editProfileBtn) {
     editProfileBtn.onclick = () => {
@@ -16442,8 +17136,15 @@ function attachEventHandlers() {
       const modal = document.getElementById('modal-edit-profile');
       const nameInput = document.getElementById('input-edit-profile-name');
       const avatarInput = document.getElementById('input-edit-profile-avatar');
-      if (nameInput) nameInput.value = state.user.displayName;
-      if (avatarInput) avatarInput.value = state.user.photoURL;
+      const previewImg = document.getElementById('edit-profile-preview');
+      const currentAvatar = state.user.photoURL || state.user.avatarUrl || './image_ad59c0.jpg';
+
+      if (nameInput) nameInput.value = state.user.displayName || state.user.name || '';
+      if (avatarInput) avatarInput.value = state.user.photoURL || '';
+      if (previewImg) previewImg.src = currentAvatar;
+
+      initEditProfileModal();
+
       document.body.style.overflow = 'hidden';
       if (modal) modal.classList.add('open');
     };
@@ -16453,10 +17154,21 @@ function attachEventHandlers() {
   if (editProfileForm) {
     editProfileForm.onsubmit = async (e) => {
       e.preventDefault();
-      const newName = document.getElementById('input-edit-profile-name')?.value;
-      const newAvatar = document.getElementById('input-edit-profile-avatar')?.value;
+      const newName = (document.getElementById('input-edit-profile-name')?.value || '').trim();
+      const newAvatar = document.getElementById('input-edit-profile-avatar')?.value || '';
 
+      if (!newName) {
+        toast('Full Name is required', 'error');
+        return;
+      }
       if (!state.user) return;
+
+      const saveBtn = document.getElementById('btnSaveProfile');
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+      }
+
       try {
         if (auth?.currentUser) {
           await updateProfile(auth.currentUser, {
@@ -16464,16 +17176,19 @@ function attachEventHandlers() {
             photoURL: newAvatar || ''
           }).catch(console.warn);
         }
-        // Writes users/{uid} with updatedAt: serverTimestamp() per security rules
         await updateDoc(doc(db, 'users', state.user.uid), {
           name: newName,
+          displayName: newName,
+          photoURL: newAvatar || '',
           avatarUrl: newAvatar || '',
           updatedAt: serverTimestamp()
         });
+
         state.user.displayName = newName;
         state.user.name = newName;
         state.user.photoURL = newAvatar || '';
         state.user.avatarUrl = newAvatar || '';
+
         if (usersMap.has(state.user.uid)) {
           const u = usersMap.get(state.user.uid);
           u.name = newName;
@@ -16481,14 +17196,21 @@ function attachEventHandlers() {
           u.avatarUrl = newAvatar || '';
           u.photoURL = newAvatar || '';
         }
+
         updateProfileUI();
         renderLeaderboard();
         renderAdminMembers();
         updateAdminPushTargets();
         closeAllModals();
-        toast('Profile updated', 'success');
+        toast('Profile updated successfully', 'success');
       } catch (err) {
-        toast(err.message || 'Update failed', 'error');
+        console.error('Save profile error:', err);
+        toast(err.message || 'Failed to update profile', 'error');
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save Changes';
+        }
       }
     };
   }
@@ -16796,4 +17518,9 @@ if (typeof window !== 'undefined') {
   window.renderBroadcastModal = renderBroadcastModal;
   window.unsubscribeUserNotifications = unsubscribeUserNotifications;
   window.userNotifications = userNotifications;
+  window.renderAdminAdjustments = renderAdminAdjustments;
+  window.applyAccountAdjustment = applyAccountAdjustment;
+  window.openAvatarCropper = openAvatarCropper;
+  window.getPresetAvatars = getPresetAvatars;
+  window.initEditProfileModal = initEditProfileModal;
 }
