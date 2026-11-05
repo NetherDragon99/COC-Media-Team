@@ -2,7 +2,7 @@
   "id": "./",
   "name": "COC Media Team",
   "short_name": "COC Media",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform.",
   "start_url": "./",
   "scope": "./",

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.6)
+ * COC Media Team - Production Web App (v2.1.7)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.6';
+export const APP_VERSION = '2.1.7';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -422,10 +422,24 @@ export let editingBroadcastId = null;
 /* ==========================================================================
    CATEGORY ICONS & COLOR SWATCHES
    ========================================================================== */
-export const CATEGORY_COLORS = [
-  '#0A84FF', '#30D158', '#FF9F0A', '#FF453A', '#BF5AF2',
-  '#64D2FF', '#FF375F', '#5E5CE6', '#FFD60A', '#AC8E68', '#98989D'
+export const IOS_SYSTEM_COLORS = [
+  { name: 'System Blue', hex: '#0A84FF' },
+  { name: 'Green', hex: '#30D158' },
+  { name: 'Red', hex: '#FF453A' },
+  { name: 'Orange', hex: '#FF9F0A' },
+  { name: 'Yellow', hex: '#FFD60A' },
+  { name: 'Pink', hex: '#FF375F' },
+  { name: 'Purple', hex: '#BF5AF2' },
+  { name: 'Teal', hex: '#64D2FF' },
+  { name: 'Indigo', hex: '#5E5CE6' },
+  { name: 'Brown', hex: '#A2845E' },
+  { name: 'Mint', hex: '#00C7BE' },
+  { name: 'Cyan', hex: '#32ADE6' },
+  { name: 'Gray', hex: '#8E8E93' },
+  { name: 'Dark Gray', hex: '#636366' }
 ];
+
+export const CATEGORY_COLORS = IOS_SYSTEM_COLORS.map(c => c.hex);
 
 export const CATEGORY_ICONS = {
   camera: `<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle>`,
@@ -455,8 +469,10 @@ export const CATEGORY_ICONS = {
 };
 
 export function getCategorySvg(iconKey, className = 'w-4 h-4') {
-  const content = CATEGORY_ICONS[iconKey] || CATEGORY_ICONS.film;
-  return `<svg class="${className} stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">${content}</svg>`;
+  if (CATEGORY_ICONS[iconKey]) {
+    return `<svg class="${className} stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">${CATEGORY_ICONS[iconKey]}</svg>`;
+  }
+  return getIconSvg(iconKey, className);
 }
 
 export function formatDateTime(ts, options = {}) {
@@ -8375,7 +8391,7 @@ export function closeSubModal() {
   }
 }
 
-export function openIconPicker(param1, onSelectParam) {
+export function openUnifiedIconPicker(param1, onSelectParam) {
   let selectedKey = 'bell';
   let onSelect = null;
   if (typeof param1 === 'object' && param1 !== null) {
@@ -8493,6 +8509,8 @@ export function openIconPicker(param1, onSelectParam) {
     body: bodyEl
   });
 }
+
+export const openIconPicker = openUnifiedIconPicker;
 
 function getSquircleColorClass(type) {
   if (type === 'reward' || type === 'bonus' || type === 'points' || type === 'attendance_approved') return 'notification-squircle-green';
@@ -12413,11 +12431,22 @@ export function generateFutureOccurrences(sessionTemplate, count = 52) {
       timeZone: APP_TIMEZONE || undefined
     });
 
+    const monthNum = d.getMonth() + 1;
+    const dayNum = d.getDate();
+    const monthShort = d.toLocaleDateString('en-US', { month: 'short', timeZone: APP_TIMEZONE }).toLowerCase();
+    const monthLong = d.toLocaleDateString('en-US', { month: 'long', timeZone: APP_TIMEZONE }).toLowerCase();
+    const weekdayShort = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: APP_TIMEZONE }).toLowerCase();
+    const weekdayLong = d.toLocaleDateString('en-US', { weekday: 'long', timeZone: APP_TIMEZONE }).toLowerCase();
+
+    // Normalized search variations string (e.g., "2026-11-08 11/8 11-8 8/11 8-11 8 nov november sunday sun...")
+    const searchTerms = `${dateStr} ${monthNum}/${dayNum} ${monthNum}-${dayNum} ${dayNum}/${monthNum} ${dayNum}-${monthNum} ${dayNum} ${monthShort} ${monthLong} ${weekdayShort} ${weekdayLong} ${formattedDate} ${formattedTime}`.toLowerCase();
+
     return {
       dateMs,
       dateStr,
       formattedDate,
       formattedTime,
+      searchTerms,
       key: `occ_${dateMs}`
     };
   });
@@ -12576,10 +12605,8 @@ export function openRequestWaiverModal() {
         if (!listContainer) return;
         const filtered = futureOccs.filter(occ => {
           if (!dateSearchQuery) return true;
-          const q = dateSearchQuery.toLowerCase();
-          return occ.formattedDate.toLowerCase().includes(q) ||
-                 occ.formattedTime.toLowerCase().includes(q) ||
-                 occ.dateStr.includes(q);
+          const q = dateSearchQuery.toLowerCase().trim();
+          return (occ.searchTerms || '').includes(q);
         });
 
         if (filtered.length === 0) {
@@ -12590,7 +12617,7 @@ export function openRequestWaiverModal() {
         listContainer.innerHTML = filtered.map(occ => {
           const isSelected = selectedOccurrenceDateMs === occ.dateMs;
           return `
-            <button type="button" class="btn-occ-radio w-full p-2.5 rounded-xl border text-left text-xs transition flex items-center justify-between ${isSelected ? 'bg-[#0A84FF]/20 border-[#0A84FF] text-white font-semibold' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-date-ms="${occ.dateMs}">
+            <button type="button" class="occurrence-row btn-occ-radio w-full p-2.5 rounded-xl border text-left text-xs transition flex items-center justify-between ${isSelected ? 'bg-[#0A84FF]/20 border-[#0A84FF] text-white font-semibold' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-date-ms="${occ.dateMs}" data-search="${esc(occ.searchTerms || '')}">
               <span>${occ.formattedDate} at ${occ.formattedTime}</span>
               <div class="w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'border-[#0A84FF] bg-[#0A84FF] text-white' : 'border-white/20 bg-white/5'}">
                 ${isSelected ? '<svg class="w-3 h-3 stroke-current fill-none" stroke-width="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
@@ -13214,6 +13241,7 @@ const PRESET_BADGES = [
   { id: 'event_hero', label: 'Event Hero', icon: 'heart', color: '#FF375F' }
 ];
 
+export const renderMemberLedger = (...args) => loadTransactionLedger(...args);
 export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
   if (!containerEl) return;
   // Security check: only self or admin can view financial ledger
@@ -13322,7 +13350,7 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
                     ${sign}${tx.amount} ${unit}
                   </span>
                   ${tx.status === 'revoked' ? `
-                    <span class="text-rose-400 font-mono text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-rose-500/10 border border-rose-500/20">Revoked</span>
+                    <span class="text-neutral-400 font-mono text-[10px] font-medium tracking-wide">[REVOKED]</span>
                   ` : (isAdminUser && !tx.isAttendanceLog ? `
                     <button type="button" class="btn-text-danger btn-revoke-ledger text-xs text-rose-400 hover:text-rose-300 font-semibold transition px-2 py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20" data-id="${tx.id}">Revoke</button>
                   ` : '')}
@@ -13358,6 +13386,10 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
         btn.textContent = 'Revoking...';
 
         try {
+                    let newPoints = undefined;
+          let newPenalties = undefined;
+          let newFinesDue = undefined;
+
           await runTransaction(db, async (t) => {
             const txDocRef = doc(db, 'users', uid, 'transactions', txId);
             const txSnap = await t.get(txDocRef);
@@ -13375,37 +13407,35 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
 
             const userPoints = Number(userData.points || 0);
             const userPenalties = Number(userData.penalties || 0);
+            const userFines = Number(userData.finesDue || 0);
             const amount = Number(txData.amount || 0);
+
+            const userUpdates = { updatedAt: serverTimestamp() };
 
             if (txData.category === 'points' || txData.type === 'bonus' || txData.type === 'penalty') {
               if (txData.type === 'bonus') {
-                const newPoints = Math.max(0, userPoints - amount);
-                t.update(userDocRef, {
-                  points: newPoints,
-                  updatedAt: serverTimestamp()
-                });
+                newPoints = Math.max(0, userPoints - amount);
+                userUpdates.points = newPoints;
               } else if (txData.type === 'penalty') {
-                const newPoints = userPoints + amount;
-                const newPenalties = Math.max(0, userPenalties - amount);
-                t.update(userDocRef, {
-                  points: newPoints,
-                  penalties: newPenalties,
-                  updatedAt: serverTimestamp()
-                });
+                newPoints = userPoints + amount;
+                newPenalties = Math.max(0, userPenalties - amount);
+                userUpdates.points = newPoints;
+                userUpdates.penalties = newPenalties;
               }
+              t.update(userDocRef, userUpdates);
             } else if (txData.category === 'financial' || txData.type === 'fine' || txData.type === 'payment' || txData.type === 'waive') {
               const privDocRef = doc(db, 'users_private', uid);
               const privSnap = await t.get(privDocRef);
               const privData = privSnap.exists() ? privSnap.data() : {};
-              const currentFines = Number(privData.finesEGP || 0);
+              const currentFines = Number(privData.finesEGP || userFines);
 
               if (txData.type === 'fine') {
-                const newFinesDue = Math.max(0, currentFines - amount);
-                t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
+                newFinesDue = Math.max(0, currentFines - amount);
               } else if (txData.type === 'payment' || txData.type === 'waive') {
-                const newFinesDue = currentFines + amount;
-                t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
+                newFinesDue = currentFines + amount;
               }
+              t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
+              t.update(userDocRef, { finesDue: newFinesDue, updatedAt: serverTimestamp() });
             }
 
             t.update(txDocRef, {
@@ -13415,10 +13445,27 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
             });
           });
 
+          // Instantly update local usersMap
+          const localUser = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+          if (localUser) {
+            if (newPoints !== undefined) localUser.points = newPoints;
+            if (newPenalties !== undefined) localUser.penalties = newPenalties;
+            if (newFinesDue !== undefined) localUser.finesDue = newFinesDue;
+          }
+
           invalidateEgpCache(uid);
           await getMemberDerivedEgpBalance(uid, true);
           toast('Transaction revoked and balance reversed atomically', 'success');
           loadTransactionLedger(uid, containerEl, countBadgeEl);
+
+          // Update Adjuster summary cards in place if member control is open
+          const ptsEl = document.getElementById('ctrl-summary-points');
+          if (ptsEl && newPoints !== undefined) ptsEl.textContent = newPoints;
+          const penEl = document.getElementById('ctrl-summary-penalties');
+          if (penEl && newPenalties !== undefined) penEl.textContent = newPenalties;
+          const finEl = document.getElementById('ctrl-summary-fines');
+          if (finEl && newFinesDue !== undefined) finEl.textContent = `${newFinesDue} EGP`;
+
           if (typeof renderAdminMembers === 'function') renderAdminMembers();
           if (typeof renderLeaderboard === 'function') renderLeaderboard();
         } catch (err) {
@@ -13446,6 +13493,14 @@ function openMemberControlModal(member) {
   let hasPendingChanges = false;
   let editedName = member.displayName || '';
   let selectedRole = member.role || (member.isAdmin ? 'admin' : 'member');
+  let ledgerLoaded = false;
+
+  const currentMember = state.members.find(m => m.uid === member.uid) || member;
+  const isAdmin = Boolean(selectedRole === 'admin' || currentMember.role === 'admin' || currentMember.isAdmin);
+  const privateData = usersPrivate.get(currentMember.uid) || {};
+  const memberEmail = privateData.email || currentMember.email || 'No email on record';
+  const cachedFineSum = egpAggregateCache.get(currentMember.uid)?.fineSum || 0;
+  const finesBalance = (privateData.finesEGP || currentMember.finesDue || 0) + cachedFineSum;
 
   function markDirty() {
     hasPendingChanges = true;
@@ -13461,683 +13516,449 @@ function openMemberControlModal(member) {
     }
   }
 
-  const renderContent = () => {
-    const currentMember = state.members.find(m => m.uid === member.uid) || member;
-    const isAdmin = Boolean(selectedRole === 'admin' || currentMember.role === 'admin' || currentMember.isAdmin);
-    const privateData = usersPrivate.get(currentMember.uid) || {};
-    const memberEmail = privateData.email || currentMember.email || 'No email on record';
-    const cachedFineSum = egpAggregateCache.get(currentMember.uid)?.fineSum || 0;
-    const finesBalance = (privateData.finesEGP || 0) + cachedFineSum;
+  const modalBody = document.createElement('div');
+  modalBody.id = 'member-ctrl-body';
+  modalBody.className = 'space-y-3 text-xs';
 
-    const modalBody = document.getElementById('member-ctrl-body');
-    if (!modalBody) return;
+  modalBody.innerHTML = `
+    <!-- Navigation Tab Bar (Flexible, non-wrapping, horizontal scroll) -->
+    <div id="member-ctrl-tab-bar" class="modal-tabs flex items-center gap-2 p-1.5 rounded-xl bg-white/5 border border-white/10 overflow-x-auto whitespace-nowrap scrollbar-none flex-nowrap" style="scrollbar-width: none; -ms-overflow-style: none;">
+      <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap bg-[#0A84FF] text-white shadow-sm" data-tab="profile">
+        Profile
+      </button>
+      <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="adjuster">
+        Adjust
+      </button>
+      <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="ledger">
+        Ledger
+      </button>
+      <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="tasks">
+        Tasks
+      </button>
+      <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="attendance">
+        Attendance
+      </button>
+    </div>
 
-    modalBody.innerHTML = `
-      <div class="space-y-4 text-xs">
-        <!-- Navigation Tab Bar (Flexible, non-wrapping, horizontal scroll) -->
-        <div id="member-ctrl-tab-bar" class="modal-tabs flex items-center gap-2 p-1.5 rounded-xl bg-white/5 border border-white/10 overflow-x-auto whitespace-nowrap scrollbar-none" style="scrollbar-width: none; -ms-overflow-style: none;">
-          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'profile' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="profile">
-            Profile
-          </button>
-          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'adjuster' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="adjuster">
-            Adjust
-          </button>
-          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'ledger' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="ledger">
-            Ledger
-          </button>
-          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'tasks' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="tasks">
-            Tasks
-          </button>
-          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'attendance' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="attendance">
-            Attendance
-          </button>
-          <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${activeTab === 'submissions' ? 'bg-[#0A84FF] text-white' : 'text-neutral-400 hover:text-white'}" data-tab="submissions">
-            Submissions
+    <!-- TAB 1: Profile (iOS Inset Grouped) -->
+    <div id="tab-sec-profile" class="member-tab-panel space-y-3">
+      <!-- Member Identity Hero Card -->
+      <div class="ios-card flex items-center gap-3">
+        <div id="btn-crop-member-avatar" class="cursor-pointer relative group flex-shrink-0" title="Tap to change avatar">
+          <div id="member-ctrl-avatar-wrap">${renderAvatar(currentMember, 'w-12 h-12')}</div>
+          <div class="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition text-[9px] text-white font-bold">Edit</div>
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="font-bold text-white text-base truncate" id="member-ctrl-hero-name">${esc(currentMember.displayName || currentMember.name || 'Member')}</div>
+          <div class="text-[12px] text-neutral-400 truncate">${esc(memberEmail)}</div>
+          <div class="mt-1">
+            <span id="member-ctrl-hero-role-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}">
+              ${isAdmin ? 'ADMIN' : 'MEMBER'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Identity & Role Card -->
+      <div class="ios-card space-y-3">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Identity &amp; Role</div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Display Name</label>
+          <input id="ctrl-member-name" type="text" class="ios-input text-white w-full" value="${esc(editedName)}" required />
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Role &amp; Permissions</label>
+          <div id="ctrl-role-seg-wrap"></div>
+          <p class="text-[11px] text-neutral-400 mt-1">Admin has full access across all management tools.</p>
+        </div>
+      </div>
+
+      <!-- Badges Management Card -->
+      <div class="ios-card space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Member Badges</span>
+          <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline">
+            + Add Custom Badge
           </button>
         </div>
 
-        <!-- TAB 1: Profile & Role -->
-        <div id="tab-sec-profile" class="${activeTab === 'profile' ? '' : 'hidden'} space-y-4">
-          <!-- Identity Summary (NO raw UID text, avatar is tap-to-crop) -->
-          <div class="flex items-center gap-3 p-3 rounded-2xl bg-white/5 border border-white/10">
-            <div id="btn-crop-member-avatar" class="cursor-pointer relative group flex-shrink-0" title="Tap to change avatar">
-              ${renderAvatar(currentMember, 'w-12 h-12')}
-              <div class="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition text-[9px] text-white font-bold">Edit</div>
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="font-bold text-white text-base truncate">${esc(currentMember.displayName)}</div>
-              <div class="text-[12px] text-neutral-400 truncate">${esc(memberEmail)}</div>
-              <div class="mt-1">
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}">
-                  ${isAdmin ? 'ADMIN' : 'MEMBER'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Inset Group: Edit Identity & Role -->
-          <div class="ios-inset-group">
-            <div class="ios-inset-header">IDENTITY &amp; ROLE</div>
-            <div class="p-3.5 space-y-3.5">
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-1">Display Name</label>
-                <input id="ctrl-member-name" type="text" class="ios-input text-white" value="${esc(editedName)}" required />
-              </div>
-
-              <!-- Role Selector (2-Option Segmented) -->
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-1">Role &amp; Permissions</label>
-                <div id="ctrl-role-seg-wrap"></div>
-                <p class="text-[11px] text-neutral-400 mt-1">Admin has full access</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- Inset Group: Badges Management (Separated from Role) -->
-          <div class="ios-inset-group">
-            <div class="ios-inset-header flex items-center justify-between">
-              <span>MEMBER BADGES</span>
-              <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline">
-                + Add Custom Badge
-              </button>
-            </div>
-            <div class="p-3.5 space-y-3">
-              <div id="ctrl-badges-list" class="flex flex-wrap gap-1.5 min-h-8 items-center">
-                ${Array.isArray(currentMember.badges) && currentMember.badges.length > 0 ? currentMember.badges.map(b => {
-                  const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
-                  return `
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${norm.color || '#3A3A3C'}40">
-                      <span class="w-2 h-2 rounded-full" style="background-color: ${norm.color || '#3A3A3C'}"></span>
-                      <span>${esc(norm.label)}</span>
-                      <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(norm.id)}" aria-label="Remove badge">&times;</button>
-                    </span>
-                  `;
-                }).join('') : `
-                  <span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>
-                `}
-              </div>
-
-              <!-- Quick Add Preset Badges -->
-              <div>
-                <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Quick Add Presets:</label>
-                <div class="flex flex-wrap gap-1.5">
-                  ${PRESET_BADGES.map(preset => {
-                    const alreadyHas = (currentMember.badges || []).some(b => (b.id || b.label || b) === preset.id);
-                    return `
-                      <button type="button" class="btn-quick-add-badge text-[11px] px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${alreadyHas ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/10 text-neutral-400' : 'bg-white/10 hover:bg-white/15 border-white/10 text-white'}" data-preset-id="${preset.id}" ${alreadyHas ? 'disabled' : ''}>
-                        <span class="w-2 h-2 rounded-full" style="background-color: ${preset.color}"></span>
-                        <span>+ ${preset.label}</span>
-                      </button>
-                    `;
-                  }).join('')}
-                </div>
-              </div>
-            </div>
-          </div>
+        <div id="ctrl-badges-list" class="flex flex-wrap gap-1.5 min-h-8 items-center">
+          ${Array.isArray(currentMember.badges) && currentMember.badges.length > 0 ? currentMember.badges.map(b => {
+            const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
+            return `
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${norm.color || '#3A3A3C'}40">
+                <span class="w-2 h-2 rounded-full" style="background-color: ${norm.color || '#3A3A3C'}"></span>
+                <span>${esc(norm.label)}</span>
+                <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(norm.id)}" aria-label="Remove badge">&times;</button>
+              </span>
+            `;
+          }).join('') : `
+            <span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>
+          `}
         </div>
 
-        <!-- TAB 2: Universal Points & Fines Adjuster -->
-        <div id="tab-sec-adjuster" class="${activeTab === 'adjuster' ? '' : 'hidden'} space-y-4">
-          <!-- Balance Summary Cards -->
-          <div class="grid grid-cols-3 gap-2">
-            <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-center">
-              <div class="text-[10px] text-neutral-400 uppercase font-mono">Points</div>
-              <div class="text-base font-bold text-amber-400 font-mono">${currentMember.points || 0}</div>
-            </div>
-            <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-center">
-              <div class="text-[10px] text-neutral-400 uppercase font-mono">Penalties</div>
-              <div class="text-base font-bold text-rose-400 font-mono">${currentMember.penalties || 0}</div>
-            </div>
-            <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-center">
-              <div class="text-[10px] text-neutral-400 uppercase font-mono">Fines Due</div>
-              <div class="text-base font-bold text-blue-400 font-mono">${finesBalance} EGP</div>
-            </div>
-          </div>
-
-          <!-- Adjuster Action Box -->
-          <div class="ios-inset-group">
-            <div class="ios-inset-header">ADJUSTMENT TYPE</div>
-            <div class="p-3.5 space-y-3.5">
-              <!-- Category Toggle via renderSegmented -->
-              <div id="ctrl-adj-cat-wrap"></div>
-
-              <!-- Action Pills with Semantic Tints -->
-              ${adjusterCategory === 'points' ? `
-                <div class="grid grid-cols-2 gap-2">
-                  <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${adjusterType === 'bonus' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="bonus">
-                    + Add Bonus
-                  </button>
-                  <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${adjusterType === 'penalty' ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="penalty">
-                    - Deduct Penalty
-                  </button>
-                </div>
-              ` : `
-                <div class="space-y-2">
-                  <div class="flex items-center justify-between px-1">
-                    <span class="text-[11px] text-neutral-400">Current Balance:</span>
-                    <span class="text-xs font-mono text-[#0A84FF] font-bold">${finesBalance} EGP</span>
-                  </div>
-                  <div class="grid grid-cols-3 gap-2">
-                    <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'fine' ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="fine">
-                      + Add Fine
-                    </button>
-                    <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'payment' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="payment">
-                      - Record Pay
-                    </button>
-                    <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${adjusterType === 'waive' ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}" data-type="waive">
-                      ~ Waive Fine
-                    </button>
-                  </div>
-                </div>
-              `}
-
-              <!-- Equal-Width Preset Chips in a Single Row -->
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-1">
-                  Amount (${adjusterCategory === 'points' ? 'Points' : 'EGP'})
-                </label>
-                <input id="ctrl-adjust-amount" type="number" min="1" step="1" class="ios-input text-white font-mono text-sm" placeholder="e.g. 50" required />
-                <div class="grid grid-cols-4 gap-1.5 mt-2">
-                  ${adjusterCategory === 'points' ? `
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="25">25</button>
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="250">250</button>
-                  ` : `
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="200">200</button>
-                    <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="500">500</button>
-                  `}
-                </div>
-              </div>
-
-              <!-- Dark Glass Reason Field with Quick Reason Chips -->
-              <div>
-                <label class="block text-neutral-300 font-semibold mb-1">
-                  Reason <span class="text-rose-400">*</span>
-                </label>
-                <textarea id="ctrl-adjust-reason" class="ios-input text-white text-xs leading-relaxed" rows="2" placeholder="Required explanation for the transaction ledger..." required></textarea>
-                <div class="flex flex-wrap gap-1 mt-1.5">
-                  ${['Meeting attendance', 'Late check-in', 'Special contribution', 'Manual adjustment'].map(chip => `
-                    <button type="button" class="btn-quick-reason px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-neutral-300 transition" data-reason="${chip}">
-                      ${chip}
-                    </button>
-                  `).join('')}
-                </div>
-              </div>
-
-              <div class="pt-1">
-                <button type="button" id="btn-submit-adjust" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold transition flex items-center justify-center gap-2">
-                  <span>Apply &amp; Record in Ledger</span>
+        <div>
+          <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Quick Add Presets:</label>
+          <div class="flex flex-wrap gap-1.5">
+            ${PRESET_BADGES.map(preset => {
+              const alreadyHas = (currentMember.badges || []).some(b => (b.id || b.label || b) === preset.id);
+              return `
+                <button type="button" class="btn-quick-add-badge text-[11px] px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${alreadyHas ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/10 text-neutral-400' : 'bg-white/10 hover:bg-white/15 border-white/10 text-white'}" data-preset-id="${preset.id}" ${alreadyHas ? 'disabled' : ''}>
+                  <span class="w-2 h-2 rounded-full" style="background-color: ${preset.color}"></span>
+                  <span>+ ${preset.label}</span>
                 </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- TAB 3: Ledger -->
-        <div id="tab-sec-ledger" class="${activeTab === 'ledger' ? '' : 'hidden'} space-y-3">
-          <div class="flex items-center justify-between text-neutral-400 text-[11px] px-1">
-            <span>Historical transactions on record</span>
-            <button id="btn-refresh-ctrl-ledger" class="text-[#0A84FF] hover:underline font-semibold">Refresh</button>
-          </div>
-          <div id="member-ctrl-ledger-list"></div>
-        </div>
-
-        <!-- TAB 4: Current Tasks -->
-        <div id="tab-sec-tasks" class="${activeTab === 'tasks' ? '' : 'hidden'} space-y-3">
-          <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between">
-            <span>Tracking active tasks for current occurrence.</span>
-            <span class="font-mono text-neutral-400">${state.tasks.filter(t => !t.archived).length} active</span>
-          </div>
-
-          <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-            ${state.tasks.filter(t => !t.archived).map(task => {
-              const win = getTaskWindow(task, serverNow());
-              const occKey = win ? win.occurrenceKey : 'once';
-              const isCompleted = state.submissions.some(s => s.uid === currentMember.uid && s.taskId === task.id && (task.isPermanent || s.occurrenceKey === occKey));
-              const sub = state.submissions.find(s => s.uid === currentMember.uid && s.taskId === task.id && (task.isPermanent || s.occurrenceKey === occKey));
-
-              return `
-                <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
-                  <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-2">
-                      ${isCompleted ? `
-                        <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">✓</span>
-                      ` : `
-                        <span class="w-5 h-5 rounded-full bg-white/10 text-neutral-400 flex items-center justify-center text-xs">○</span>
-                      `}
-                      <span class="font-bold text-white">${esc(task.title)}</span>
-                    </div>
-                    <span class="font-mono text-[11px] ${isCompleted ? 'text-emerald-400' : 'text-neutral-400'} font-semibold">
-                      ${task.points || 0} pts
-                    </span>
-                  </div>
-
-                  ${isCompleted && sub ? `
-                    <div class="pt-1 text-[11px] space-y-1.5 border-t border-white/5">
-                      <div class="flex items-center justify-between text-neutral-400">
-                        <span>Submitted: ${formatDateTime(sub.submittedAt)}</span>
-                        <span class="font-mono text-emerald-400 font-bold">+${sub.pointsAwarded || 0} pts</span>
-                      </div>
-                      ${sub.comment ? `<p class="text-neutral-300 italic bg-black/20 p-1.5 rounded">"${esc(sub.comment)}"</p>` : ''}
-                      <div class="flex items-center justify-end gap-2 pt-1">
-                        <button class="btn-ctrl-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(sub.id)}">Edit</button>
-                        <button class="btn-ctrl-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-sub-id="${esc(sub.id)}">Revoke</button>
-                      </div>
-                    </div>
-                  ` : ''}
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-
-        <!-- TAB 5: Attendance -->
-        <div id="tab-sec-attendance" class="${activeTab === 'attendance' ? '' : 'hidden'} space-y-3">
-          <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between">
-            <span>Tracking attendance logs and penalties.</span>
-            <span class="font-mono text-neutral-400">${state.attendanceSessions.filter(s => !s.archived).length} sessions</span>
-          </div>
-
-          <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-            ${state.attendanceSessions.filter(s => !s.archived).map(session => {
-              const occ = resolveSessionOccurrence(session, serverNow());
-              const occKey = occ ? occ.key : 'once';
-              const log = state.attendanceLogs.find(l => l.uid === currentMember.uid && l.sessionId === session.id && l.occurrenceKey === occKey);
-
-              return `
-                <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
-                  <div class="flex items-center justify-between">
-                    <span class="font-bold text-white">${esc(session.title)}</span>
-                    ${log ? `
-                      <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] ${log.status === 'on_time' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
-                        ${log.status === 'on_time' ? 'ON TIME' : 'LATE (-' + (log.penalty || 0) + ' pts)'}
-                      </span>
-                    ` : `
-                      <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] bg-white/10 text-neutral-400">NOT CHECKED IN</span>
-                    `}
-                  </div>
-
-                  ${log ? `
-                    <div class="pt-1 text-[11px] space-y-1.5 border-t border-white/5">
-                      <div class="flex items-center justify-between text-neutral-400">
-                        <span>Checked In: ${formatDateTime(log.checkedInAt)}</span>
-                        ${log.fineEGP ? `<span class="text-rose-400 font-mono">${log.fineEGP} EGP</span>` : ''}
-                      </div>
-                      <div class="flex items-center justify-end gap-2 pt-1">
-                        <button class="btn-ctrl-edit-log px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-log-id="${esc(log.id)}">Edit Penalty</button>
-                        <button class="btn-ctrl-delete-log px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-log-id="${esc(log.id)}">Delete Log</button>
-                      </div>
-                    </div>
-                  ` : ''}
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-
-        <!-- TAB 6: Submissions History -->
-        <div id="tab-sec-submissions" class="${activeTab === 'submissions' ? '' : 'hidden'} space-y-3">
-          <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-            ${state.submissions.filter(s => s.uid === currentMember.uid || s.userId === currentMember.uid).map(sub => {
-              const task = state.tasks.find(t => t.id === sub.taskId);
-              return `
-                <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
-                  <div class="flex items-center justify-between">
-                    <span class="font-bold text-white">${esc(task?.title || sub.taskTitle || 'Task')}</span>
-                    <span class="font-mono text-emerald-400 font-bold">+${sub.pointsAwarded || 0} pts</span>
-                  </div>
-                  <div class="text-[11px] text-neutral-400 flex items-center justify-between">
-                    <span>${formatDateTime(sub.submittedAt)}</span>
-                    <span class="uppercase font-mono text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-neutral-300">${esc(sub.occurrenceKey || 'once')}</span>
-                  </div>
-                  ${Array.isArray(sub.answers) && sub.answers.length > 0 ? `
-                    <div class="space-y-1 pt-1 border-t border-white/5">
-                      ${sub.answers.map((a, i) => {
-                        const aVal = typeof a === 'object' ? (a.type === 'mcq' && a.answer === 'Other' ? `Other: ${a.otherText || ''}` : (a.answer || '')) : a;
-                        return `
-                          <div class="text-[11px] bg-black/20 p-1.5 rounded">
-                            <span class="text-neutral-400 font-medium">Q${i+1}:</span> ${esc(aVal)}
-                          </div>
-                        `;
-                      }).join('')}
-                    </div>
-                  ` : ''}
-                  <div class="flex items-center justify-end gap-2 pt-1">
-                    <button class="btn-ctrl-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(sub.id)}">Edit</button>
-                    <button class="btn-ctrl-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-sub-id="${esc(sub.id)}">Revoke</button>
-                  </div>
-                </div>
               `;
             }).join('')}
           </div>
         </div>
       </div>
-    `;
+    </div>
 
-    // Wire Tab Switching with Horizontal Smooth Scrolling
-    modalBody.querySelectorAll('.member-tab-btn').forEach(btn => {
-      btn.onclick = () => {
-        activeTab = btn.dataset.tab;
-        renderContent();
-        setTimeout(() => {
-          const activeEl = modalBody.querySelector(`.member-tab-btn[data-tab="${activeTab}"]`);
-          if (activeEl) {
-            activeEl.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-          }
-        }, 10);
-      };
-    });
+    <!-- TAB 2: Universal Adjuster (Points & Financials) -->
+    <div id="tab-sec-adjuster" class="member-tab-panel space-y-3 hidden">
+      <!-- Quick Metric Summary strip (.ios-card) -->
+      <div class="ios-card grid grid-cols-3 gap-2 text-center">
+        <div class="p-1">
+          <div class="text-[10px] text-neutral-400 uppercase font-mono">Points</div>
+          <div id="ctrl-summary-points" class="text-base font-bold text-amber-400 font-mono">${currentMember.points || 0}</div>
+        </div>
+        <div class="p-1 border-x border-white/10">
+          <div class="text-[10px] text-neutral-400 uppercase font-mono">Penalties</div>
+          <div id="ctrl-summary-penalties" class="text-base font-bold text-rose-400 font-mono">${currentMember.penalties || 0}</div>
+        </div>
+        <div class="p-1">
+          <div class="text-[10px] text-neutral-400 uppercase font-mono">Fines Due</div>
+          <div id="ctrl-summary-fines" class="text-base font-bold text-blue-400 font-mono">${finesBalance} EGP</div>
+        </div>
+      </div>
 
-    // Wire Avatar Tap-to-Crop
-    const avatarCropBtn = modalBody.querySelector('#btn-crop-member-avatar');
-    if (avatarCropBtn) {
-      avatarCropBtn.onclick = () => {
-        pickAndCropImage({
-          aspect: 1,
-          onCropped: async (base64Url) => {
-            try {
-              await updateDoc(doc(db, 'users', currentMember.uid), {
-                avatarUrl: base64Url,
-                photoURL: base64Url,
-                updatedAt: serverTimestamp()
-              });
-              currentMember.avatarUrl = base64Url;
-              currentMember.photoURL = base64Url;
-              const u = usersMap.get(currentMember.uid);
-              if (u) { u.avatarUrl = base64Url; u.photoURL = base64Url; }
-              toast('Avatar updated successfully', 'success');
-              renderContent();
-              renderMembersAdmin();
-            } catch (err) {
-              console.error('Avatar update error:', err);
-              toast('Failed to update avatar: ' + err.message, 'error');
-            }
-          }
-        });
-      };
-    }
+      <!-- Adjuster Form (.ios-card) -->
+      <div class="ios-card space-y-3.5">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Adjustment Type</div>
+        
+        <!-- Category Toggle Segmented -->
+        <div id="ctrl-adj-cat-wrap"></div>
 
-    // Wire Display Name Input
-    const nameInp = modalBody.querySelector('#ctrl-member-name');
-    if (nameInp) {
-      nameInp.oninput = (e) => {
-        editedName = e.target.value;
-        markDirty();
-      };
-    }
+        <!-- Action Pills: Points Group -->
+        <div id="adj-action-points-group" class="grid grid-cols-2 gap-2">
+          <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition bg-emerald-500/20 border-emerald-500/50 text-emerald-300" data-type="bonus">
+            + Add Bonus
+          </button>
+          <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="penalty">
+            - Deduct Penalty
+          </button>
+        </div>
 
-    // Wire Role Segmented Selector
-    const roleWrap = modalBody.querySelector('#ctrl-role-seg-wrap');
-    if (roleWrap) {
-      roleWrap.appendChild(renderSegmented({
-        id: 'ctrl-member-role-seg',
-        options: [
-          { value: 'member', label: 'Member' },
-          { value: 'admin', label: 'Admin' }
-        ],
-        value: selectedRole,
-        onChange: (newRole) => {
-          if (newRole !== 'admin') {
-            if (currentMember.uid === state.user?.uid) {
-              toast('You cannot demote yourself from admin', 'error');
-              renderContent();
-              return;
-            }
-            const adminCount = state.members.filter(m => m.role === 'admin' || m.isAdmin).length;
-            if (adminCount <= 1) {
-              toast('Cannot demote the last administrator', 'error');
-              renderContent();
-              return;
-            }
-          }
-          selectedRole = newRole;
-          markDirty();
-        }
-      }));
-    }
+        <!-- Action Pills: Financial Group -->
+        <div id="adj-action-financial-group" class="space-y-2 hidden">
+          <div class="flex items-center justify-between px-1">
+            <span class="text-[11px] text-neutral-400">Current Balance:</span>
+            <span id="ctrl-adj-fines-preview" class="text-xs font-mono text-[#0A84FF] font-bold">${finesBalance} EGP</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-rose-500/20 border-rose-500/50 text-rose-300" data-type="fine">
+              + Add Fine
+            </button>
+            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="payment">
+              - Record Pay
+            </button>
+            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="waive">
+              ~ Waive Fine
+            </button>
+          </div>
+        </div>
 
-    // Wire Adjuster Category Segmented
-    const adjCatWrap = modalBody.querySelector('#ctrl-adj-cat-wrap');
-    if (adjCatWrap) {
-      adjCatWrap.appendChild(renderSegmented({
-        id: 'adj-cat-segmented',
-        options: [
-          { value: 'points', label: 'Points & Penalties' },
-          { value: 'financial', label: 'Financials (EGP)' }
-        ],
-        value: adjusterCategory,
-        onChange: (val) => {
-          adjusterCategory = val;
-          adjusterType = val === 'points' ? 'bonus' : 'fine';
-          renderContent();
-        }
-      }));
-    }
+        <!-- Amount & Preset Chips -->
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">
+            Amount (<span id="ctrl-adj-unit-label">Points</span>)
+          </label>
+          <input id="ctrl-adjust-amount" type="number" min="1" step="1" class="ios-input text-white font-mono text-sm w-full" placeholder="e.g. 50" required />
+          
+          <!-- Points Presets -->
+          <div id="adj-presets-points" class="grid grid-cols-4 gap-1.5 mt-2">
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="25">25</button>
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="250">250</button>
+          </div>
 
-    // Wire Adjuster Action Pills
-    modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
-      btn.onclick = () => {
-        adjusterType = btn.dataset.type;
-        renderContent();
-      };
-    });
+          <!-- Financial Presets -->
+          <div id="adj-presets-financial" class="grid grid-cols-4 gap-1.5 mt-2 hidden">
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="200">200</button>
+            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="500">500</button>
+          </div>
+        </div>
 
-    // Wire Adjuster Preset Chips
-    modalBody.querySelectorAll('.btn-adj-preset').forEach(btn => {
-      btn.onclick = () => {
-        const amtInput = document.getElementById('ctrl-adjust-amount');
-        if (amtInput) amtInput.value = btn.dataset.amount;
-      };
-    });
+        <!-- Reason & Quick Chips -->
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">
+            Reason <span class="text-rose-400">*</span>
+          </label>
+          <textarea id="ctrl-adjust-reason" class="ios-input text-white text-xs leading-relaxed w-full" rows="2" placeholder="Required explanation for the transaction ledger..." required></textarea>
+          <div class="flex flex-wrap gap-1 mt-1.5">
+            ${['Meeting attendance', 'Late check-in', 'Special contribution', 'Manual adjustment'].map(chip => `
+              <button type="button" class="btn-quick-reason px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-neutral-300 transition" data-reason="${chip}">
+                ${chip}
+              </button>
+            `).join('')}
+          </div>
+        </div>
 
-    // Wire Quick Reason Chips
-    modalBody.querySelectorAll('.btn-quick-reason').forEach(btn => {
-      btn.onclick = () => {
-        const reasonInput = document.getElementById('ctrl-adjust-reason');
-        if (reasonInput) reasonInput.value = btn.dataset.reason;
-      };
-    });
+        <div class="pt-1">
+          <button type="button" id="btn-submit-adjust" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold transition flex items-center justify-center gap-2">
+            <span>Apply &amp; Record in Ledger</span>
+          </button>
+        </div>
+      </div>
+    </div>
 
-    // Wire Adjuster Submit
-    const submitAdjustBtn = modalBody.querySelector('#btn-submit-adjust');
-    if (submitAdjustBtn) {
-      submitAdjustBtn.onclick = async () => {
-        const amountVal = parseInt(document.getElementById('ctrl-adjust-amount')?.value, 10);
-        const reasonVal = document.getElementById('ctrl-adjust-reason')?.value.trim();
+    <!-- TAB 3: Ledger -->
+    <div id="tab-sec-ledger" class="member-tab-panel space-y-3 hidden">
+      <div class="ios-card space-y-3">
+        <div class="flex items-center justify-between text-neutral-400 text-[11px] px-1">
+          <span>Historical transactions on record</span>
+          <button type="button" id="btn-refresh-ctrl-ledger" class="text-[#0A84FF] hover:underline font-semibold">Refresh</button>
+        </div>
+        <div id="member-ctrl-ledger-list"></div>
+      </div>
+    </div>
 
-        if (isNaN(amountVal) || amountVal <= 0) {
-          toast('Please enter a valid amount greater than 0', 'error');
-          return;
-        }
+    <!-- TAB 4: Current Tasks -->
+    <div id="tab-sec-tasks" class="member-tab-panel space-y-3 hidden">
+      <div class="ios-card space-y-3">
+        <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between">
+          <span>Tracking active tasks for current occurrence.</span>
+          <span class="font-mono text-neutral-400">${state.tasks.filter(t => !t.archived).length} active</span>
+        </div>
 
-        if (!reasonVal) {
-          toast('Adjustment reason is mandatory for the ledger', 'error');
-          return;
-        }
+        <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+          ${state.tasks.filter(t => !t.archived).map(task => {
+            const win = getTaskWindow(task, serverNow());
+            const occKey = win ? win.occurrenceKey : 'once';
+            const isCompleted = state.submissions.some(s => s.uid === currentMember.uid && s.taskId === task.id && (task.isPermanent || s.occurrenceKey === occKey));
+            const sub = state.submissions.find(s => s.uid === currentMember.uid && s.taskId === task.id && (task.isPermanent || s.occurrenceKey === occKey));
 
-        submitAdjustBtn.disabled = true;
-        submitAdjustBtn.textContent = 'Recording adjustment...';
+            return `
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    ${isCompleted ? `
+                      <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">✓</span>
+                    ` : `
+                      <span class="w-5 h-5 rounded-full bg-white/10 text-neutral-400 flex items-center justify-center text-xs">○</span>
+                    `}
+                    <span class="font-bold text-white">${esc(task.title)}</span>
+                  </div>
+                  <span class="font-mono text-[11px] ${isCompleted ? 'text-emerald-400' : 'text-neutral-400'} font-semibold">
+                    ${task.points || 0} pts
+                  </span>
+                </div>
 
-        try {
-          const batch = writeBatch(db);
-          const txRef = doc(collection(db, 'users', currentMember.uid, 'transactions'));
-          const txData = {
-            type: adjusterType,
-            category: adjusterCategory,
-            amount: amountVal,
-            reason: reasonVal,
-            adminUid: state.user.uid,
-            adminName: state.user.displayName || 'Admin',
-            createdAt: serverTimestamp()
-          };
-          batch.set(txRef, txData);
+                ${isCompleted && sub ? `
+                  <div class="pt-1 text-[11px] space-y-1.5 border-t border-white/5">
+                    <div class="flex items-center justify-between text-neutral-400">
+                      <span>Submitted: ${formatDateTime(sub.submittedAt)}</span>
+                      <span class="font-mono text-emerald-400 font-bold">+${sub.pointsAwarded || 0} pts</span>
+                    </div>
+                    ${sub.comment ? `<p class="text-neutral-300 italic bg-black/20 p-1.5 rounded">"${esc(sub.comment)}"</p>` : ''}
+                    <div class="flex items-center justify-end gap-2 pt-1">
+                      <button type="button" class="btn-ctrl-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(sub.id)}">Edit</button>
+                      <button type="button" class="btn-ctrl-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-sub-id="${esc(sub.id)}">Revoke</button>
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    </div>
 
-          let actionLabel = 'adjustment';
-          if (adjusterCategory === 'points') {
-            if (adjusterType === 'bonus') {
-              const pointsUpdate = buildPointsUpdate(usersMap.get(currentMember.uid) || currentMember, amountVal);
-              batch.update(doc(db, 'users', currentMember.uid), {
-                ...pointsUpdate,
-                updatedAt: serverTimestamp()
-              });
-              actionLabel = `+${amountVal} bonus points`;
-            } else if (adjusterType === 'penalty') {
-              batch.update(doc(db, 'users', currentMember.uid), {
-                penalties: increment(amountVal),
-                updatedAt: serverTimestamp()
-              });
-              actionLabel = `-${amountVal} penalty points`;
-            }
-          } else {
-            const pRef = doc(db, 'users_private', currentMember.uid);
-            if (adjusterType === 'fine') {
-              batch.set(pRef, { finesEGP: increment(amountVal), updatedAt: serverTimestamp() }, { merge: true });
-              actionLabel = `+${amountVal} EGP fine`;
-            } else if (adjusterType === 'payment') {
-              batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
-              actionLabel = `payment of ${amountVal} EGP`;
-            } else if (adjusterType === 'waive') {
-              batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
-              actionLabel = `waive of ${amountVal} EGP fine`;
-            }
-          }
+    <!-- TAB 5: Attendance -->
+    <div id="tab-sec-attendance" class="member-tab-panel space-y-3 hidden">
+      <div class="ios-card space-y-3">
+        <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between">
+          <span>Tracking attendance logs and penalties.</span>
+          <span class="font-mono text-neutral-400">${state.attendanceSessions.filter(s => !s.archived).length} sessions</span>
+        </div>
 
-          createNotification(batch, {
-            uid: currentMember.uid,
-            title: 'Account Adjusted',
-            message: `Admin adjusted your account: ${actionLabel}. Reason: "${reasonVal}"`,
-            type: 'system'
-          });
+        <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+          ${state.attendanceSessions.filter(s => !s.archived).map(session => {
+            const occ = resolveSessionOccurrence(session, serverNow());
+            const occKey = occ ? occ.key : 'once';
+            const log = state.attendanceLogs.find(l => l.uid === currentMember.uid && l.sessionId === session.id && l.occurrenceKey === occKey);
 
-          logAdminAction(batch, {
-            action: 'member_adjusted',
-            targetUid: currentMember.uid,
-            details: { type: adjusterType, category: adjusterCategory, amount: amountVal, reason: reasonVal }
-          });
+            return `
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-white">${esc(session.title)}</span>
+                  ${log ? `
+                    <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] ${log.status === 'on_time' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
+                      ${log.status === 'on_time' ? 'ON TIME' : 'LATE (-' + (log.penalty || 0) + ' pts)'}
+                    </span>
+                  ` : `
+                    <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] bg-white/10 text-neutral-400">NOT CHECKED IN</span>
+                  `}
+                </div>
 
-          await batch.commit();
+                ${log ? `
+                  <div class="pt-1 text-[11px] space-y-1.5 border-t border-white/5">
+                    <div class="flex items-center justify-between text-neutral-400">
+                      <span>Checked In: ${formatDateTime(log.checkedInAt)}</span>
+                      ${log.fineEGP ? `<span class="text-rose-400 font-mono">${log.fineEGP} EGP</span>` : ''}
+                    </div>
+                    <div class="flex items-center justify-end gap-2 pt-1">
+                      <button type="button" class="btn-ctrl-edit-log px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-log-id="${esc(log.id)}">Edit Penalty</button>
+                      <button type="button" class="btn-ctrl-delete-log px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-log-id="${esc(log.id)}">Delete Log</button>
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+  `;
 
-          invalidateEgpCache(currentMember.uid);
-          getMemberDerivedEgpBalance(currentMember.uid, true).then(() => { renderContent(); });
-          toast(`Successfully applied ${actionLabel}`, 'success');
-        } catch (err) {
-          console.error('Adjuster error:', err);
-          toast('Failed to record adjustment: ' + err.message, 'error');
-          submitAdjustBtn.disabled = false;
-          submitAdjustBtn.textContent = 'Apply & Record in Ledger';
-        }
-      };
-    }
+  // Wire Tab Switching: Strictly CSS class toggle (Zero innerHTML re-render)
+  modalBody.querySelectorAll('.member-tab-btn').forEach(btn => {
+    btn.onclick = () => {
+      activeTab = btn.dataset.tab;
+      modalBody.querySelectorAll('.member-tab-btn').forEach(b => {
+        const isActive = b.dataset.tab === activeTab;
+        b.className = `member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap ${isActive ? 'bg-[#0A84FF] text-white shadow-sm' : 'text-neutral-400 hover:text-white'}`;
+      });
+      modalBody.querySelectorAll('.member-tab-panel').forEach(panel => {
+        panel.classList.add('hidden');
+      });
+      const activePanel = modalBody.querySelector(`#tab-sec-${activeTab}`);
+      if (activePanel) activePanel.classList.remove('hidden');
 
-    // Ledger tab loading
-    if (activeTab === 'ledger') {
-      loadTransactionLedger(currentMember.uid, document.getElementById('member-ctrl-ledger-list'));
-      const refreshBtn = document.getElementById('btn-refresh-ctrl-ledger');
-      if (refreshBtn) {
-        refreshBtn.onclick = () => {
-          loadTransactionLedger(currentMember.uid, document.getElementById('member-ctrl-ledger-list'));
-        };
+      if (activeTab === 'ledger' && !ledgerLoaded) {
+        ledgerLoaded = true;
+        loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
       }
-    }
 
-    // Badges management
-    const openBadgePickerBtn = modalBody.querySelector('#btn-open-badge-picker');
-    if (openBadgePickerBtn) {
-      openBadgePickerBtn.onclick = () => {
-        openBadgePickerSheet({
-          onSelect: async (badgeObj) => {
-            if (!badgeObj) return;
-            const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
-            if (curBadges.some(b => (b.id || b.label || b) === badgeObj.id)) return;
+      btn.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+    };
+  });
 
-            const newBadges = [...curBadges, badgeObj];
-            const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
+  // Wire Refresh Ledger
+  const refreshLedgerBtn = modalBody.querySelector('#btn-refresh-ctrl-ledger');
+  if (refreshLedgerBtn) {
+    refreshLedgerBtn.onclick = () => {
+      loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
+    };
+  }
 
-            try {
-              const batch = writeBatch(db);
-              batch.update(doc(db, 'users', currentMember.uid), {
-                badges: newBadges,
-                badgeIds: newBadgeIds,
-                updatedAt: serverTimestamp()
-              });
-
-              createNotification(batch, {
-                uid: currentMember.uid,
-                title: 'Badge Awarded!',
-                message: `You have been awarded the "${badgeObj.label}" badge!`,
-                type: 'badge'
-              });
-
-              logAdminAction(batch, {
-                action: 'badge_awarded',
-                targetUid: currentMember.uid,
-                details: { badgeId: badgeObj.id, badgeLabel: badgeObj.label }
-              });
-
-              await batch.commit();
-              currentMember.badges = newBadges;
-              currentMember.badgeIds = newBadgeIds;
-              toast(`Badge "${badgeObj.label}" awarded!`, 'success');
-              renderContent();
-            } catch (err) {
-              console.error('Error adding badge:', err);
-              toast('Failed to add badge', 'error');
-            }
+  // Wire Avatar Tap-to-Crop
+  const avatarCropBtn = modalBody.querySelector('#btn-crop-member-avatar');
+  if (avatarCropBtn) {
+    avatarCropBtn.onclick = () => {
+      pickAndCropImage({
+        aspect: 1,
+        onCropped: async (base64Url) => {
+          try {
+            await updateDoc(doc(db, 'users', currentMember.uid), {
+              avatarUrl: base64Url,
+              photoURL: base64Url,
+              updatedAt: serverTimestamp()
+            });
+            currentMember.avatarUrl = base64Url;
+            currentMember.photoURL = base64Url;
+            const u = usersMap.get(currentMember.uid);
+            if (u) { u.avatarUrl = base64Url; u.photoURL = base64Url; }
+            const wrap = modalBody.querySelector('#member-ctrl-avatar-wrap');
+            if (wrap) wrap.innerHTML = renderAvatar(currentMember, 'w-12 h-12');
+            toast('Avatar updated successfully', 'success');
+            renderMembersAdmin();
+          } catch (err) {
+            console.error('Avatar update error:', err);
+            toast('Failed to update avatar: ' + err.message, 'error');
           }
-        });
-      };
-    }
-
-    // Quick add presets
-    modalBody.querySelectorAll('.btn-quick-add-badge').forEach(btn => {
-      btn.onclick = async () => {
-        const presetId = btn.dataset.presetId;
-        const preset = PRESET_BADGES.find(p => p.id === presetId);
-        if (!preset) return;
-
-        const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
-        if (curBadges.some(b => (b.id || b.label || b) === preset.id)) return;
-
-        const newBadges = [...curBadges, preset];
-        const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
-
-        try {
-          const batch = writeBatch(db);
-          batch.update(doc(db, 'users', currentMember.uid), {
-            badges: newBadges,
-            badgeIds: newBadgeIds,
-            updatedAt: serverTimestamp()
-          });
-
-          createNotification(batch, {
-            uid: currentMember.uid,
-            title: 'Badge Awarded!',
-            message: `You have been awarded the "${preset.label}" badge by an administrator!`,
-            type: 'badge'
-          });
-
-          logAdminAction(batch, {
-            action: 'badge_awarded',
-            targetUid: currentMember.uid,
-            details: { badgeId: preset.id, badgeLabel: preset.label }
-          });
-
-          await batch.commit();
-          currentMember.badges = newBadges;
-          currentMember.badgeIds = newBadgeIds;
-          toast(`Badge "${preset.label}" awarded!`, 'success');
-          renderContent();
-        } catch (err) {
-          console.error('Error adding preset badge:', err);
-          toast('Failed to add badge', 'error');
         }
-      };
-    });
+      });
+    };
+  }
 
-    // Remove badge
+  // Wire Display Name Input
+  const nameInp = modalBody.querySelector('#ctrl-member-name');
+  if (nameInp) {
+    nameInp.oninput = (e) => {
+      editedName = e.target.value;
+      const heroName = modalBody.querySelector('#member-ctrl-hero-name');
+      if (heroName) heroName.textContent = editedName.trim() || 'Member';
+      markDirty();
+    };
+  }
+
+  // Wire Role Segmented Selector
+  const roleWrap = modalBody.querySelector('#ctrl-role-seg-wrap');
+  if (roleWrap) {
+    roleWrap.appendChild(renderSegmented({
+      id: 'ctrl-member-role-seg',
+      options: [
+        { value: 'member', label: 'Member' },
+        { value: 'admin', label: 'Admin' }
+      ],
+      value: selectedRole,
+      onChange: (newRole) => {
+        if (newRole !== 'admin') {
+          if (currentMember.uid === state.user?.uid) {
+            toast('You cannot demote yourself from admin', 'error');
+            return;
+          }
+          const adminCount = state.members.filter(m => m.role === 'admin' || m.isAdmin).length;
+          if (adminCount <= 1) {
+            toast('Cannot demote the last administrator', 'error');
+            return;
+          }
+        }
+        selectedRole = newRole;
+        const roleBadge = modalBody.querySelector('#member-ctrl-hero-role-badge');
+        if (roleBadge) {
+          const isNowAdmin = selectedRole === 'admin';
+          roleBadge.textContent = isNowAdmin ? 'ADMIN' : 'MEMBER';
+          roleBadge.className = `px-2 py-0.5 rounded-full text-[10px] font-bold ${isNowAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}`;
+        }
+        markDirty();
+      }
+    }));
+  }
+
+  // Wire Badges Management
+  function refreshBadgesDOM() {
+    const badgesList = modalBody.querySelector('#ctrl-badges-list');
+    if (!badgesList) return;
+    if (Array.isArray(currentMember.badges) && currentMember.badges.length > 0) {
+      badgesList.innerHTML = currentMember.badges.map(b => {
+        const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
+        return `
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${norm.color || '#3A3A3C'}40">
+            <span class="w-2 h-2 rounded-full" style="background-color: ${norm.color || '#3A3A3C'}"></span>
+            <span>${esc(norm.label)}</span>
+            <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(norm.id)}" aria-label="Remove badge">&times;</button>
+          </span>
+        `;
+      }).join('');
+    } else {
+      badgesList.innerHTML = '<span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>';
+    }
+    wireBadgeRemoveHandlers();
+
+    modalBody.querySelectorAll('.btn-quick-add-badge').forEach(btn => {
+      const presetId = btn.dataset.presetId;
+      const alreadyHas = (currentMember.badges || []).some(b => (b.id || b.label || b) === presetId);
+      btn.disabled = alreadyHas;
+      btn.className = `btn-quick-add-badge text-[11px] px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${alreadyHas ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/10 text-neutral-400' : 'bg-white/10 hover:bg-white/15 border-white/10 text-white'}`;
+    });
+  }
+
+  function wireBadgeRemoveHandlers() {
     modalBody.querySelectorAll('.btn-remove-member-badge').forEach(btn => {
       btn.onclick = async () => {
         const badgeId = btn.dataset.badgeId;
@@ -14163,22 +13984,307 @@ function openMemberControlModal(member) {
           currentMember.badges = newBadges;
           currentMember.badgeIds = newBadgeIds;
           toast('Badge removed', 'info');
-          renderContent();
+          refreshBadgesDOM();
         } catch (err) {
           console.error('Error removing badge:', err);
           toast('Failed to remove badge', 'error');
         }
       };
     });
+  }
+  wireBadgeRemoveHandlers();
 
-    updateSaveButtonState();
-  };
+  const openBadgePickerBtn = modalBody.querySelector('#btn-open-badge-picker');
+  if (openBadgePickerBtn) {
+    openBadgePickerBtn.onclick = () => {
+      openBadgePickerSheet({
+        onSelect: async (badgeObj) => {
+          if (!badgeObj) return;
+          const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
+          if (curBadges.some(b => (b.id || b.label || b) === badgeObj.id)) return;
+
+          const newBadges = [...curBadges, badgeObj];
+          const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
+
+          try {
+            const batch = writeBatch(db);
+            batch.update(doc(db, 'users', currentMember.uid), {
+              badges: newBadges,
+              badgeIds: newBadgeIds,
+              updatedAt: serverTimestamp()
+            });
+
+            createNotification(batch, {
+              uid: currentMember.uid,
+              title: 'Badge Awarded!',
+              message: `You have been awarded the "${badgeObj.label}" badge!`,
+              type: 'badge'
+            });
+
+            logAdminAction(batch, {
+              action: 'badge_awarded',
+              targetUid: currentMember.uid,
+              details: { badgeId: badgeObj.id, badgeLabel: badgeObj.label }
+            });
+
+            await batch.commit();
+            currentMember.badges = newBadges;
+            currentMember.badgeIds = newBadgeIds;
+            toast(`Badge "${badgeObj.label}" awarded!`, 'success');
+            refreshBadgesDOM();
+          } catch (err) {
+            console.error('Error adding badge:', err);
+            toast('Failed to add badge', 'error');
+          }
+        }
+      });
+    };
+  }
+
+  modalBody.querySelectorAll('.btn-quick-add-badge').forEach(btn => {
+    btn.onclick = async () => {
+      const presetId = btn.dataset.presetId;
+      const preset = PRESET_BADGES.find(p => p.id === presetId);
+      if (!preset) return;
+
+      const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
+      if (curBadges.some(b => (b.id || b.label || b) === preset.id)) return;
+
+      const newBadges = [...curBadges, preset];
+      const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
+
+      try {
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'users', currentMember.uid), {
+          badges: newBadges,
+          badgeIds: newBadgeIds,
+          updatedAt: serverTimestamp()
+        });
+
+        createNotification(batch, {
+          uid: currentMember.uid,
+          title: 'Badge Awarded!',
+          message: `You have been awarded the "${preset.label}" badge by an administrator!`,
+          type: 'badge'
+        });
+
+        logAdminAction(batch, {
+          action: 'badge_awarded',
+          targetUid: currentMember.uid,
+          details: { badgeId: preset.id, badgeLabel: preset.label }
+        });
+
+        await batch.commit();
+        currentMember.badges = newBadges;
+        currentMember.badgeIds = newBadgeIds;
+        toast(`Badge "${preset.label}" awarded!`, 'success');
+        refreshBadgesDOM();
+      } catch (err) {
+        console.error('Error adding preset badge:', err);
+        toast('Failed to add badge', 'error');
+      }
+    };
+  });
+
+  // Wire Adjuster Category Segmented (In-place switching)
+  const adjCatWrap = modalBody.querySelector('#ctrl-adj-cat-wrap');
+  if (adjCatWrap) {
+    adjCatWrap.appendChild(renderSegmented({
+      id: 'adj-cat-segmented',
+      options: [
+        { value: 'points', label: 'Points & Penalties' },
+        { value: 'financial', label: 'Financials (EGP)' }
+      ],
+      value: adjusterCategory,
+      onChange: (val) => {
+        adjusterCategory = val;
+        adjusterType = val === 'points' ? 'bonus' : 'fine';
+        
+        const pointsGroup = modalBody.querySelector('#adj-action-points-group');
+        const finGroup = modalBody.querySelector('#adj-action-financial-group');
+        const pointsPresets = modalBody.querySelector('#adj-presets-points');
+        const finPresets = modalBody.querySelector('#adj-presets-financial');
+        const unitLabel = modalBody.querySelector('#ctrl-adj-unit-label');
+
+        if (pointsGroup) pointsGroup.classList.toggle('hidden', val !== 'points');
+        if (finGroup) finGroup.classList.toggle('hidden', val !== 'financial');
+        if (pointsPresets) pointsPresets.classList.toggle('hidden', val !== 'points');
+        if (finPresets) finPresets.classList.toggle('hidden', val !== 'financial');
+        if (unitLabel) unitLabel.textContent = val === 'points' ? 'Points' : 'EGP';
+
+        updateAdjusterTypeButtons();
+      }
+    }));
+  }
+
+  function updateAdjusterTypeButtons() {
+    modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
+      const isSel = btn.dataset.type === adjusterType;
+      if (btn.dataset.type === 'bonus') {
+        btn.className = `btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${isSel ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
+      } else if (btn.dataset.type === 'penalty') {
+        btn.className = `btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${isSel ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
+      } else if (btn.dataset.type === 'fine') {
+        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
+      } else if (btn.dataset.type === 'payment') {
+        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
+      } else if (btn.dataset.type === 'waive') {
+        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
+      }
+    });
+  }
+
+  // Wire Adjuster Action Pills
+  modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
+    btn.onclick = () => {
+      adjusterType = btn.dataset.type;
+      updateAdjusterTypeButtons();
+    };
+  });
+
+  // Wire Adjuster Preset Chips
+  modalBody.querySelectorAll('.btn-adj-preset').forEach(btn => {
+    btn.onclick = () => {
+      const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
+      if (amtInput) amtInput.value = btn.dataset.amount;
+    };
+  });
+
+  // Wire Quick Reason Chips
+  modalBody.querySelectorAll('.btn-quick-reason').forEach(btn => {
+    btn.onclick = () => {
+      const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
+      if (reasonInput) reasonInput.value = btn.dataset.reason;
+    };
+  });
+
+  // Wire Adjuster Submit
+  const submitAdjustBtn = modalBody.querySelector('#btn-submit-adjust');
+  if (submitAdjustBtn) {
+    submitAdjustBtn.onclick = async () => {
+      const amountVal = parseInt(modalBody.querySelector('#ctrl-adjust-amount')?.value, 10);
+      const reasonVal = modalBody.querySelector('#ctrl-adjust-reason')?.value.trim();
+
+      if (isNaN(amountVal) || amountVal <= 0) {
+        toast('Please enter a valid amount greater than 0', 'error');
+        return;
+      }
+
+      if (!reasonVal) {
+        toast('Adjustment reason is mandatory for the ledger', 'error');
+        return;
+      }
+
+      submitAdjustBtn.disabled = true;
+      submitAdjustBtn.textContent = 'Recording adjustment...';
+
+      try {
+        const batch = writeBatch(db);
+        const txRef = doc(collection(db, 'users', currentMember.uid, 'transactions'));
+        const txData = {
+          type: adjusterType,
+          category: adjusterCategory,
+          amount: amountVal,
+          reason: reasonVal,
+          adminUid: state.user.uid,
+          adminName: state.user.displayName || 'Admin',
+          createdAt: serverTimestamp()
+        };
+        batch.set(txRef, txData);
+
+        let actionLabel = 'adjustment';
+        if (adjusterCategory === 'points') {
+          if (adjusterType === 'bonus') {
+            const pointsUpdate = buildPointsUpdate(usersMap.get(currentMember.uid) || currentMember, amountVal);
+            batch.update(doc(db, 'users', currentMember.uid), {
+              ...pointsUpdate,
+              updatedAt: serverTimestamp()
+            });
+            actionLabel = `+${amountVal} bonus points`;
+            currentMember.points = (currentMember.points || 0) + amountVal;
+          } else if (adjusterType === 'penalty') {
+            batch.update(doc(db, 'users', currentMember.uid), {
+              penalties: increment(amountVal),
+              updatedAt: serverTimestamp()
+            });
+            actionLabel = `-${amountVal} penalty points`;
+            currentMember.penalties = (currentMember.penalties || 0) + amountVal;
+          }
+        } else {
+          const pRef = doc(db, 'users_private', currentMember.uid);
+          let newFineDue = currentMember.finesDue || 0;
+          if (adjusterType === 'fine') {
+            batch.set(pRef, { finesEGP: increment(amountVal), updatedAt: serverTimestamp() }, { merge: true });
+            actionLabel = `+${amountVal} EGP fine`;
+            newFineDue += amountVal;
+          } else if (adjusterType === 'payment') {
+            batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
+            actionLabel = `payment of ${amountVal} EGP`;
+            newFineDue = Math.max(0, newFineDue - amountVal);
+          } else if (adjusterType === 'waive') {
+            batch.set(pRef, { finesEGP: increment(-amountVal), updatedAt: serverTimestamp() }, { merge: true });
+            actionLabel = `waive of ${amountVal} EGP fine`;
+            newFineDue = Math.max(0, newFineDue - amountVal);
+          }
+          currentMember.finesDue = newFineDue;
+        }
+
+        createNotification(batch, {
+          uid: currentMember.uid,
+          title: 'Account Adjusted',
+          message: `Admin adjusted your account: ${actionLabel}. Reason: "${reasonVal}"`,
+          type: 'system'
+        });
+
+        logAdminAction(batch, {
+          action: 'member_adjusted',
+          targetUid: currentMember.uid,
+          details: { type: adjusterType, category: adjusterCategory, amount: amountVal, reason: reasonVal }
+        });
+
+        await batch.commit();
+
+        invalidateEgpCache(currentMember.uid);
+        getMemberDerivedEgpBalance(currentMember.uid, true).then((latestEgp) => {
+          const finEl = modalBody.querySelector('#ctrl-summary-fines');
+          if (finEl) finEl.textContent = `${latestEgp} EGP`;
+          const prevEl = modalBody.querySelector('#ctrl-adj-fines-preview');
+          if (prevEl) prevEl.textContent = `${latestEgp} EGP`;
+        });
+
+        // Update Summary metrics in place
+        const ptsEl = modalBody.querySelector('#ctrl-summary-points');
+        if (ptsEl) ptsEl.textContent = currentMember.points || 0;
+        const penEl = modalBody.querySelector('#ctrl-summary-penalties');
+        if (penEl) penEl.textContent = currentMember.penalties || 0;
+
+        // Reset inputs
+        const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
+        if (amtInput) amtInput.value = '';
+        const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
+        if (reasonInput) reasonInput.value = '';
+
+        if (ledgerLoaded) {
+          loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
+        }
+
+        toast(`Successfully applied ${actionLabel}`, 'success');
+      } catch (err) {
+        console.error('Adjuster error:', err);
+        toast('Failed to record adjustment: ' + err.message, 'error');
+      } finally {
+        submitAdjustBtn.disabled = false;
+        submitAdjustBtn.textContent = 'Apply & Record in Ledger';
+      }
+    };
+  }
 
   openModal({
-    title: `Member Control: ${member.displayName}`,
-    body: `<div id="member-ctrl-body"></div>`,
+    title: `Member Control: ${member.displayName || member.name || 'Member'}`,
+    body: modalBody,
     saveLabel: 'Save',
     cancelLabel: 'Cancel',
+    isDirty: () => hasPendingChanges,
     onSave: async () => {
       if (!hasPendingChanges) return true;
       const cleanName = editedName.trim();
@@ -14232,7 +14338,7 @@ function openMemberControlModal(member) {
     }
   });
 
-  renderContent();
+  updateSaveButtonState();
 }
 
 async function handleRepairTotals() {

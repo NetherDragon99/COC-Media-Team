@@ -1947,10 +1947,10 @@ textarea:focus-visible {
 /* iOS Inset-Grouped Card (iOS HIG) */
 .ios-card {
   border-radius: 14px;
-  background: var(--surface-2, #1C1C1E);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #1C1C1E;
   padding: 14px 16px;
   margin-bottom: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* iOS Active Press Effect */
@@ -1973,4 +1973,51 @@ button:active,
 .modal-tabs::-webkit-scrollbar,
 #member-ctrl-tab-bar::-webkit-scrollbar {
   display: none;
+}
+
+
+/* Apple HIG Modal Sheet Header Buttons */
+.modal-header button {
+  background: transparent !important;
+  border: none !important;
+  padding: 4px 8px;
+  font-size: 15px;
+  color: #0A84FF;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: none !important;
+}
+.modal-header button:hover {
+  opacity: 0.85;
+}
+.modal-header button:active {
+  transform: scale(0.96);
+}
+.modal-header #shared-modal-save,
+.modal-header .btn-modal-save {
+  font-weight: 600;
+}
+
+
+/* 14 iOS System Color Swatches */
+.color-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  border: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, outline 0.15s ease;
+  position: relative;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.color-swatch:hover {
+  transform: scale(1.08);
+}
+.color-swatch.active,
+.color-swatch.selected {
+  outline: 2px solid #FFFFFF;
+  outline-offset: 2px;
+  transform: scale(1.08);
 }
