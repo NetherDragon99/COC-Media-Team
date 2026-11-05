@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.7)
+ * COC Media Team - Production Web App (v2.1.8)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.7';
+export const APP_VERSION = '2.1.8';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -2743,7 +2743,9 @@ function dismissToast(el) {
 /**
  * iOS Action Sheet confirmation returning Promise<boolean>.
  */
-export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', confirmLabel = 'Confirm', destructive = false }) {
+export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', confirmLabel, confirmText, destructive = false, isDestructive = false }) {
+  const actualConfirmLabel = confirmLabel || confirmText || 'Confirm';
+  const isDest = Boolean(destructive || isDestructive);
   const root = document.getElementById('shared-confirm-root');
   const titleEl = document.getElementById('shared-confirm-title');
   const msgEl = document.getElementById('shared-confirm-message');
@@ -2754,8 +2756,8 @@ export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', con
 
   titleEl.textContent = title;
   msgEl.textContent = message;
-  actionBtn.textContent = confirmLabel;
-  actionBtn.className = `action-sheet-btn ${destructive ? 'destructive' : 'primary'}`;
+  actionBtn.textContent = actualConfirmLabel;
+  actionBtn.className = `action-sheet-btn ${isDest ? 'destructive' : 'primary'}`;
 
   document.body.style.overflow = 'hidden';
   root.classList.add('open');

@@ -1969,6 +1969,7 @@ button:active,
   white-space: nowrap;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  flex-wrap: nowrap;
 }
 .modal-tabs::-webkit-scrollbar,
 #member-ctrl-tab-bar::-webkit-scrollbar {
