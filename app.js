@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * COC Media Team - Production Web App (v2.1.8)
+ * COC Media Team - Production Web App (v2.1.9)
  * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
  * Designed & Developed by Steven Mario
  * ============================================================================
@@ -31,7 +31,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.1.8';
+export const APP_VERSION = '2.1.9';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -167,6 +167,7 @@ export function createNotification(batch, { uid, title, message, body, type = 's
     targetAction: targetAction || null,
     refId,
     read: false,
+    timestamp: serverTimestamp(),
     createdAt: serverTimestamp()
   });
   return notifRef;
@@ -653,6 +654,7 @@ function normalizeWaiverRequest(raw) {
     userName: raw.userName || 'Member',
     userAvatar: raw.userAvatar || '',
     reason: raw.reason || '',
+    category: raw.category || '',
     status: raw.status || 'pending',
     adminNote: raw.adminNote || '',
     createdAt: raw.createdAt || null,
@@ -2308,7 +2310,6 @@ export function renderDateTimeField({ label = 'Date & Time', valueMs = null, mod
   labelBox.className = 'flex flex-col text-left';
   labelBox.innerHTML = `
     <span class="text-xs font-semibold text-neutral-200">${esc(label)}</span>
-    <span class="text-[10px] text-neutral-400 font-mono">Cairo time (${APP_TIMEZONE})</span>
   `;
 
   const chip = document.createElement('div');
@@ -4963,6 +4964,7 @@ function initNavigation() {
     { id: 'badges', hash: '#admin-badges' },
     { id: 'attendance', hash: '#admin-attendance' },
     { id: 'submissions', hash: '#admin-submissions' },
+    { id: 'waivers', hash: '#admin-waivers' },
     { id: 'members', hash: '#admin-members' },
     { id: 'broadcasts', hash: '#admin-broadcasts' }
   ];
@@ -5901,11 +5903,7 @@ function setupWaiverRequestsListener() {
       const unsubAll = onSnapshot(qAll, (snapshot) => {
         state.waiverRequests = snapshot.docs.map(d => normalizeWaiverRequest({ id: d.id, ...d.data() }));
         const pendingCount = state.waiverRequests.filter(w => w.status === 'pending').length;
-        const badgeEl = document.getElementById('admin-pending-waivers-badge');
-        if (badgeEl) {
-          badgeEl.textContent = pendingCount;
-          badgeEl.classList.toggle('hidden', pendingCount === 0);
-        }
+        updateWaiversBadge(pendingCount);
         if (typeof renderAdminWaivers === 'function') renderAdminWaivers();
       }, (err) => console.warn('Admin waiver requests listener:', err));
       listeners.add('waiver_requests', unsubAll);
@@ -7865,183 +7863,137 @@ function renderLeaderboard() {
   const nowMs = serverNow();
   const period = state.leaderboardPeriod || 'all';
 
-  // Zero-Extra-Reads: compute directly from usersMap in memory
-  const sourceMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
+  // Zero-Extra-Reads: compute directly from usersMap in memory (identical for guests and signed-in users)
+  const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
 
-  const sorted = [...sourceMembers].map(m => {
+  const sorted = (allMembers || []).map(m => {
     const prof = getUserProfile(m.uid, m.displayName, m.photoURL);
-    const periodPoints = getMemberPeriodPoints(m, period, nowMs);
+    const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
     const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
     return { ...m, ...prof, periodPoints, penalties };
-  }).sort((a, b) => {
-    const diff = (b.periodPoints || 0) - (a.periodPoints || 0);
-    if (diff !== 0) return diff;
-    const penDiff = (a.penalties || 0) - (b.penalties || 0); // fewer penalties first
-    if (penDiff !== 0) return penDiff;
-    return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
   });
+
+  const rankedMembers = sorted
+    .filter(m => Number(m.periodPoints || 0) > 0)
+    .sort((a, b) => {
+      const diff = Number(b.periodPoints || 0) - Number(a.periodPoints || 0);
+      if (diff !== 0) return diff;
+      const penDiff = (a.penalties || 0) - (b.penalties || 0);
+      if (penDiff !== 0) return penDiff;
+      return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
+    });
+  const unrankedMembers = sorted
+    .filter(m => Number(m.periodPoints || 0) <= 0)
+    .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
 
   if (countEl) countEl.textContent = `${sorted.length} Members`;
 
-  // Filter & Sort Eligible Members with points > 0
-  const rankedMembers = sorted.filter(m => Number(m.periodPoints || 0) > 0);
+  const taskCountOf = (uid) => (state.submissions || []).filter(s => s.userId === uid || s.uid === uid).length;
 
-  function renderRows(membersToRender, startRank = 1) {
-    if (membersToRender.length === 0) {
-      listEl.innerHTML = '<p class="text-xs text-neutral-400 py-6 text-center">No points awarded yet.</p>';
-      return;
+  function podiumCard(member, place) {
+    const cfg = {
+      1: { label: '#1', border: 'border-amber-400', text: 'text-amber-400', sub: 'text-amber-300/80', ring: 'border-amber-400', size: 'w-14 h-14', pad: 'p-3.5', extra: 'shadow-xl bg-gradient-to-b from-amber-500/10 to-transparent' },
+      2: { label: '#2', border: 'border-slate-300', text: 'text-slate-300', sub: 'text-neutral-400', ring: 'border-slate-300', size: 'w-12 h-12', pad: 'p-3', extra: '' },
+      3: { label: '#3', border: 'border-amber-700', text: 'text-amber-500', sub: 'text-neutral-400', ring: 'border-amber-700', size: 'w-12 h-12', pad: 'p-3', extra: '' }
+    }[place];
+    const name = member.displayName || member.name || 'Member';
+    return `
+      <div id="podium-${place === 1 ? 'first' : place === 2 ? 'second' : 'third'}" class="podium-card glass-card ${cfg.pad} text-center border-t-2 ${cfg.border} ${cfg.extra} rounded-xl cursor-pointer hover:bg-white/5 transition" data-member-uid="${esc(member.uid)}">
+        <div class="text-xs font-bold ${cfg.text} mb-1">${cfg.label}</div>
+        <div class="mx-auto mb-1.5 flex justify-center">${renderAvatar(member, cfg.size)}</div>
+        <div class="font-bold text-xs text-white truncate">${esc(name)}</div>
+        <div class="text-xs font-bold ${cfg.text} font-mono mt-0.5">${member.periodPoints} pts</div>
+        <div class="text-[10px] ${cfg.sub}">${taskCountOf(member.uid)} tasks</div>
+      </div>`;
+  }
+
+  // ----- Podium / Spotlight / Empty state (built dynamically, no static fallback HTML) -----
+  if (podiumEl) {
+    if (rankedMembers.length === 0) {
+      podiumEl.className = 'pt-4 pb-2';
+      podiumEl.innerHTML = `
+        <div class="ios-card text-center py-6" id="leaderboard-empty-state">
+          <p class="text-sm font-semibold text-white">No points awarded yet.</p>
+          <p class="text-xs text-neutral-400 mt-1">Complete tasks to climb the leaderboard.</p>
+        </div>`;
+    } else if (rankedMembers.length === 1) {
+      podiumEl.className = 'flex justify-center items-center pt-4 pb-2';
+      const m = rankedMembers[0];
+      podiumEl.innerHTML = `
+        <div id="podium-first" class="podium-card glass-card p-4 text-center border-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/15 to-transparent rounded-2xl w-full max-w-[260px] cursor-pointer hover:scale-[1.02] transition" data-member-uid="${esc(m.uid)}">
+          <div class="text-sm font-bold text-amber-400 mb-1">#1</div>
+          <div class="mx-auto mb-2 flex justify-center">${renderAvatar(m, 'w-16 h-16')}</div>
+          <div class="font-bold text-sm text-white truncate">${esc(m.displayName || m.name || 'Member')}</div>
+          <div class="text-sm font-bold text-amber-400 font-mono mt-0.5">${m.periodPoints} pts</div>
+          <div class="text-[10px] text-amber-300/80">${taskCountOf(m.uid)} tasks</div>
+        </div>`;
+    } else if (rankedMembers.length === 2) {
+      podiumEl.className = 'grid grid-cols-2 gap-3 max-w-sm mx-auto items-end pt-4 pb-2';
+      podiumEl.innerHTML = podiumCard(rankedMembers[1], 2) + podiumCard(rankedMembers[0], 1);
+    } else {
+      podiumEl.className = 'grid grid-cols-3 gap-2 items-end pt-4 pb-2';
+      podiumEl.innerHTML = podiumCard(rankedMembers[1], 2) + podiumCard(rankedMembers[0], 1) + podiumCard(rankedMembers[2], 3);
     }
 
-    listEl.innerHTML = membersToRender.map((member, idx) => {
-      const isMe = state.user?.uid === member.uid;
-      const rankNum = startRank + idx;
-      const taskCount = (state.submissions || []).filter(s => s.userId === member.uid || s.uid === member.uid).length;
-
-      return `
-        <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''}" data-member-uid="${esc(member.uid)}">
-          <div class="flex items-center gap-3 min-w-0 flex-1 mr-2">
-            <span class="w-5 text-center font-mono font-bold text-xs shrink-0 ${rankNum <= 3 ? 'text-amber-400' : 'text-neutral-500'}">
-              ${rankNum}
-            </span>
-            <div class="shrink-0">
-              ${renderAvatar(member, 'w-8 h-8')}
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="font-semibold text-xs text-white flex items-center gap-1.5 min-w-0">
-                <span class="truncate shrink-0 max-w-[100px]">${esc(member.displayName || member.name || 'Member')}</span>
-                ${isMe ? '<span class="text-[9px] px-1 rounded bg-[#0A84FF] text-white shrink-0">You</span>' : ''}
-                <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
-              </div>
-              <div class="text-[10px] text-neutral-400">${taskCount} quotas</div>
-            </div>
-          </div>
-
-          <div class="text-right shrink-0">
-            <div class="font-bold font-mono text-xs text-amber-400">${member.periodPoints || 0} pts</div>
-            <div class="text-[10px] text-neutral-500">${member.role || 'member'}</div>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    listEl.querySelectorAll('.badge-row-container').forEach(c => {
-      const uid = c.dataset.uid;
-      const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-      if (mem) {
-        renderBadgeRow(c, mem.badges, mem);
-      }
-    });
-
-    listEl.querySelectorAll('.leaderboard-member-row').forEach(row => {
-      row.onclick = () => {
+    podiumEl.querySelectorAll('.podium-card').forEach(card => {
+      card.onclick = () => {
         if (selectionState && selectionState.active) return;
-        const uid = row.dataset.memberUid;
+        const uid = card.dataset.memberUid;
         if (uid) openMiniProfileSheet(uid);
       };
     });
   }
 
-  const p1 = document.getElementById('podium-first');
-  const p2 = document.getElementById('podium-second');
-  const p3 = document.getElementById('podium-third');
+  // ----- "All Members" list: only members NOT already shown in the podium -----
+  const podiumCount = Math.min(rankedMembers.length, 3);
+  const restRanked = rankedMembers.slice(podiumCount);
 
-  if (rankedMembers.length === 0) {
-    // CASE 0: Hide podium, render empty state
-    if (podiumEl) podiumEl.classList.add('hidden');
-    renderRows([], 1);
-  } else if (rankedMembers.length === 1) {
-    // CASE 1: Single Leader Spotlight hero card
-    if (podiumEl) {
-      podiumEl.classList.remove('hidden', 'grid-cols-3', 'grid-cols-2');
-      podiumEl.className = 'flex justify-center items-center pt-4 pb-2';
-    }
-    if (p2) p2.classList.add('hidden');
-    if (p3) p3.classList.add('hidden');
-    if (p1) {
-      p1.classList.remove('hidden');
-      p1.className = 'glass-card p-4 text-center border-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/15 to-transparent rounded-2xl w-full max-w-[260px] cursor-pointer hover:scale-[1.02] transition';
-      updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
-      p1.onclick = () => openMiniProfileSheet(rankedMembers[0].uid);
-    }
-    const remaining = sorted.filter(m => m.uid !== rankedMembers[0].uid);
-    renderRows(remaining, 2);
-  } else if (rankedMembers.length === 2) {
-    // CASE 2: 2-pillar podium: #1 Gold (elevated) and #2 Silver (left)
-    if (podiumEl) {
-      podiumEl.classList.remove('hidden', 'grid-cols-3', 'flex', 'justify-center');
-      podiumEl.className = 'grid grid-cols-2 gap-3 max-w-sm mx-auto items-end pt-4 pb-2';
-    }
-    if (p3) p3.classList.add('hidden');
-    if (p2) {
-      p2.classList.remove('hidden');
-      p2.className = 'glass-card p-3 text-center border-t-2 border-slate-300 rounded-xl cursor-pointer hover:bg-white/5 transition';
-      updatePodiumSlot(rankedMembers[1], 'podium-second', 'podium-2', period);
-      p2.onclick = () => openMiniProfileSheet(rankedMembers[1].uid);
-    }
-    if (p1) {
-      p1.classList.remove('hidden');
-      p1.className = 'glass-card p-3.5 text-center border-t-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/10 to-transparent rounded-xl cursor-pointer hover:bg-white/5 transition';
-      updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
-      p1.onclick = () => openMiniProfileSheet(rankedMembers[0].uid);
-    }
-    const remaining = sorted.filter(m => m.uid !== rankedMembers[0].uid && m.uid !== rankedMembers[1].uid);
-    renderRows(remaining, 3);
-  } else {
-    // CASE 3: Full 3-step podium
-    if (podiumEl) {
-      podiumEl.classList.remove('hidden', 'grid-cols-2', 'flex', 'justify-center', 'max-w-sm', 'mx-auto');
-      podiumEl.className = 'grid grid-cols-3 gap-2 items-end pt-4 pb-2';
-    }
-    if (p2) {
-      p2.classList.remove('hidden');
-      p2.className = 'glass-card p-3 text-center border-t-2 border-slate-300 rounded-xl cursor-pointer hover:bg-white/5 transition';
-      updatePodiumSlot(rankedMembers[1], 'podium-second', 'podium-2', period);
-      p2.onclick = () => openMiniProfileSheet(rankedMembers[1].uid);
-    }
-    if (p1) {
-      p1.classList.remove('hidden');
-      p1.className = 'glass-card p-3.5 text-center border-t-2 border-amber-400 shadow-xl bg-gradient-to-b from-amber-500/10 to-transparent rounded-xl cursor-pointer hover:bg-white/5 transition';
-      updatePodiumSlot(rankedMembers[0], 'podium-first', 'podium-1', period);
-      p1.onclick = () => openMiniProfileSheet(rankedMembers[0].uid);
-    }
-    if (p3) {
-      p3.classList.remove('hidden');
-      p3.className = 'glass-card p-3 text-center border-t-2 border-amber-700 rounded-xl cursor-pointer hover:bg-white/5 transition';
-      updatePodiumSlot(rankedMembers[2], 'podium-third', 'podium-3', period);
-      p3.onclick = () => openMiniProfileSheet(rankedMembers[2].uid);
-    }
-    const topUids = new Set([rankedMembers[0].uid, rankedMembers[1].uid, rankedMembers[2].uid]);
-    const remaining = sorted.filter(m => !topUids.has(m.uid));
-    renderRows(remaining, 4);
-  }
-}
-
-function updatePodiumSlot(member, slotId, prefix, period) {
-  const slot = document.getElementById(slotId);
-  const nameEl = document.getElementById(`${prefix}-name`);
-  const ptsEl = document.getElementById(`${prefix}-pts`);
-  const tasksEl = document.getElementById(`${prefix}-tasks`);
-  const imgEl = document.getElementById(`${prefix}-img`);
-
-  if (!slot || !nameEl || !ptsEl || !tasksEl) return;
-
-  if (!member) {
-    nameEl.textContent = '--';
-    ptsEl.textContent = '0 pts';
-    tasksEl.textContent = '0 tasks';
-    return;
+  function rowHtml(member, rankNum, muted) {
+    const isMe = state.user?.uid === member.uid;
+    return `
+      <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''} ${muted ? 'opacity-60' : ''}" data-member-uid="${esc(member.uid)}">
+        <div class="flex items-center gap-3 min-w-0 flex-1 mr-2">
+          <span class="w-5 text-center font-mono font-bold text-xs shrink-0 ${rankNum && rankNum <= 3 ? 'text-amber-400' : 'text-neutral-500'}">${rankNum || '–'}</span>
+          <div class="shrink-0">${renderAvatar(member, 'w-8 h-8')}</div>
+          <div class="min-w-0 flex-1">
+            <div class="font-semibold text-xs text-white flex items-center gap-1.5 min-w-0">
+              <span class="truncate shrink-0 max-w-[100px]">${esc(member.displayName || member.name || 'Member')}</span>
+              ${isMe ? '<span class="text-[9px] px-1 rounded bg-[#0A84FF] text-white shrink-0">You</span>' : ''}
+              <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
+            </div>
+            <div class="text-[10px] text-neutral-400">${taskCountOf(member.uid)} quotas</div>
+          </div>
+        </div>
+        <div class="text-right shrink-0">
+          <div class="font-bold font-mono text-xs ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} pts</div>
+          <div class="text-[10px] text-neutral-500">${member.role || 'member'}</div>
+        </div>
+      </div>`;
   }
 
-  const prof = getUserProfile(member.uid, member.displayName, member.photoURL);
-  const pts = member.periodPoints !== undefined ? member.periodPoints : getMemberPeriodPoints(member, period || state.leaderboardPeriod || 'all', serverNow());
-  nameEl.textContent = prof.displayName || 'Member';
-  ptsEl.textContent = `${pts} pts`;
-  const tCount = state.submissions.filter(s => s.userId === member.uid).length;
-  tasksEl.textContent = `${tCount} tasks`;
-
-  if (imgEl && prof.photoURL) {
-    imgEl.src = prof.photoURL;
+  let listHtml = restRanked.map((m, i) => rowHtml(m, podiumCount + 1 + i, false)).join('');
+  if (unrankedMembers.length > 0) {
+    listHtml += `<div class="pt-3 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">No points yet</div>`;
+    listHtml += unrankedMembers.map(m => rowHtml(m, null, true)).join('');
   }
+  listEl.innerHTML = listHtml;
+
+  const listGroup = listEl.closest('.inset-group');
+  if (listGroup) listGroup.classList.toggle('hidden', listHtml.trim() === '');
+
+  listEl.querySelectorAll('.badge-row-container').forEach(c => {
+    const uid = c.dataset.uid;
+    const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+    if (mem) renderBadgeRow(c, mem.badges, mem);
+  });
+
+  listEl.querySelectorAll('.leaderboard-member-row').forEach(row => {
+    row.onclick = () => {
+      if (selectionState && selectionState.active) return;
+      const uid = row.dataset.memberUid;
+      if (uid) openMiniProfileSheet(uid);
+    };
+  });
 }
 
 /* ==========================================================================
@@ -9483,64 +9435,37 @@ function openAdminTaskModal(taskId = null) {
   let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
   let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
 
-  // Deadline state
-  let currentDurationMinutes = normTiers.durationMinutes || (schedType === 'once' ? 1440 : 1440);
-  let deadlineDaysAfter = 1;
-  let deadlineTimeStr = selectedTimeStr;
-  let deadlineDateStr = selectedDateStr;
+  const toDateStr = ms => {
+    const p = getZonedParts(ms, APP_TIMEZONE);
+    return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
+  };
+  const toTimeStr = ms => {
+    const p = getZonedParts(ms, APP_TIMEZONE);
+    return `${pad2(p.hour)}:${pad2(p.minute)}`;
+  };
+  const dtToMs = (dStr, tStr) => {
+    const [y, mo, d] = String(dStr || '').split('-').map(Number);
+    const [h, mi] = String(tStr || '').split(':').map(Number);
+    return zonedDateToMs(y, mo, d, h || 0, mi || 0, 0, APP_TIMEZONE);
+  };
 
-  if (schedType === 'once') {
-    const dlMs = schedStartMs + currentDurationMinutes * 60000;
-    const dlParts = getZonedParts(dlMs, APP_TIMEZONE);
-    deadlineDateStr = `${dlParts.year}-${pad2(dlParts.month)}-${pad2(dlParts.day)}`;
-    deadlineTimeStr = `${pad2(dlParts.hour)}:${pad2(dlParts.minute)}`;
-  } else {
-    const startMin = schedParts.hour * 60 + schedParts.minute;
-    const { daysAfter, endMinuteOfDay } = pickersFromOffset(currentDurationMinutes, startMin);
-    deadlineDaysAfter = daysAfter;
-    deadlineTimeStr = `${pad2(Math.floor(endMinuteOfDay / 60))}:${pad2(endMinuteOfDay % 60)}`;
-  }
+  // Deadline state (absolute date + time, relative to the first occurrence start)
+  const currentDurationMinutes = normTiers.durationMinutes || 1440;
+  let deadlineDateStr = toDateStr(schedStartMs + currentDurationMinutes * 60000);
+  let deadlineTimeStr = toTimeStr(schedStartMs + currentDurationMinutes * 60000);
 
   // Tier 1: Early Bonus
   let earlyBonusEnabled = Boolean(normTiers.earlyBonus.enabled);
   let earlyBonusPoints = normTiers.earlyBonus.points || 15;
-  let earlyBonusDaysAfter = 0;
-  let earlyBonusTimeStr = selectedTimeStr;
-  let earlyBonusDateStr = selectedDateStr;
-
-  if (normTiers.earlyBonus.untilMinutes > 0) {
-    if (schedType === 'once') {
-      const ebMs = schedStartMs + normTiers.earlyBonus.untilMinutes * 60000;
-      const ebParts = getZonedParts(ebMs, APP_TIMEZONE);
-      earlyBonusDateStr = `${ebParts.year}-${pad2(ebParts.month)}-${pad2(ebParts.day)}`;
-      earlyBonusTimeStr = `${pad2(ebParts.hour)}:${pad2(ebParts.minute)}`;
-    } else {
-      const startMin = schedParts.hour * 60 + schedParts.minute;
-      const { daysAfter, endMinuteOfDay } = pickersFromOffset(normTiers.earlyBonus.untilMinutes, startMin);
-      earlyBonusDaysAfter = daysAfter;
-      earlyBonusTimeStr = `${pad2(Math.floor(endMinuteOfDay / 60))}:${pad2(endMinuteOfDay % 60)}`;
-    }
-  }
+  const earlyMins = normTiers.earlyBonus.untilMinutes > 0 ? normTiers.earlyBonus.untilMinutes : Math.max(1, Math.round(currentDurationMinutes / 2));
+  let earlyBonusDateStr = toDateStr(schedStartMs + earlyMins * 60000);
+  let earlyBonusTimeStr = toTimeStr(schedStartMs + earlyMins * 60000);
 
   // Tier 2: Grace Period (NO grace points)
   let graceEnabled = Boolean(normTiers.grace.enabled);
-  let graceDaysAfter = deadlineDaysAfter;
-  let graceTimeStr = deadlineTimeStr;
-  let graceDateStr = deadlineDateStr;
-
-  if (normTiers.grace.untilMinutes > 0) {
-    if (schedType === 'once') {
-      const grMs = schedStartMs + normTiers.grace.untilMinutes * 60000;
-      const grParts = getZonedParts(grMs, APP_TIMEZONE);
-      graceDateStr = `${grParts.year}-${pad2(grParts.month)}-${pad2(grParts.day)}`;
-      graceTimeStr = `${pad2(grParts.hour)}:${pad2(grParts.minute)}`;
-    } else {
-      const startMin = schedParts.hour * 60 + schedParts.minute;
-      const { daysAfter, endMinuteOfDay } = pickersFromOffset(normTiers.grace.untilMinutes, startMin);
-      graceDaysAfter = daysAfter;
-      graceTimeStr = `${pad2(Math.floor(endMinuteOfDay / 60))}:${pad2(endMinuteOfDay % 60)}`;
-    }
-  }
+  const graceMins = normTiers.grace.untilMinutes > 0 ? normTiers.grace.untilMinutes : currentDurationMinutes + 1440;
+  let graceDateStr = toDateStr(schedStartMs + graceMins * 60000);
+  let graceTimeStr = toTimeStr(schedStartMs + graceMins * 60000);
 
   // Tier 3: Missed Penalty
   let missedPenaltyEnabled = Boolean(normTiers.missedPenalty.enabled);
@@ -9548,7 +9473,9 @@ function openAdminTaskModal(taskId = null) {
 
   // Recurrence schedule sets
   let weeklyDays = new Set(Array.isArray(sched.days) ? sched.days : ['Sat', 'Sun']);
-  let monthlyDates = new Set(Array.isArray(sched.dates) ? sched.dates : [1]);
+  let monthlyDates = new Set(Array.isArray(sched.dates) ? sched.dates.map(Number).filter(n => n >= 1 && n <= 31) : [1]);
+  let monthlyLastDay = sched.lastDay === true;
+  if (monthlyLastDay) monthlyDates.delete(31);
   let monthlyWeeks = new Set(Array.isArray(sched.weeks) ? sched.weeks : ['1st']);
   let monthlyWeekdays = new Set(Array.isArray(sched.weekdays) ? sched.weekdays : ['Sat']);
 
@@ -9609,26 +9536,25 @@ function openAdminTaskModal(taskId = null) {
           <input id="adm-task-link" type="url" class="w-full glass-input text-xs font-mono" placeholder="https://..." value="${esc(currentLink)}" />
         </div>
 
-        <!-- Schedule / Recurrence Card -->
-        <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
-          <label class="block text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</label>
-          <div>
-            <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
-            <div id="adm-task-sched-type-wrap"></div><input type="hidden" id="adm-task-sched-type" value="once" />
-          </div>
-
-          <div id="adm-sched-subform" class="space-y-3 pt-1"></div>
-        </div>
-
         <!-- Points Claim Policy Card -->
-        <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-2">
-          <label class="block text-xs font-bold text-white uppercase tracking-wider">Points Claim Policy</label>
-          <p class="text-[11px] text-neutral-400">Rules for how points are awarded for submissions.</p>
+        <div class="ios-card space-y-2" style="margin-bottom:0">
+          <div class="text-xs font-bold text-white uppercase tracking-wider">Points Claim Policy</div>
+          <p id="adm-claim-hint" class="text-[11px] text-neutral-400"></p>
           <div id="mount-task-claim-policy"></div>
         </div>
 
+        <!-- Schedule / Recurrence Card (hidden for one-time milestones) -->
+        <div id="adm-recurrence-card" class="ios-card space-y-3 ${currentClaimPolicy === 'milestone' ? 'hidden' : ''}" style="margin-bottom:0">
+          <div class="text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</div>
+          <div>
+            <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
+            <div id="adm-task-sched-type-wrap"></div>
+          </div>
+          <div id="adm-sched-subform" class="space-y-3 pt-1"></div>
+        </div>
+
         <!-- Permanent Task Switch Card -->
-        <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-2">
+        <div class="ios-card space-y-2" style="margin-bottom:0">
           <div class="flex items-center justify-between">
             <div>
               <span class="text-xs font-bold text-white">Permanent Task</span>
@@ -9640,44 +9566,23 @@ function openAdminTaskModal(taskId = null) {
 
         <!-- Deadlines & Tiers Container (Hidden if Permanent Task is ON) -->
         <div id="adm-nonpermanent-container" class="${currentIsPermanent ? 'hidden' : ''} space-y-3.5">
-          <!-- Deadline Card (Pickers) -->
-          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
-            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-              <span>Task Deadline</span>
-              
+          <div class="ios-card space-y-3" style="margin-bottom:0">
+            <div class="text-xs font-bold text-white uppercase tracking-wider">Task Deadline</div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[11px] text-neutral-300 mb-1">Deadline Date</label>
+                <input id="adm-dl-date" type="date" class="ios-input" value="${deadlineDateStr}" />
+              </div>
+              <div>
+                <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
+                <input id="adm-dl-time" type="time" class="ios-input" value="${deadlineTimeStr}" />
+              </div>
             </div>
-
-            ${schedType === 'once' ? `
-              <div class="grid grid-cols-2 gap-2">
-                <div>
-                  <label class="block text-[11px] text-neutral-300 mb-1">Deadline Date</label>
-                  <div id="field-adm-dl-date"></div>
-                </div>
-                <div>
-                  <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
-                  <div id="field-adm-dl-time"></div>
-                </div>
-              </div>
-            ` : `
-              <div class="space-y-2.5">
-                <div class="grid grid-cols-2 gap-2">
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
-                    <div id="field-adm-dl-time"></div>
-                  </div>
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Days After Start</label>
-                    <div id="mount-dl-days-stepper"></div>
-                  </div>
-                </div>
-              </div>
-            `}
-
-            <div id="adm-deadline-words" class="p-2 rounded-xl bg-white/5 border border-white/10 text-[11px] text-[#0A84FF] font-medium"></div>
+            <div id="adm-deadline-words" class="hidden"></div>
           </div>
 
           <!-- Tier 1: Early Bonus Card -->
-          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+          <div class="ios-card space-y-3" style="margin-bottom:0">
             <div class="flex items-center justify-between">
               <div>
                 <span class="text-xs font-bold text-white">Early Bonus</span>
@@ -9685,76 +9590,51 @@ function openAdminTaskModal(taskId = null) {
               </div>
               <div id="mount-switch-early"></div>
             </div>
-
             <div id="adm-early-container" class="${earlyBonusEnabled ? '' : 'hidden'} space-y-2.5 pt-2 border-t border-white/10">
+              <div>
+                <label class="block text-[11px] text-neutral-300 mb-1">Early Points</label>
+                <input id="adm-early-pts" type="number" inputmode="numeric" min="1" class="ios-input font-mono" value="${earlyBonusPoints}" placeholder="15" />
+              </div>
               <div class="grid grid-cols-2 gap-2">
                 <div>
-                  <label class="block text-[11px] text-neutral-300 mb-1">Early Points</label>
-                  <input id="adm-early-pts" type="number" min="1" class="w-full glass-input text-xs font-mono text-emerald-400 font-bold" value="${earlyBonusPoints}" placeholder="15" />
+                  <label class="block text-[11px] text-neutral-300 mb-1">Bonus Ends Date</label>
+                  <input id="adm-early-date" type="date" class="ios-input" value="${earlyBonusDateStr}" />
                 </div>
-                ${schedType === 'once' ? `
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Bonus Window Ends Date</label>
-                    <div id="field-adm-early-date"></div>
-                  </div>
-                ` : `
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Days After Start</label>
-                    <div id="mount-early-days-stepper"></div>
-                  </div>
-                `}
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Bonus Ends Time</label>
+                  <input id="adm-early-time" type="time" class="ios-input" value="${earlyBonusTimeStr}" />
+                </div>
               </div>
-
-              <div>
-                <label class="block text-[11px] text-neutral-300 mb-1">Bonus Window Ends Time</label>
-                <div id="field-adm-early-time"></div>
-              </div>
-
-              <div id="adm-early-words" class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-400 font-medium"></div>
+              <div id="adm-early-words" class="hidden"></div>
             </div>
           </div>
 
           <!-- Tier 2: Grace Period Card (NO grace points) -->
-          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+          <div class="ios-card space-y-3" style="margin-bottom:0">
             <div class="flex items-center justify-between">
               <div>
                 <span class="text-xs font-bold text-white">Grace Period</span>
-                <p class="text-[11px] text-neutral-400">Allow standard submissions past deadline (marked in grace)</p>
+                <p class="text-[11px] text-neutral-400">Allow standard submissions past deadline</p>
               </div>
               <div id="mount-switch-grace"></div>
             </div>
-
             <div id="adm-grace-container" class="${graceEnabled ? '' : 'hidden'} space-y-2.5 pt-2 border-t border-white/10">
-              ${schedType === 'once' ? `
-                <div class="grid grid-cols-2 gap-2">
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Date</label>
-                    <div id="field-adm-grace-date"></div>
-                  </div>
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Time</label>
-                    <div id="field-adm-grace-time"></div>
-                  </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Date</label>
+                  <input id="adm-grace-date" type="date" class="ios-input" value="${graceDateStr}" />
                 </div>
-              ` : `
-                <div class="grid grid-cols-2 gap-2">
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Time</label>
-                    <div id="field-adm-grace-time"></div>
-                  </div>
-                  <div>
-                    <label class="block text-[11px] text-neutral-300 mb-1">Days After Start</label>
-                    <div id="mount-grace-days-stepper"></div>
-                  </div>
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Time</label>
+                  <input id="adm-grace-time" type="time" class="ios-input" value="${graceTimeStr}" />
                 </div>
-              `}
-
-              <div id="adm-grace-words" class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-400 font-medium"></div>
+              </div>
+              <div id="adm-grace-words" class="hidden"></div>
             </div>
           </div>
 
           <!-- Tier 3: Missed-Deadline Penalty Card -->
-          <div class="p-3.5 rounded-2xl bg-black/20 border border-white/10 space-y-3">
+          <div class="ios-card space-y-3" style="margin-bottom:0">
             <div class="flex items-center justify-between">
               <div>
                 <span class="text-xs font-bold text-white">Missed-Deadline Penalty</span>
@@ -9762,10 +9642,9 @@ function openAdminTaskModal(taskId = null) {
               </div>
               <div id="mount-switch-missed"></div>
             </div>
-
             <div id="adm-missed-container" class="${missedPenaltyEnabled ? '' : 'hidden'} pt-2 border-t border-white/10">
               <label class="block text-[11px] text-neutral-300 mb-1">Penalty Points</label>
-              <input id="adm-task-missed-pts" type="number" min="1" class="w-full glass-input text-xs font-mono text-rose-400 font-bold" value="${missedPenaltyPoints}" placeholder="5" />
+              <input id="adm-task-missed-pts" type="number" inputmode="numeric" min="1" class="ios-input font-mono" value="${missedPenaltyPoints}" placeholder="5" />
             </div>
           </div>
         </div>
@@ -9824,7 +9703,20 @@ function openAdminTaskModal(taskId = null) {
       };
     }
 
-    // Points Claim Policy Segmented control
+    // Claim policy: milestones never repeat, so the recurrence card is hidden for them
+    function applyClaimPolicyVisibility() {
+      const card = bodyEl.querySelector('#adm-recurrence-card');
+      if (card) card.classList.toggle('hidden', currentClaimPolicy === 'milestone');
+      const hint = bodyEl.querySelector('#adm-claim-hint');
+      if (hint) {
+        hint.textContent = currentClaimPolicy === 'milestone'
+          ? 'Awarded once per member, ever. This task does not repeat.'
+          : currentClaimPolicy === 'every_submission'
+            ? 'Points are awarded on every submission.'
+            : 'Points are awarded once per cycle. Set the recurrence below.';
+      }
+    }
+
     const mountClaimPolicy = bodyEl.querySelector('#mount-task-claim-policy');
     if (mountClaimPolicy) {
       mountClaimPolicy.appendChild(renderSegmented({
@@ -9835,11 +9727,15 @@ function openAdminTaskModal(taskId = null) {
           { value: 'milestone', label: 'One-time milestone' }
         ],
         value: currentClaimPolicy,
-        onChange: (val) => { currentClaimPolicy = val; }
+        onChange: (val) => {
+          currentClaimPolicy = val;
+          applyClaimPolicyVisibility();
+        }
       }));
     }
+    applyClaimPolicyVisibility();
 
-    // Schedule Type Segmented control
+    // Schedule Type Segmented control (updates only the sub-form, never the whole modal)
     const mountTaskSchedType = bodyEl.querySelector('#adm-task-sched-type-wrap');
     if (mountTaskSchedType) {
       mountTaskSchedType.innerHTML = '';
@@ -9854,17 +9750,9 @@ function openAdminTaskModal(taskId = null) {
         value: schedType,
         onChange: (val) => {
           schedType = val;
-          renderContent();
+          renderSchedSubform();
         }
       }));
-    }
-
-    const schedTypeSelect = bodyEl.querySelector('#adm-task-sched-type');
-    if (schedTypeSelect) {
-      schedTypeSelect.onchange = e => {
-        schedType = e.target.value;
-        renderContent();
-      };
     }
 
     // Mount Permanent Switch
@@ -9925,72 +9813,24 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Deadline Days Stepper (for recurring)
-    const mountDlStepper = bodyEl.querySelector('#mount-dl-days-stepper');
-    if (mountDlStepper) {
-      mountDlStepper.appendChild(renderStepper({
-        value: deadlineDaysAfter,
-        min: 0,
-        max: 30,
-        unit: 'd',
-        onChange: (val) => {
-          deadlineDaysAfter = val;
-          updateAllWords();
-        }
-      }));
-    }
+    // Native date / time inputs
+    const bindField = (sel, setter) => {
+      const el = bodyEl.querySelector(sel);
+      if (el) {
+        const handler = e => { if (e.target.value) setter(e.target.value); updateAllWords(); };
+        el.onchange = handler;
+        el.oninput = handler;
+      }
+    };
+    bindField('#adm-dl-date', v => { deadlineDateStr = v; });
+    bindField('#adm-dl-time', v => { deadlineTimeStr = v; });
+    bindField('#adm-early-date', v => { earlyBonusDateStr = v; });
+    bindField('#adm-early-time', v => { earlyBonusTimeStr = v; });
+    bindField('#adm-grace-date', v => { graceDateStr = v; });
+    bindField('#adm-grace-time', v => { graceTimeStr = v; });
 
-    // Mount Early Days Stepper
-    const mountEarlyStepper = bodyEl.querySelector('#mount-early-days-stepper');
-    if (mountEarlyStepper) {
-      mountEarlyStepper.appendChild(renderStepper({
-        value: earlyBonusDaysAfter,
-        min: 0,
-        max: 30,
-        unit: 'd',
-        onChange: (val) => {
-          earlyBonusDaysAfter = val;
-          updateAllWords();
-        }
-      }));
-    }
-
-    // Mount Grace Days Stepper
-    const mountGraceStepper = bodyEl.querySelector('#mount-grace-days-stepper');
-    if (mountGraceStepper) {
-      mountGraceStepper.appendChild(renderStepper({
-        value: graceDaysAfter,
-        min: 0,
-        max: 30,
-        unit: 'd',
-        onChange: (val) => {
-          graceDaysAfter = val;
-          updateAllWords();
-        }
-      }));
-    }
-
-    // Wire deadline inputs
-    const dlDateInp = bodyEl.querySelector('#adm-dl-date');
-    if (dlDateInp) dlDateInp.onchange = e => { deadlineDateStr = e.target.value; updateAllWords(); };
-    const dlTimeInp = bodyEl.querySelector('#adm-dl-time');
-    if (dlTimeInp) dlTimeInp.onchange = e => { deadlineTimeStr = e.target.value; updateAllWords(); };
-
-    // Wire early inputs
     const earlyPtsInp = bodyEl.querySelector('#adm-early-pts');
-    if (earlyPtsInp) earlyPtsInp.oninput = e => { earlyBonusPoints = Number(e.target.value) || 15; updateAllWords(); };
-    const earlyDateInp = bodyEl.querySelector('#adm-early-date');
-    if (earlyDateInp) earlyDateInp.onchange = e => { earlyBonusDateStr = e.target.value; updateAllWords(); };
-    const earlyTimeInp = bodyEl.querySelector('#adm-early-time');
-    if (earlyTimeInp) earlyTimeInp.onchange = e => { earlyBonusTimeStr = e.target.value; updateAllWords(); };
-
-    // Wire grace inputs
-    const graceDateInp = bodyEl.querySelector('#adm-grace-date');
-    if (graceDateInp) graceDateInp.onchange = e => { graceDateStr = e.target.value; updateAllWords(); };
-    const graceTimeInp = bodyEl.querySelector('#adm-grace-time');
-    if (graceTimeInp) graceTimeInp.onchange = e => { graceTimeStr = e.target.value; updateAllWords(); };
-
-    // Wire missed inputs
+    if (earlyPtsInp) earlyPtsInp.oninput = e => { earlyBonusPoints = Number(e.target.value) || 15; };
     const missedPtsInp = bodyEl.querySelector('#adm-task-missed-pts');
     if (missedPtsInp) missedPtsInp.oninput = e => { missedPenaltyPoints = Number(e.target.value) || 5; };
 
@@ -10017,177 +9857,112 @@ function openAdminTaskModal(taskId = null) {
     }
   }
 
+  const HINT_CLASS = 'p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-400 font-medium';
+  function setHint(el, msg) {
+    if (!el) return;
+    el.textContent = msg || '';
+    el.className = msg ? HINT_CLASS : 'hidden';
+  }
+
+  // Inline validation hints only (no developer-facing text)
   function updateAllWords() {
-    const dlWords = bodyEl.querySelector('#adm-deadline-words');
-    const earlyWords = bodyEl.querySelector('#adm-early-words');
-    const graceWords = bodyEl.querySelector('#adm-grace-words');
+    const startMs = dtToMs(selectedDateStr, selectedTimeStr);
+    const dlMs = dtToMs(deadlineDateStr, deadlineTimeStr);
+    const ebMs = dtToMs(earlyBonusDateStr, earlyBonusTimeStr);
+    const grMs = dtToMs(graceDateStr, graceTimeStr);
+    const ok = n => Number.isFinite(n);
 
-    const [sh, sm] = selectedTimeStr.split(':').map(Number);
-    const startMin = (sh || 0) * 60 + (sm || 0);
-
-    // 1. Deadline words
-    if (dlWords) {
-      if (schedType === 'once') {
-        const [sy, smo, sd] = selectedDateStr.split('-').map(Number);
-        const [dy, dmo, dd] = deadlineDateStr.split('-').map(Number);
-        const [dh, dm] = deadlineTimeStr.split(':').map(Number);
-        const startMs = zonedDateToMs(sy, smo, sd, sh, sm, 0, APP_TIMEZONE);
-        const dlMs = zonedDateToMs(dy, dmo, dd, dh, dm, 0, APP_TIMEZONE);
-        const diffMins = Math.round((dlMs - startMs) / 60000);
-        if (diffMins > 0) {
-          dlWords.textContent = `Closes ${Math.floor(diffMins / 1440)}d ${Math.floor((diffMins % 1440) / 60)}h after start, at ${formatTimeDisplayWords(dh, dm)} (${deadlineDateStr})`;
-          dlWords.className = 'p-2 rounded-xl bg-white/5 border border-white/10 text-[11px] text-[#0A84FF] font-medium';
-        } else {
-          dlWords.textContent = '⚠ Deadline must be strictly after the start date & time';
-          dlWords.className = 'p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-400 font-medium';
-        }
-      } else {
-        const [dh, dm] = deadlineTimeStr.split(':').map(Number);
-        const dlMin = (dh || 0) * 60 + (dm || 0);
-        const dur = offsetFromPickers(deadlineDaysAfter, startMin, dlMin);
-        if (dur > 0) {
-          dlWords.textContent = `Closes ${deadlineDaysAfter === 0 ? 'same day' : `${deadlineDaysAfter} day${deadlineDaysAfter > 1 ? 's' : ''} after start`}, at ${formatTimeDisplayWords(dh, dm)} (${dur} mins duration)`;
-          dlWords.className = 'p-2 rounded-xl bg-white/5 border border-white/10 text-[11px] text-[#0A84FF] font-medium';
-        } else {
-          dlWords.textContent = '⚠ Deadline time must be strictly after the start time';
-          dlWords.className = 'p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-400 font-medium';
-        }
-      }
-    }
-
-    // 2. Early words
-    if (earlyWords && earlyBonusEnabled) {
-      const [eh, em] = earlyBonusTimeStr.split(':').map(Number);
-      if (schedType === 'once') {
-        earlyWords.textContent = `Early bonus window (+${earlyBonusPoints} pts) ends ${earlyBonusDateStr} at ${formatTimeDisplayWords(eh, em)}`;
-      } else {
-        earlyWords.textContent = `Early bonus window (+${earlyBonusPoints} pts) ends ${earlyBonusDaysAfter === 0 ? 'same day' : `${earlyBonusDaysAfter}d after start`} at ${formatTimeDisplayWords(eh, em)}`;
-      }
-    }
-
-    // 3. Grace words
-    if (graceWords && graceEnabled) {
-      const [gh, gm] = graceTimeStr.split(':').map(Number);
-      if (schedType === 'once') {
-        graceWords.textContent = `Grace period cutoff is ${graceDateStr} at ${formatTimeDisplayWords(gh, gm)} (standard points)`;
-      } else {
-        graceWords.textContent = `Grace period cutoff is ${graceDaysAfter === 0 ? 'same day' : `${graceDaysAfter}d after start`} at ${formatTimeDisplayWords(gh, gm)} (standard points, stored with inGrace: true)`;
-      }
-    }
+    setHint(bodyEl.querySelector('#adm-deadline-words'),
+      ok(startMs) && ok(dlMs) && dlMs <= startMs ? '⚠ The deadline must be after the start date and time.' : '');
+    setHint(bodyEl.querySelector('#adm-early-words'),
+      earlyBonusEnabled && ok(ebMs) && ok(startMs) && ok(dlMs) && (ebMs <= startMs || ebMs >= dlMs)
+        ? '⚠ The bonus window must end after the start and before the deadline.' : '');
+    setHint(bodyEl.querySelector('#adm-grace-words'),
+      graceEnabled && ok(grMs) && ok(dlMs) && grMs <= dlMs
+        ? '⚠ The grace cutoff must be after the deadline.' : '');
   }
 
   function renderSchedSubform() {
     const subContainer = bodyEl.querySelector('#adm-sched-subform');
     if (!subContainer) return;
 
-    function wireTaskSchedDateTimeFields() {
-      const dBox = subContainer.querySelector('#field-sched-inp-date');
-      const tBox = subContainer.querySelector('#field-sched-inp-time');
-      if (dBox) {
-        dBox.replaceWith(renderDateTimeField({
-          label: 'Start Date',
-          valueMs: parseDateTimeToMs(selectedDateStr, APP_TIMEZONE) || Date.now(),
-          mode: 'date',
-          onChange: (ms) => {
-            selectedDateStr = formatZonedDateKey(ms, APP_TIMEZONE);
-            updateAllWords();
-          }
-        }));
-      }
-      if (tBox) {
-        const [th, tm] = selectedTimeStr.split(':').map(Number);
-        tBox.replaceWith(renderDateTimeField({
-          label: 'Start Time',
-          valueMs: (th || 0) * 60 + (tm || 0),
-          mode: 'time',
-          onChange: (mins) => {
-            const h = Math.floor(mins / 60) % 24;
-            const m = mins % 60;
-            selectedTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-            updateAllWords();
-          }
-        }));
-      }
-      const schedDateInp = subContainer.querySelector('#sched-inp-date');
-      if (schedDateInp) schedDateInp.onchange = e => { selectedDateStr = e.target.value; updateAllWords(); };
-      const schedTimeInp = subContainer.querySelector('#sched-inp-time');
-      if (schedTimeInp) schedTimeInp.onchange = e => { selectedTimeStr = e.target.value; updateAllWords(); };
+    const startFields = (timeLabel) => `
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
+          <input id="sched-inp-date" type="date" class="ios-input" value="${selectedDateStr}" />
+        </div>
+        <div>
+          <label class="block text-[11px] text-neutral-400 mb-1">${timeLabel}</label>
+          <input id="sched-inp-time" type="time" class="ios-input" value="${selectedTimeStr}" />
+        </div>
+      </div>`;
+
+    function wireStartFields() {
+      const d = subContainer.querySelector('#sched-inp-date');
+      const t = subContainer.querySelector('#sched-inp-time');
+      if (d) { d.onchange = e => { if (e.target.value) selectedDateStr = e.target.value; updateAllWords(); }; }
+      if (t) { t.onchange = e => { if (e.target.value) selectedTimeStr = e.target.value; updateAllWords(); }; }
     }
 
+    const chipOn = 'bg-[#0A84FF] border-[#0A84FF] text-white';
+    const chipOff = 'bg-white/5 border-white/10 text-neutral-400';
+
     if (schedType === 'once') {
-      subContainer.innerHTML = `
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-sched-inp-date"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Time (${APP_TIMEZONE})</label>
-            <div id="field-sched-inp-time"></div>
-          </div>
-        </div>
-      `;
-      wireTaskSchedDateTimeFields();
+      subContainer.innerHTML = startFields('Start Time');
+      wireStartFields();
     } else if (schedType === 'daily') {
-      subContainer.innerHTML = `
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-sched-inp-date"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Daily Time (${APP_TIMEZONE})</label>
-            <div id="field-sched-inp-time"></div>
-          </div>
-        </div>
-      `;
-      wireTaskSchedDateTimeFields();
+      subContainer.innerHTML = startFields('Daily Time');
+      wireStartFields();
     } else if (schedType === 'weekly') {
       subContainer.innerHTML = `
         <div>
           <label class="block text-[11px] text-neutral-400 mb-1.5">Select Weekdays</label>
           <div class="flex flex-wrap gap-1.5" id="weekly-days-picker">
             ${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(day => `
-              <button type="button" class="btn-day-chip px-2.5 py-1 rounded-lg border text-xs font-semibold transition ${weeklyDays.has(day) ? 'bg-[#0A84FF] border-[#0A84FF] text-white' : 'bg-white/5 border-white/10 text-neutral-400'}" data-day="${day}">
-                ${day}
-              </button>
+              <button type="button" class="btn-day-chip px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition ${weeklyDays.has(day) ? chipOn : chipOff}" data-day="${day}">${day}</button>
             `).join('')}
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-2 pt-1">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-sched-inp-date"></div>
-          </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Event Time (${APP_TIMEZONE})</label>
-            <div id="field-sched-inp-time"></div>
-          </div>
-        </div>
-      `;
+        ${startFields('Event Time')}`;
       subContainer.querySelectorAll('.btn-day-chip').forEach(btn => {
         btn.onclick = () => {
           const d = btn.dataset.day;
-          if (weeklyDays.has(d)) weeklyDays.delete(d);
-          else weeklyDays.add(d);
-          renderSchedSubform();
+          if (weeklyDays.has(d)) weeklyDays.delete(d); else weeklyDays.add(d);
+          btn.className = `btn-day-chip px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition ${weeklyDays.has(d) ? chipOn : chipOff}`;
         };
       });
-      wireTaskSchedDateTimeFields();
+      wireStartFields();
     } else {
+      // Monthly: day-of-month grid (1-31) + Last Day of Month
+      const dayCls = (on) => `btn-mday h-9 rounded-lg text-xs font-semibold font-mono transition ${on ? 'bg-[#0A84FF] text-white' : 'bg-white/[0.08] text-neutral-300'}`;
+      const lastCls = (on) => `w-full h-10 rounded-lg text-xs font-semibold transition ${on ? 'bg-[#0A84FF] text-white' : 'bg-white/[0.08] text-neutral-300'}`;
       subContainer.innerHTML = `
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-            <div id="field-sched-inp-date"></div>
+        <div>
+          <label class="block text-[11px] text-neutral-400 mb-1.5">Day of Month</label>
+          <div id="monthly-day-grid" class="grid grid-cols-7 gap-1.5">
+            ${Array.from({ length: 31 }, (_, i) => i + 1).map(day => `
+              <button type="button" class="${dayCls(monthlyDates.has(day))}" data-day="${day}">${day}</button>
+            `).join('')}
           </div>
-          <div>
-            <label class="block text-[11px] text-neutral-400 mb-1">Event Time (${APP_TIMEZONE})</label>
-            <div id="field-sched-inp-time"></div>
-          </div>
+          <button type="button" id="btn-mday-last" class="${lastCls(monthlyLastDay)} mt-2">Last Day of Month</button>
         </div>
-      `;
-      wireTaskSchedDateTimeFields();
+        ${startFields('Event Time')}`;
+      subContainer.querySelectorAll('.btn-mday').forEach(btn => {
+        btn.onclick = () => {
+          const d = Number(btn.dataset.day);
+          if (monthlyDates.has(d)) monthlyDates.delete(d); else monthlyDates.add(d);
+          btn.className = dayCls(monthlyDates.has(d));
+        };
+      });
+      const lastBtn = subContainer.querySelector('#btn-mday-last');
+      if (lastBtn) {
+        lastBtn.onclick = () => {
+          monthlyLastDay = !monthlyLastDay;
+          lastBtn.className = `${lastCls(monthlyLastDay)} mt-2`;
+        };
+      }
+      wireStartFields();
     }
   }
 
@@ -10259,13 +10034,10 @@ function openAdminTaskModal(taskId = null) {
       headerRow.appendChild(delBtn);
       qCard.appendChild(headerRow);
 
-      // Card Controls: Type Segmented Control + Required iOS Switch
-      const controlsRow = document.createElement('div');
-      controlsRow.className = 'flex items-center justify-between gap-3 pt-1 border-t border-white/5';
-
-      const segMount = document.createElement('div');
-      segMount.className = 'flex-1';
-      const seg = renderSegmented({
+      // Row 2: Type selector (full width)
+      const typeRow = document.createElement('div');
+      typeRow.className = 'pt-1 border-t border-white/5';
+      typeRow.appendChild(renderSegmented({
         options: [
           { value: 'short', label: 'Short Text' },
           { value: 'long', label: 'Paragraph' },
@@ -10282,21 +10054,20 @@ function openAdminTaskModal(taskId = null) {
           }
           renderQuestionsList();
         }
-      });
-      segMount.appendChild(seg);
+      }));
+      qCard.appendChild(typeRow);
 
-      const reqBox = document.createElement('div');
-      reqBox.className = 'flex items-center gap-2 shrink-0';
-      reqBox.innerHTML = '<span class="text-[11px] text-neutral-300 font-medium">Required</span>';
-      reqBox.appendChild(renderSwitch({
+      // Row 3: Required label (left) + iOS switch (right), never clipped
+      const reqRow = document.createElement('div');
+      reqRow.className = 'flex items-center';
+      reqRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+      reqRow.innerHTML = '<span class="text-[12px] text-neutral-200 font-medium">Required</span>';
+      reqRow.appendChild(renderSwitch({
         id: `q-req-sw-${q.id}`,
         checked: Boolean(q.isRequired),
         onChange: (chk) => { q.isRequired = chk; }
       }));
-
-      controlsRow.appendChild(segMount);
-      controlsRow.appendChild(reqBox);
-      qCard.appendChild(controlsRow);
+      qCard.appendChild(reqRow);
 
       // MCQ Options Builder (if type === 'mcq')
       if (q.type === 'mcq') {
@@ -10391,51 +10162,29 @@ function openAdminTaskModal(taskId = null) {
         APP_TIMEZONE
       );
 
-      const startMinuteOfDay = (parseInt(hourStr, 10) || 0) * 60 + (parseInt(minStr, 10) || 0);
+      // Milestones never repeat: force a one-time schedule
+      const effectiveSchedType = currentClaimPolicy === 'milestone' ? 'once' : schedType;
 
-      // Validate & compute durationMinutes
+      // Validate & compute durationMinutes (deadline date/time relative to start)
       let finalDurationMinutes = null;
       if (!currentIsPermanent) {
-        if (schedType === 'once') {
-          const [dy, dmo, dd] = deadlineDateStr.split('-').map(Number);
-          const [dh, dm] = deadlineTimeStr.split(':').map(Number);
-          const deadlineMs = zonedDateToMs(dy, dmo, dd, dh, dm, 0, APP_TIMEZONE);
-          finalDurationMinutes = Math.round((deadlineMs - startDateTimeMs) / 60000);
-          if (finalDurationMinutes <= 0) {
-            toast('Deadline date & time must be strictly after the start time', 'error');
-            return false;
-          }
-        } else {
-          const [dh, dm] = deadlineTimeStr.split(':').map(Number);
-          const dlMinute = (dh || 0) * 60 + (dm || 0);
-          finalDurationMinutes = offsetFromPickers(deadlineDaysAfter, startMinuteOfDay, dlMinute);
-          if (finalDurationMinutes <= 0) {
-            toast('Deadline time must be strictly after the start time', 'error');
-            return false;
-          }
+        const deadlineMs = dtToMs(deadlineDateStr, deadlineTimeStr);
+        finalDurationMinutes = Math.round((deadlineMs - startDateTimeMs) / 60000);
+        if (!Number.isFinite(finalDurationMinutes) || finalDurationMinutes <= 0) {
+          toast('The deadline must be after the start date and time', 'error');
+          return false;
         }
       }
 
       // Early Bonus validation
       let finalEarlyBonus = { enabled: false, untilMinutes: 0, points: Number(currentPoints) || 5 };
       if (!currentIsPermanent && earlyBonusEnabled) {
-        let ebUntilMinutes = 0;
-        if (schedType === 'once') {
-          const [ey, emo, ed] = earlyBonusDateStr.split('-').map(Number);
-          const [eh, em] = earlyBonusTimeStr.split(':').map(Number);
-          const ebMs = zonedDateToMs(ey, emo, ed, eh, em, 0, APP_TIMEZONE);
-          ebUntilMinutes = Math.round((ebMs - startDateTimeMs) / 60000);
-        } else {
-          const [eh, em] = earlyBonusTimeStr.split(':').map(Number);
-          const ebMin = (eh || 0) * 60 + (em || 0);
-          ebUntilMinutes = offsetFromPickers(earlyBonusDaysAfter, startMinuteOfDay, ebMin);
-        }
-
-        if (ebUntilMinutes <= 0 || (finalDurationMinutes && ebUntilMinutes >= finalDurationMinutes)) {
-          toast('Early bonus window must end after start and strictly before the deadline', 'error');
+        const ebMs = dtToMs(earlyBonusDateStr, earlyBonusTimeStr);
+        const ebUntilMinutes = Math.round((ebMs - startDateTimeMs) / 60000);
+        if (!Number.isFinite(ebUntilMinutes) || ebUntilMinutes <= 0 || (finalDurationMinutes && ebUntilMinutes >= finalDurationMinutes)) {
+          toast('The bonus window must end after the start and before the deadline', 'error');
           return false;
         }
-
         finalEarlyBonus = {
           enabled: true,
           untilMinutes: ebUntilMinutes,
@@ -10446,27 +10195,13 @@ function openAdminTaskModal(taskId = null) {
       // Grace Period validation (NO grace points)
       let finalGrace = { enabled: false, untilMinutes: 0 };
       if (!currentIsPermanent && graceEnabled) {
-        let grUntilMinutes = 0;
-        if (schedType === 'once') {
-          const [gy, gmo, gd] = graceDateStr.split('-').map(Number);
-          const [gh, gm] = graceTimeStr.split(':').map(Number);
-          const grMs = zonedDateToMs(gy, gmo, gd, gh, gm, 0, APP_TIMEZONE);
-          grUntilMinutes = Math.round((grMs - startDateTimeMs) / 60000);
-        } else {
-          const [gh, gm] = graceTimeStr.split(':').map(Number);
-          const grMin = (gh || 0) * 60 + (gm || 0);
-          grUntilMinutes = offsetFromPickers(graceDaysAfter, startMinuteOfDay, grMin);
-        }
-
-        if (finalDurationMinutes && grUntilMinutes <= finalDurationMinutes) {
-          toast('Grace period cutoff must be strictly after the deadline', 'error');
+        const grMs = dtToMs(graceDateStr, graceTimeStr);
+        const grUntilMinutes = Math.round((grMs - startDateTimeMs) / 60000);
+        if (!Number.isFinite(grUntilMinutes) || (finalDurationMinutes && grUntilMinutes <= finalDurationMinutes)) {
+          toast('The grace cutoff must be after the deadline', 'error');
           return false;
         }
-
-        finalGrace = {
-          enabled: true,
-          untilMinutes: grUntilMinutes
-        };
+        finalGrace = { enabled: true, untilMinutes: grUntilMinutes };
       }
 
       // Missed Penalty
@@ -10479,16 +10214,24 @@ function openAdminTaskModal(taskId = null) {
       }
 
       let finalSchedule = {
-        type: schedType,
+        type: effectiveSchedType,
         startDateTime: startDateTimeMs
       };
-      if (schedType === 'weekly') {
+      if (effectiveSchedType === 'weekly') {
+        if (weeklyDays.size === 0) {
+          toast('Select at least one weekday', 'error');
+          return false;
+        }
         finalSchedule.days = Array.from(weeklyDays);
-      } else if (schedType === 'monthlyDates') {
-        finalSchedule.dates = Array.from(monthlyDates).sort((a, b) => a - b);
-      } else if (schedType === 'monthlyWeekdays') {
-        finalSchedule.weeks = Array.from(monthlyWeeks);
-        finalSchedule.weekdays = Array.from(monthlyWeekdays);
+      } else if (effectiveSchedType === 'monthlyDates') {
+        const dates = new Set(monthlyDates);
+        if (monthlyLastDay) dates.add(31);
+        if (dates.size === 0) {
+          toast('Select at least one day of the month', 'error');
+          return false;
+        }
+        finalSchedule.dates = Array.from(dates).sort((a, b) => a - b);
+        if (monthlyLastDay) finalSchedule.lastDay = true;
       }
 
       const validQuestions = currentQuestions
@@ -12725,152 +12468,136 @@ export function openRequestWaiverModal() {
   });
 }
 
+function updateWaiversBadge(count) {
+  const n = typeof count === 'number' ? count : (state.waiverRequests || []).filter(w => w.status === 'pending').length;
+  const dockBadge = document.getElementById('admin-waivers-dock-badge');
+  if (dockBadge) {
+    dockBadge.textContent = n > 99 ? '99+' : String(n);
+    dockBadge.classList.toggle('hidden', n === 0);
+  }
+}
+
+function formatWaiverTargetDate(w) {
+  const ms = w.occurrenceStart ? parseDateTimeToMs(w.occurrenceStart) : NaN;
+  if (Number.isFinite(ms)) {
+    return new Date(ms).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: APP_TIMEZONE });
+  }
+  return w.occurrenceKey || '';
+}
+
 function renderAdminWaivers() {
   const container = document.getElementById('admin-waivers-list');
   const countEl = document.getElementById('admin-waiver-count');
+  const labelEl = document.getElementById('admin-waivers-filter-label');
+  const segMount = document.getElementById('admin-waivers-segmented-mount');
   if (!container) return;
 
-  const waivers = state.waiverRequests || [];
-  if (countEl) countEl.textContent = `${waivers.length} requests`;
+  const filter = state.adminWaiverFilter || 'pending';
+  const all = state.waiverRequests || [];
+  updateWaiversBadge(all.filter(w => w.status === 'pending').length);
+
+  // Segmented control: mounted once, then only its value is synced
+  if (segMount && !segMount.firstChild) {
+    segMount.appendChild(renderSegmented({
+      id: 'admin-waivers-segmented',
+      options: [
+        { value: 'pending', label: 'Pending' },
+        { value: 'approved', label: 'Approved' },
+        { value: 'rejected', label: 'Rejected' }
+      ],
+      value: filter,
+      onChange: (val) => {
+        state.adminWaiverFilter = val;
+        renderAdminWaivers();
+      }
+    }));
+  }
+
+  const waivers = all.filter(w => w.status === filter);
+  if (countEl) countEl.textContent = `${waivers.length} request${waivers.length === 1 ? '' : 's'}`;
+  if (labelEl) labelEl.textContent = filter.charAt(0).toUpperCase() + filter.slice(1);
 
   if (waivers.length === 0) {
     container.innerHTML = `
-      <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
-        No waiver or excuse requests on record.
-      </div>
-    `;
+      <div class="ios-card text-center text-xs text-neutral-400 py-6">
+        ${filter === 'pending' ? 'No pending excuse requests. You are all caught up.' : `No ${filter} excuse requests.`}
+      </div>`;
     return;
   }
 
-  const pending = waivers.filter(w => w.status === 'pending');
-  const resolved = waivers.filter(w => w.status !== 'pending');
-
-  container.innerHTML = `
-    <!-- Pending Requests -->
-    <div class="space-y-2">
-      <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-        <span>Pending Requests (${pending.length})</span>
-        <span class="text-[10px] text-amber-400 font-normal">Requires action</span>
-      </div>
-      ${pending.length === 0 ? `
-        <div class="p-3 rounded-xl bg-white/5 text-center text-xs text-neutral-400">
-          All excuse requests have been resolved!
-        </div>
-      ` : pending.map(w => {
-        const prof = getUserProfile(w.uid, w.userName, w.userAvatar);
-        const occDate = w.occurrenceStart ? formatDateTime(w.occurrenceStart) : w.occurrenceKey;
-        return `
-          <div class="p-3.5 rounded-xl bg-white/5 border border-white/10 space-y-2.5 text-xs" data-waiver-id="${esc(w.id)}">
-            <div class="flex items-start justify-between gap-2">
-              <div class="flex items-center gap-2.5 min-w-0 flex-1">
-                ${renderAvatar(prof, 'w-8 h-8')}
-                <div class="min-w-0 flex-1">
-                  <div class="font-bold text-white truncate">${esc(prof.displayName)}</div>
-                  <div class="text-[11px] text-[#0A84FF] truncate font-medium">${esc(w.sessionTitle)}</div>
-                  <div class="text-[10px] text-neutral-400 font-mono">${esc(occDate)}</div>
-                </div>
-              </div>
-              <span class="waiver-status-pending px-2 py-0.5 rounded-full text-[10px] font-bold font-mono shrink-0">
-                Pending
-              </span>
-            </div>
-
-            <div class="p-2.5 rounded-lg bg-black/30 border border-white/5 text-neutral-200 text-xs">
-              <span class="text-[10px] text-neutral-400 uppercase font-semibold block mb-0.5">Stated Reason:</span>
-              "${esc(w.reason)}"
-            </div>
-
-            <!-- Quick Pill Chips for Resolution Note -->
-            <div>
-              <span class="text-[10px] text-neutral-400 block mb-1">Quick Note Presets:</span>
-              <div class="flex flex-wrap gap-1">
-                <button type="button" class="btn-waiver-preset px-2 py-0.5 rounded bg-white/10 hover:bg-white/15 text-[10px] text-neutral-300" data-note="Approved — Church service">Church service</button>
-                <button type="button" class="btn-waiver-preset px-2 py-0.5 rounded bg-white/10 hover:bg-white/15 text-[10px] text-neutral-300" data-note="Approved — Exams/Study">Exams / Study</button>
-                <button type="button" class="btn-waiver-preset px-2 py-0.5 rounded bg-white/10 hover:bg-white/15 text-[10px] text-neutral-300" data-note="Approved — Illness/Health">Health / Family</button>
-                <button type="button" class="btn-waiver-preset px-2 py-0.5 rounded bg-white/10 hover:bg-white/15 text-[10px] text-neutral-300" data-note="Rejected — Insufficient notice">Insufficient notice</button>
-                <button type="button" class="btn-waiver-preset px-2 py-0.5 rounded bg-white/10 hover:bg-white/15 text-[10px] text-neutral-300" data-note="Rejected — Unjustified">Unjustified</button>
-              </div>
-            </div>
-
-            <div>
-              <input type="text" class="input-waiver-note w-full ios-input text-xs text-white" placeholder="Optional resolution note for member..." />
-            </div>
-
-            <div class="flex items-center justify-end gap-2 pt-1 border-t border-white/5">
-              <button type="button" class="btn-reject-waiver px-3 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 border border-rose-500/30 font-semibold text-xs transition" data-id="${esc(w.id)}">
-                Reject Excuse
-              </button>
-              <button type="button" class="btn-approve-waiver px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm transition" data-id="${esc(w.id)}">
-                Approve Excuse
-              </button>
+  container.innerHTML = waivers.map(w => {
+    const prof = getUserProfile(w.uid, w.userName, w.userAvatar);
+    const isPending = w.status === 'pending';
+    const statusCls = w.status === 'approved' ? 'waiver-status-approved' : w.status === 'rejected' ? 'waiver-status-rejected' : 'waiver-status-pending';
+    return `
+      <div class="ios-card space-y-3 text-xs" style="margin-bottom:0" data-waiver-id="${esc(w.id)}">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            ${renderAvatar(prof, 'w-9 h-9')}
+            <div class="min-w-0">
+              <div class="font-bold text-white text-sm truncate">${esc(prof.displayName || w.userName)}</div>
+              <div class="text-[11px] text-[#0A84FF] truncate font-medium">${esc(w.sessionTitle)}</div>
             </div>
           </div>
-        `;
-      }).join('')}
-    </div>
-
-    <!-- Resolved Requests History -->
-    ${resolved.length > 0 ? `
-      <div class="space-y-2 pt-3">
-        <div class="text-xs font-bold text-neutral-400 uppercase tracking-wider flex items-center justify-between">
-          <span>Resolved History (${resolved.length})</span>
+          <span class="${statusCls} px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0">${esc(w.status.charAt(0).toUpperCase() + w.status.slice(1))}</span>
         </div>
-        <div class="space-y-1.5 max-h-64 overflow-y-auto pr-1">
-          ${resolved.map(w => {
-            const isApp = w.status === 'approved';
-            return `
-              <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-between text-xs">
-                <div class="min-w-0 flex-1 mr-2">
-                  <div class="flex items-center gap-2">
-                    <span class="font-bold text-white truncate">${esc(w.userName)}</span>
-                    <span class="text-neutral-400 text-[11px] truncate">• ${esc(w.sessionTitle)}</span>
-                  </div>
-                  <p class="text-neutral-400 text-[10px] truncate mt-0.5">"${esc(w.reason)}"${w.adminNote ? ` — Note: ${esc(w.adminNote)}` : ''}</p>
-                </div>
-                <span class="${isApp ? 'waiver-status-approved' : 'waiver-status-rejected'} px-2 py-0.5 rounded-full text-[10px] font-bold font-mono shrink-0">
-                  ${isApp ? 'Approved' : 'Rejected'}
-                </span>
-              </div>
-            `;
-          }).join('')}
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <div class="text-[10px] uppercase font-semibold text-neutral-500">Target Date</div>
+            <div class="text-neutral-200">${esc(formatWaiverTargetDate(w))}</div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase font-semibold text-neutral-500">Category</div>
+            <div class="text-neutral-200">${esc(w.category || 'Other')}</div>
+          </div>
         </div>
-      </div>
-    ` : ''}
-  `;
 
-  // Wire quick note presets
-  container.querySelectorAll('.btn-waiver-preset').forEach(btn => {
-    btn.onclick = () => {
-      const card = btn.closest('[data-waiver-id]');
-      const noteInput = card?.querySelector('.input-waiver-note');
-      if (noteInput) noteInput.value = btn.dataset.note;
-    };
-  });
+        <div>
+          <div class="text-[10px] uppercase font-semibold text-neutral-500 mb-1">Explanation</div>
+          <div class="p-2.5 rounded-lg bg-black/30 text-neutral-200 leading-relaxed">${esc(w.reason)}</div>
+          ${!isPending && w.adminNote ? `<div class="text-[10px] text-neutral-400 mt-1.5">Admin note: ${esc(w.adminNote)}</div>` : ''}
+        </div>
 
-  // Wire Approve / Reject
+        ${isPending ? `
+          <input type="text" class="input-waiver-note ios-input" placeholder="Optional note for the member..." />
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" class="btn-reject-waiver py-2.5 rounded-xl font-bold text-white text-sm transition" style="background:#FF453A" data-id="${esc(w.id)}">Reject</button>
+            <button type="button" class="btn-approve-waiver py-2.5 rounded-xl font-bold text-black text-sm transition" style="background:#30D158" data-id="${esc(w.id)}">Approve</button>
+          </div>
+        ` : ''}
+      </div>`;
+  }).join('');
+
   const resolveWaiver = async (waiverId, newStatus, cardEl) => {
     const waiver = (state.waiverRequests || []).find(w => w.id === waiverId);
-    if (!waiver) return;
+    if (!waiver || !cardEl) return;
 
-    const noteInput = cardEl?.querySelector('.input-waiver-note');
-    const adminNote = noteInput?.value.trim() || (newStatus === 'approved' ? 'Excuse approved' : 'Excuse rejected');
-
+    const noteInput = cardEl.querySelector('.input-waiver-note');
+    const adminNote = noteInput?.value.trim() || '';
     cardEl.querySelectorAll('button').forEach(b => { b.disabled = true; });
+
+    const verb = newStatus === 'approved' ? 'Approved' : 'Rejected';
+    const targetDate = formatWaiverTargetDate(waiver);
 
     try {
       const batch = writeBatch(db);
-      const wRef = doc(db, 'waiver_requests', waiver.id);
-      batch.update(wRef, {
+      batch.update(doc(db, 'waiver_requests', waiver.id), {
         status: newStatus,
+        excused: newStatus === 'approved',
         adminNote,
         resolvedAt: serverTimestamp(),
-        resolvedBy: state.user.uid
+        resolvedBy: state.user.uid,
+        reviewedAt: serverTimestamp(),
+        reviewedBy: state.user.uid,
+        updatedAt: serverTimestamp()
       });
 
+      // In-app notification for the member
       createNotification(batch, {
         uid: waiver.uid,
-        title: `Waiver Request ${newStatus === 'approved' ? 'Approved' : 'Rejected'}`,
-        message: `Your excuse for "${waiver.sessionTitle}" was ${newStatus}. ${adminNote}`,
+        title: 'Attendance Excuse Update',
+        body: `Your excuse request for ${waiver.sessionTitle} on ${targetDate} was ${verb}.`,
         type: 'attendance',
         targetAction: { route: 'attendance' }
       });
@@ -12884,7 +12611,7 @@ function renderAdminWaivers() {
       await batch.commit();
       waiver.status = newStatus;
       waiver.adminNote = adminNote;
-      toast(`Waiver request ${newStatus}!`, 'success');
+      toast(`Excuse ${newStatus}`, 'success');
       renderAdminWaivers();
     } catch (err) {
       console.error('Error resolving waiver:', err);
@@ -12896,7 +12623,6 @@ function renderAdminWaivers() {
   container.querySelectorAll('.btn-approve-waiver').forEach(btn => {
     btn.onclick = () => resolveWaiver(btn.dataset.id, 'approved', btn.closest('[data-waiver-id]'));
   });
-
   container.querySelectorAll('.btn-reject-waiver').forEach(btn => {
     btn.onclick = () => resolveWaiver(btn.dataset.id, 'rejected', btn.closest('[data-waiver-id]'));
   });
