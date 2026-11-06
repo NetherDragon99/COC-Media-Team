@@ -40,7 +40,7 @@ export function updateDockHeight() {
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.3';
+export const APP_VERSION = '2.2.4';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -219,6 +219,7 @@ export const listeners = {
 };
 
 export const categoriesMap = new Map();
+export const badgesMap = new Map();
 
 export function getCategoryForTask(task) {
   if (!task) return { id: 'uncategorized', name: 'Uncategorized', iconKey: 'folder', color: '#8E8E93' };
@@ -805,28 +806,13 @@ export const PRESET_BADGES = [
 ];
 
 export function getAllAvailableBadges() {
-  const badgeMap = new Map();
-  PRESET_BADGES.forEach(b => badgeMap.set(b.id, { ...b }));
-  (state.badges || []).forEach(b => {
-    if (b && b.id) {
-      badgeMap.set(b.id, {
-        id: b.id,
-        label: b.label || b.name || b.nameEn || b.id,
-        description: b.description || '',
-        color: b.color || '#0A84FF',
-        icon: b.icon || 'star'
-      });
-    }
-  });
-  (state.members || []).forEach(m => {
-    (m.badges || []).forEach(b => {
-      const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
-      if (norm && norm.id && !badgeMap.has(norm.id)) {
-        badgeMap.set(norm.id, { id: norm.id, label: norm.label || norm.id, color: norm.color || '#3A3A3C', icon: norm.icon || 'star' });
-      }
-    });
-  });
-  return Array.from(badgeMap.values());
+  if (badgesMap.size > 0) {
+    return Array.from(badgesMap.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
+  }
+  if (Array.isArray(state.badges) && state.badges.length > 0) {
+    return state.badges;
+  }
+  return [];
 }
 
 export function normalizeBroadcast(raw) {
@@ -1956,7 +1942,7 @@ if (typeof globalThis !== 'undefined') {
 /**
  * Pure 1x cover-fit crop geometry calculation for live preview and canvas export.
  */
-function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, outSize }) {
+function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, outSize, isLogo = false }) {
   const w = Math.max(1, Number(imgW) || 1);
   const h = Math.max(1, Number(imgH) || 1);
   const vp = Math.max(1, Number(viewport) || 280);
@@ -1965,17 +1951,18 @@ function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, out
   const coverScale = Math.max(vp / w, vp / h);
   const containScale = Math.min(vp / w, vp / h);
   const minZoom = containScale / coverScale;
+  const minAllowedZoom = isLogo ? minZoom : 1;
   const maxZoom = 4;
 
-  const currentZoom = Math.min(maxZoom, Math.max(minZoom, Number(zoom) || 1));
+  const currentZoom = Math.min(maxZoom, Math.max(minAllowedZoom, Number(zoom) || 1));
   const effectiveScale = coverScale * currentZoom;
 
   const dispW = w * effectiveScale;
   const dispH = h * effectiveScale;
 
-  let targetX = offsetX !== undefined ? Number(offsetX) : (vp - dispW) / 2;
+  let targetX = (offsetX !== undefined && offsetX !== null) ? Number(offsetX) : (vp - dispW) / 2;
   let targetY;
-  if (offsetY !== undefined) {
+  if (offsetY !== undefined && offsetY !== null) {
     targetY = Number(offsetY);
   } else {
     if (h > w && dispH > vp) {
@@ -2038,10 +2025,339 @@ function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, out
   };
 }
 
-  if (typeof globalThis !== 'undefined') globalThis.computeCropRect = computeCropRect;
+/**
+ * Pure, DOM-free row gesture factory.
+ * Manages pointer gestures, long press, selection toggle, and tap invocation.
+ */
+function defaultVibrate(ms) {
+  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+    try { navigator.vibrate(ms); } catch (_) {}
+  }
+}
+function defaultSetTimer(fn, ms) { return setTimeout(fn, ms); }
+function defaultClearTimer(id) { clearTimeout(id); }
+function defaultFalse() { return false; }
+function defaultNoop() {}
+
+function createRowGesture(gestureOptions = {}) {
+  const longPressMs = gestureOptions.longPressMs || 450;
+  const moveTolerance = gestureOptions.moveTolerance || 10;
+  const setTimer = gestureOptions.setTimer || defaultSetTimer;
+  const clearTimer = gestureOptions.clearTimer || defaultClearTimer;
+  const vibrate = gestureOptions.vibrate || defaultVibrate;
+  const isInteractive = gestureOptions.isInteractive || defaultFalse;
+  const isSelecting = gestureOptions.isSelecting || defaultFalse;
+  const onTap = gestureOptions.onTap || defaultNoop;
+  const onLongPress = gestureOptions.onLongPress || defaultNoop;
+  const onToggle = gestureOptions.onToggle || defaultNoop;
+  let timerId = null;
+  let startX = 0;
+  let startY = 0;
+  let fired = false;
+  let moved = false;
+  let currentId = null;
+
+  function down(e, id) {
+    if (isInteractive(e && e.target ? e.target : null)) return;
+    startX = e?.clientX ?? (e?.touches && e.touches[0] ? e.touches[0].clientX : 0);
+    startY = e?.clientY ?? (e?.touches && e.touches[0] ? e.touches[0].clientY : 0);
+    fired = false;
+    moved = false;
+    currentId = id;
+    if (timerId !== null) {
+      clearTimer(timerId);
+      timerId = null;
+    }
+    timerId = setTimer(() => {
+      fired = true;
+      timerId = null;
+      try { vibrate(35); } catch (_) {}
+      onLongPress(currentId, e);
+    }, longPressMs);
+  }
+
+  function move(e, id) {
+    if (timerId === null && !fired) return;
+    const clientX = e?.clientX ?? (e?.touches && e.touches[0] ? e.touches[0].clientX : 0);
+    const clientY = e?.clientY ?? (e?.touches && e.touches[0] ? e.touches[0].clientY : 0);
+    const dist = Math.hypot(clientX - startX, clientY - startY);
+    if (dist > moveTolerance) {
+      if (timerId !== null) {
+        clearTimer(timerId);
+        timerId = null;
+      }
+      moved = true;
+    }
+  }
+
+  function up(e, id) {
+    if (timerId !== null) {
+      clearTimer(timerId);
+      timerId = null;
+    }
+  }
+
+  function cancel(e, id) {
+    if (timerId !== null) {
+      clearTimer(timerId);
+      timerId = null;
+    }
+  }
+
+  function click(e, id) {
+    if (isInteractive(e && e.target ? e.target : null)) return;
+    if (fired) {
+      fired = false;
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+      return;
+    }
+    if (moved) {
+      moved = false;
+      return;
+    }
+    if (isSelecting()) {
+      onToggle(id, e);
+    } else {
+      onTap(id, e);
+    }
+  }
+
+  return { down, move, up, cancel, click };
+}
+
+/**
+ * Pure roster reconciliation engine.
+ * Computes shown occurrence, active assigned members, matching logs/waivers,
+ * and exact member attendance statuses.
+ */
+function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now()) } = {}) {
+  const norm = normalizeSession(session) || session;
+  const now = parseDateTimeToMs(nowMs);
+  const sched = normalizeScheduleObject(norm?.schedule || norm);
+  const startMs = parseDateTimeToMs(sched.startDateTime);
+  const earlyCheckInMinutes = typeof norm?.earlyCheckInMinutes === 'number' ? norm.earlyCheckInMinutes : 15;
+  const lateCutoffMinutes = typeof norm?.lateCutoffMinutes === 'number' ? norm.lateCutoffMinutes : (typeof norm?.lateWindowMinutes === 'number' ? norm.lateWindowMinutes : 120);
+  const earlyMs = earlyCheckInMinutes * 60000;
+  const lateMs = lateCutoffMinutes * 60000;
+
+  // 1. Members normalization & active filtering (non-disabled, non-blocked)
+  let memberList = [];
+  if (Array.isArray(members)) {
+    memberList = members;
+  } else if (members && typeof members.values === 'function') {
+    memberList = Array.from(members.values());
+  } else if (members && typeof members === 'object') {
+    memberList = Object.values(members);
+  }
+  const activeMembers = memberList.filter(m => m && !m.disabled && !m.blocked);
+
+  // 2. Assigned calculation (NEVER 0 when active members exist)
+  let assigned = [];
+  if (norm?.targetType === 'badge' && Array.isArray(norm.badgeIds) && norm.badgeIds.length > 0) {
+    assigned = activeMembers.filter(m => {
+      const uBadges = Array.isArray(m.badgeIds) ? m.badgeIds : (Array.isArray(m.badges) ? m.badges.map(b => typeof b === 'object' ? b.id : b) : []);
+      return uBadges.some(bid => norm.badgeIds.includes(bid));
+    });
+  } else if (Array.isArray(norm?.assignedUids) && norm.assignedUids.length > 0) {
+    assigned = activeMembers.filter(m => norm.assignedUids.includes(m.uid || m.id));
+  } else if (Array.isArray(norm?.assignedMembers) && norm.assignedMembers.length > 0) {
+    assigned = activeMembers.filter(m => norm.assignedMembers.includes(m.uid || m.id));
+  }
+  if (assigned.length === 0) {
+    assigned = [...activeMembers];
+  }
+
+  // 3. Resolve shown occurrence
+  let shownOccurrence = null;
+  let occState = 'upcoming'; // upcoming | open | closed
+
+  if (sched.type === 'once') {
+    const opensAt = startMs - earlyMs;
+    const closesAt = startMs + lateMs;
+    const nextOpensAt = Infinity;
+    if (now < opensAt) {
+      occState = 'upcoming';
+    } else if (now <= closesAt) {
+      occState = 'open';
+    } else {
+      occState = 'closed';
+    }
+    shownOccurrence = {
+      key: 'once',
+      start: startMs,
+      opensAt,
+      closesAt,
+      nextOpensAt
+    };
+  } else {
+    const fromMs = Math.max(startMs, now - 60 * 86400000);
+    const toMs = now + 60 * 86400000;
+    let occs = getOccurrences(sched, fromMs, toMs);
+    if (!occs || occs.length === 0) {
+      occs = [startMs];
+    }
+
+    const pastOrOpen = occs.filter(o => (o - earlyMs) <= now);
+    if (pastOrOpen.length > 0) {
+      const currStart = pastOrOpen[pastOrOpen.length - 1];
+      const currIdx = occs.indexOf(currStart);
+      const nextStart = currIdx !== -1 && currIdx + 1 < occs.length ? occs[currIdx + 1] : null;
+      const opensAt = currStart - earlyMs;
+      const closesAt = currStart + lateMs;
+      const nextOpensAt = nextStart ? nextStart - earlyMs : Infinity;
+
+      if (now <= closesAt) {
+        occState = 'open';
+      } else {
+        occState = 'closed';
+      }
+
+      shownOccurrence = {
+        key: formatZonedDateKey(currStart, APP_TIMEZONE),
+        start: currStart,
+        opensAt,
+        closesAt,
+        nextOpensAt
+      };
+    } else {
+      const firstStart = occs[0];
+      const nextStart = occs.length > 1 ? occs[1] : null;
+      shownOccurrence = {
+        key: formatZonedDateKey(firstStart, APP_TIMEZONE),
+        start: firstStart,
+        opensAt: firstStart - earlyMs,
+        closesAt: firstStart + lateMs,
+        nextOpensAt: nextStart ? nextStart - earlyMs : Infinity
+      };
+      occState = 'upcoming';
+    }
+  }
+
+  // 4. Match logs and waivers for shown occurrence
+  const occLogs = (Array.isArray(logs) ? logs : []).filter(l => {
+    if (!l) return false;
+    const matchSession = (l.sessionId === norm.id || !l.sessionId || !norm.id);
+    if (!matchSession) return false;
+
+    if (sched.type === 'once') {
+      return true;
+    }
+    if (l.occurrenceKey && (l.occurrenceKey === shownOccurrence.key || l.occurrenceKey === 'once')) {
+      return true;
+    }
+    if (l.occurrenceStart && l.occurrenceStart >= shownOccurrence.opensAt && l.occurrenceStart < shownOccurrence.nextOpensAt) {
+      return true;
+    }
+    const logTime = parseDateTimeToMs(l.timestamp || l.createdAtMs || l.submittedAt);
+    if (logTime && logTime >= shownOccurrence.opensAt && logTime < shownOccurrence.nextOpensAt) {
+      return true;
+    }
+    return false;
+  });
+
+  const occWaivers = (Array.isArray(waivers) ? waivers : []).filter(w => {
+    if (!w || w.status !== 'approved') return false;
+    const matchSession = (w.sessionId === norm.id || !w.sessionId || !norm.id);
+    if (!matchSession) return false;
+    if (sched.type === 'once') return true;
+    return w.occurrenceKey === shownOccurrence.key || w.occurrenceKey === 'once' || w.dateKey === shownOccurrence.key || !w.occurrenceKey;
+  });
+
+  const logsByUser = new Map();
+  occLogs.forEach(l => {
+    const uid = l.userId || l.uid;
+    if (uid && !logsByUser.has(uid)) {
+      logsByUser.set(uid, l);
+    }
+  });
+
+  const waiversByUser = new Map();
+  occWaivers.forEach(w => {
+    const uid = w.userId || w.uid;
+    if (uid && !waiversByUser.has(uid)) {
+      waiversByUser.set(uid, w);
+    }
+  });
+
+  // 5. Evaluate rows and counts
+  let presentCount = 0;
+  let onTimeCount = 0;
+  let lateCount = 0;
+  let excusedCount = 0;
+  let absentCount = 0;
+  let pendingCount = 0;
+
+  const rows = assigned.map(member => {
+    const uid = member.uid || member.id;
+    const log = logsByUser.get(uid);
+    const waiver = waiversByUser.get(uid);
+
+    let status = 'pending';
+    let substatus = '';
+    let delaySeconds = 0;
+
+    if (log) {
+      if (log.status === 'absent') {
+        status = 'absent';
+        absentCount++;
+      } else {
+        status = 'present';
+        delaySeconds = Number(log.delaySeconds) || 0;
+        if (log.status === 'late' || delaySeconds > 0) {
+          substatus = 'late';
+          lateCount++;
+        } else {
+          substatus = 'on_time';
+          onTimeCount++;
+        }
+        presentCount++;
+      }
+    } else if (waiver) {
+      status = 'excused';
+      excusedCount++;
+    } else if (occState === 'closed') {
+      status = 'absent';
+      absentCount++;
+    } else {
+      status = 'pending';
+      pendingCount++;
+    }
+
+    return {
+      user: member,
+      status,
+      substatus,
+      delaySeconds,
+      log: log || null,
+      waiver: waiver || null
+    };
+  });
+
+  return {
+    counts: {
+      assignedCount: assigned.length,
+      presentCount,
+      onTimeCount,
+      lateCount,
+      excusedCount,
+      absentCount,
+      pendingCount
+    },
+    rows,
+    occurrence: shownOccurrence,
+    state: occState
+  };
+}
+
+  if (typeof globalThis !== 'undefined') {
+    globalThis.computeCropRect = computeCropRect;
+    globalThis.createRowGesture = createRowGesture;
+    globalThis.buildRoster = buildRoster;
+  }
 // ==== ENGINE END
 
-export { computeCropRect, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned };
+export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned };
 
 /* ==========================================================================
    SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
@@ -2704,7 +3020,7 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
  * Pick image file, crop in interactive 280px sheet, compress to Base64 data URI.
  * Returns Promise<dataURI | null>
  */
-export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 30000 } = {}) {
+export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = false, maxChars = 32000 } = {}) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -2747,10 +3063,10 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 3
           });
         }
 
-        // Downscale source to max 1024px for mobile memory safety
+        // Downscale source to max 1200px for mobile memory safety
         let srcW = bmp.width;
         let srcH = bmp.height;
-        const maxDim = 1024;
+        const maxDim = 1200;
         if (srcW > maxDim || srcH > maxDim) {
           if (srcW > srcH) {
             srcH = Math.round((srcH * maxDim) / srcW);
@@ -2767,69 +3083,82 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 3
         const offCtx = offCanvas.getContext('2d');
         offCtx.drawImage(bmp, 0, 0, srcW, srcH);
 
-        // Open 280px cropper modal
-        const minScale = Math.max(280 / srcW, 280 / srcH);
-        let scale = minScale;
-        const maxScale = minScale * 3.5;
-        let panX = (280 - srcW * scale) / 2;
-        let panY = (280 - srcH * scale) / 2;
+        const viewport = 280;
+        const coverScale = Math.max(viewport / srcW, viewport / srcH);
+        const containScale = Math.min(viewport / srcW, viewport / srcH);
+        const minZoomVal = isLogo ? (containScale / coverScale) : 1;
 
-        function clamp() {
-          scale = Math.max(minScale, Math.min(scale, maxScale));
-          const curW = srcW * scale;
-          const curH = srcH * scale;
-          panX = Math.min(0, Math.max(panX, 280 - curW));
-          panY = Math.min(0, Math.max(panY, 280 - curH));
-        }
+        let zoom = 1;
+        let panX = undefined;
+        let panY = undefined;
 
-        clamp();
+        // Initial geometry computation
+        let geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize, isLogo });
+        panX = geom.clampedX;
+        panY = geom.clampedY;
 
         const maskClass = shape === 'circle' ? 'ios-cropper-mask-circle' : 'ios-cropper-mask-rounded';
 
-        const cropModal = openModal({
-          title: shape === 'circle' ? 'Crop Profile Avatar' : 'Crop App Logo',
-          sheetClass: 'cropper-modal-sheet',
-          body: `
-            <div class="space-y-4">
-              <div class="ios-cropper-viewport" id="cropper-viewport">
-                <canvas id="cropper-canvas" width="280" height="280" class="block w-[280px] h-[280px] pointer-events-none"></canvas>
-                <div class="${maskClass}"></div>
-              </div>
-              <div class="px-2 space-y-1">
-                <div class="flex items-center justify-between text-[11px] text-neutral-400">
-                  <span>Zoom</span>
-                  <span id="cropper-zoom-text">1.0x</span>
-                </div>
-                <input id="cropper-zoom-slider" type="range" min="1" max="3.5" step="0.05" value="1" class="w-full accent-[#0A84FF]" />
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'space-y-4';
+        bodyEl.innerHTML = `
+          <div class="ios-cropper-viewport relative mx-auto w-[280px] h-[280px] overflow-hidden rounded-2xl bg-black/40 touch-none select-none" id="cropper-viewport" style="touch-action: none;">
+            <canvas id="cropper-canvas" width="280" height="280" class="block w-[280px] h-[280px] pointer-events-none" style="max-width: none; max-height: none;"></canvas>
+            <div class="${maskClass} pointer-events-none absolute inset-0"></div>
+          </div>
+          <div class="px-2 space-y-2">
+            <div class="flex items-center justify-between text-[11px] text-neutral-400">
+              <span>Zoom</span>
+              <div class="flex items-center gap-2">
+                <span id="cropper-zoom-text">${zoom.toFixed(1)}x</span>
+                <button type="button" id="btn-cropper-reset" class="text-[11px] text-[#0A84FF] font-semibold hover:underline cursor-pointer">Reset</button>
               </div>
             </div>
-          `,
-          saveLabel: 'Save Image',
-          cancelLabel: 'Cancel',
+            <input id="cropper-zoom-slider" type="range" min="${minZoomVal.toFixed(2)}" max="4" step="0.01" value="${zoom}" class="w-full accent-[#0A84FF]" />
+            <p class="text-center text-[10px] text-neutral-500">Drag to position • Pinch or slide to scale</p>
+          </div>
+        `;
+
+        let modal = null;
+
+        function redraw() {
+          const canvas = bodyEl.querySelector('#cropper-canvas');
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d');
+          geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize, isLogo });
+          panX = geom.clampedX;
+          panY = geom.clampedY;
+
+          ctx.clearRect(0, 0, viewport, viewport);
+          ctx.drawImage(offCanvas, geom.sx, geom.sy, geom.sw, geom.sh, geom.dx, geom.dy, geom.dw, geom.dh);
+
+          const zoomText = bodyEl.querySelector('#cropper-zoom-text');
+          if (zoomText) zoomText.textContent = `${zoom.toFixed(1)}x`;
+          const slider = bodyEl.querySelector('#cropper-zoom-slider');
+          if (slider && document.activeElement !== slider) slider.value = zoom;
+        }
+
+        modal = openModal({
+          title: shape === 'circle' ? 'Move and Scale' : 'Crop App Logo',
+          sheetClass: 'cropper-modal-sheet',
+          body: bodyEl,
+          saveLabel: 'Done',
           onClose: () => resolve(null),
           onSave: () => {
-            // Render cropped area to outSize x outSize canvas
             const outCanvas = document.createElement('canvas');
             outCanvas.width = outSize;
             outCanvas.height = outSize;
             const outCtx = outCanvas.getContext('2d');
 
-            const cropX = -panX / scale;
-            const cropY = -panY / scale;
-            const cropW = 280 / scale;
-            const cropH = 280 / scale;
+            const finalGeom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize, isLogo });
+            outCtx.drawImage(offCanvas, finalGeom.sx, finalGeom.sy, finalGeom.sw, finalGeom.sh, finalGeom.dx, finalGeom.dy, finalGeom.dw, finalGeom.dh);
 
-            outCtx.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, outSize, outSize);
-
-            let dataUri = '';
-            // Try webp first
-            dataUri = outCanvas.toDataURL('image/webp', 0.82);
+            let dataUri = outCanvas.toDataURL('image/webp', 0.85);
             if (!dataUri.startsWith('data:image/webp')) {
-              dataUri = outCanvas.toDataURL('image/jpeg', 0.82);
+              dataUri = outCanvas.toDataURL('image/jpeg', 0.85);
             }
 
-            // Stepwise compression if over maxChars
-            const qualities = [0.72, 0.62, 0.52, 0.42];
+            const qualities = [0.75, 0.65, 0.55, 0.45];
             let qIdx = 0;
             while (dataUri.length > maxChars && qIdx < qualities.length) {
               const mime = dataUri.startsWith('data:image/webp') ? 'image/webp' : 'image/jpeg';
@@ -2837,19 +3166,13 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 3
               qIdx++;
             }
 
-            // Downscale dimension if still too large
             if (dataUri.length > maxChars) {
               const smallerDim = Math.round(outSize * 0.8);
               outCanvas.width = smallerDim;
               outCanvas.height = smallerDim;
-              outCtx.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, smallerDim, smallerDim);
+              outCtx.clearRect(0, 0, smallerDim, smallerDim);
+              outCtx.drawImage(offCanvas, finalGeom.sx, finalGeom.sy, finalGeom.sw, finalGeom.sh, 0, 0, smallerDim, smallerDim);
               dataUri = outCanvas.toDataURL('image/jpeg', 0.6);
-            }
-
-            if (dataUri.length > maxChars) {
-              toast('Image could not be compressed under character limit', 'error');
-              resolve(null);
-              return;
             }
 
             resolve(dataUri);
@@ -2857,97 +3180,119 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, maxChars = 3
           }
         });
 
-        // Wire canvas drawing and viewport pointer events
         setTimeout(() => {
-          const viewport = document.getElementById('cropper-viewport');
-          const canvas = document.getElementById('cropper-canvas');
-          const zoomSlider = document.getElementById('cropper-zoom-slider');
-          const zoomText = document.getElementById('cropper-zoom-text');
-          if (!viewport || !canvas) return;
+          redraw();
+          const vpEl = bodyEl.querySelector('#cropper-viewport');
+          const slider = bodyEl.querySelector('#cropper-zoom-slider');
+          const resetBtn = bodyEl.querySelector('#btn-cropper-reset');
 
-          const ctx = canvas.getContext('2d');
-
-          function draw() {
-            ctx.clearRect(0, 0, 280, 280);
-            ctx.drawImage(offCanvas, panX, panY, srcW * scale, srcH * scale);
-            if (zoomText) zoomText.textContent = `${(scale / minScale).toFixed(1)}x`;
-            if (zoomSlider) zoomSlider.value = (scale / minScale).toFixed(2);
+          if (slider) {
+            slider.oninput = () => {
+              zoom = parseFloat(slider.value) || 1;
+              redraw();
+            };
           }
 
-          draw();
+          if (resetBtn) {
+            resetBtn.onclick = () => {
+              zoom = 1;
+              panX = undefined;
+              panY = undefined;
+              redraw();
+            };
+          }
 
-          // Pointer tracking for drag & pinch
-          const pointers = new Map();
-          let prevDiff = -1;
+          if (vpEl) {
+            let isDragging = false;
+            let startDragX = 0;
+            let startDragY = 0;
+            let initialPanX = 0;
+            let initialPanY = 0;
+            let lastTapTime = 0;
+            const pointers = new Map();
 
-          viewport.onpointerdown = (e) => {
-            viewport.setPointerCapture(e.pointerId);
-            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          };
+            vpEl.onpointerdown = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-          viewport.onpointermove = (e) => {
-            if (!pointers.has(e.pointerId)) return;
-            const prev = pointers.get(e.pointerId);
-            const dx = e.clientX - prev.x;
-            const dy = e.clientY - prev.y;
-            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-            if (pointers.size === 1) {
-              panX += dx;
-              panY += dy;
-              clamp();
-              draw();
-            } else if (pointers.size === 2) {
-              const pts = Array.from(pointers.values());
-              const curDiff = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-              if (prevDiff > 0) {
-                const ratio = curDiff / prevDiff;
-                scale *= ratio;
-                clamp();
-                draw();
+              const now = Date.now();
+              if (pointers.size === 1 && now - lastTapTime < 300) {
+                zoom = zoom > 1.5 ? 1 : 2;
+                redraw();
+                lastTapTime = 0;
+                return;
               }
-              prevDiff = curDiff;
-            }
-          };
+              lastTapTime = now;
 
-          const onPointerEnd = (e) => {
-            pointers.delete(e.pointerId);
-            if (pointers.size < 2) prevDiff = -1;
-          };
+              if (pointers.size === 1) {
+                isDragging = true;
+                startDragX = e.clientX;
+                startDragY = e.clientY;
+                initialPanX = panX;
+                initialPanY = panY;
+              }
+              try { vpEl.setPointerCapture(e.pointerId); } catch (_) {}
+            };
 
-          viewport.onpointerup = onPointerEnd;
-          viewport.onpointercancel = onPointerEnd;
+            vpEl.onpointermove = (e) => {
+              e.stopPropagation();
+              if (!pointers.has(e.pointerId)) return;
+              pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-          // Mouse wheel zoom
-          viewport.onwheel = (e) => {
-            e.preventDefault();
-            const delta = e.deltaY < 0 ? 1.08 : 0.92;
-            scale *= delta;
-            clamp();
-            draw();
-          };
+              if (pointers.size === 2) {
+                const pts = Array.from(pointers.values());
+                const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                if (vpEl._lastPinchDist) {
+                  const factor = dist / vpEl._lastPinchDist;
+                  zoom = Math.min(4, Math.max(minZoomVal, zoom * factor));
+                  redraw();
+                }
+                vpEl._lastPinchDist = dist;
+                return;
+              }
 
-          // Slider zoom
-          if (zoomSlider) {
-            zoomSlider.oninput = (e) => {
-              scale = minScale * Number(e.target.value);
-              clamp();
-              draw();
+              if (isDragging && pointers.size === 1) {
+                const dx = e.clientX - startDragX;
+                const dy = e.clientY - startDragY;
+                panX = initialPanX + dx;
+                panY = initialPanY + dy;
+                redraw();
+              }
+            };
+
+            const endPointer = (e) => {
+              e.stopPropagation();
+              pointers.delete(e.pointerId);
+              if (pointers.size < 2) delete vpEl._lastPinchDist;
+              if (pointers.size === 0) isDragging = false;
+              try { vpEl.releasePointerCapture(e.pointerId); } catch (_) {}
+            };
+
+            vpEl.onpointerup = endPointer;
+            vpEl.onpointercancel = endPointer;
+
+            vpEl.onwheel = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const delta = e.deltaY < 0 ? 0.1 : -0.1;
+              zoom = Math.min(4, Math.max(minZoomVal, zoom + delta));
+              redraw();
             };
           }
         }, 50);
 
       } catch (err) {
-        console.error('Error preparing image:', err);
-        toast('Failed to load image', 'error');
+        console.error('Cropper setup error:', err);
+        toast('Failed to process image file', 'error');
         resolve(null);
       }
     };
 
+    // Synchronous click within user gesture
     input.click();
   });
 }
-
 
 export function esc(value) {
   if (value === null || value === undefined) return '';
@@ -3214,41 +3559,64 @@ export function initSheetDragGestures() {
   let startTime = 0;
   let viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
   let isDragging = false;
+  let potentialContentDrag = false;
+  let activeScrollEl = null;
 
   const onStart = (e) => {
     const target = e.target;
     if (!target) return;
 
-    // Check hit on grabber, grabber-hitarea, modal-grabber, modal-header, or sub-modal-toolbar
-    const grabber = target.closest('.sheet-grabber, .sheet-grabber-hitarea, .modal-grabber, .modal-header, .sub-modal-toolbar');
-    if (!grabber) return;
-
-    // Ignore interactive elements inside header
-    if (target.closest('button, input, textarea, select, a, .sub-modal-text-btn, .modal-close-btn, #shared-modal-cancel, #shared-modal-save')) {
+    // Ignore interactive elements
+    if (target.closest('button, input, textarea, select, a, .sub-modal-text-btn, .modal-close-btn, #shared-modal-cancel, #shared-modal-save, .member-picker-item, .chip-remove-btn')) {
       return;
     }
 
-    const sheet = grabber.closest('.modal-sheet, .sub-modal-sheet');
+    const sheet = target.closest('.modal-sheet, .sub-modal-sheet');
     if (!sheet) return;
 
-    activeSheet = sheet;
+    // Check hit on grabber / header vs content
+    const grabber = target.closest('.sheet-grabber, .sheet-grabber-hitarea, .modal-grabber, .modal-header, .sub-modal-toolbar');
+    const scrollEl = target.closest('.modal-body, .sheet-scroll, .icon-grid-scrollable') || sheet;
+
     startY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
     startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     startHeight = sheet.getBoundingClientRect().height;
     viewportH = window.innerHeight;
-    isDragging = true;
+    activeSheet = sheet;
+    activeScrollEl = scrollEl;
 
-    sheet.classList.add('is-dragging');
+    if (grabber) {
+      isDragging = true;
+      potentialContentDrag = false;
+      sheet.classList.add('is-dragging');
+    } else if (scrollEl && scrollEl.scrollTop <= 0) {
+      // At the top of content, eligible for pull-down dismiss
+      potentialContentDrag = true;
+      isDragging = false;
+    }
   };
 
   const onMove = (e) => {
-    if (!isDragging || !activeSheet) return;
+    if (!activeSheet) return;
 
     const currentY = e.clientY ?? e.touches?.[0]?.clientY ?? startY;
     const deltaY = currentY - startY;
 
+    if (!isDragging && potentialContentDrag) {
+      if (deltaY > 10 && (!activeScrollEl || activeScrollEl.scrollTop <= 0)) {
+        isDragging = true;
+        potentialContentDrag = false;
+        activeSheet.classList.add('is-dragging');
+      } else if (deltaY < -5) {
+        potentialContentDrag = false;
+        return;
+      }
+    }
+
+    if (!isDragging) return;
+
     const minH = 0.25 * viewportH;
-    const maxH = 0.96 * viewportH;
+    const maxH = 0.95 * viewportH;
     const targetHeight = startHeight - deltaY;
 
     if (targetHeight >= minH) {
@@ -3261,10 +3629,16 @@ export function initSheetDragGestures() {
       activeSheet.style.maxHeight = `${minH}px`;
       activeSheet.style.transform = `translateY(${minH - targetHeight}px)`;
     }
+
+    const backdrop = activeSheet.closest('.modal-backdrop, .sub-modal-overlay');
+    if (backdrop) {
+      const progress = Math.max(0.2, Math.min(1, targetHeight / (0.75 * viewportH)));
+      backdrop.style.opacity = progress.toFixed(2);
+    }
   };
 
   const onEnd = (e) => {
-    if (!isDragging || !activeSheet) return;
+    if (!activeSheet) return;
 
     const currentY = e.clientY ?? e.changedTouches?.[0]?.clientY ?? startY;
     const deltaY = currentY - startY;
@@ -3273,16 +3647,26 @@ export function initSheetDragGestures() {
     const velocity = deltaY / deltaTime; // px/ms
 
     const sheet = activeSheet;
+    const wasDragging = isDragging;
     isDragging = false;
+    potentialContentDrag = false;
     activeSheet = null;
+    activeScrollEl = null;
 
     sheet.classList.remove('is-dragging');
+
+    const backdrop = sheet.closest('.modal-backdrop, .sub-modal-overlay');
+    if (backdrop) {
+      backdrop.style.opacity = '';
+    }
+
+    if (!wasDragging) return;
 
     const finalHeight = startHeight - deltaY;
     const finalRatio = finalHeight / viewportH;
 
-    // Dismiss Resolution: If released below 25% viewport height OR high downward velocity
-    const shouldDismiss = (finalRatio < 0.25) || (velocity > 0.65 && deltaY > 30);
+    // Dismiss Resolution: If released below 25% viewport height OR high downward velocity (>0.8 px/ms)
+    const shouldDismiss = (finalRatio < 0.25) || (velocity > 0.8 && deltaY > 30);
 
     if (shouldDismiss) {
       sheet.style.transition = 'transform 0.24s cubic-bezier(0.32, 0.72, 0, 1)';
@@ -3297,8 +3681,8 @@ export function initSheetDragGestures() {
     }
 
     // Freeform Fluid Height Retention:
-    // Sheet stays at exact released height clamped between 25vh and 96vh
-    const clampedParkedHeight = Math.min(0.96 * viewportH, Math.max(0.25 * viewportH, finalHeight));
+    // Sheet stays at exact released height clamped between 25vh and 95vh
+    const clampedParkedHeight = Math.min(0.95 * viewportH, Math.max(0.25 * viewportH, finalHeight));
     sheet.classList.remove('sheet-detent-large');
     sheet.style.transition = 'height 0.18s ease, max-height 0.18s ease';
     sheet.style.height = `${clampedParkedHeight}px`;
@@ -3548,107 +3932,102 @@ export function renderBadgeRow(container, badges, member) {
 export function openMiniProfileSheet(uidOrMember) {
   const uid = typeof uidOrMember === 'string' ? uidOrMember : (uidOrMember?.uid || '');
   const userProf = getUserProfile(uid, uidOrMember?.displayName || uidOrMember?.name || 'Member', uidOrMember?.photoURL || uidOrMember?.avatarUrl || '');
-  const normBadges = (userProf.badges || []).map(normalizeBadgeItem).filter(Boolean);
 
-  const currentUid = state.user?.uid;
-  const currentUserInMap = currentUid ? usersMap.get(currentUid) : null;
-  const isViewerAdmin = Boolean(
-    state.user?.isAdmin || 
-    state.user?.role === 'admin' || 
-    currentUserInMap?.isAdmin || 
-    currentUserInMap?.role === 'admin'
+  // Resolve badges via live badgesMap (FIX 3)
+  const rawBadgeIds = Array.isArray(userProf.badgeIds) ? userProf.badgeIds : (
+    Array.isArray(userProf.badges) ? userProf.badges.map(b => typeof b === 'object' ? b?.id : b).filter(Boolean) : []
   );
-  const isSelf = Boolean(currentUid && currentUid === userProf.uid);
-  const showFines = isSelf; // Strict Financial Privacy: NEVER expose fines on public/leaderboard profile sheets
+
+  const resolvedBadges = [];
+  const seenIds = new Set();
+  rawBadgeIds.forEach(bid => {
+    if (seenIds.has(bid)) return;
+    seenIds.add(bid);
+    const fromMap = badgesMap.get(bid);
+    if (fromMap) {
+      resolvedBadges.push(fromMap);
+    } else if (Array.isArray(userProf.badges)) {
+      const fallback = userProf.badges.find(b => (typeof b === 'object' ? b?.id : b) === bid);
+      if (fallback && typeof fallback === 'object') {
+        resolvedBadges.push({
+          id: bid,
+          name: fallback.label || fallback.name || bid,
+          label: fallback.label || fallback.name || bid,
+          description: fallback.description || '',
+          iconKey: fallback.icon || 'star',
+          icon: fallback.icon || 'star',
+          color: fallback.color || '#FFD60A'
+        });
+      }
+    }
+  });
 
   const wrapperEl = document.createElement('div');
-  wrapperEl.className = 'mini-profile-container relative w-full flex flex-col h-full';
-
-  // 1. Overhanging Avatar (88px x 88px, margin-top: -44px, protruding 44px above sheet border)
-  const avatarHtml = `
-    <div class="mini-profile-avatar-anchor flex justify-center w-full" style="position: relative; z-index: 30; flex-shrink: 0;">
-      <div class="mini-profile-avatar-protruding rounded-full overflow-hidden flex items-center justify-center" style="width: 88px; height: 88px; margin-top: -44px; border: 4px solid var(--bg-elevated, #1C1C1E); box-shadow: 0 8px 24px rgba(0,0,0,0.5); background: var(--bg-elevated, #1C1C1E);">
-        ${renderAvatar(userProf, 'w-full h-full text-2xl font-bold')}
-      </div>
-    </div>
-  `;
-
-  // 2. Dismiss Button
-  const dismissBtnHtml = `
-    <button type="button" class="mini-profile-close-btn absolute top-2 right-2 w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-neutral-300 hover:text-white flex items-center justify-center text-xs z-40 transition cursor-pointer" aria-label="Close"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
-  `;
-
-  // 3. Stats row (NEVER show finesEGP to other members; only self or admin)
-  const statsHtml = showFines ? `
-    <div class="grid grid-cols-3 gap-2.5 pt-2">
-      <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-        <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Points</span>
-        <span class="text-base font-bold font-mono text-amber-400 mt-0.5 block">${userProf.points || 0}</span>
-      </div>
-      <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-        <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Penalties</span>
-        <span class="text-base font-bold font-mono text-rose-400 mt-0.5 block">${userProf.penalties || 0}</span>
-      </div>
-      <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-        <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Fines</span>
-        <span class="text-base font-bold font-mono text-rose-300 mt-0.5 block">${userProf.finesEGP !== undefined ? userProf.finesEGP : (userProf.penalties ? `${userProf.penalties} EGP` : '0 EGP')}</span>
-      </div>
-    </div>
-  ` : `
-    <div class="grid grid-cols-2 gap-2.5 pt-2">
-      <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-        <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Points</span>
-        <span class="text-base font-bold font-mono text-amber-400 mt-0.5 block">${userProf.points || 0}</span>
-      </div>
-      <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-        <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Penalties</span>
-        <span class="text-base font-bold font-mono text-rose-400 mt-0.5 block">${userProf.penalties || 0}</span>
-      </div>
-    </div>
-  `;
-
-  // 4. Badges detail grid
-  const badgesGridHtml = `
-    <div class="space-y-2 pt-1">
-      <div class="flex items-center justify-between">
-        <span class="text-xs font-bold text-white uppercase tracking-wider">Earned Badges (${normBadges.length})</span>
-      </div>
-      ${normBadges.length === 0 ? `
-        <div class="p-5 rounded-2xl bg-white/[0.02] border border-white/5 text-center text-xs text-neutral-400">
-          No badges earned yet.
-        </div>
-      ` : `
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          ${normBadges.map(b => `
-            <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 flex items-start gap-3">
-              <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: ${b.color}20; color: ${b.color}; border: 1px solid ${b.color}40;">
-                ${getCategorySvg(b.icon || 'star', 'w-4 h-4')}
-              </div>
-              <div class="min-w-0 flex-1">
-                <div class="font-bold text-xs text-white truncate">${esc(b.label)}</div>
-                <div class="text-[11px] text-neutral-400 mt-0.5 leading-snug">${esc(b.description || 'Verified Team Achievement')}</div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      `}
-    </div>
-  `;
+  wrapperEl.className = 'mini-profile-root relative w-full h-full';
+  wrapperEl.style.position = 'relative';
+  wrapperEl.style.overflow = 'visible';
+  wrapperEl.style.height = '100%';
 
   wrapperEl.innerHTML = `
-    ${avatarHtml}
-    ${dismissBtnHtml}
-    <div class="mini-profile-scroll-body flex-1 overflow-y-auto space-y-4 pt-1 pb-4" style="-webkit-overflow-scrolling: touch;">
-      <div>
-        <h3 class="text-lg font-bold text-white text-center">${esc(userProf.displayName)}</h3>
-        <div class="flex justify-center mt-1">
-          <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold ${userProf.isAdmin ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-white/10 text-neutral-300 border border-white/10'}">
-            ${esc(userProf.role || (userProf.isAdmin ? 'admin' : 'member'))}
-          </span>
+    <div class="sheet-bg absolute inset-0" style="position: absolute; inset: 0; border-radius: 28px 28px 0 0; background: var(--bg-grouped-secondary, #1C1C1E); border: 0.5px solid var(--border-glass, rgba(255,255,255,0.12)); box-shadow: 0 -8px 32px rgba(0,0,0,0.65); z-index: 10;"></div>
+
+    <div class="sheet-avatar absolute" style="position: absolute; top: -44px; left: 50%; transform: translateX(-50%); width: 88px; height: 88px; border-radius: 50%; border: 4px solid #1C1C1E; box-shadow: 0 8px 28px rgba(0,0,0,0.7); background: #1C1C1E; z-index: 50; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+      ${renderAvatar(userProf, 'w-full h-full text-2xl font-bold')}
+    </div>
+
+    <button type="button" class="mini-profile-close-btn absolute top-3 right-3 w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-neutral-300 hover:text-white flex items-center justify-center text-xs transition cursor-pointer" style="position: absolute; z-index: 60;" aria-label="Close">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    </button>
+
+    <div class="sheet-scroll relative" style="position: relative; z-index: 20; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 56px 16px 24px 16px;">
+      <div class="space-y-4">
+        <div>
+          <h3 class="text-lg font-bold text-white text-center">${esc(userProf.displayName)}</h3>
+          <div class="flex justify-center mt-1">
+            <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold ${userProf.isAdmin ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-white/10 text-neutral-300 border border-white/10'}">
+              ${esc(userProf.role || (userProf.isAdmin ? 'admin' : 'member'))}
+            </span>
+          </div>
+        </div>
+
+        <!-- Exactly 2-column grid: POINTS and PENALTIES -->
+        <div class="grid grid-cols-2 gap-3 pt-1">
+          <div class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+            <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Points</span>
+            <span class="text-2xl font-bold text-white tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.points || 0}</span>
+          </div>
+          <div class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+            <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Penalties</span>
+            <span class="text-2xl font-bold text-rose-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.penalties || 0}</span>
+          </div>
+        </div>
+
+        <!-- Badges resolved via live badgesMap -->
+        <div class="space-y-2 pt-1">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-white uppercase tracking-wider">Badges (${resolvedBadges.length})</span>
+          </div>
+          ${resolvedBadges.length === 0 ? `
+            <div class="p-5 rounded-2xl bg-white/[0.02] border border-white/5 text-center text-xs text-neutral-400">
+              No badges yet.
+            </div>
+          ` : `
+            <div class="grid grid-cols-1 gap-2">
+              ${resolvedBadges.map(b => `
+                <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 flex items-start gap-3">
+                  <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: ${b.color}20; color: ${b.color}; border: 1px solid ${b.color}40;">
+                    ${getCategorySvg(b.iconKey || b.icon || 'star', 'w-4 h-4')}
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="font-bold text-xs text-white truncate">${esc(b.name || b.label)}</div>
+                    <div class="text-[11px] text-neutral-400 mt-0.5 leading-snug">${esc(b.description || 'Verified Team Achievement')}</div>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          `}
         </div>
       </div>
-      ${statsHtml}
-      ${badgesGridHtml}
     </div>
   `;
 
@@ -3667,9 +4046,6 @@ export function openMiniProfileSheet(uidOrMember) {
   });
 }
 
-/* ==========================================================================
-   UNIVERSAL iOS MEMBER PICKER HALF-SHEET
-   ========================================================================== */
 export function openMemberPicker({ multi = false, includeAllOption = false, filterBadgeIds = null, selectedUids = [], onConfirm }) {
   const selectedSet = new Set((selectedUids || []).map(String));
   let searchQuery = '';
@@ -4191,83 +4567,86 @@ export function attachLongPress(cardEl, onTrigger) {
   }
 }
 
-export function attachRowGestures(rowEl, { onTap, onLongPress, bulkType, bulkId } = {}) {
+export function attachRowGestures(rowEl, opts = {}) {
   if (!rowEl) return;
-  let timer = null;
-  let startX = 0;
-  let startY = 0;
-  let longPressed = false;
+  const onTap = opts.onTap || opts.onSingleTap;
+  const onLongPress = opts.onLongPress;
+  const bulkType = opts.bulkType;
+  const bulkId = opts.bulkId;
 
-  const cancelLongPress = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
+  const getRowId = () => {
+    return bulkId || rowEl.dataset.bulkId || rowEl.dataset.taskId || rowEl.dataset.catId || rowEl.dataset.badgeId || rowEl.dataset.sessionId || rowEl.dataset.subId || rowEl.dataset.memberUid || rowEl.dataset.broadcastId || rowEl.dataset.waiverId || '';
   };
 
-  rowEl.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (e.target.closest('input, textarea, select, button, a, label')) return;
-
-    startX = e.clientX;
-    startY = e.clientY;
-    longPressed = false;
-    cancelLongPress();
-
-    timer = setTimeout(() => {
-      longPressed = true;
-      try {
-        if (typeof navigator !== 'undefined' && navigator.vibrate) {
-          navigator.vibrate(40);
-        }
-      } catch (err) {}
+  const gesture = createRowGesture({
+    longPressMs: 450,
+    moveTolerance: 10,
+    isInteractive: (target) => {
+      if (!target || typeof target.closest !== 'function') return false;
+      return Boolean(target.closest('button, a, input, select, textarea, label, [data-no-row-tap]'));
+    },
+    isSelecting: () => Boolean(selectionState && selectionState.active),
+    onTap: (id, e) => {
+      if (typeof onTap === 'function') {
+        onTap(e);
+      }
+    },
+    onLongPress: (id, e) => {
       if (typeof onLongPress === 'function') {
         onLongPress(e);
       } else if (bulkType) {
-        const id = bulkId || rowEl.dataset.bulkId || rowEl.dataset.taskId || rowEl.dataset.catId || rowEl.dataset.badgeId || rowEl.dataset.sessionId || rowEl.dataset.subId || rowEl.dataset.memberUid || rowEl.dataset.broadcastId || rowEl.dataset.waiverId;
+        const rowId = id || getRowId();
         if (!selectionState.active) {
-          enterSelectionMode(bulkType, id);
-        } else if (id) {
-          toggleItemSelection(rowEl, id);
+          enterSelectionMode(bulkType, rowId);
+        } else if (rowId) {
+          toggleItemSelection(rowEl, rowId);
         }
       }
-    }, 450);
+    },
+    onToggle: (id, e) => {
+      const rowId = id || getRowId();
+      if (rowId) {
+        toggleItemSelection(rowEl, rowId);
+      }
+    }
+  });
+
+  rowEl.setAttribute('role', 'button');
+  rowEl.setAttribute('tabindex', '0');
+  rowEl.style.touchAction = 'pan-y';
+  rowEl.style.userSelect = 'none';
+  rowEl.style.webkitUserSelect = 'none';
+  rowEl.style.webkitTouchCallout = 'none';
+
+  rowEl.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    gesture.down(e, getRowId());
   });
 
   rowEl.addEventListener('pointermove', (e) => {
-    if (!timer) return;
-    const dx = Math.abs(e.clientX - startX);
-    const dy = Math.abs(e.clientY - startY);
-    if (dx > 10 || dy > 10) {
-      cancelLongPress();
-    }
+    gesture.move(e, getRowId());
   });
 
-  rowEl.addEventListener('pointerup', cancelLongPress);
-  rowEl.addEventListener('pointercancel', cancelLongPress);
+  rowEl.addEventListener('pointerup', (e) => {
+    gesture.up(e, getRowId());
+  });
+
+  rowEl.addEventListener('pointercancel', (e) => {
+    gesture.cancel(e, getRowId());
+  });
 
   rowEl.addEventListener('click', (e) => {
-    if (longPressed) {
-      longPressed = false;
+    gesture.click(e, getRowId());
+  });
+
+  rowEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+
+  rowEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if (e.target.closest('input, textarea, select, button, a, label')) return;
-
-    const id = bulkId || rowEl.dataset.bulkId || rowEl.dataset.taskId || rowEl.dataset.catId || rowEl.dataset.badgeId || rowEl.dataset.sessionId || rowEl.dataset.subId || rowEl.dataset.memberUid || rowEl.dataset.broadcastId || rowEl.dataset.waiverId;
-
-    if (selectionState.active) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (id) {
-        toggleItemSelection(rowEl, id);
-      }
-      return;
-    }
-
-    if (typeof onTap === 'function') {
-      onTap(e);
+      gesture.click(e, getRowId());
     }
   });
 }
@@ -4300,50 +4679,56 @@ export function getBulkActions(listType) {
     listType === 'broadcasts' && adminBroadcastsFilter === 'archived'
   );
 
+  const DANGER_CLS = 'h-9 px-3 rounded-xl text-xs font-semibold text-[#FF453A] bg-[#FF453A]/15 hover:bg-[#FF453A]/25 border border-[#FF453A]/25 transition';
+  const SUCCESS_CLS = 'h-9 px-3 rounded-xl text-xs font-semibold text-[#30D158] bg-[#30D158]/15 hover:bg-[#30D158]/25 border border-[#30D158]/25 transition';
+  const WARNING_CLS = 'h-9 px-3 rounded-xl text-xs font-semibold text-[#FF9F0A] bg-[#FF9F0A]/15 hover:bg-[#FF9F0A]/25 border border-[#FF9F0A]/25 transition';
+  const NEUTRAL_CLS = 'h-9 px-3 rounded-xl text-xs font-semibold text-white/90 bg-white/10 hover:bg-white/15 border border-white/15 transition';
+  const PRIMARY_CLS = 'h-9 px-3 rounded-xl text-xs font-semibold text-[#0A84FF] bg-[#0A84FF]/15 hover:bg-[#0A84FF]/25 border border-[#0A84FF]/25 transition';
+
   if (listType === 'badges') {
     return [
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
   if (listType === 'tasks' || listType === 'admin_tasks' || listType === 'categories' || listType === 'sessions' || listType === 'broadcasts') {
     return [
-      { id: 'btn-bulk-archive', label: isArchivedView ? 'Restore' : 'Archive', type: 'archive', isRestore: isArchivedView, class: 'bg-white/10 hover:bg-white/20 text-white font-semibold' },
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+      { id: 'btn-bulk-archive', label: isArchivedView ? 'Restore' : 'Archive', type: 'archive', isRestore: isArchivedView, class: isArchivedView ? SUCCESS_CLS : NEUTRAL_CLS },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
   if (listType === 'members') {
     return [
-      { id: 'btn-bulk-add-badge', label: 'Badge +', type: 'add_badge', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white font-semibold' },
-      { id: 'btn-bulk-remove-badge', label: 'Badge -', type: 'remove_badge', class: 'bg-white/10 hover:bg-white/20 text-white font-semibold' },
-      { id: 'btn-bulk-toggle-disable', label: 'Disable', type: 'disable', class: 'bg-[#FF9F0A]/20 hover:bg-[#FF9F0A]/30 text-[#FF9F0A] font-semibold' },
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+      { id: 'btn-bulk-add-badge', label: 'Badge +', type: 'add_badge', class: PRIMARY_CLS },
+      { id: 'btn-bulk-remove-badge', label: 'Badge -', type: 'remove_badge', class: NEUTRAL_CLS },
+      { id: 'btn-bulk-toggle-disable', label: 'Disable', type: 'disable', class: WARNING_CLS },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
   if (listType === 'waivers') {
     return [
-      { id: 'btn-bulk-approve-waiver', label: 'Approve', type: 'approve_waiver', class: 'bg-[#30D158] hover:bg-[#28B84D] text-black font-semibold' },
-      { id: 'btn-bulk-deny-waiver', label: 'Deny', type: 'deny_waiver', class: 'bg-[#FF453A] hover:bg-[#D9382E] text-white font-semibold' },
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+      { id: 'btn-bulk-approve-waiver', label: 'Approve', type: 'approve_waiver', class: SUCCESS_CLS },
+      { id: 'btn-bulk-deny-waiver', label: 'Deny', type: 'deny_waiver', class: DANGER_CLS },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
   if (listType === 'submissions' || listType === 'attendance_logs' || listType === 'notifications_admin') {
     return [
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
   if (listType === 'notifications' || listType === 'updates') {
     return [
-      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white font-semibold' }
+      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: PRIMARY_CLS }
     ];
   }
 
   return [
-    { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+    { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
   ];
 }
 
@@ -4374,6 +4759,14 @@ export function enterSelectionMode(type, initialSelectedId = null) {
   }
 
   updateSelectionUI();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && selectionState.active) {
+      exitSelectionMode();
+    }
+  });
 }
 
 export function exitSelectionMode() {
@@ -4420,8 +4813,14 @@ export function updateSelectionUI() {
   const countEl = document.getElementById('bulk-selection-count');
   if (countEl) {
     countEl.textContent = `${count} Selected`;
+    countEl.classList.remove('font-mono');
+    countEl.style.fontVariantNumeric = 'tabular-nums';
   }
 
+  const cancelBtn = document.getElementById('btn-bulk-cancel');
+  if (cancelBtn) {
+    cancelBtn.onclick = exitSelectionMode;
+  }
   const selectAllBtn = document.getElementById('btn-bulk-select-all');
   if (selectAllBtn) {
     const allSelected = selectionState.visibleIds.length > 0 &&
@@ -4430,10 +4829,6 @@ export function updateSelectionUI() {
     selectAllBtn.onclick = toggleSelectAll;
   }
 
-  const doneBtnTop = document.getElementById('btn-bulk-done');
-  if (doneBtnTop) {
-    doneBtnTop.onclick = exitSelectionMode;
-  }
 
   const actionsContainer = document.getElementById('bulk-actions-container');
   if (actionsContainer) {
@@ -4443,7 +4838,7 @@ export function updateSelectionUI() {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.id = act.id;
-      btn.className = `text-xs font-semibold px-2.5 py-1 rounded-full transition disabled:opacity-40 disabled:cursor-not-allowed ${act.class || ''}`;
+      btn.className = `${act.class || 'h-9 px-3 rounded-xl text-xs font-semibold bg-white/10 text-white'} disabled:opacity-40 disabled:cursor-not-allowed`;
       btn.textContent = act.label;
       btn.disabled = (count === 0);
       btn.onclick = () => {
@@ -5711,7 +6106,11 @@ export const PAGE_ORDER = [
    RELEASE v2.2.1: CENTRALIZED 3-BUCKET ADJUST HUB & ATOMIC ADJUSTMENT ENGINE
    ========================================================================== */
 
-export async function applyAccountAdjustment({ targetUid, bucket, direction, amount, reason }) {
+export async function applyAccountAdjustment(opts) {
+  if (!opts || !opts.targetUid) {
+    return submitHubAdjustment();
+  }
+  const { targetUid, bucket, direction, amount, reason } = opts;
   if (!state.user) throw new Error('Authentication required');
   if (!targetUid) throw new Error('Target member is required');
   const validBuckets = ['points', 'penalties', 'fines'];
@@ -5833,33 +6232,29 @@ const adjustHubState = {
   bucket: 'points',
   direction: 'add',
   amount: '',
-  reason: '',
-  searchQuery: ''
+  reason: ''
 };
 
 export function renderAdminAdjustments() {
   const panel = document.getElementById('admin-panel-adjustments');
   if (!panel) return;
 
-  const rosterList = document.getElementById('hubMemberRosterList');
-  const searchInput = document.getElementById('hubMemberSearchInput');
-  const recipientsBadge = document.getElementById('hubRecipientsBadge');
-  const toggleAllBtn = document.getElementById('btnHubToggleAll');
-  const selectedMemberCard = document.getElementById('hubSelectedMemberCard');
+  const openPickerBtn = document.getElementById('btnHubOpenPicker');
+  const clearRecipientsBtn = document.getElementById('btnHubClearRecipients');
+  const pickerLabel = document.getElementById('hubPickerLabel');
+  const pickerSubtext = document.getElementById('hubPickerSubtext');
+  const selectedRecipientsContainer = document.getElementById('hubSelectedRecipientsContainer');
+  const selectedCountText = document.getElementById('hubSelectedCountText');
+  const selectedRecipientsList = document.getElementById('hubSelectedRecipientsList');
+
   const bucketSegmented = document.getElementById('hubBucketSegmented');
   const directionSegmented = document.getElementById('hubDirectionSegmented');
   const amountInput = document.getElementById('hubAdjustAmount');
   const amountUnit = document.getElementById('hubAmountUnit');
   const directionDesc = document.getElementById('hubOperationDesc');
   const reasonInput = document.getElementById('hubAdjustReason');
-  const reasonChipsContainer = document.getElementById('hubReasonChipsContainer');
   const submitBtn = document.getElementById('btnHubSubmitAdjustment');
   const submitBtnLabel = document.getElementById('hubSubmitBtnLabel');
-
-  // Synchronize inputs with persistent state
-  if (amountInput && adjustHubState.amount) amountInput.value = adjustHubState.amount;
-  if (reasonInput && adjustHubState.reason) reasonInput.value = adjustHubState.reason;
-  if (searchInput && adjustHubState.searchQuery) searchInput.value = adjustHubState.searchQuery;
 
   function updateDynamicButtonLabel() {
     if (!submitBtnLabel) return;
@@ -5875,8 +6270,58 @@ export function renderAdminAdjustments() {
       if (submitBtn) submitBtn.disabled = true;
     } else {
       submitBtnLabel.textContent = `${dirSign} ${dirWord} ${amt > 0 ? amt : ''} ${unit} ${toFrom} ${count} Member${count > 1 ? 's' : ''}`;
-      if (submitBtn) submitBtn.disabled = false;
+      if (submitBtn) submitBtn.disabled = (amt <= 0);
     }
+  }
+
+  function updateRecipientsUI() {
+    const count = adjustHubState.selectedUids.size;
+    if (pickerLabel) {
+      pickerLabel.textContent = count === 0 ? 'Select member(s)' : `${count} Member${count > 1 ? 's' : ''} Selected`;
+    }
+    if (pickerSubtext) {
+      pickerSubtext.textContent = count === 0 ? 'Tap to choose recipients' : 'Tap to change recipient selection';
+    }
+    if (clearRecipientsBtn) {
+      clearRecipientsBtn.classList.toggle('hidden', count === 0);
+    }
+    if (selectedRecipientsContainer) {
+      selectedRecipientsContainer.classList.toggle('hidden', count === 0);
+    }
+    if (selectedCountText) {
+      selectedCountText.textContent = count;
+    }
+
+    if (selectedRecipientsList) {
+      if (count === 0) {
+        selectedRecipientsList.innerHTML = '';
+      } else {
+        const chipsHtml = Array.from(adjustHubState.selectedUids).map(uid => {
+          const user = usersMap.get(uid) || (state.members || []).find(m => m.uid === uid) || { uid, displayName: 'Member' };
+          const name = user.displayName || user.name || user.email || uid;
+          return `
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-xs text-white">
+              <span class="truncate max-w-[120px]">${esc(name)}</span>
+              <button type="button" class="btn-hub-remove-recipient text-neutral-400 hover:text-white cursor-pointer" data-uid="${esc(uid)}" aria-label="Remove ${esc(name)}">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </span>
+          `;
+        }).join('');
+        selectedRecipientsList.innerHTML = chipsHtml;
+
+        selectedRecipientsList.querySelectorAll('.btn-hub-remove-recipient').forEach(btn => {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            adjustHubState.selectedUids.delete(btn.dataset.uid);
+            updateRecipientsUI();
+            updateDynamicButtonLabel();
+          };
+        });
+      }
+    }
+
+    updateDynamicButtonLabel();
   }
 
   function updateBucketUI() {
@@ -5884,209 +6329,50 @@ export function renderAdminAdjustments() {
     bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
       const isCur = btn.dataset.bucket === adjustHubState.bucket;
       btn.classList.toggle('active', isCur);
-      if (isCur) {
-        btn.classList.remove('text-neutral-400');
-        btn.classList.add('text-white');
-      } else {
-        btn.classList.add('text-neutral-400');
-        btn.classList.remove('text-white');
-      }
+      btn.classList.toggle('bg-white/15', isCur);
+      btn.classList.toggle('text-white', isCur);
+      btn.classList.toggle('shadow-sm', isCur);
+      btn.classList.toggle('text-neutral-400', !isCur);
     });
 
     if (amountUnit) {
-      amountUnit.textContent = adjustHubState.bucket === 'points' ? 'Points' : (adjustHubState.bucket === 'penalties' ? 'Penalties' : 'Fines (EGP)');
+      amountUnit.textContent = adjustHubState.bucket === 'points' ? 'PTS' : (adjustHubState.bucket === 'penalties' ? 'PEN' : 'EGP');
     }
 
-    if (directionDesc) {
-      if (adjustHubState.bucket === 'points') {
-        directionDesc.textContent = adjustHubState.direction === 'add' ? '+ Add performance score to member balance' : '- Deduct performance points from balance';
-      } else if (adjustHubState.bucket === 'penalties') {
-        directionDesc.textContent = adjustHubState.direction === 'add' ? '+ Record misconduct penalty on member record' : '- Forgive / remove penalty points from record';
-      } else {
-        directionDesc.textContent = adjustHubState.direction === 'add' ? '+ Issue financial fine owed by member' : '- Record settlement / credit fine payment';
-      }
-    }
-
+    updateDirectionDesc();
     updateDynamicButtonLabel();
   }
 
   function updateDirectionUI() {
     if (!directionSegmented) return;
-    directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
-      const isCur = btn.dataset.direction === adjustHubState.direction;
+    directionSegmented.querySelectorAll('.hub-dir-btn').forEach(btn => {
+      const isCur = btn.dataset.dir === adjustHubState.direction;
       btn.classList.toggle('active', isCur);
-      if (isCur) {
-        btn.classList.remove('text-neutral-400');
-        btn.classList.add('text-white');
-      } else {
-        btn.classList.add('text-neutral-400');
-        btn.classList.remove('text-white');
-      }
+      btn.classList.toggle('bg-white/15', isCur);
+      btn.classList.toggle('text-white', isCur);
+      btn.classList.toggle('shadow-sm', isCur);
+      btn.classList.toggle('text-neutral-400', !isCur);
     });
 
-    updateBucketUI();
-  }
-
-  function renderRoster() {
-    if (!rosterList) return;
-    const q = (searchInput?.value || adjustHubState.searchQuery || '').trim().toLowerCase();
-    const all = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
-    const filtered = all.filter(m => {
-      if (m.disabled) return false;
-      if (!q) return true;
-      const name = (m.displayName || m.name || '').toLowerCase();
-      const email = (m.email || '').toLowerCase();
-      const role = (m.role || '').toLowerCase();
-      const badges = (m.badges || []).map(b => (b.name || b.label || b.id || '').toLowerCase()).join(' ');
-      return name.includes(q) || email.includes(q) || role.includes(q) || badges.includes(q);
-    });
-
-    if (recipientsBadge) {
-      recipientsBadge.textContent = `${adjustHubState.selectedUids.size} Selected`;
-    }
-
-    if (toggleAllBtn) {
-      const allSelected = filtered.length > 0 && filtered.every(m => adjustHubState.selectedUids.has(m.uid));
-      toggleAllBtn.textContent = allSelected ? 'Deselect All' : 'Select All';
-    }
-
-    if (filtered.length === 0) {
-      rosterList.innerHTML = '<div class="p-4 text-center text-xs text-neutral-400">No members match your search.</div>';
-    } else {
-      rosterList.innerHTML = filtered.map(m => {
-        const isSelected = adjustHubState.selectedUids.has(m.uid);
-        const memFines = m.finesDue !== undefined ? m.finesDue : (m.penalties ? m.penalties : 0);
-
-        return `
-          <div class="hub-roster-item${isSelected ? ' selected' : ''}" data-uid="${esc(m.uid)}">
-            <div class="flex items-center gap-2.5 min-w-0 flex-1">
-              <div class="w-5 h-5 rounded-full border ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF] text-white' : 'border-white/30 bg-transparent'} flex items-center justify-center shrink-0 transition">
-                ${isSelected ? '<svg class="w-3 h-3 stroke-current fill-none" stroke-width="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
-              </div>
-              <div class="shrink-0">${renderAvatar(m, 'w-7 h-7')}</div>
-              <div class="min-w-0 flex-1">
-                <div class="font-semibold text-white text-xs truncate">${esc(m.displayName || m.name || 'Member')}</div>
-                <div class="text-[10px] text-neutral-400 truncate">${esc(m.role || 'member')}</div>
-              </div>
-            </div>
-            <div class="text-right shrink-0 font-mono text-[10px] text-neutral-400">
-              <span class="text-amber-400 font-bold">${m.points || 0} pts</span>
-              <span> | </span>
-              <span class="text-rose-400">${m.penalties || 0} pen</span>
-              <span> | </span>
-              <span class="text-blue-400">${memFines} EGP</span>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      rosterList.querySelectorAll('.hub-roster-item').forEach(item => {
-        item.onclick = () => {
-          const uid = item.dataset.uid;
-          if (adjustHubState.selectedUids.has(uid)) {
-            adjustHubState.selectedUids.delete(uid);
-          } else {
-            adjustHubState.selectedUids.add(uid);
-          }
-          renderRoster();
-          renderSingleSummaryCard();
-          updateDynamicButtonLabel();
-        };
-      });
-    }
-
-    renderSingleSummaryCard();
+    updateDirectionDesc();
     updateDynamicButtonLabel();
   }
 
-  function renderSingleSummaryCard() {
-    if (!selectedMemberCard) return;
-    if (adjustHubState.selectedUids.size !== 1) {
-      selectedMemberCard.classList.add('hidden');
-      selectedMemberCard.innerHTML = '';
-      return;
-    }
-
-    const singleUid = Array.from(adjustHubState.selectedUids)[0];
-    const member = usersMap.get(singleUid) || (state.members || []).find(m => m.uid === singleUid);
-    if (!member) {
-      selectedMemberCard.classList.add('hidden');
-      return;
-    }
-
-    const memFines = member.finesDue !== undefined ? member.finesDue : (member.penalties ? member.penalties : 0);
-
-    selectedMemberCard.classList.remove('hidden');
-    selectedMemberCard.innerHTML = `
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2.5 min-w-0">
-          ${renderAvatar(member, 'w-8 h-8')}
-          <div class="min-w-0">
-            <div class="font-bold text-white text-xs truncate">${esc(member.displayName || member.name || 'Member')}</div>
-            <div class="text-[10px] text-neutral-400 truncate">${esc(member.email || member.role || 'Member')}</div>
-          </div>
-        </div>
-        <button type="button" id="btnHubClearSingle" class="text-[10px] text-neutral-400 hover:text-white px-2 py-1 rounded-md bg-white/5">Deselect</button>
-      </div>
-      <div class="grid grid-cols-3 gap-2 text-center font-mono pt-1">
-        <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
-          <div class="text-[9px] uppercase tracking-wider text-amber-300 font-bold">Points</div>
-          <div class="text-sm font-bold text-amber-400 mt-0.5">${member.points || 0} pts</div>
-        </div>
-        <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
-          <div class="text-[9px] uppercase tracking-wider text-rose-300 font-bold">Penalties</div>
-          <div class="text-sm font-bold text-rose-400 mt-0.5">${member.penalties || 0}</div>
-        </div>
-        <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
-          <div class="text-[9px] uppercase tracking-wider text-blue-300 font-bold">Fines Due</div>
-          <div class="text-sm font-bold text-blue-400 mt-0.5">${memFines} EGP</div>
-        </div>
-      </div>
-    `;
-
-    const clearSingleBtn = document.getElementById('btnHubClearSingle');
-    if (clearSingleBtn) {
-      clearSingleBtn.onclick = () => {
-        adjustHubState.selectedUids.delete(singleUid);
-        renderRoster();
-      };
+  function updateDirectionDesc() {
+    if (!directionDesc) return;
+    const isAdd = adjustHubState.direction === 'add';
+    if (adjustHubState.bucket === 'points') {
+      directionDesc.textContent = isAdd ? 'Credit points to member balances.' : 'Deduct points from member balances.';
+    } else if (adjustHubState.bucket === 'penalties') {
+      directionDesc.textContent = isAdd ? 'Add penalty marks to member records.' : 'Forgive penalty marks from member records.';
+    } else {
+      directionDesc.textContent = isAdd ? 'Assign monetary fine (EGP) balance.' : 'Waive monetary fine (EGP) balance.';
     }
   }
 
-  // Search input handler
-  if (searchInput) {
-    searchInput.oninput = () => {
-      adjustHubState.searchQuery = searchInput.value;
-      renderRoster();
-    };
-  }
-
-  // Toggle All button
-  if (toggleAllBtn) {
-    toggleAllBtn.onclick = () => {
-      const q = (searchInput?.value || '').trim().toLowerCase();
-      const all = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
-      const filtered = all.filter(m => {
-        if (!q) return true;
-        const name = (m.displayName || m.name || '').toLowerCase();
-        const email = (m.email || '').toLowerCase();
-        const role = (m.role || '').toLowerCase();
-        const badges = (m.badges || []).map(b => (b.name || b.label || b.id || '').toLowerCase()).join(' ');
-        return name.includes(q) || email.includes(q) || role.includes(q) || badges.includes(q);
-      });
-
-      const allSelected = filtered.length > 0 && filtered.every(m => adjustHubState.selectedUids.has(m.uid));
-      if (allSelected) {
-        filtered.forEach(m => adjustHubState.selectedUids.delete(m.uid));
-      } else {
-        filtered.forEach(m => adjustHubState.selectedUids.add(m.uid));
-      }
-      renderRoster();
-    };
-  }
-
-  // Bucket segmented control
-  if (bucketSegmented) {
+  // Bind bucket selection buttons
+  if (bucketSegmented && !bucketSegmented._hasBound) {
+    bucketSegmented._hasBound = true;
     bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
       btn.onclick = () => {
         adjustHubState.bucket = btn.dataset.bucket;
@@ -6095,115 +6381,320 @@ export function renderAdminAdjustments() {
     });
   }
 
-  // Direction segmented control
-  if (directionSegmented) {
-    directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
+  // Bind direction selection buttons
+  if (directionSegmented && !directionSegmented._hasBound) {
+    directionSegmented._hasBound = true;
+    directionSegmented.querySelectorAll('.hub-dir-btn').forEach(btn => {
       btn.onclick = () => {
-        adjustHubState.direction = btn.dataset.direction;
+        adjustHubState.direction = btn.dataset.dir;
         updateDirectionUI();
       };
     });
   }
 
-  // Presets
-  panel.querySelectorAll('.hub-preset-btn').forEach(btn => {
-    btn.onclick = () => {
-      adjustHubState.amount = btn.dataset.amount;
-      if (amountInput) amountInput.value = btn.dataset.amount;
-      panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.toggle('active', b === btn));
-      updateDynamicButtonLabel();
-    };
-  });
-
-  // Amount input event: ONLY updates state & submit button label in place!
-  if (amountInput) {
+  // Bind amount input (persistent state without form re-rendering)
+  if (amountInput && !amountInput._hasBound) {
+    amountInput._hasBound = true;
     amountInput.oninput = () => {
       adjustHubState.amount = amountInput.value;
-      const val = amountInput.value;
-      panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.toggle('active', b.dataset.amount === val));
       updateDynamicButtonLabel();
     };
   }
 
-  // Reason input event: ONLY updates state in place!
-  if (reasonInput) {
+  // Bind reason input (persistent state without form re-rendering)
+  if (reasonInput && !reasonInput._hasBound) {
+    reasonInput._hasBound = true;
     reasonInput.oninput = () => {
       adjustHubState.reason = reasonInput.value;
     };
   }
 
-  // Reason chips
-  if (reasonChipsContainer) {
-    reasonChipsContainer.querySelectorAll('.hub-quick-chip').forEach(chip => {
-      chip.onclick = () => {
-        adjustHubState.reason = chip.dataset.reason;
-        if (reasonInput) reasonInput.value = chip.dataset.reason;
+  // Bind open member picker button
+  if (openPickerBtn && !openPickerBtn._hasBound) {
+    openPickerBtn._hasBound = true;
+    openPickerBtn.onclick = () => {
+      openAdjustmentsMemberPickerSheet();
+    };
+  }
+
+  // Bind clear recipients button
+  if (clearRecipientsBtn && !clearRecipientsBtn._hasBound) {
+    clearRecipientsBtn._hasBound = true;
+    clearRecipientsBtn.onclick = () => {
+      adjustHubState.selectedUids.clear();
+      updateRecipientsUI();
+    };
+  }
+
+  // Bind submit adjustment button
+  if (submitBtn && !submitBtn._hasBound) {
+    submitBtn._hasBound = true;
+    submitBtn.onclick = async () => {
+      await applyAccountAdjustment();
+    };
+  }
+
+  // Sync current form state
+  if (amountInput) amountInput.value = adjustHubState.amount || '';
+  if (reasonInput) reasonInput.value = adjustHubState.reason || '';
+
+  updateBucketUI();
+  updateDirectionUI();
+  updateRecipientsUI();
+}
+
+/**
+ * Dedicated popup member picker half-sheet for Adjustments Hub (FIX 5).
+ * Edits a draft selection set and commits on 'Done'.
+ */
+function openAdjustmentsMemberPickerSheet() {
+  const activeMembers = (usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members])
+    .filter(m => m && !m.disabled && !m.blocked);
+
+  const draftSelection = new Set(adjustHubState.selectedUids);
+  let searchQuery = '';
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'flex flex-col h-full space-y-3';
+  bodyEl.style.height = '100%';
+
+  bodyEl.innerHTML = `
+    <!-- Sticky Search -->
+    <div class="ios-search-wrapper shrink-0">
+      <svg class="search-icon w-4 h-4 text-neutral-400 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <input type="search" id="pickerSearchInput" class="ios-input ios-search-field" placeholder="Search name, email, badge or role..." autocomplete="off" />
+    </div>
+
+    <!-- Selection Controls -->
+    <div class="flex items-center justify-between text-xs px-1 shrink-0">
+      <button type="button" id="btnPickerToggleAll" class="text-[#0A84FF] font-semibold hover:underline">Select All</button>
+      <span id="pickerCountLabel" class="text-neutral-400 font-semibold" style="font-variant-numeric: tabular-nums;">${draftSelection.size} Selected</span>
+    </div>
+
+    <!-- Scrollable Members List -->
+    <div id="pickerRosterList" class="flex-1 overflow-y-auto space-y-2 pr-1 min-h-0" style="-webkit-overflow-scrolling: touch;">
+      <!-- Populated dynamically -->
+    </div>
+  `;
+
+  function renderList() {
+    const listEl = bodyEl.querySelector('#pickerRosterList');
+    const countEl = bodyEl.querySelector('#pickerCountLabel');
+    const toggleAllBtn = bodyEl.querySelector('#btnPickerToggleAll');
+    if (!listEl) return;
+
+    const q = searchQuery.toLowerCase().trim();
+    const filtered = activeMembers.filter(m => {
+      if (!q) return true;
+      const name = (m.displayName || m.name || '').toLowerCase();
+      const email = (m.email || '').toLowerCase();
+      const role = (m.role || '').toLowerCase();
+      const badges = (m.badges || []).map(b => (typeof b === 'object' ? b.label || b.name : b).toLowerCase()).join(' ');
+      return name.includes(q) || email.includes(q) || role.includes(q) || badges.includes(q);
+    });
+
+    if (countEl) {
+      countEl.textContent = `${draftSelection.size} Selected`;
+    }
+
+    if (toggleAllBtn) {
+      const allFilteredSelected = filtered.length > 0 && filtered.every(m => draftSelection.has(m.uid));
+      toggleAllBtn.textContent = allFilteredSelected ? 'Deselect All' : 'Select All';
+      toggleAllBtn.onclick = () => {
+        if (allFilteredSelected) {
+          filtered.forEach(m => draftSelection.delete(m.uid));
+        } else {
+          filtered.forEach(m => draftSelection.add(m.uid));
+        }
+        renderList();
+      };
+    }
+
+    if (filtered.length === 0) {
+      listEl.innerHTML = `
+        <div class="p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-2xl">
+          No members matching "${esc(searchQuery)}"
+        </div>
+      `;
+      return;
+    }
+
+    listEl.innerHTML = filtered.map(member => {
+      const isChecked = draftSelection.has(member.uid);
+      const userProf = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+      const pts = member.points || 0;
+      const pen = member.penalties || 0;
+      const fines = member.finesEGP !== undefined ? member.finesEGP : (member.penalties ? `${member.penalties} EGP` : '0 EGP');
+
+      return `
+        <div class="picker-member-item p-2.5 rounded-xl border transition flex items-center justify-between gap-3 cursor-pointer select-none ${isChecked ? 'bg-[#0A84FF]/10 border-[#0A84FF]/30' : 'bg-white/[0.03] border-white/5 hover:bg-white/[0.06]'}" data-uid="${esc(member.uid)}">
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            <div class="w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition ${isChecked ? 'bg-[#0A84FF] border-[#0A84FF] text-white' : 'border-neutral-500 bg-transparent'}">
+              ${isChecked ? '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+            </div>
+            ${renderAvatar(userProf, 'w-8 h-8')}
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-white text-xs truncate">${esc(userProf.displayName)}</span>
+                <span class="text-[9px] uppercase px-1.5 py-0.2 rounded font-semibold ${member.role === 'admin' ? 'bg-purple-500/20 text-purple-300' : 'bg-white/10 text-neutral-400'}">${esc(member.role || 'member')}</span>
+              </div>
+              <div class="text-[10px] text-neutral-400 flex items-center gap-2 mt-0.5" style="font-variant-numeric: tabular-nums;">
+                <span>Pts: <strong class="text-amber-400">${pts}</strong></span>
+                <span>•</span>
+                <span>Pen: <strong class="text-rose-400">${pen}</strong></span>
+                <span>•</span>
+                <span>Due: <strong class="text-neutral-300">${fines}</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    listEl.querySelectorAll('.picker-member-item').forEach(el => {
+      el.onclick = () => {
+        const uid = el.dataset.uid;
+        if (draftSelection.has(uid)) {
+          draftSelection.delete(uid);
+        } else {
+          draftSelection.add(uid);
+        }
+        renderList();
       };
     });
   }
 
-  // Submit adjustment button
-  if (submitBtn) {
-    submitBtn.onclick = async () => {
-      if (adjustHubState.selectedUids.size === 0) {
-        toast('Please select at least one recipient member', 'warning');
-        return;
-      }
+  const modal = openModal({
+    title: 'Select Recipients',
+    body: bodyEl,
+    saveLabel: `Done (${draftSelection.size})`,
+    onSave: async () => {
+      adjustHubState.selectedUids = new Set(draftSelection);
+      renderAdminAdjustments();
+      return true;
+    }
+  });
 
-      const amtVal = Math.abs(Number(adjustHubState.amount || amountInput?.value));
-      if (isNaN(amtVal) || amtVal <= 0) {
-        toast('Please enter a valid amount greater than 0', 'error');
-        return;
-      }
+  setTimeout(() => {
+    renderList();
+    const searchInput = bodyEl.querySelector('#pickerSearchInput');
+    if (searchInput) {
+      searchInput.oninput = () => {
+        searchQuery = searchInput.value;
+        renderList();
+      };
+    }
+  }, 30);
+}
 
-      // Optional reason: defaults to 'Manual adjustment' if empty
-      const reasonVal = String(adjustHubState.reason || reasonInput?.value || '').trim() || 'Manual adjustment';
+export async function submitHubAdjustment() {
+  const { selectedUids, bucket, direction, amount, reason } = adjustHubState;
+  const numAmount = parseInt(amount, 10);
 
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'Applying adjustments...';
-
-      try {
-        const uidsArray = Array.from(adjustHubState.selectedUids);
-        for (const targetUid of uidsArray) {
-          const res = await applyAccountAdjustment({
-            targetUid,
-            bucket: adjustHubState.bucket,
-            direction: adjustHubState.direction,
-            amount: amtVal,
-            reason: reasonVal
-          });
-
-          const mem = usersMap.get(targetUid) || (state.members || []).find(m => m.uid === targetUid);
-          if (mem) {
-            if (res.newPoints !== undefined) mem.points = res.newPoints;
-            if (res.newPenalties !== undefined) mem.penalties = res.newPenalties;
-            if (res.newFinesDue !== undefined) mem.finesDue = res.newFinesDue;
-          }
-        }
-
-        adjustHubState.amount = '';
-        adjustHubState.reason = '';
-        if (amountInput) amountInput.value = '';
-        if (reasonInput) reasonInput.value = '';
-        panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.remove('active'));
-
-        toast(`Applied ${adjustHubState.direction === 'add' ? '+' : '-'}${amtVal} ${adjustHubState.bucket} to ${uidsArray.length} member(s)`, 'success');
-        renderRoster();
-        if (typeof renderAdminMembers === 'function') renderAdminMembers();
-        if (typeof renderLeaderboard === 'function') renderLeaderboard();
-      } catch (err) {
-        console.error('Adjust Hub Error:', err);
-        toast(err.message || 'Failed to apply adjustment', 'error');
-      } finally {
-        submitBtn.disabled = false;
-        updateDynamicButtonLabel();
-      }
-    };
+  if (selectedUids.size === 0) {
+    toast('Please select at least one recipient', 'error');
+    return;
+  }
+  if (isNaN(numAmount) || numAmount <= 0) {
+    toast('Please enter a valid amount greater than 0', 'error');
+    return;
   }
 
-  updateBucketUI();
-  updateDirectionUI();
-  renderRoster();
+  const finalReason = (reason || '').trim() || 'Manual adjustment';
+  const submitBtn = document.getElementById('btnHubSubmitAdjustment');
+  if (submitBtn) submitBtn.disabled = true;
+
+  try {
+    const targetUids = Array.from(selectedUids);
+    const chunkSize = 250;
+    const now = serverNow();
+    const adminEmail = state.user?.email || 'admin';
+    const adminUid = state.user?.uid || 'admin';
+
+    for (let i = 0; i < targetUids.length; i += chunkSize) {
+      const chunk = targetUids.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+
+      for (const targetUid of chunk) {
+        const member = usersMap.get(targetUid) || (state.members || []).find(m => m.uid === targetUid) || {};
+        const userRef = doc(db, 'users', targetUid);
+        const privateRef = doc(db, 'users_private', targetUid);
+
+        let delta = direction === 'add' ? numAmount : -numAmount;
+
+        if (bucket === 'points') {
+          const currentPts = member.points || 0;
+          const currentTotal = member.totalPoints || currentPts;
+          const newPts = Math.max(0, currentPts + delta);
+          const updateData = buildPointsUpdate({
+            currentPoints: currentPts,
+            currentTotalPoints: currentTotal,
+            delta,
+            nowMs: now
+          });
+          batch.update(userRef, updateData);
+        } else if (bucket === 'penalties') {
+          const curPen = member.penalties || 0;
+          const newPen = Math.max(0, curPen + delta);
+          batch.update(userRef, {
+            penalties: newPen,
+            updatedAt: serverTimestamp()
+          });
+        } else if (bucket === 'fines') {
+          const curFines = member.finesEGP || 0;
+          const newFines = Math.max(0, curFines + delta);
+          batch.set(privateRef, {
+            finesEGP: newFines,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
+
+        // Ledger audit record
+        const ledgerRef = doc(collection(db, 'transactions'));
+        batch.set(ledgerRef, {
+          userId: targetUid,
+          performedBy: adminUid,
+          performedByEmail: adminEmail,
+          bucket,
+          direction,
+          amount: numAmount,
+          reason: finalReason,
+          timestamp: serverTimestamp(),
+          createdAtMs: now
+        });
+
+        // Push notification
+        const notifRef = doc(collection(db, 'notifications'));
+        const dirWord = direction === 'add' ? 'added' : 'deducted';
+        batch.set(notifRef, {
+          userId: targetUid,
+          type: 'account_adjustment',
+          title: 'Account Adjustment',
+          body: `Admin ${dirWord} ${numAmount} ${bucket} for: "${finalReason}"`,
+          read: false,
+          timestamp: serverTimestamp(),
+          createdAtMs: now
+        });
+      }
+
+      await batch.commit();
+    }
+
+    toast(`Successfully applied adjustment to ${targetUids.length} member${targetUids.length > 1 ? 's' : ''}`, 'success');
+
+    // Reset recipients, amount, reason while preserving bucket and direction (FIX 5)
+    adjustHubState.selectedUids.clear();
+    adjustHubState.amount = '';
+    adjustHubState.reason = '';
+
+    renderAdminAdjustments();
+
+  } catch (err) {
+    console.error('Error applying adjustment:', err);
+    toast(`Adjustment failed: ${err.message || 'Unknown error'}`, 'error');
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
 }
 
 export function getPresetAvatars() {
@@ -6356,15 +6847,19 @@ export function initEditProfileModal() {
   if (presetsGrid && (!presetsGrid.children || presetsGrid.children.length === 0)) {
     const presets = getPresetAvatars();
     presetsGrid.innerHTML = presets.map(p => `
-      <button type="button" class="preset-avatar-btn w-9 h-9 rounded-full overflow-hidden hover:scale-105 transition" data-avatar-url="${esc(p.dataUrl)}" title="${esc(p.label)}">
-        <img src="${esc(p.dataUrl)}" alt="${esc(p.label)}" class="w-full h-full object-cover" />
+      <button type="button" class="preset-avatar-btn w-14 h-14 rounded-full overflow-hidden hover:scale-105 transition border-2 border-transparent p-0.5" data-avatar-url="${esc(p.dataUrl)}" title="${esc(p.label)}">
+        <img src="${esc(p.dataUrl)}" alt="${esc(p.label)}" class="w-full h-full object-cover rounded-full" />
       </button>
     `).join('');
 
     presetsGrid.querySelectorAll('.preset-avatar-btn').forEach(btn => {
       btn.onclick = () => {
-        presetsGrid.querySelectorAll('.preset-avatar-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+        presetsGrid.querySelectorAll('.preset-avatar-btn').forEach(b => {
+          b.classList.remove('active', 'border-[#0A84FF]', 'ring-2', 'ring-[#0A84FF]');
+          b.classList.add('border-transparent');
+        });
+        btn.classList.add('active', 'border-[#0A84FF]', 'ring-2', 'ring-[#0A84FF]');
+        btn.classList.remove('border-transparent');
         const url = btn.dataset.avatarUrl;
         if (avatarInput) avatarInput.value = url;
         if (previewImg) previewImg.src = url;
@@ -6378,22 +6873,22 @@ export function initEditProfileModal() {
     };
   }
 
-  if (uploadBtn && fileInput) {
-    uploadBtn.onclick = () => fileInput.click();
-
-    fileInput.onchange = () => {
-      const file = fileInput.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const rawUrl = e.target.result;
-        openAvatarCropper(rawUrl, (croppedUrl) => {
+  if (uploadBtn) {
+    uploadBtn.onclick = () => {
+      pickAndCropImage({
+        shape: 'circle',
+        outSize: 160,
+        onDone: (croppedUrl) => {
           if (avatarInput) avatarInput.value = croppedUrl;
           if (previewImg) previewImg.src = croppedUrl;
-        });
-      };
-      reader.readAsDataURL(file);
-      fileInput.value = '';
+          if (presetsGrid) {
+            presetsGrid.querySelectorAll('.preset-avatar-btn').forEach(b => {
+              b.classList.remove('active', 'border-[#0A84FF]', 'ring-2', 'ring-[#0A84FF]');
+              b.classList.add('border-transparent');
+            });
+          }
+        }
+      });
     };
   }
 }
@@ -7224,10 +7719,7 @@ function setupMembersListeners() {
  * Admins listen to collection('users_private') limit(500) so email and finesEGP are always live.
  */
 
-// ============================================================================
-// DERIVED EGP BALANCE CACHE & HELPERS (TASK 6)
-// Balance = users_private.finesEGP (admin adjustments) + sum(attendance_logs.fineEGP)
-// ============================================================================
+
 const egpAggregateCache = new Map(); // uid -> { fineSum, timestamp }
 
 function invalidateEgpCache(uid) {
@@ -8370,13 +8862,37 @@ function initFirestoreListeners() {
     listeners.add('attendance_sessions', unsubSessions);
   } catch (e) { console.warn(e); }
 
-  // Badges Realtime Listener (Section 3)
+  // Badges Realtime Listener (FIX 3)
   try {
     const unsubBadges = onSnapshot(collection(db, 'badges'), (snapshot) => {
-      state.badges = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      badgesMap.clear();
+      state.badges = snapshot.docs.map(d => {
+        const data = d.data();
+        const badgeObj = {
+          id: d.id,
+          name: data.name || data.label || d.id,
+          label: data.label || data.name || d.id,
+          description: data.description || '',
+          iconKey: data.iconKey || data.icon || 'star',
+          icon: data.iconKey || data.icon || 'star',
+          color: data.color || '#FFD60A',
+          order: typeof data.order === 'number' ? data.order : 0
+        };
+        badgesMap.set(d.id, badgeObj);
+        return badgeObj;
+      });
+
       renderAdminBadges();
+      renderLeaderboard();
+      updateProfileUI();
+      if (typeof renderAdminMembers === 'function') renderAdminMembers();
     }, (err) => console.warn('Badges listener:', err));
     listeners.add('badges', unsubBadges);
+
+    // One-time deterministic badges seed check (admin only)
+    if (state.user && (state.user.isAdmin || state.user.role === 'admin')) {
+      checkAndSeedBadgesOnce();
+    }
   } catch (e) { console.warn(e); }
 
   // 4. Attendance Logs (User live attendance & Admin oversight)
@@ -10486,6 +11002,32 @@ function updateProfileUI() {
     const emailToDisplay = state.userPrivate?.email || state.user.email || 'Verified Member';
     if (emailEl) emailEl.textContent = emailToDisplay;
     if (avatarEl && state.user.photoURL) avatarEl.src = state.user.photoURL;
+
+    const avatarCropBtn = document.getElementById('btn-profile-avatar-crop');
+    if (avatarCropBtn && !avatarCropBtn._hasCropListener) {
+      avatarCropBtn._hasCropListener = true;
+      avatarCropBtn.onclick = async () => {
+        if (!state.user) return;
+        const croppedUri = await pickAndCropImage({ shape: 'circle', outSize: 160 });
+        if (croppedUri) {
+          try {
+            await updateDoc(doc(db, 'users', state.user.uid), {
+              avatarUrl: croppedUri,
+              photoURL: croppedUri,
+              updatedAt: serverTimestamp()
+            });
+            state.user.photoURL = croppedUri;
+            state.user.avatarUrl = croppedUri;
+            if (avatarEl) avatarEl.src = croppedUri;
+            toast('Profile photo updated!', 'success');
+          } catch (err) {
+            console.error(err);
+            toast('Failed to save profile photo', 'error');
+          }
+        }
+      };
+    }
+
     if (roleEl) roleEl.textContent = state.user.role.toUpperCase();
     if (streakEl) streakEl.textContent = `${state.user.streakDays || 0} Day Streak`;
 
@@ -10976,7 +11518,7 @@ export function renderAdminTasks() {
             <div class="font-semibold text-white truncate">${esc(t.title)}</div>
             <div class="text-[10px] text-neutral-400 flex items-center gap-1.5 mt-0.5">
               <span class="inline-flex items-center gap-1" style="color: ${cat.color};">
-                getCategorySvg(cat.iconKey, 'w-3 h-3')
+                ${getCategorySvg(cat.iconKey, 'w-3 h-3')}
                 <span>${esc(cat.name)}</span>
               </span>
               <span>•</span>
@@ -12089,11 +12631,8 @@ function renderAdminSessions() {
           </div>
 
           <div class="flex items-center justify-between pt-2 border-t border-white/5">
-            <button type="button" class="btn-card-view-attendance text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition" data-session-id="${esc(session.id)}">
+            <button type="button" class="btn-card-view-attendance text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
               <span>View Attendance</span> &rarr;
-            </button>
-            <button type="button" class="btn-card-edit-session text-xs font-semibold text-neutral-400 hover:text-white flex items-center gap-1 transition" data-session-id="${esc(session.id)}">
-              <span>Edit Settings</span>
             </button>
           </div>
 
@@ -12729,14 +13268,40 @@ function openAdminSessionModal(sessionId = null) {
 // SECTION 3: ADMIN "BADGES" MANAGEMENT DASHBOARD
 // =========================================================================
 
-export function renderAdminBadges() {
+export 
+async function checkAndSeedBadgesOnce() {
+  if (!state.user || (state.user.role !== 'admin' && !state.user.isAdmin)) return;
+  try {
+    const genDoc = await getDoc(doc(db, 'settings', 'general'));
+    if (genDoc.exists() && genDoc.data()?.badgesSeeded === true) {
+      return;
+    }
+    const defaultBadges = [
+      { id: 'top-contributor', name: 'Top Contributor', label: 'Top Contributor', description: 'Awarded for extraordinary dedication and team contribution.', iconKey: 'star', icon: 'star', color: '#FFD60A', order: 1 },
+      { id: 'streak-warrior', name: 'Streak Warrior', label: 'Streak Warrior', description: 'Consistently completes weekly tasks and attends gatherings.', iconKey: 'flame', icon: 'flame', color: '#FF9F0A', order: 2 },
+      { id: 'quality-champion', name: 'Quality Champion', label: 'Quality Champion', description: 'Exemplary craftsmanship in media production and service.', iconKey: 'shield', icon: 'shield', color: '#BF5AF2', order: 3 },
+      { id: 'service-leader', name: 'Service Leader', label: 'Service Leader', description: 'Inspiring leadership and steadfast reliability on the media team.', iconKey: 'heart', icon: 'heart', color: '#FF375F', order: 4 }
+    ];
+
+    const batch = writeBatch(db);
+    defaultBadges.forEach(b => {
+      batch.set(doc(db, 'badges', b.id), b, { merge: true });
+    });
+    batch.set(doc(db, 'settings', 'general'), { badgesSeeded: true }, { merge: true });
+    await batch.commit();
+  } catch (err) {
+    console.warn('One-time badges seed check:', err);
+  }
+}
+
+function renderAdminBadges() {
   const container = document.getElementById('admin-badges-list');
   if (!container) return;
 
   const allBadges = getAllAvailableBadges();
   if (allBadges.length === 0) {
     container.innerHTML = `
-      <div class="col-span-full glass-card p-8 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-2xl">
+      <div class="glass-card p-8 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-2xl w-full">
         No team badges created yet. Tap "+ New Badge" to create one.
       </div>
     `;
@@ -12752,30 +13317,32 @@ export function renderAdminBadges() {
     }).length;
 
     const color = badge.color || '#0A84FF';
-    const iconSvg = getIconSvg(badge.icon || 'star', 'w-4 h-4');
+    const iconSvg = getIconSvg(badge.icon || badge.iconKey || 'star', 'w-4 h-4');
     const isSelected = selectionState.active && selectionState.type === 'badges' && selectionState.selectedIds.has(badge.id);
+    const hasDesc = Boolean(badge.description && badge.description.trim() && badge.description.trim() !== 'No description provided.');
 
     return `
-      <div class="glass-card bulk-select-card p-3 flex items-center justify-between text-xs rounded-xl cursor-pointer hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-badge-id="${esc(badge.id)}" data-bulk-id="${esc(badge.id)}">
+      <div class="glass-card bulk-select-card p-3.5 text-xs rounded-2xl cursor-pointer hover:bg-white/[0.04] transition w-full${isSelected ? ' selected' : ''}" data-badge-id="${esc(badge.id)}" data-bulk-id="${esc(badge.id)}">
         ${BULK_INDICATOR_HTML}
-        <div class="bulk-card-content flex items-center justify-between w-full">
-          <div class="flex items-center gap-2.5 min-w-0">
-            <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background-color: ${color}25; border: 1px solid ${color}50; color: ${color};">
+        <div class="bulk-card-content flex items-center justify-between w-full gap-3">
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background-color: ${color}25; border: 1px solid ${color}50; color: ${color};">
               ${iconSvg}
             </div>
-            <div class="min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="font-semibold text-white truncate">${esc(badge.label || badge.name || badge.id)}</span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-bold text-white text-sm break-words">${esc(badge.label || badge.name || badge.id)}</span>
                 <span class="w-2 h-2 rounded-full shrink-0" style="background-color: ${color};"></span>
               </div>
-              ${badge.description ? `<p class="text-[10px] text-neutral-400 truncate mt-0.5">${esc(badge.description)}</p>` : ''}
+              ${hasDesc ? `<p class="text-[11px] text-neutral-400 mt-1 leading-snug break-words">${esc(badge.description)}</p>` : ''}
             </div>
           </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-white/10 text-neutral-300">
-              ${memberCount}
+
+          <div class="flex items-center gap-3 shrink-0">
+            <span class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white/5 border border-white/10 text-neutral-300 whitespace-nowrap" style="font-variant-numeric: tabular-nums;">
+              ${memberCount} member${memberCount === 1 ? '' : 's'}
             </span>
-            <svg class="w-4 h-4 text-neutral-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            <svg class="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
       </div>
@@ -13282,23 +13849,23 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
       <div class="grid grid-cols-5 gap-1.5 text-center text-xs">
         <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
           <span class="text-[10px] text-neutral-400 block font-medium">Assigned</span>
-          <span class="font-bold font-mono text-white mt-0.5 block">${assignedMembers.length}</span>
+          <span class="font-bold text-white mt-0.5 block" style="font-variant-numeric: tabular-nums;">${assignedMembers.length}</span>
         </div>
         <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
           <span class="text-[10px] text-emerald-300 block font-medium">On Time</span>
-          <span class="font-bold font-mono text-emerald-400 mt-0.5 block">${onTimeCount}</span>
+          <span class="font-bold text-emerald-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${onTimeCount}</span>
         </div>
         <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
           <span class="text-[10px] text-amber-300 block font-medium">Late</span>
-          <span class="font-bold font-mono text-amber-400 mt-0.5 block">${lateCount}</span>
+          <span class="font-bold text-amber-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${lateCount}</span>
         </div>
         <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
           <span class="text-[10px] text-blue-300 block font-medium">Excused</span>
-          <span class="font-bold font-mono text-blue-400 mt-0.5 block">${excusedCount}</span>
+          <span class="font-bold text-blue-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${excusedCount}</span>
         </div>
         <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
           <span class="text-[10px] text-rose-300 block font-medium">Absent</span>
-          <span class="font-bold font-mono text-rose-400 mt-0.5 block">${absentCount}</span>
+          <span class="font-bold text-rose-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${absentCount}</span>
         </div>
       </div>
 

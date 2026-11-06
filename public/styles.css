@@ -54,7 +54,12 @@
   --radius-full: 9999px;
   
   --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+}
+
+.font-mono {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif !important;
+  font-variant-numeric: tabular-nums !important;
 }
 
 @media (prefers-color-scheme: dark), :root.dark {
@@ -430,8 +435,10 @@ button:active {
   scrollbar-width: none;
   -ms-overflow-style: none;
   gap: 4px;
-  padding: 6px 8px;
+    padding: 6px 16px;
   max-width: calc(100vw - 20px);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent);
 }
 
 #admin-dock::-webkit-scrollbar {
@@ -472,31 +479,7 @@ button:active {
 /* ==========================================================================
    GLOBAL BULK SELECTION MODE STYLES
    ========================================================================== */
-.floating-bulk-bar {
-  position: fixed;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: calc(100% - 32px);
-  max-width: 460px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  background: rgba(28, 28, 30, 0.88);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 20px;
-  z-index: 900;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1), opacity 180ms ease;
-}
-
-.floating-bulk-bar.hidden {
-  display: none !important;
-}
+/* floating-bulk-bar handled in Section 3 */
 
 /* Bulk Selection Card Layout & Shift */
 .bulk-select-card {
@@ -2712,23 +2695,21 @@ input[type="search"],
 /* Section 3: Floating Bulk Bar 2-Tier Layout & Segmented Control */
 .floating-bulk-bar {
   position: fixed;
-  bottom: calc(var(--dock-height, 76px) + env(safe-area-inset-bottom, 12px) + 12px) !important;
+  bottom: calc(var(--dock-height, 64px) + env(safe-area-inset-bottom, 12px) + 10px) !important;
   left: 50%;
   transform: translateX(-50%);
   width: calc(100% - 32px);
   max-width: 480px;
   height: auto !important;
-  min-height: 80px;
   display: flex !important;
   flex-direction: column !important;
-  justify-content: center !important;
   gap: 8px !important;
   padding: 10px 14px !important;
   background: rgba(28, 28, 30, 0.94) !important;
-  backdrop-filter: blur(28px) !important;
-  -webkit-backdrop-filter: blur(28px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.16) !important;
-  border-radius: 20px !important;
+  backdrop-filter: blur(25px) !important;
+  -webkit-backdrop-filter: blur(25px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 18px !important;
   z-index: 900 !important;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.65) !important;
   transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1), opacity 180ms ease;

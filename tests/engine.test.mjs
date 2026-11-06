@@ -37,11 +37,13 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster } = exportsObj;
 assert.strictEqual(typeof computeCropRect, 'function', 'computeCropRect must be a function');
+assert.strictEqual(typeof createRowGesture, 'function', 'createRowGesture must be a function');
+assert.strictEqual(typeof buildRoster, 'function', 'buildRoster must be a function');
 
 assert.strictEqual(APP_TIMEZONE, 'Africa/Cairo', 'APP_TIMEZONE must be Africa/Cairo');
 assert.strictEqual(typeof getOccurrences, 'function', 'getOccurrences must be a function');
@@ -1202,7 +1204,7 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assertClose(ls1.sh, 500);
 
   // 11.6 Landscape at minZoom (0.5)
-  const lsMin = computeCropRect({ imgW: 1000, imgH: 500, viewport: 280, zoom: 0.5 });
+  const lsMin = computeCropRect({ imgW: 1000, imgH: 500, viewport: 280, zoom: 0.5, isLogo: true });
   assertClose(lsMin.dispW, 280);
   assertClose(lsMin.dispH, 140);
   assertClose(lsMin.clampedX, 0);
@@ -1256,6 +1258,202 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
     assert.ok(res.dw > 0, 'dw must be > 0');
     assert.ok(res.dh > 0, 'dh must be > 0');
   }
+
+
+  // 11.9 High-res 4000x3000 landscape at zoom 1, 2, 4
+  const hrLandscape1 = computeCropRect({ imgW: 4000, imgH: 3000, viewport: 280, zoom: 1 });
+  assertClose(hrLandscape1.coverScale, 280 / 3000);
+  assertClose(hrLandscape1.sw, 3000, 1e-3, 'Landscape zoom 1 sw must equal shorter side (3000)');
+  assertClose(hrLandscape1.sh, 3000, 1e-3, 'Landscape zoom 1 sh must equal shorter side (3000)');
+  assert.ok(hrLandscape1.sx >= 0 && hrLandscape1.sx + hrLandscape1.sw <= 4000, 'sx bounds');
+  assert.ok(hrLandscape1.sy >= 0 && hrLandscape1.sy + hrLandscape1.sh <= 3000, 'sy bounds');
+
+  const hrLandscape2 = computeCropRect({ imgW: 4000, imgH: 3000, viewport: 280, zoom: 2 });
+  assertClose(hrLandscape2.sw, 1500, 1e-3, 'Landscape zoom 2 sw must equal shorter side / 2');
+  assertClose(hrLandscape2.sh, 1500, 1e-3, 'Landscape zoom 2 sh must equal shorter side / 2');
+
+  const hrLandscape4 = computeCropRect({ imgW: 4000, imgH: 3000, viewport: 280, zoom: 4 });
+  assertClose(hrLandscape4.sw, 750, 1e-3, 'Landscape zoom 4 sw must equal shorter side / 4');
+  assertClose(hrLandscape4.sh, 750, 1e-3, 'Landscape zoom 4 sh must equal shorter side / 4');
+
+  // 11.10 High-res 3000x4000 portrait at zoom 1, 2, 4
+  const hrPortrait1 = computeCropRect({ imgW: 3000, imgH: 4000, viewport: 280, zoom: 1 });
+  assertClose(hrPortrait1.coverScale, 280 / 3000);
+  assertClose(hrPortrait1.sw, 3000, 1e-3, 'Portrait zoom 1 sw must equal shorter side (3000)');
+  assertClose(hrPortrait1.sh, 3000, 1e-3, 'Portrait zoom 1 sh must equal shorter side (3000)');
+  assert.ok(hrPortrait1.sx >= 0 && hrPortrait1.sx + hrPortrait1.sw <= 3000, 'portrait sx bounds');
+  assert.ok(hrPortrait1.sy >= 0 && hrPortrait1.sy + hrPortrait1.sh <= 4000, 'portrait sy bounds');
+
+  // Extreme pans clamping verification
+  const extremePan = computeCropRect({ imgW: 4000, imgH: 3000, viewport: 280, zoom: 2, offsetX: -99999, offsetY: 99999 });
+  assert.ok(extremePan.sx >= 0 && extremePan.sx + extremePan.sw <= 4000 + 1e-4, 'extreme pan bounds');
+  assert.ok(extremePan.sy >= 0 && extremePan.sy + extremePan.sh <= 3000 + 1e-4, 'extreme pan bounds');
+}
+
+
+// ============================================================================
+// 12. CREATE ROW GESTURE FACTORY TESTS
+// ============================================================================
+{
+  let timerFn = null;
+  let timerIdCounter = 1;
+  const activeTimers = new Map();
+
+  const fakeSetTimer = (fn, ms) => {
+    const id = timerIdCounter++;
+    activeTimers.set(id, fn);
+    return id;
+  };
+  const fakeClearTimer = (id) => {
+    activeTimers.delete(id);
+  };
+
+  let tapCalls = [];
+  let longPressCalls = [];
+  let toggleCalls = [];
+  let vibrateCalls = [];
+  let selecting = false;
+
+  const gestures = createRowGesture({
+    longPressMs: 450,
+    moveTolerance: 10,
+    setTimer: fakeSetTimer,
+    clearTimer: fakeClearTimer,
+    vibrate: (ms) => vibrateCalls.push(ms),
+    isInteractive: (t) => t && t.interactive === true,
+    isSelecting: () => selecting,
+    onTap: (id) => tapCalls.push(id),
+    onLongPress: (id) => longPressCalls.push(id),
+    onToggle: (id) => toggleCalls.push(id)
+  });
+
+  // 12.1 Quick Tap -> onTap called once
+  tapCalls = []; longPressCalls = [];
+  gestures.down({ clientX: 100, clientY: 100 }, 'row-1');
+  gestures.up({ clientX: 100, clientY: 100 }, 'row-1');
+  gestures.click({ clientX: 100, clientY: 100 }, 'row-1');
+  assert.strictEqual(tapCalls.length, 1, 'tap must call onTap once');
+  assert.strictEqual(tapCalls[0], 'row-1');
+  assert.strictEqual(longPressCalls.length, 0, 'quick tap must not trigger onLongPress');
+
+  // 12.2 Long Press -> onLongPress called once, subsequent click suppressed
+  tapCalls = []; longPressCalls = []; vibrateCalls = [];
+  gestures.down({ clientX: 100, clientY: 100 }, 'row-2');
+  // Fire timers
+  const entries = Array.from(activeTimers.entries());
+  for (const [id, fn] of entries) {
+    fn();
+    activeTimers.delete(id);
+  }
+  assert.strictEqual(longPressCalls.length, 1, 'long press timer must call onLongPress');
+  assert.strictEqual(longPressCalls[0], 'row-2');
+  assert.strictEqual(vibrateCalls.length, 1, 'vibrate must be called on long press');
+
+  let prevented = false;
+  let stopped = false;
+  gestures.click({ preventDefault: () => { prevented = true; }, stopPropagation: () => { stopped = true; } }, 'row-2');
+  assert.strictEqual(tapCalls.length, 0, 'click after long-press must NOT call onTap');
+  assert.ok(prevented && stopped, 'click after long-press must call preventDefault & stopPropagation');
+
+  // 12.3 Movement beyond tolerance -> clears timer, click ignored
+  tapCalls = []; longPressCalls = [];
+  gestures.down({ clientX: 100, clientY: 100 }, 'row-3');
+  assert.strictEqual(activeTimers.size, 1);
+  gestures.move({ clientX: 115, clientY: 100 }, 'row-3'); // dx = 15 > 10
+  assert.strictEqual(activeTimers.size, 0, 'movement beyond tolerance must cancel timer');
+  gestures.up({ clientX: 115, clientY: 100 }, 'row-3');
+  gestures.click({ clientX: 115, clientY: 100 }, 'row-3');
+  assert.strictEqual(tapCalls.length, 0, 'click after drag must not call onTap');
+  assert.strictEqual(longPressCalls.length, 0);
+
+  // 12.4 Interactive target ignored
+  tapCalls = []; longPressCalls = [];
+  gestures.down({ target: { interactive: true }, clientX: 100, clientY: 100 }, 'row-4');
+  assert.strictEqual(activeTimers.size, 0, 'interactive target down must be ignored');
+  gestures.click({ target: { interactive: true } }, 'row-4');
+  assert.strictEqual(tapCalls.length, 0, 'interactive target click must be ignored');
+
+  // 12.5 Selection mode active -> onToggle called instead of onTap
+  selecting = true;
+  tapCalls = []; toggleCalls = [];
+  gestures.down({ clientX: 100, clientY: 100 }, 'row-5');
+  gestures.up({ clientX: 100, clientY: 100 }, 'row-5');
+  gestures.click({ clientX: 100, clientY: 100 }, 'row-5');
+  assert.strictEqual(tapCalls.length, 0, 'in selection mode, click must not call onTap');
+  assert.strictEqual(toggleCalls.length, 1, 'in selection mode, click must call onToggle');
+  assert.strictEqual(toggleCalls[0], 'row-5');
+  selecting = false;
+}
+
+// ============================================================================
+// 13. BUILD ROSTER RECONCILIATION ENGINE TESTS
+// ============================================================================
+{
+  // 13.1 Screenshot Scenario:
+  // Once session Nov 5 9:00 PM Cairo (2026-11-05T21:00:00+02:00)
+  // One late log, now 10:30 PM (2026-11-05T22:30:00+02:00) -> closed, assigned = 2 active members
+  const session = {
+    id: 'sess_nov5',
+    title: 'General Meeting',
+    schedule: {
+      type: 'once',
+      startDateTime: '2026-11-05T21:00:00'
+    },
+    earlyCheckInMinutes: 15,
+    lateCutoffMinutes: 60 // closed at 22:00
+  };
+  const members = [
+    { uid: 'u1', name: 'Alice' },
+    { uid: 'u2', name: 'Bob' },
+    { uid: 'u3', name: 'Charlie', disabled: true } // disabled must be excluded
+  ];
+  const logs = [
+    { sessionId: 'sess_nov5', userId: 'u1', status: 'late', delaySeconds: 900 }
+  ];
+  const nowMs = zonedPartsToMs({ year: 2026, month: 11, day: 5, hour: 22, minute: 30, second: 0 }, 'Africa/Cairo');
+  const roster = buildRoster({ session, logs, members, nowMs });
+
+  assert.strictEqual(roster.counts.assignedCount, 2, 'Assigned must count all non-disabled active members');
+  assert.strictEqual(roster.counts.presentCount, 1, 'Present count must be 1');
+  assert.strictEqual(roster.counts.lateCount, 1, 'Late count must be 1');
+  assert.strictEqual(roster.counts.absentCount, 1, 'Absent count must be 1 for Bob who had no check-in');
+  assert.strictEqual(roster.counts.excusedCount, 0);
+  assert.strictEqual(roster.state, 'closed', 'Session window must be closed at 22:30');
+  assert.strictEqual(roster.occurrence.key, 'once');
+
+  // 13.2 Excused via waiver
+  const waivers = [
+    { sessionId: 'sess_nov5', userId: 'u2', status: 'approved' }
+  ];
+  const rosterWithWaiver = buildRoster({ session, logs, waivers, members, nowMs });
+  assert.strictEqual(rosterWithWaiver.counts.excusedCount, 1, 'Bob must be excused via approved waiver');
+  assert.strictEqual(rosterWithWaiver.counts.absentCount, 0, 'No members absent when Bob is excused');
+
+  // 13.3 Weekly session retains last occurrence after closing until next window opens
+  const weeklySession = {
+    id: 'sess_weekly',
+    title: 'Sunday Gathering',
+    schedule: {
+      type: 'weekly',
+      weekdays: ['Sun'],
+      timeOfDay: '18:00',
+      startDateTime: '2026-10-01T18:00:00'
+    },
+    earlyCheckInMinutes: 30, // opens 17:30
+    lateCutoffMinutes: 120   // closes 20:00
+  };
+
+  // Check on Monday Nov 2 10:00 AM (Sunday Nov 1 occurrence is closed, but next is Nov 8)
+  const mondayMs = zonedPartsToMs({ year: 2026, month: 11, day: 2, hour: 10, minute: 0, second: 0 }, 'Africa/Cairo');
+  const rosterMonday = buildRoster({ session: weeklySession, members, nowMs: mondayMs });
+  assert.strictEqual(rosterMonday.state, 'closed');
+  // Occurrences list has Sunday Nov 1
+  assert.ok(rosterMonday.occurrence.key.includes('2026-11-01') || rosterMonday.occurrence.key.includes('2026-10-'), 'Must show previous closed occurrence');
+
+  // Check on Saturday Nov 7 12:00 PM (still before next early window opens on Sunday Nov 8 17:30)
+  const saturdayMs = zonedPartsToMs({ year: 2026, month: 11, day: 7, hour: 12, minute: 0, second: 0 }, 'Africa/Cairo');
+  const rosterSat = buildRoster({ session: weeklySession, members, nowMs: saturdayMs });
+  assert.strictEqual(rosterSat.state, 'closed', 'Must remain in closed state showing last occurrence');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
