@@ -1,3 +1,12 @@
+
+export function updateDockHeight() {
+  const dock = document.getElementById('admin-dock') || document.getElementById('user-dock');
+  const h = dock ? dock.offsetHeight : 76;
+  if (typeof document !== 'undefined') {
+    document.documentElement.style.setProperty('--dock-height', `${h || 76}px`);
+  }
+}
+
 /**
  * ============================================================================
  * COC Media Team - Production Web App (v2.2.0)
@@ -31,7 +40,7 @@
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.2';
+export const APP_VERSION = '2.2.3';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -190,6 +199,9 @@ export function logAdminAction(batch, { action, targetUid = null, details = {} }
    ========================================================================== */
 export const listeners = {
   _map: new Map(),
+  has(key) {
+    return this._map.has(key);
+  },
   add(key, unsubscribe) {
     if (this._map.has(key)) {
       try { this._map.get(key)(); } catch (e) { /* ignore */ }
@@ -205,6 +217,54 @@ export const listeners = {
     }
   }
 };
+
+export const categoriesMap = new Map();
+
+export function getCategoryForTask(task) {
+  if (!task) return { id: 'uncategorized', name: 'Uncategorized', iconKey: 'folder', color: '#8E8E93' };
+  const catId = task.categoryId || task.category;
+  if (catId && categoriesMap.has(catId)) {
+    const c = categoriesMap.get(catId);
+    if (!c.archived) return c;
+  }
+  const found = (state.categories || []).find(c => c.id === catId && !c.archived);
+  if (found) return found;
+  return { id: 'uncategorized', name: 'Uncategorized', iconKey: 'folder', color: '#8E8E93' };
+}
+
+let catReRenderTimer = null;
+export function scheduleCategoriesReRender() {
+  if (catReRenderTimer) clearTimeout(catReRenderTimer);
+  catReRenderTimer = setTimeout(() => {
+    requestAnimationFrame(() => {
+      populateCategoryFilters();
+      if (typeof renderTasks === 'function') renderTasks();
+      if (typeof renderAdminTasks === 'function') renderAdminTasks();
+      if (typeof renderAdminCategories === 'function') renderAdminCategories();
+      if (typeof renderHomeDueTasks === 'function') renderHomeDueTasks();
+      updateTaskModalCategoryIfOpen();
+    });
+  }, 80);
+}
+
+export function updateTaskModalCategoryIfOpen() {
+  const wrap = document.getElementById('adm-task-category-picker-wrap');
+  if (!wrap) return;
+  const hiddenInp = document.getElementById('adm-task-category');
+  const catId = hiddenInp?.value || '';
+  const cat = getCategoryForTask({ categoryId: catId });
+  const row = wrap.querySelector('.admin-category-picker-row');
+  if (row) {
+    row.innerHTML = `
+      <div class="flex items-center gap-2.5 min-w-0">
+        <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${cat.color || '#0A84FF'};"></span>
+        <span class="flex-shrink-0 text-neutral-300">${getCategorySvg(cat.iconKey, 'w-4 h-4')}</span>
+        <span class="font-semibold truncate text-white">${esc(cat.name || 'Select Category')}</span>
+      </div>
+      <svg class="w-4 h-4 text-neutral-400 shrink-0 ml-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+    `;
+  }
+}
 
 /* ==========================================================================
    SAFE INITIALIZER RUNNER (Boot error isolation)
@@ -734,7 +794,15 @@ function normalizeNotification(raw) {
   };
 }
 
-// PRESET_BADGES hoisted above
+// Preset badges for Quick Add in Admin Member Control
+export const PRESET_BADGES = [
+  { id: 'top_contributor', label: 'Top Contributor', icon: 'star', color: '#FFD60A' },
+  { id: 'task_master', label: 'Task Master', icon: 'zap', color: '#0A84FF' },
+  { id: 'streak_warrior', label: 'Streak Warrior', icon: 'flame', color: '#FF9F0A' },
+  { id: 'rising_star', label: 'Rising Star', icon: 'sparkle', color: '#30D158' },
+  { id: 'quality_champion', label: 'Quality Champion', icon: 'shield', color: '#BF5AF2' },
+  { id: 'event_hero', label: 'Event Hero', icon: 'heart', color: '#FF375F' }
+];
 
 export function getAllAvailableBadges() {
   const badgeMap = new Map();
@@ -1027,6 +1095,106 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof se
 
   return update;
 }
+
+async function backfillWindowCounters() {
+  if (!state.user || (state.user.role !== 'admin' && !state.user.isAdmin)) return;
+
+  const nowMs = serverNow();
+  const curMonthKey = monthKeyOf(nowMs, APP_TIMEZONE);
+  const curWeekKey = weekKeyOf(nowMs, APP_TIMEZONE);
+  const currentBackfillMarker = `${curMonthKey}_${curWeekKey}`;
+
+  try {
+    const generalDoc = await getDoc(doc(db, 'settings', 'general')).catch(() => null);
+    const lastMarker = generalDoc?.exists() ? generalDoc.data()?.windowBackfill : null;
+    if (lastMarker === currentBackfillMarker) {
+      return;
+    }
+
+    // Determine start of current month in UTC ms for Cairo (UTC+2)
+    const parts = curMonthKey.split('-');
+    const year = parseInt(parts[0], 10) || 2026;
+    const month = (parseInt(parts[1], 10) || 1) - 1;
+    const startOfMonthMs = Date.UTC(year, month, 1, -2, 0, 0);
+
+    const subsSnap = await getDocs(query(
+      collection(db, 'submissions'),
+      where('submittedAt', '>=', startOfMonthMs),
+      limit(2000)
+    )).catch(() => ({ empty: true, docs: [] }));
+
+    const memberMonthTotals = new Map();
+    const memberWeekTotals = new Map();
+
+    subsSnap.docs?.forEach(d => {
+      const s = d.data();
+      const uid = s.userId || s.uid;
+      if (!uid) return;
+      const pts = Number(s.pointsAwarded || s.points || 0);
+      const subMs = parseDateTimeToMs(s.submittedAt || s.createdAt);
+      const subMonthKey = monthKeyOf(subMs, APP_TIMEZONE);
+      const subWeekKey = weekKeyOf(subMs, APP_TIMEZONE);
+
+      if (subMonthKey === curMonthKey) {
+        memberMonthTotals.set(uid, (memberMonthTotals.get(uid) || 0) + pts);
+      }
+      if (subWeekKey === curWeekKey) {
+        memberWeekTotals.set(uid, (memberWeekTotals.get(uid) || 0) + pts);
+      }
+    });
+
+    const membersToUpdate = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
+    let currentBatch = writeBatch(db);
+    let opCount = 0;
+
+    for (const mem of membersToUpdate) {
+      if (!mem.uid || mem.disabled) continue;
+      const mPts = memberMonthTotals.get(mem.uid) || 0;
+      const wPts = memberWeekTotals.get(mem.uid) || 0;
+
+      if (mem.monthKey !== curMonthKey || mem.monthPoints !== mPts || mem.weekKey !== curWeekKey || mem.weekPoints !== wPts) {
+        currentBatch.update(doc(db, 'users', mem.uid), {
+          monthKey: curMonthKey,
+          monthPoints: mPts,
+          weekKey: curWeekKey,
+          weekPoints: wPts,
+          updatedAt: serverTimestamp()
+        });
+        opCount++;
+
+        mem.monthKey = curMonthKey;
+        mem.monthPoints = mPts;
+        mem.weekKey = curWeekKey;
+        mem.weekPoints = wPts;
+        if (usersMap.has(mem.uid)) {
+          const u = usersMap.get(mem.uid);
+          u.monthKey = curMonthKey;
+          u.monthPoints = mPts;
+          u.weekKey = curWeekKey;
+          u.weekPoints = wPts;
+        }
+
+        if (opCount >= 450) {
+          await currentBatch.commit();
+          currentBatch = writeBatch(db);
+          opCount = 0;
+        }
+      }
+    }
+
+    currentBatch.set(doc(db, 'settings', 'general'), {
+      windowBackfill: currentBackfillMarker,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+    await currentBatch.commit();
+
+    console.log(`[Window Backfill] Synced window counters for marker ${currentBackfillMarker}`);
+    renderLeaderboard();
+  } catch (err) {
+    console.warn('[Window Backfill] Error:', err);
+  }
+}
+
 
 function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!userObj) return 0;
@@ -1784,9 +1952,96 @@ if (typeof globalThis !== 'undefined') {
   if (typeof usersMap !== 'undefined') globalThis.usersMap = usersMap;
   if (typeof getUserProfile !== 'undefined') globalThis.getUserProfile = getUserProfile;
 }
+
+/**
+ * Pure 1x cover-fit crop geometry calculation for live preview and canvas export.
+ */
+function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, outSize }) {
+  const w = Math.max(1, Number(imgW) || 1);
+  const h = Math.max(1, Number(imgH) || 1);
+  const vp = Math.max(1, Number(viewport) || 280);
+  const out = Math.max(1, Number(outSize) || vp);
+
+  const coverScale = Math.max(vp / w, vp / h);
+  const containScale = Math.min(vp / w, vp / h);
+  const minZoom = containScale / coverScale;
+  const maxZoom = 4;
+
+  const currentZoom = Math.min(maxZoom, Math.max(minZoom, Number(zoom) || 1));
+  const effectiveScale = coverScale * currentZoom;
+
+  const dispW = w * effectiveScale;
+  const dispH = h * effectiveScale;
+
+  let targetX = offsetX !== undefined ? Number(offsetX) : (vp - dispW) / 2;
+  let targetY;
+  if (offsetY !== undefined) {
+    targetY = Number(offsetY);
+  } else {
+    if (h > w && dispH > vp) {
+      targetY = (vp - dispH) * 0.35;
+    } else {
+      targetY = (vp - dispH) / 2;
+    }
+  }
+
+  let clampedX;
+  if (dispW >= vp) {
+    clampedX = Math.min(0, Math.max(vp - dispW, targetX));
+  } else {
+    clampedX = (vp - dispW) / 2;
+  }
+
+  let clampedY;
+  if (dispH >= vp) {
+    clampedY = Math.min(0, Math.max(vp - dispH, targetY));
+  } else {
+    clampedY = (vp - dispH) / 2;
+  }
+
+  const interX = Math.max(0, clampedX);
+  const interY = Math.max(0, clampedY);
+  const interRight = Math.min(vp, clampedX + dispW);
+  const interBottom = Math.min(vp, clampedY + dispH);
+  const interW = Math.max(0, interRight - interX);
+  const interH = Math.max(0, interBottom - interY);
+
+  const sx = Math.max(0, (interX - clampedX) / effectiveScale);
+  const sy = Math.max(0, (interY - clampedY) / effectiveScale);
+  const sw = Math.min(w - sx, interW / effectiveScale);
+  const sh = Math.min(h - sy, interH / effectiveScale);
+
+  const outScale = out / vp;
+  const dx = interX * outScale;
+  const dy = interY * outScale;
+  const dw = interW * outScale;
+  const dh = interH * outScale;
+
+  return {
+    sx,
+    sy,
+    sw,
+    sh,
+    dx,
+    dy,
+    dw,
+    dh,
+    minZoom,
+    maxZoom,
+    coverScale,
+    containScale,
+    effectiveScale,
+    clampedX,
+    clampedY,
+    dispW,
+    dispH
+  };
+}
+
+  if (typeof globalThis !== 'undefined') globalThis.computeCropRect = computeCropRect;
 // ==== ENGINE END
 
-export { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned };
+export { computeCropRect, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned };
 
 /* ==========================================================================
    SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
@@ -3320,7 +3575,7 @@ export function openMiniProfileSheet(uidOrMember) {
 
   // 2. Dismiss Button
   const dismissBtnHtml = `
-    <button type="button" class="mini-profile-close-btn absolute top-2 right-2 w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-neutral-300 hover:text-white flex items-center justify-center text-xs z-40 transition cursor-pointer" aria-label="Close">✕</button>
+    <button type="button" class="mini-profile-close-btn absolute top-2 right-2 w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-neutral-300 hover:text-white flex items-center justify-center text-xs z-40 transition cursor-pointer" aria-label="Close"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
   `;
 
   // 3. Stats row (NEVER show finesEGP to other members; only self or admin)
@@ -3936,6 +4191,87 @@ export function attachLongPress(cardEl, onTrigger) {
   }
 }
 
+export function attachRowGestures(rowEl, { onTap, onLongPress, bulkType, bulkId } = {}) {
+  if (!rowEl) return;
+  let timer = null;
+  let startX = 0;
+  let startY = 0;
+  let longPressed = false;
+
+  const cancelLongPress = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  rowEl.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('input, textarea, select, button, a, label')) return;
+
+    startX = e.clientX;
+    startY = e.clientY;
+    longPressed = false;
+    cancelLongPress();
+
+    timer = setTimeout(() => {
+      longPressed = true;
+      try {
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate(40);
+        }
+      } catch (err) {}
+      if (typeof onLongPress === 'function') {
+        onLongPress(e);
+      } else if (bulkType) {
+        const id = bulkId || rowEl.dataset.bulkId || rowEl.dataset.taskId || rowEl.dataset.catId || rowEl.dataset.badgeId || rowEl.dataset.sessionId || rowEl.dataset.subId || rowEl.dataset.memberUid || rowEl.dataset.broadcastId || rowEl.dataset.waiverId;
+        if (!selectionState.active) {
+          enterSelectionMode(bulkType, id);
+        } else if (id) {
+          toggleItemSelection(rowEl, id);
+        }
+      }
+    }, 450);
+  });
+
+  rowEl.addEventListener('pointermove', (e) => {
+    if (!timer) return;
+    const dx = Math.abs(e.clientX - startX);
+    const dy = Math.abs(e.clientY - startY);
+    if (dx > 10 || dy > 10) {
+      cancelLongPress();
+    }
+  });
+
+  rowEl.addEventListener('pointerup', cancelLongPress);
+  rowEl.addEventListener('pointercancel', cancelLongPress);
+
+  rowEl.addEventListener('click', (e) => {
+    if (longPressed) {
+      longPressed = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.closest('input, textarea, select, button, a, label')) return;
+
+    const id = bulkId || rowEl.dataset.bulkId || rowEl.dataset.taskId || rowEl.dataset.catId || rowEl.dataset.badgeId || rowEl.dataset.sessionId || rowEl.dataset.subId || rowEl.dataset.memberUid || rowEl.dataset.broadcastId || rowEl.dataset.waiverId;
+
+    if (selectionState.active) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (id) {
+        toggleItemSelection(rowEl, id);
+      }
+      return;
+    }
+
+    if (typeof onTap === 'function') {
+      onTap(e);
+    }
+  });
+}
+
 function getVisibleCardsForType(type) {
   let container = null;
   if (type === 'tasks') container = document.getElementById('tasks-container');
@@ -3947,6 +4283,7 @@ function getVisibleCardsForType(type) {
   else if (type === 'submissions') container = document.getElementById('admin-submissions-list');
   else if (type === 'broadcasts') container = document.getElementById('admin-broadcasts-list');
   else if (type === 'badges') container = document.getElementById('admin-badges-list');
+  else if (type === 'waivers') container = document.getElementById('admin-waivers-list');
 
   if (!container) return [];
   return Array.from(container.querySelectorAll('.bulk-select-card[data-bulk-id]'));
@@ -3965,38 +4302,48 @@ export function getBulkActions(listType) {
 
   if (listType === 'badges') {
     return [
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10' }
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
     ];
   }
 
   if (listType === 'tasks' || listType === 'admin_tasks' || listType === 'categories' || listType === 'sessions' || listType === 'broadcasts') {
     return [
-      { id: 'btn-bulk-archive', label: isArchivedView ? 'Restore' : 'Archive', type: 'archive', isRestore: isArchivedView, class: 'bg-white/10 hover:bg-white/20 text-white' },
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10' }
-    ];
-  }
-
-  if (listType === 'submissions' || listType === 'attendance_logs' || listType === 'notifications_admin' || listType === 'waivers') {
-    return [
-      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10' }
+      { id: 'btn-bulk-archive', label: isArchivedView ? 'Restore' : 'Archive', type: 'archive', isRestore: isArchivedView, class: 'bg-white/10 hover:bg-white/20 text-white font-semibold' },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
     ];
   }
 
   if (listType === 'members') {
     return [
-      { id: 'btn-bulk-add-badge', label: 'Add Badge', type: 'add_badge', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white' },
-      { id: 'btn-bulk-remove-badge', label: 'Remove Badge', type: 'remove_badge', class: 'bg-white/10 hover:bg-white/20 text-white' }
+      { id: 'btn-bulk-add-badge', label: 'Badge +', type: 'add_badge', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white font-semibold' },
+      { id: 'btn-bulk-remove-badge', label: 'Badge -', type: 'remove_badge', class: 'bg-white/10 hover:bg-white/20 text-white font-semibold' },
+      { id: 'btn-bulk-toggle-disable', label: 'Disable', type: 'disable', class: 'bg-[#FF9F0A]/20 hover:bg-[#FF9F0A]/30 text-[#FF9F0A] font-semibold' },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+    ];
+  }
+
+  if (listType === 'waivers') {
+    return [
+      { id: 'btn-bulk-approve-waiver', label: 'Approve', type: 'approve_waiver', class: 'bg-[#30D158] hover:bg-[#28B84D] text-black font-semibold' },
+      { id: 'btn-bulk-deny-waiver', label: 'Deny', type: 'deny_waiver', class: 'bg-[#FF453A] hover:bg-[#D9382E] text-white font-semibold' },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
+    ];
+  }
+
+  if (listType === 'submissions' || listType === 'attendance_logs' || listType === 'notifications_admin') {
+    return [
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
     ];
   }
 
   if (listType === 'notifications' || listType === 'updates') {
     return [
-      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white' }
+      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: 'bg-[#0A84FF] hover:bg-[#0071E3] text-white font-semibold' }
     ];
   }
 
   return [
-    { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A]' }
+    { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: 'text-[#FF453A] hover:bg-[#FF453A]/10 font-semibold' }
   ];
 }
 
@@ -4083,6 +4430,11 @@ export function updateSelectionUI() {
     selectAllBtn.onclick = toggleSelectAll;
   }
 
+  const doneBtnTop = document.getElementById('btn-bulk-done');
+  if (doneBtnTop) {
+    doneBtnTop.onclick = exitSelectionMode;
+  }
+
   const actionsContainer = document.getElementById('bulk-actions-container');
   if (actionsContainer) {
     const actions = getBulkActions(selectionState.type);
@@ -4103,20 +4455,18 @@ export function updateSelectionUI() {
           handleBulkBadge(true);
         } else if (act.type === 'remove_badge') {
           handleBulkBadge(false);
+        } else if (act.type === 'disable') {
+          handleBulkToggleDisable();
+        } else if (act.type === 'approve_waiver') {
+          handleBulkWaiver(true);
+        } else if (act.type === 'deny_waiver') {
+          handleBulkWaiver(false);
         } else if (act.type === 'mark_read') {
           handleBulkMarkRead();
         }
       };
       actionsContainer.appendChild(btn);
     });
-
-    const doneBtn = document.createElement('button');
-    doneBtn.type = 'button';
-    doneBtn.id = 'btn-bulk-done';
-    doneBtn.className = 'text-xs font-semibold px-3 py-1 rounded-full bg-white/10 text-white hover:bg-white/20 transition';
-    doneBtn.textContent = 'Done';
-    doneBtn.onclick = exitSelectionMode;
-    actionsContainer.appendChild(doneBtn);
   }
 }
 
@@ -4216,6 +4566,192 @@ export async function handleBulkArchive(isRestore = false) {
   }
 }
 
+export async function handleBulkWaiver(approved = true) {
+  const ids = Array.from(selectionState.selectedIds);
+  const count = ids.length;
+  if (count === 0) return;
+
+  const status = approved ? 'approved' : 'rejected';
+  const label = approved ? 'Approve' : 'Deny';
+
+  const confirmed = await confirmSheet({
+    title: `${label} ${count} Waiver Request(s)?`,
+    message: `${label} ${count} selected waiver request(s)?`,
+    confirmLabel: `${label} ${count}`,
+    destructive: !approved
+  });
+  if (!confirmed) return;
+
+  try {
+    const batch = writeBatch(db);
+    ids.forEach(id => {
+      batch.update(doc(db, 'waiver_requests', id), {
+        status,
+        excused: approved,
+        resolvedAt: serverTimestamp(),
+        resolvedBy: state.user?.uid || 'admin',
+        updatedAt: serverTimestamp()
+      });
+      const w = (state.waiverRequests || []).find(x => x.id === id);
+      if (w) {
+        w.status = status;
+        w.excused = approved;
+      }
+    });
+    await batch.commit();
+    toast(`${count} waiver request(s) ${status}`, 'success');
+    exitSelectionMode();
+    renderAdminWaivers();
+  } catch (err) {
+    console.error('Bulk waiver error:', err);
+    toast('Failed to process waivers: ' + err.message, 'error');
+  }
+}
+
+export async function handleBulkToggleDisable() {
+  const ids = Array.from(selectionState.selectedIds);
+  const count = ids.length;
+  if (count === 0) return;
+
+  const anyEnabled = ids.some(id => {
+    const m = usersMap.get(id) || state.members.find(x => x.uid === id);
+    return !m?.disabled;
+  });
+
+  const shouldDisable = anyEnabled;
+  const actionName = shouldDisable ? 'Disable' : 'Enable';
+
+  const confirmed = await confirmSheet({
+    title: `${actionName} ${count} Member(s)?`,
+    message: shouldDisable
+      ? `Disable ${count} selected member(s)? They will not be able to log in or earn points.`
+      : `Re-enable ${count} selected member(s)?`,
+    confirmLabel: actionName,
+    destructive: shouldDisable
+  });
+  if (!confirmed) return;
+
+  try {
+    const batch = writeBatch(db);
+    ids.forEach(id => {
+      batch.update(doc(db, 'users', id), {
+        disabled: shouldDisable,
+        disabledAt: shouldDisable ? Date.now() : null
+      });
+      const m = usersMap.get(id) || state.members.find(x => x.uid === id);
+      if (m) m.disabled = shouldDisable;
+    });
+
+    await batch.commit();
+    toast(`${shouldDisable ? 'Disabled' : 'Enabled'} ${count} member(s)`, 'success');
+    exitSelectionMode();
+    renderAdminMembers();
+  } catch (err) {
+    console.error('Bulk disable error:', err);
+    toast('Failed to update members: ' + err.message, 'error');
+  }
+}
+
+export async function permanentlyDeleteMember(uid) {
+  if (!uid) return;
+  const CHUNK_SIZE = 450;
+  const refsToDelete = [];
+
+  // 1. users and users_private
+  refsToDelete.push(doc(db, 'users', uid));
+  refsToDelete.push(doc(db, 'users_private', uid));
+
+  // 2. Submissions
+  try {
+    const q1 = query(collection(db, 'submissions'), where('uid', '==', uid));
+    const snap1 = await getDocs(q1);
+    snap1.forEach(d => refsToDelete.push(d.ref));
+  } catch (err) {
+    console.warn('Submissions uid query:', err);
+  }
+  try {
+    const q2 = query(collection(db, 'submissions'), where('userId', '==', uid));
+    const snap2 = await getDocs(q2);
+    snap2.forEach(d => refsToDelete.push(d.ref));
+  } catch (err) {
+    console.warn('Submissions userId query:', err);
+  }
+
+  // 3. Attendance logs
+  try {
+    const qAtt = query(collection(db, 'attendance_logs'), where('uid', '==', uid));
+    const snapAtt = await getDocs(qAtt);
+    snapAtt.forEach(d => refsToDelete.push(d.ref));
+  } catch (err) {
+    console.warn('Attendance logs query:', err);
+  }
+
+  // 4. Waiver requests
+  try {
+    const qWaiver = query(collection(db, 'waiver_requests'), where('uid', '==', uid));
+    const snapWaiver = await getDocs(qWaiver);
+    snapWaiver.forEach(d => refsToDelete.push(d.ref));
+  } catch (err) {
+    console.warn('Waiver requests query:', err);
+  }
+
+  // 5. Notifications
+  try {
+    const qNotif = query(collection(db, 'notifications'), where('targetUid', '==', uid));
+    const snapNotif = await getDocs(qNotif);
+    snapNotif.forEach(d => refsToDelete.push(d.ref));
+  } catch (err) {
+    console.warn('Notifications targetUid query:', err);
+  }
+  try {
+    const qNotif2 = query(collection(db, 'notifications'), where('uid', '==', uid));
+    const snapNotif2 = await getDocs(qNotif2);
+    snapNotif2.forEach(d => refsToDelete.push(d.ref));
+  } catch (err) {
+    console.warn('Notifications uid query:', err);
+  }
+
+  // 6. Transactions
+  try {
+    const qTx = query(collection(db, 'transactions'), where('uid', '==', uid));
+    const snapTx = await getDocs(qTx);
+    snapTx.forEach(d => refsToDelete.push(d.ref));
+  } catch (err) {
+    console.warn('Transactions query:', err);
+  }
+
+  // De-duplicate refs
+  const uniqueRefsMap = new Map();
+  refsToDelete.forEach(r => uniqueRefsMap.set(r.path, r));
+  const uniqueRefs = Array.from(uniqueRefsMap.values());
+
+  for (let i = 0; i < uniqueRefs.length; i += CHUNK_SIZE) {
+    const chunk = uniqueRefs.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+    chunk.forEach(r => batch.delete(r));
+    if (i === 0) {
+      batch.set(doc(db, 'blocked_uids', uid), {
+        blockedAt: Date.now(),
+        blockedBy: state.user?.uid || 'admin',
+        reason: 'Permanent deletion'
+      });
+    }
+    await batch.commit();
+  }
+
+  if (uniqueRefs.length === 0) {
+    await setDoc(doc(db, 'blocked_uids', uid), {
+      blockedAt: Date.now(),
+      blockedBy: state.user?.uid || 'admin',
+      reason: 'Permanent deletion'
+    });
+  }
+
+  usersMap.delete(uid);
+  usersPrivate.delete(uid);
+  state.members = state.members.filter(m => m.uid !== uid);
+}
+
 export async function handleBulkDelete() {
   const ids = Array.from(selectionState.selectedIds);
   const count = ids.length;
@@ -4223,7 +4759,61 @@ export async function handleBulkDelete() {
 
   const type = selectionState.type;
   if (type === 'members') {
-    toast('Members cannot be deleted.', 'error');
+    const confirmed = await confirmSheet({
+      title: `Permanently Delete ${count} Member(s)?`,
+      message: `Permanently delete ${count} selected member(s)? This removes all their submissions, attendance records, notifications, and balance history. This cannot be undone.`,
+      confirmLabel: `Delete ${count} Member${count > 1 ? 's' : ''}`,
+      destructive: true
+    });
+    if (!confirmed) return;
+
+    try {
+      for (const memberUid of ids) {
+        await permanentlyDeleteMember(memberUid);
+      }
+      toast(`Permanently deleted ${count} member(s)`, 'success');
+      exitSelectionMode();
+      renderAdminMembers();
+    } catch (err) {
+      console.error('Bulk member delete error:', err);
+      toast('Failed to delete members: ' + err.message, 'error');
+    }
+    return;
+  }
+
+  if (type === 'badges') {
+    const confirmed = await confirmSheet({
+      title: `Permanently Delete ${count} Badge(s)?`,
+      message: `Permanently delete ${count} selected badge(s)? They will be removed from all assigned team members. This cannot be undone.`,
+      confirmLabel: `Delete ${count}`,
+      destructive: true
+    });
+    if (!confirmed) return;
+
+    try {
+      const batch = writeBatch(db);
+      ids.forEach(bId => {
+        batch.delete(doc(db, 'badges', bId));
+      });
+
+      (state.members || []).forEach(m => {
+        const uBadges = Array.isArray(m.badgeIds) ? m.badgeIds : (
+          Array.isArray(m.badges) ? m.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : []
+        );
+        const remaining = uBadges.filter(id => !ids.includes(id));
+        if (remaining.length !== uBadges.length) {
+          batch.update(doc(db, 'users', m.uid), { badgeIds: remaining });
+        }
+      });
+
+      await batch.commit();
+      toast(`Deleted ${count} badge(s)`, 'success');
+      exitSelectionMode();
+      renderAdminBadges();
+    } catch (err) {
+      console.error('Bulk badge delete error:', err);
+      toast('Failed to delete badges: ' + err.message, 'error');
+    }
     return;
   }
 
@@ -5206,7 +5796,7 @@ export async function applyAccountAdjustment({ targetUid, bucket, direction, amo
       uid: targetUid,
       title: 'Account Adjusted',
       message: `Admin ${direction === 'add' ? 'added' : 'deducted'} ${cleanAmount} ${notifUnit} ${notifAction} your ${bucket} balance.`,
-      body: `Admin ${direction === 'add' ? 'added' : 'deducted'} ${cleanAmount} ${notifUnit} ${notifAction} your ${bucket} balance.\n💬 Admin Note: ${cleanReason}`,
+      body: `Admin ${direction === 'add' ? 'added' : 'deducted'} ${cleanAmount} ${notifUnit} ${notifAction} your ${bucket} balance.\nAdmin Note: ${cleanReason}`,
       adminNote: cleanReason,
       type: notifType,
       read: false,
@@ -5237,6 +5827,16 @@ let currentHubSelectedMember = null;
 let currentHubBucket = 'points';
 let currentHubDirection = 'add';
 
+// Persistent state for Adjustments Hub across tab switches and keystrokes
+const adjustHubState = {
+  selectedUids: new Set(),
+  bucket: 'points',
+  direction: 'add',
+  amount: '',
+  reason: '',
+  searchQuery: ''
+};
+
 export function renderAdminAdjustments() {
   const panel = document.getElementById('admin-panel-adjustments');
   if (!panel) return;
@@ -5256,18 +5856,19 @@ export function renderAdminAdjustments() {
   const submitBtn = document.getElementById('btnHubSubmitAdjustment');
   const submitBtnLabel = document.getElementById('hubSubmitBtnLabel');
 
-  let currentBucket = 'points';
-  let currentDirection = 'add';
-  const selectedUids = new Set();
+  // Synchronize inputs with persistent state
+  if (amountInput && adjustHubState.amount) amountInput.value = adjustHubState.amount;
+  if (reasonInput && adjustHubState.reason) reasonInput.value = adjustHubState.reason;
+  if (searchInput && adjustHubState.searchQuery) searchInput.value = adjustHubState.searchQuery;
 
   function updateDynamicButtonLabel() {
     if (!submitBtnLabel) return;
-    const count = selectedUids.size;
-    const amt = Number(amountInput?.value) || 0;
-    const dirSign = currentDirection === 'add' ? '+' : '-';
-    const dirWord = currentDirection === 'add' ? 'Add' : 'Deduct';
-    const unit = currentBucket === 'points' ? 'Points' : (currentBucket === 'penalties' ? 'Penalties' : 'EGP');
-    const toFrom = currentDirection === 'add' ? 'to' : 'from';
+    const count = adjustHubState.selectedUids.size;
+    const amt = Number(adjustHubState.amount) || Number(amountInput?.value) || 0;
+    const dirSign = adjustHubState.direction === 'add' ? '+' : '-';
+    const dirWord = adjustHubState.direction === 'add' ? 'Add' : 'Deduct';
+    const unit = adjustHubState.bucket === 'points' ? 'Points' : (adjustHubState.bucket === 'penalties' ? 'Penalties' : 'EGP');
+    const toFrom = adjustHubState.direction === 'add' ? 'to' : 'from';
 
     if (count === 0) {
       submitBtnLabel.textContent = 'Select Recipient(s)';
@@ -5281,26 +5882,28 @@ export function renderAdminAdjustments() {
   function updateBucketUI() {
     if (!bucketSegmented) return;
     bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
-      const isCur = btn.dataset.bucket === currentBucket;
+      const isCur = btn.dataset.bucket === adjustHubState.bucket;
       btn.classList.toggle('active', isCur);
       if (isCur) {
         btn.classList.remove('text-neutral-400');
+        btn.classList.add('text-white');
       } else {
         btn.classList.add('text-neutral-400');
+        btn.classList.remove('text-white');
       }
     });
 
     if (amountUnit) {
-      amountUnit.textContent = currentBucket === 'points' ? 'Points' : (currentBucket === 'penalties' ? 'Penalties' : 'EGP');
+      amountUnit.textContent = adjustHubState.bucket === 'points' ? 'Points' : (adjustHubState.bucket === 'penalties' ? 'Penalties' : 'Fines (EGP)');
     }
 
     if (directionDesc) {
-      if (currentBucket === 'points') {
-        directionDesc.textContent = currentDirection === 'add' ? '+ Add performance points to balance' : '- Deduct points from balance';
-      } else if (currentBucket === 'penalties') {
-        directionDesc.textContent = currentDirection === 'add' ? '+ Add misconduct penalty to record' : '- Remove / forgive penalty from record';
+      if (adjustHubState.bucket === 'points') {
+        directionDesc.textContent = adjustHubState.direction === 'add' ? '+ Add performance score to member balance' : '- Deduct performance points from balance';
+      } else if (adjustHubState.bucket === 'penalties') {
+        directionDesc.textContent = adjustHubState.direction === 'add' ? '+ Record misconduct penalty on member record' : '- Forgive / remove penalty points from record';
       } else {
-        directionDesc.textContent = currentDirection === 'add' ? '+ Issue financial fine due to member' : '- Credit / settle fine paid by member';
+        directionDesc.textContent = adjustHubState.direction === 'add' ? '+ Issue financial fine owed by member' : '- Record settlement / credit fine payment';
       }
     }
 
@@ -5310,12 +5913,14 @@ export function renderAdminAdjustments() {
   function updateDirectionUI() {
     if (!directionSegmented) return;
     directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
-      const isCur = btn.dataset.direction === currentDirection;
+      const isCur = btn.dataset.direction === adjustHubState.direction;
       btn.classList.toggle('active', isCur);
       if (isCur) {
         btn.classList.remove('text-neutral-400');
+        btn.classList.add('text-white');
       } else {
         btn.classList.add('text-neutral-400');
+        btn.classList.remove('text-white');
       }
     });
 
@@ -5324,9 +5929,10 @@ export function renderAdminAdjustments() {
 
   function renderRoster() {
     if (!rosterList) return;
-    const q = (searchInput?.value || '').trim().toLowerCase();
+    const q = (searchInput?.value || adjustHubState.searchQuery || '').trim().toLowerCase();
     const all = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
     const filtered = all.filter(m => {
+      if (m.disabled) return false;
       if (!q) return true;
       const name = (m.displayName || m.name || '').toLowerCase();
       const email = (m.email || '').toLowerCase();
@@ -5336,11 +5942,11 @@ export function renderAdminAdjustments() {
     });
 
     if (recipientsBadge) {
-      recipientsBadge.textContent = `${selectedUids.size} Selected`;
+      recipientsBadge.textContent = `${adjustHubState.selectedUids.size} Selected`;
     }
 
     if (toggleAllBtn) {
-      const allSelected = filtered.length > 0 && filtered.every(m => selectedUids.has(m.uid));
+      const allSelected = filtered.length > 0 && filtered.every(m => adjustHubState.selectedUids.has(m.uid));
       toggleAllBtn.textContent = allSelected ? 'Deselect All' : 'Select All';
     }
 
@@ -5348,7 +5954,7 @@ export function renderAdminAdjustments() {
       rosterList.innerHTML = '<div class="p-4 text-center text-xs text-neutral-400">No members match your search.</div>';
     } else {
       rosterList.innerHTML = filtered.map(m => {
-        const isSelected = selectedUids.has(m.uid);
+        const isSelected = adjustHubState.selectedUids.has(m.uid);
         const memFines = m.finesDue !== undefined ? m.finesDue : (m.penalties ? m.penalties : 0);
 
         return `
@@ -5377,10 +5983,10 @@ export function renderAdminAdjustments() {
       rosterList.querySelectorAll('.hub-roster-item').forEach(item => {
         item.onclick = () => {
           const uid = item.dataset.uid;
-          if (selectedUids.has(uid)) {
-            selectedUids.delete(uid);
+          if (adjustHubState.selectedUids.has(uid)) {
+            adjustHubState.selectedUids.delete(uid);
           } else {
-            selectedUids.add(uid);
+            adjustHubState.selectedUids.add(uid);
           }
           renderRoster();
           renderSingleSummaryCard();
@@ -5395,13 +6001,13 @@ export function renderAdminAdjustments() {
 
   function renderSingleSummaryCard() {
     if (!selectedMemberCard) return;
-    if (selectedUids.size !== 1) {
+    if (adjustHubState.selectedUids.size !== 1) {
       selectedMemberCard.classList.add('hidden');
       selectedMemberCard.innerHTML = '';
       return;
     }
 
-    const singleUid = Array.from(selectedUids)[0];
+    const singleUid = Array.from(adjustHubState.selectedUids)[0];
     const member = usersMap.get(singleUid) || (state.members || []).find(m => m.uid === singleUid);
     if (!member) {
       selectedMemberCard.classList.add('hidden');
@@ -5441,7 +6047,7 @@ export function renderAdminAdjustments() {
     const clearSingleBtn = document.getElementById('btnHubClearSingle');
     if (clearSingleBtn) {
       clearSingleBtn.onclick = () => {
-        selectedUids.delete(singleUid);
+        adjustHubState.selectedUids.delete(singleUid);
         renderRoster();
       };
     }
@@ -5449,7 +6055,10 @@ export function renderAdminAdjustments() {
 
   // Search input handler
   if (searchInput) {
-    searchInput.oninput = () => renderRoster();
+    searchInput.oninput = () => {
+      adjustHubState.searchQuery = searchInput.value;
+      renderRoster();
+    };
   }
 
   // Toggle All button
@@ -5466,11 +6075,11 @@ export function renderAdminAdjustments() {
         return name.includes(q) || email.includes(q) || role.includes(q) || badges.includes(q);
       });
 
-      const allSelected = filtered.length > 0 && filtered.every(m => selectedUids.has(m.uid));
+      const allSelected = filtered.length > 0 && filtered.every(m => adjustHubState.selectedUids.has(m.uid));
       if (allSelected) {
-        filtered.forEach(m => selectedUids.delete(m.uid));
+        filtered.forEach(m => adjustHubState.selectedUids.delete(m.uid));
       } else {
-        filtered.forEach(m => selectedUids.add(m.uid));
+        filtered.forEach(m => adjustHubState.selectedUids.add(m.uid));
       }
       renderRoster();
     };
@@ -5480,7 +6089,7 @@ export function renderAdminAdjustments() {
   if (bucketSegmented) {
     bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
       btn.onclick = () => {
-        currentBucket = btn.dataset.bucket;
+        adjustHubState.bucket = btn.dataset.bucket;
         updateBucketUI();
       };
     });
@@ -5490,7 +6099,7 @@ export function renderAdminAdjustments() {
   if (directionSegmented) {
     directionSegmented.querySelectorAll('.hub-direction-btn').forEach(btn => {
       btn.onclick = () => {
-        currentDirection = btn.dataset.direction;
+        adjustHubState.direction = btn.dataset.direction;
         updateDirectionUI();
       };
     });
@@ -5499,19 +6108,27 @@ export function renderAdminAdjustments() {
   // Presets
   panel.querySelectorAll('.hub-preset-btn').forEach(btn => {
     btn.onclick = () => {
-      if (amountInput) {
-        amountInput.value = btn.dataset.amount;
-        panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.toggle('active', b === btn));
-        updateDynamicButtonLabel();
-      }
+      adjustHubState.amount = btn.dataset.amount;
+      if (amountInput) amountInput.value = btn.dataset.amount;
+      panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.toggle('active', b === btn));
+      updateDynamicButtonLabel();
     };
   });
 
+  // Amount input event: ONLY updates state & submit button label in place!
   if (amountInput) {
     amountInput.oninput = () => {
+      adjustHubState.amount = amountInput.value;
       const val = amountInput.value;
       panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.toggle('active', b.dataset.amount === val));
       updateDynamicButtonLabel();
+    };
+  }
+
+  // Reason input event: ONLY updates state in place!
+  if (reasonInput) {
+    reasonInput.oninput = () => {
+      adjustHubState.reason = reasonInput.value;
     };
   }
 
@@ -5519,6 +6136,7 @@ export function renderAdminAdjustments() {
   if (reasonChipsContainer) {
     reasonChipsContainer.querySelectorAll('.hub-quick-chip').forEach(chip => {
       chip.onclick = () => {
+        adjustHubState.reason = chip.dataset.reason;
         if (reasonInput) reasonInput.value = chip.dataset.reason;
       };
     });
@@ -5527,33 +6145,30 @@ export function renderAdminAdjustments() {
   // Submit adjustment button
   if (submitBtn) {
     submitBtn.onclick = async () => {
-      if (selectedUids.size === 0) {
+      if (adjustHubState.selectedUids.size === 0) {
         toast('Please select at least one recipient member', 'warning');
         return;
       }
 
-      const amtVal = Math.abs(Number(amountInput?.value));
+      const amtVal = Math.abs(Number(adjustHubState.amount || amountInput?.value));
       if (isNaN(amtVal) || amtVal <= 0) {
         toast('Please enter a valid amount greater than 0', 'error');
         return;
       }
 
-      const reasonVal = String(reasonInput?.value || '').trim();
-      if (!reasonVal) {
-        toast('Audit reason is required for the transaction ledger', 'error');
-        return;
-      }
+      // Optional reason: defaults to 'Manual adjustment' if empty
+      const reasonVal = String(adjustHubState.reason || reasonInput?.value || '').trim() || 'Manual adjustment';
 
       submitBtn.disabled = true;
       submitBtn.textContent = 'Applying adjustments...';
 
       try {
-        const uidsArray = Array.from(selectedUids);
+        const uidsArray = Array.from(adjustHubState.selectedUids);
         for (const targetUid of uidsArray) {
           const res = await applyAccountAdjustment({
             targetUid,
-            bucket: currentBucket,
-            direction: currentDirection,
+            bucket: adjustHubState.bucket,
+            direction: adjustHubState.direction,
             amount: amtVal,
             reason: reasonVal
           });
@@ -5566,11 +6181,13 @@ export function renderAdminAdjustments() {
           }
         }
 
+        adjustHubState.amount = '';
+        adjustHubState.reason = '';
         if (amountInput) amountInput.value = '';
         if (reasonInput) reasonInput.value = '';
         panel.querySelectorAll('.hub-preset-btn').forEach(b => b.classList.remove('active'));
 
-        toast(`Applied ${currentDirection === 'add' ? '+' : '-'}${amtVal} ${currentBucket} to ${uidsArray.length} member(s)`, 'success');
+        toast(`Applied ${adjustHubState.direction === 'add' ? '+' : '-'}${amtVal} ${adjustHubState.bucket} to ${uidsArray.length} member(s)`, 'success');
         renderRoster();
         if (typeof renderAdminMembers === 'function') renderAdminMembers();
         if (typeof renderLeaderboard === 'function') renderLeaderboard();
@@ -6304,6 +6921,9 @@ async function setupAuthLifecycle() {
 
       // Start authenticated Firestore listeners
       initFirestoreListeners();
+      if (state.user?.isAdmin || state.user?.role === 'admin') {
+        backfillWindowCounters();
+      }
         } else {
       state.user = null;
       state.userPrivate = null;
@@ -7810,17 +8430,34 @@ function populateCategoryFilters() {
   const container = document.getElementById('category-filter-chips');
   if (!container) return;
 
+  // Count active tasks per category for current member view
+  const activeTasks = (state.tasks || []).filter(t => !t.archived && t.active !== false);
+  const activeCatIds = new Set();
+  activeTasks.forEach(t => {
+    const cId = t.categoryId || t.category;
+    if (cId) activeCatIds.add(cId);
+  });
+
+  // If selectedCategory is no longer active or was archived, fall back to 'all'
+  if (state.selectedCategory !== 'all') {
+    const cat = state.categories.find(c => c.id === state.selectedCategory);
+    if (!cat || cat.archived || !activeCatIds.has(cat.id)) {
+      state.selectedCategory = 'all';
+    }
+  }
+
   const current = state.selectedCategory;
   let html = `
-    <button data-category="all" class="cat-filter-btn px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${current === 'all' ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-300'}">
+    <button type="button" data-category="all" class="cat-filter-btn px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${current === 'all' ? 'bg-[#0A84FF] text-white' : 'bg-white/10 text-neutral-300'}">
       All Tasks
     </button>
   `;
 
-  state.categories.filter(c => !c.archived).forEach(cat => {
+  // Only render categories that have active tasks > 0
+  state.categories.filter(c => !c.archived && activeCatIds.has(c.id)).forEach(cat => {
     const isSelected = current === cat.id;
     html += `
-      <button data-category="${esc(cat.id)}" class="cat-filter-btn inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${isSelected ? 'text-white' : 'bg-white/10 text-neutral-300'}" style="${isSelected ? `background-color: ${cat.color || '#0A84FF'};` : ''}">
+      <button type="button" data-category="${esc(cat.id)}" class="cat-filter-btn inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${isSelected ? 'text-white' : 'bg-white/10 text-neutral-300'}" style="${isSelected ? `background-color: ${cat.color || '#0A84FF'};` : ''}">
         ${getCategorySvg(cat.iconKey, 'w-3.5 h-3.5')}
         <span>${esc(cat.name)}</span>
       </button>
@@ -7870,7 +8507,7 @@ function renderTasks() {
   if (emptyState) emptyState.classList.add('hidden');
 
   container.innerHTML = filtered.map(task => {
-    const cat = state.categories.find(c => c.id === task.categoryId || c.id === task.category) || { name: 'General', color: '#0A84FF', iconKey: 'film' };
+    const cat = getCategoryForTask(task);
     const win = getTaskWindow(task, now);
     const isDone = Boolean(state.user && state.mySubmissions?.some(s => s.taskId === task.id && (task.schedule?.type === 'once' ? true : s.occurrenceKey === win?.occurrenceKey)));
     const totalCompletions = state.submissions.filter(s => s.taskId === task.id).length;
@@ -7922,7 +8559,7 @@ function renderTasks() {
             </button>
 
             <span class="font-semibold text-xs ${isDone ? 'text-emerald-400' : 'text-[#0A84FF]'}">
-              ${isDone ? 'Completed ✓' : 'View & Submit &rarr;'}
+              ${isDone ? 'Completed' : 'View & Submit &rarr;'}
             </span>
           </div>
         </div>
@@ -8066,7 +8703,7 @@ function openTaskDetailsModal(taskId) {
   // Banner status with countdown
   let bannerHtml = '';
   if (isDone) {
-    bannerHtml = '<div class="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium text-center flex items-center justify-center gap-2">✓ You have completed this occurrence.</div>';
+    bannerHtml = '<div class="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium text-center flex items-center justify-center gap-2"><svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg> You have completed this occurrence.</div>';
   } else if (win?.state === 'closed') {
     bannerHtml = '<div class="p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-400 text-xs font-medium text-center">This task is closed for submissions.</div>';
   } else if (win?.state === 'upcoming') {
@@ -8765,21 +9402,71 @@ function renderProfileTransactions() {
 
 function updateUserTodayAttendanceBadge() {
   const badge = document.getElementById('user-today-attendance-badge');
+  const ctaBtn = document.getElementById('home-attendance-checkin-cta');
   if (!badge) return;
 
   if (!state.user) {
     badge.textContent = 'Guest Mode';
-    badge.className = 'text-xs px-2 py-0.5 rounded-full bg-white/10 text-neutral-400';
+    badge.className = 'text-xs px-2 py-0.5 rounded-full bg-white/10 text-neutral-400 font-medium';
+    if (ctaBtn) ctaBtn.style.display = 'none';
     return;
   }
 
-  const todayChecked = state.myAttendanceLogs?.length > 0;
-  if (todayChecked) {
-    badge.textContent = 'Checked In';
-    badge.className = 'text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold';
+  const nowMs = serverNow();
+  const activeSessions = (state.attendanceSessions || []).filter(s => s.active && !s.archived);
+
+  let activeLog = null;
+  let activeOcc = null;
+  let windowIsOpen = false;
+
+  for (const session of activeSessions) {
+    const occ = getOccurrenceFor(session, nowMs);
+    const occKey = occ ? occ.key : 'once';
+    const occStart = occ ? occ.start : (session.schedule?.startDateTime || nowMs);
+
+    const log = (state.myAttendanceLogs || []).find(l => {
+      if (l.sessionId !== session.id) return false;
+      return matchesOccurrence(l, occKey, occStart, session);
+    });
+
+    if (log) {
+      activeLog = log;
+      activeOcc = occ || { key: occKey, start: occStart };
+      break;
+    }
+
+    const calc = computeAttendance(session, nowMs);
+    if (calc.status === 'on_time' || calc.status === 'late') {
+      windowIsOpen = true;
+    }
+  }
+
+  if (!activeLog && state.myAttendanceLogs?.length > 0) {
+    const todayKey = formatZonedDateKey(nowMs, APP_TIMEZONE);
+    activeLog = state.myAttendanceLogs.find(l => {
+      const logMs = parseDateTimeToMs(l.checkedInAt || l.occurrenceStart);
+      return logMs && formatZonedDateKey(logMs, APP_TIMEZONE) === todayKey;
+    });
+  }
+
+  if (activeLog) {
+    const logTime = formatDateTime(activeLog.checkedInAt || activeLog.occurrenceStart, { hour: 'numeric', minute: '2-digit' });
+    const isLate = activeLog.status === 'late' || (activeLog.penalty > 0) || (activeLog.fineEGP > 0);
+    const lateMins = activeLog.lateMinutes || Math.max(1, Math.round(((parseDateTimeToMs(activeLog.checkedInAt) || nowMs) - (activeOcc?.start || nowMs)) / 60000));
+    const statusDetail = isLate ? `Late +${lateMins}m` : 'On Time';
+
+    badge.textContent = `Checked In • ${logTime} (${statusDetail})`;
+    badge.className = 'text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold';
+    if (ctaBtn) ctaBtn.style.display = 'none';
   } else {
     badge.textContent = 'Not Checked In';
-    badge.className = 'text-xs px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 font-medium';
+    badge.className = windowIsOpen
+      ? 'text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium'
+      : 'text-xs px-2 py-0.5 rounded-full bg-white/10 text-neutral-400 font-medium';
+
+    if (ctaBtn) {
+      ctaBtn.style.display = windowIsOpen ? 'inline-flex' : 'none';
+    }
   }
 }
 
@@ -8830,8 +9517,9 @@ export function renderLeaderboard() {
 
   // Zero-Extra-Reads: compute directly from usersMap in memory
   const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
+  const activeMembers = allMembers.filter(m => !m.disabled);
 
-  const sorted = (allMembers || []).map(m => {
+  const sorted = (activeMembers || []).map(m => {
     const prof = getUserProfile(m.uid, m.displayName, m.photoURL);
     const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
     const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
@@ -8863,8 +9551,6 @@ export function renderLeaderboard() {
 
   if (countEl) countEl.textContent = `${sorted.length} Members`;
 
-  const taskCountOf = (uid) => (state.submissions || []).filter(s => s.userId === uid || s.uid === uid).length;
-
   function renderStagePillar(member, defaultPlace, pillarClass) {
     if (!member) {
       // Vacant Stage Pedestal
@@ -8886,26 +9572,33 @@ export function renderLeaderboard() {
     // Dynamic rank styling based on actual tied rank
     const actualRank = member.rank;
     let rankColor = 'text-neutral-400';
-    let ringColor = 'border-white/20';
     let tierClass = pillarClass;
 
     if (actualRank === 1) {
       rankColor = 'text-amber-400';
-      ringColor = 'border-amber-400';
       tierClass = 'podium-pillar-gold';
     } else if (actualRank === 2) {
       rankColor = 'text-slate-300';
-      ringColor = 'border-slate-300';
       tierClass = 'podium-pillar-silver';
     } else if (actualRank === 3) {
       rankColor = 'text-amber-500';
-      ringColor = 'border-amber-600';
       tierClass = 'podium-pillar-bronze';
     }
 
     const name = member.displayName || member.name || 'Member';
     const isFirst = defaultPlace === 1;
     const avatarSize = isFirst ? 'w-14 h-14' : 'w-11 h-11';
+
+    // Up to 2 compact badge chips below the score
+    const memberBadges = (member.badges || []).slice(0, 2);
+    const badgesHtml = memberBadges.length > 0 ? `
+      <div class="flex items-center justify-center gap-1 mt-1 flex-wrap">
+        ${memberBadges.map(b => {
+          const bObj = typeof b === 'string' ? { label: b, color: '#0A84FF' } : b;
+          return `<span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold text-white truncate max-w-[70px]" style="background-color: ${bObj.color || '#0A84FF'}30; border: 1px solid ${bObj.color || '#0A84FF'}50;">${esc(bObj.label || bObj.name || bObj.id || 'Badge')}</span>`;
+        }).join('')}
+      </div>
+    ` : '';
 
     return `
       <div class="podium-pillar ${tierClass} ${pillarClass} cursor-pointer" data-member-uid="${esc(member.uid)}">
@@ -8915,7 +9608,7 @@ export function renderLeaderboard() {
         <div class="mx-auto mb-1.5 flex justify-center">${renderAvatar(member, avatarSize)}</div>
         <div class="font-bold text-xs text-white truncate max-w-[95%]">${esc(name)}</div>
         <div class="text-xs font-bold font-mono ${rankColor} mt-0.5">${member.periodPoints} pts</div>
-        <div class="text-[10px] text-neutral-400">${taskCountOf(member.uid)} tasks</div>
+        ${badgesHtml}
       </div>
     `;
   }
@@ -8944,29 +9637,36 @@ export function renderLeaderboard() {
     });
   }
 
-  // "ALL MEMBERS" Roster directly beneath the podium stage
+  // 4-Column "ALL MEMBERS" Roster: [Rank] [Avatar] [Middle Info Column] [Right Points Column]
   function memberRowHtml(member, rankDisplay, muted = false) {
     const isMe = state.user?.uid === member.uid;
     const isPodiumTop = member.rank && member.rank <= 3;
     const rankColorClass = isPodiumTop ? (member.rank === 1 ? 'text-amber-400' : member.rank === 2 ? 'text-slate-300' : 'text-amber-500') : 'text-neutral-500';
 
     return `
-      <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''} ${muted ? 'opacity-60' : ''}" data-member-uid="${esc(member.uid)}">
-        <div class="flex items-center gap-3 min-w-0 flex-1 mr-2">
-          <span class="w-6 text-center font-mono font-bold text-xs shrink-0 ${rankColorClass}">${rankDisplay}</span>
-          <div class="shrink-0">${renderAvatar(member, 'w-8 h-8')}</div>
-          <div class="min-w-0 flex-1">
-            <div class="font-semibold text-xs text-white flex items-center gap-1.5 min-w-0">
-              <span class="truncate shrink-0 max-w-[120px]">${esc(member.displayName || member.name || 'Member')}</span>
-              ${isMe ? '<span class="you-badge shrink-0">You</span>' : ''}
-              <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
-            </div>
-            <div class="text-[10px] text-neutral-400">${taskCountOf(member.uid)} quotas</div>
+      <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 px-3 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''} ${muted ? 'opacity-60' : ''}" data-member-uid="${esc(member.uid)}">
+        <!-- Col 1: Rank -->
+        <span class="w-7 text-center font-mono font-bold text-xs shrink-0 ${rankColorClass}">${rankDisplay}</span>
+        
+        <!-- Col 2: Avatar -->
+        <div class="shrink-0 mr-3">${renderAvatar(member, 'w-9 h-9')}</div>
+        
+        <!-- Col 3: Middle Info Column -->
+        <div class="flex-1 min-w-0 mr-3">
+          <!-- Line 1: Member Name + YOU badge -->
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span class="font-semibold text-xs text-white truncate max-w-[180px]">${esc(member.displayName || member.name || 'Member')}</span>
+            ${isMe ? '<span class="you-badge shrink-0">YOU</span>' : ''}
+          </div>
+          <!-- Line 2: Badges Row (or subtle role label if no badges) -->
+          <div class="badge-row-container flex flex-wrap gap-1 mt-1 min-w-0" data-uid="${esc(member.uid)}">
+            ${(!member.badges || member.badges.length === 0) ? '<span class="text-[10px] text-neutral-500 font-medium capitalize">' + esc(member.role || 'Member') + '</span>' : ''}
           </div>
         </div>
-        <div class="text-right shrink-0">
-          <div class="font-bold font-mono text-xs ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} pts</div>
-          <div class="text-[10px] text-neutral-500">${member.role || 'member'}</div>
+        
+        <!-- Col 4: Right Points Column (Fixed width, tabular, right-aligned) -->
+        <div class="w-20 shrink-0 text-right">
+          <span class="font-bold font-mono text-xs tabular-nums ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} pts</span>
         </div>
       </div>
     `;
@@ -8991,7 +9691,10 @@ export function renderLeaderboard() {
   listEl.querySelectorAll('.badge-row-container').forEach(c => {
     const uid = c.dataset.uid;
     const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-    if (mem) renderBadgeRow(c, mem.badges, mem);
+    if (mem && mem.badges && mem.badges.length > 0) {
+      c.innerHTML = '';
+      renderBadgeRow(c, mem.badges, mem);
+    }
   });
 
   listEl.querySelectorAll('.leaderboard-member-row').forEach(row => {
@@ -9470,14 +10173,20 @@ function getSquircleColorClass(type) {
   return 'notification-squircle-blue';
 }
 
+function getAdminNoteMarker(text) {
+  if (!text) return null;
+  if (text.includes('\u{1F4AC} Admin Note:')) return '\u{1F4AC} Admin Note:';
+  if (text.includes('Admin Note:')) return 'Admin Note:';
+  return null;
+}
+
 function getNotificationSnippet(notif) {
   const fullText = (notif.body || notif.message || '').trim();
-  const marker = '💬 Admin Note:';
-  const hasMarker = fullText.includes(marker);
-  const hasAdminNote = Boolean(notif.adminNote || hasMarker);
+  const marker = getAdminNoteMarker(fullText);
+  const hasAdminNote = Boolean(notif.adminNote || marker);
 
   let preview = fullText;
-  if (hasMarker) {
+  if (marker) {
     preview = fullText.substring(0, fullText.indexOf(marker)).trim();
   }
   preview = preview.replace(/\s+/g, ' ').trim();
@@ -9492,11 +10201,11 @@ function getNotificationSnippet(notif) {
 
 function formatNotificationContent(bodyText) {
   if (!bodyText) return '';
-  const marker = '💬 Admin Note:';
-  const idx = bodyText.indexOf(marker);
-  if (idx !== -1) {
+  const marker = getAdminNoteMarker(bodyText);
+  if (marker) {
+    const idx = bodyText.indexOf(marker);
     const mainText = bodyText.substring(0, idx).trim();
-    const noteText = bodyText.substring(idx).trim();
+    const noteText = bodyText.substring(idx).replace(/^\u{1F4AC}\s*/, '').trim();
     return `
       <div class="text-neutral-300 text-xs mt-1" style="white-space: pre-line;">${esc(mainText)}</div>
       <div class="notification-admin-note mt-1.5">${esc(noteText)}</div>
@@ -9548,7 +10257,7 @@ export function renderNotifications() {
               <span class="text-[10px] text-neutral-400 shrink-0 font-mono">${timeFormatted}</span>
             </div>
             <div class="text-neutral-400 text-xs truncate mt-0.5">
-              ${esc(snippet)}${hasNote ? ' <span class="text-[#0A84FF] font-semibold text-[10px]">[💬 Note]</span>' : ''}
+              ${esc(snippet)}${hasNote ? ' <span class="text-[#0A84FF] font-semibold text-[10px]">[Note]</span>' : ''}
             </div>
           </div>
         </div>
@@ -9602,36 +10311,37 @@ export function openNotificationDetailModal(notif) {
 
   let ctaBtnHtml = '';
   if (targetAction && targetAction.route) {
-    let ctaLabel = 'View Details ➔';
-    if (targetAction.route === 'profile') ctaLabel = 'Open Profile & Balance ➔';
-    else if (targetAction.route === 'tasks') ctaLabel = 'View Task ➔';
-    else if (targetAction.route === 'broadcast') ctaLabel = 'Open Broadcast ➔';
-    else if (targetAction.route === 'attendance') ctaLabel = 'Go to Attendance ➔';
+    let ctaLabel = 'View Details &rarr;';
+    if (targetAction.route === 'profile') ctaLabel = 'Open Profile & Balance &rarr;';
+    else if (targetAction.route === 'tasks') ctaLabel = 'View Task &rarr;';
+    else if (targetAction.route === 'broadcast') ctaLabel = 'Open Broadcast &rarr;';
+    else if (targetAction.route === 'attendance') ctaLabel = 'Go to Attendance &rarr;';
 
     ctaBtnHtml = `
       <button id="btn-notif-action-cta" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-semibold transition text-xs shadow-md">
-        ${esc(ctaLabel)}
+        ${ctaLabel}
       </button>
     `;
   }
 
   const fullText = (notif.body || notif.message || '').trim();
-  const marker = '💬 Admin Note:';
+  const marker = getAdminNoteMarker(fullText);
   let mainText = fullText;
   let adminNoteText = (notif.adminNote || '').trim();
 
-  if (fullText.includes(marker)) {
+  if (marker) {
     const parts = fullText.split(marker);
     mainText = parts[0].trim();
     if (!adminNoteText) {
-      adminNoteText = parts.slice(1).join(marker).trim();
+      adminNoteText = parts.slice(1).join(marker).replace(/^\u{1F4AC}\s*/, '').trim();
     }
   }
 
   const adminNoteCard = adminNoteText ? `
     <div class="notification-admin-note p-3 rounded-xl bg-[#0A84FF]/10 border-l-4 border-[#0A84FF] text-white text-xs space-y-1 mt-2">
       <div class="font-bold text-[#0A84FF] text-[11px] flex items-center gap-1.5">
-        <span>💬 Admin Note</span>
+        <svg class="w-3.5 h-3.5 text-[#0A84FF]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+        <span>Admin Note</span>
       </div>
       <p class="text-neutral-200 whitespace-pre-line leading-relaxed">${esc(adminNoteText)}</p>
     </div>
@@ -10214,11 +10924,11 @@ function renderAdminCategories() {
     const isSelected = selectionState.active && selectionState.type === 'categories' && selectionState.selectedIds.has(c.id);
 
     return `
-      <div class="glass-card bulk-select-card p-3 flex items-center justify-between text-xs${isSelected ? ' selected' : ''}" data-cat-id="${esc(c.id)}" data-bulk-id="${esc(c.id)}">
+      <div class="glass-card bulk-select-card p-3 flex items-center justify-between text-xs cursor-pointer select-none rounded-xl hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-cat-id="${esc(c.id)}" data-bulk-id="${esc(c.id)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content flex items-center justify-between w-full">
           <div class="flex items-center gap-2.5 min-w-0">
-            <div class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style="background-color: ${c.color}25; color: ${c.color}; border: 1px solid ${c.color}40;">
+            <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background-color: ${c.color}25; color: ${c.color}; border: 1px solid ${c.color}40;">
               ${getCategorySvg(c.iconKey, 'w-4 h-4')}
             </div>
             <div class="min-w-0">
@@ -10226,93 +10936,23 @@ function renderAdminCategories() {
               <div class="text-[10px] text-neutral-400">${taskCount} active tasks</div>
             </div>
           </div>
-          <div class="flex items-center gap-2">
-            ${isArchivedView ? `
-              <button type="button" class="btn-restore-cat text-xs text-emerald-400 px-2 py-1 hover:underline" data-cat-id="${esc(c.id)}">Restore</button>
-            ` : `
-              <button type="button" class="btn-edit-cat text-xs text-[#0A84FF] px-2 py-1 hover:underline" data-cat-id="${esc(c.id)}">Edit</button>
-              <button type="button" class="btn-archive-cat text-xs text-amber-400 px-2 py-1 hover:underline" data-cat-id="${esc(c.id)}">Archive</button>
-            `}
+          <div class="flex items-center gap-2 shrink-0 text-neutral-500">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
       </div>
     `;
   }).join('');
 
-  list.querySelectorAll('.glass-card').forEach(card => {
-    card.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'categories') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-    };
-
-    attachLongPress(card, () => {
-      enterSelectionMode('categories', card.dataset.bulkId);
+  list.querySelectorAll('.bulk-select-card').forEach(card => {
+    attachRowGestures(card, {
+      bulkType: 'categories',
+      bulkId: card.dataset.bulkId,
+      onSingleTap: () => openCategoryModal(card.dataset.catId)
     });
-  });
-
-  list.querySelectorAll('.btn-edit-cat').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'categories') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      openCategoryModal(btn.dataset.catId);
-    };
-  });
-
-  list.querySelectorAll('.btn-archive-cat').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'categories') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const cat = state.categories.find(c => c.id === btn.dataset.catId);
-      if (!cat) return;
-      const count = state.tasks.filter(t => (t.categoryId === cat.id || t.category === cat.id) && !t.archived).length;
-      const confirmed = await confirmSheet({
-        title: 'Archive Category',
-        message: `Are you sure you want to archive "${cat.name}"? ${count} active task(s) currently use this category.`,
-        confirmLabel: 'Archive',
-        destructive: true
-      });
-      if (confirmed) {
-        await updateDoc(doc(db, 'categories', cat.id), { archived: true, updatedAt: serverTimestamp() });
-        toast('Category archived', 'info');
-      }
-    };
-  });
-
-  list.querySelectorAll('.btn-restore-cat').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'categories') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      await updateDoc(doc(db, 'categories', btn.dataset.catId), { archived: false, updatedAt: serverTimestamp() });
-      toast('Category restored', 'success');
-    };
   });
 }
 
-/* ==========================================================================
-   ADMIN TASKS RENDERER & COMPATIBILITY ALIASES
-   ========================================================================== */
 export function renderAdminTasks() {
   const tbody = document.getElementById('admin-tasks-tbody');
   if (!tbody) return;
@@ -10326,17 +10966,17 @@ export function renderAdminTasks() {
   }
 
   tbody.innerHTML = filtered.map(t => {
-    const cat = (state.categories || []).find(c => c.id === t.categoryId || c.id === t.category) || { name: 'General', color: '#0A84FF', iconKey: 'film' };
+    const cat = getCategoryForTask(t);
     const isSelected = selectionState.active && selectionState.type === 'admin_tasks' && selectionState.selectedIds.has(t.id);
     return `
-      <div class="inset-row bulk-select-card flex items-center justify-between py-2 text-xs${isSelected ? ' selected' : ''}" data-task-id="${esc(t.id)}" data-bulk-id="${esc(t.id)}">
+      <div class="inset-row bulk-select-card flex items-center justify-between py-2 text-xs cursor-pointer select-none rounded-xl hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-task-id="${esc(t.id)}" data-bulk-id="${esc(t.id)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content flex items-center justify-between w-full">
           <div class="min-w-0 flex-1 pr-2">
             <div class="font-semibold text-white truncate">${esc(t.title)}</div>
             <div class="text-[10px] text-neutral-400 flex items-center gap-1.5 mt-0.5">
               <span class="inline-flex items-center gap-1" style="color: ${cat.color};">
-                ${getCategorySvg(cat.iconKey, 'w-3 h-3')}
+                getCategorySvg(cat.iconKey, 'w-3 h-3')
                 <span>${esc(cat.name)}</span>
               </span>
               <span>•</span>
@@ -10345,111 +10985,20 @@ export function renderAdminTasks() {
               <span>${t.isPermanent ? 'Permanent' : (t.schedule?.type || 'once')}</span>
             </div>
           </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            ${isArchivedView ? `
-              <button type="button" class="btn-admin-restore-task text-xs text-emerald-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Restore</button>
-              <button type="button" class="btn-admin-delete-task text-xs text-rose-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Delete permanently</button>
-            ` : `
-              <button type="button" class="btn-admin-edit-task text-xs text-[#0A84FF] px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Edit</button>
-              <button type="button" class="btn-admin-archive-task text-xs text-amber-400 px-2 py-1 hover:underline" data-task-id="${esc(t.id)}">Archive</button>
-            `}
+          <div class="flex items-center gap-2 shrink-0 text-neutral-500">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
       </div>
     `;
   }).join('');
 
-  tbody.querySelectorAll('.inset-row').forEach(row => {
-    row.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-    };
-
-    attachLongPress(row, () => {
-      enterSelectionMode('admin_tasks', row.dataset.bulkId);
+  tbody.querySelectorAll('.bulk-select-card').forEach(row => {
+    attachRowGestures(row, {
+      bulkType: 'admin_tasks',
+      bulkId: row.dataset.bulkId,
+      onSingleTap: () => openAdminTaskModal(row.dataset.taskId)
     });
-  });
-
-  tbody.querySelectorAll('.btn-admin-edit-task').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      openAdminTaskModal(btn.dataset.taskId);
-    };
-  });
-
-  tbody.querySelectorAll('.btn-admin-archive-task').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const task = (state.tasks || []).find(t => t.id === btn.dataset.taskId);
-      if (!task) return;
-      const confirm = await confirmSheet({
-        title: 'Archive Task',
-        message: `Are you sure you want to archive "${task.title}"? It will be hidden from members.`,
-        confirmLabel: 'Archive',
-        destructive: true
-      });
-      if (confirm) {
-        await updateDoc(doc(db, 'tasks', task.id), { archived: true, updatedAt: serverTimestamp() });
-        toast('Task archived', 'info');
-      }
-    };
-  });
-
-  tbody.querySelectorAll('.btn-admin-restore-task').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      await updateDoc(doc(db, 'tasks', btn.dataset.taskId), { archived: false, updatedAt: serverTimestamp() });
-      toast('Task restored', 'success');
-    };
-  });
-
-  tbody.querySelectorAll('.btn-admin-delete-task').forEach(btn => {
-    btn.onclick = async (e) => {
-      if (selectionState.active && selectionState.type === 'admin_tasks') {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const task = (state.tasks || []).find(t => t.id === btn.dataset.taskId);
-      const confirm = await confirmSheet({
-        title: 'Delete Task Permanently',
-        message: `Are you sure you want to permanently delete "${task ? task.title : 'this task'}"? This action cannot be undone.`,
-        confirmLabel: 'Delete Permanently',
-        destructive: true
-      });
-      if (confirm) {
-        await deleteDoc(doc(db, 'tasks', btn.dataset.taskId));
-        toast('Task permanently deleted', 'info');
-      }
-    };
   });
 }
 
@@ -10602,13 +11151,7 @@ function openAdminTaskModal(taskId = null) {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs font-semibold text-neutral-200 mb-1">Category</label>
-            <div id="adm-task-category-picker-wrap">
-     <button type="button" id="btn-pick-task-category" class="w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-between text-xs hover:bg-white/10 transition">
-       <span id="btn-pick-task-category-label">Select Category</span>
-       <svg class="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
-     </button>
-     <input type="hidden" id="adm-task-category" value="" />
-   </div>
+            <div id="adm-task-category-picker-wrap"></div>
           </div>
           <div>
             <label class="block text-xs font-semibold text-neutral-200 mb-1">Base Task Points</label>
@@ -10621,15 +11164,14 @@ function openAdminTaskModal(taskId = null) {
           <input id="adm-task-link" type="url" class="w-full glass-input text-xs font-mono" placeholder="https://..." value="${esc(currentLink)}" />
         </div>
 
-        <!-- Points Claim Policy Card -->
-        <div class="ios-card space-y-2" style="margin-bottom:0">
+        <!-- Points Claim Policy Card (Apple HIG Stacked Radio Group) -->
+        <div class="ios-card space-y-2.5" style="margin-bottom:0">
           <div class="text-xs font-bold text-white uppercase tracking-wider">Points Claim Policy</div>
-          <p id="adm-claim-hint" class="text-[11px] text-neutral-400"></p>
           <div id="mount-task-claim-policy"></div>
         </div>
 
         <!-- Schedule / Recurrence Card (hidden for one-time milestones) -->
-        <div id="adm-recurrence-card" class="ios-card space-y-3 ${currentClaimPolicy === 'milestone' ? 'hidden' : ''}" style="margin-bottom:0">
+        <div id="adm-recurrence-card" class="ios-card space-y-3 ${currentClaimPolicy === 'milestone' || currentClaimPolicy === 'admin_assigned' ? 'hidden' : ''}" style="margin-bottom:0">
           <div class="text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</div>
           <div>
             <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
@@ -10649,19 +11191,10 @@ function openAdminTaskModal(taskId = null) {
           </div>
         </div>
 
-        <!-- Task Deadline Section (Hidden if Permanent Task is ON) -->
-        <div id="taskDeadlineSection" class="ios-card space-y-3 ${currentIsPermanent ? 'hidden' : ''}" style="margin-bottom:0">
+        <!-- Task Deadline Section (renderDateTimeField HIG standard) -->
+        <div id="taskDeadlineSection" class="ios-card space-y-2.5 ${currentIsPermanent ? 'hidden' : ''}" style="margin-bottom:0">
           <div class="text-xs font-bold text-white uppercase tracking-wider">Task Deadline</div>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block text-[11px] text-neutral-300 mb-1">Deadline Date</label>
-              <input id="adm-dl-date" type="date" class="ios-input" value="${deadlineDateStr}" />
-            </div>
-            <div>
-              <label class="block text-[11px] text-neutral-300 mb-1">Deadline Time</label>
-              <input id="adm-dl-time" type="time" class="ios-input" value="${deadlineTimeStr}" />
-            </div>
-          </div>
+          <div id="mount-adm-deadline-field"></div>
           <div id="adm-deadline-words" class="hidden"></div>
         </div>
 
@@ -10682,16 +11215,7 @@ function openAdminTaskModal(taskId = null) {
                 <label class="block text-[11px] text-neutral-300 mb-1">Early Points</label>
                 <input id="adm-early-pts" type="number" inputmode="numeric" min="1" class="ios-input font-mono" value="${earlyBonusPoints}" placeholder="15" />
               </div>
-              <div class="grid grid-cols-2 gap-2">
-                <div>
-                  <label class="block text-[11px] text-neutral-300 mb-1">Bonus Ends Date</label>
-                  <input id="adm-early-date" type="date" class="ios-input" value="${earlyBonusDateStr}" />
-                </div>
-                <div>
-                  <label class="block text-[11px] text-neutral-300 mb-1">Bonus Ends Time</label>
-                  <input id="adm-early-time" type="time" class="ios-input" value="${earlyBonusTimeStr}" />
-                </div>
-              </div>
+              <div id="mount-adm-early-field"></div>
               <div id="adm-early-words" class="hidden"></div>
             </div>
           </div>
@@ -10706,16 +11230,7 @@ function openAdminTaskModal(taskId = null) {
               <div id="mount-switch-grace"></div>
             </div>
             <div id="adm-grace-container" class="${graceEnabled ? '' : 'hidden'} space-y-2.5 pt-2 border-t border-white/10">
-              <div class="grid grid-cols-2 gap-2">
-                <div>
-                  <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Date</label>
-                  <input id="adm-grace-date" type="date" class="ios-input" value="${graceDateStr}" />
-                </div>
-                <div>
-                  <label class="block text-[11px] text-neutral-300 mb-1">Grace Cutoff Time</label>
-                  <input id="adm-grace-time" type="time" class="ios-input" value="${graceTimeStr}" />
-                </div>
-              </div>
+              <div id="mount-adm-grace-field"></div>
               <div id="adm-grace-words" class="hidden"></div>
             </div>
           </div>
@@ -10765,62 +11280,140 @@ function openAdminTaskModal(taskId = null) {
     const linkInp = bodyEl.querySelector('#adm-task-link');
     if (linkInp) linkInp.oninput = e => { currentLink = e.target.value; };
 
-    // Category picker button wiring
-    const catBtn = bodyEl.querySelector('#btn-pick-task-category');
-    if (catBtn) {
-      const catObj = state.categories.find(c => c.id === currentCategoryId);
-      const catLabel = bodyEl.querySelector('#btn-pick-task-category-label');
-      if (catLabel && catObj) catLabel.textContent = catObj.name || catObj.nameEn || 'Select Category';
-      catBtn.onclick = () => {
-        openItemPicker({
-          title: 'Select Category',
-          items: state.categories.map(c => ({
-            id: c.id,
-            label: c.name || c.nameEn,
-            color: c.color,
-            icon: c.iconKey || c.icon || 'film'
-          })),
-          selectedId: currentCategoryId,
-          onSelect: (item) => {
-            currentCategoryId = item.id;
-            if (catInp) catInp.value = item.id;
-            if (catLabel) catLabel.textContent = item.label;
-          }
-        });
-      };
-    }
+    // Live Interactive Category Picker Row
+    function updateCategoryPickerUI() {
+      const wrap = bodyEl.querySelector('#adm-task-category-picker-wrap');
+      if (!wrap) return;
+      const cat = getCategoryForTask({ categoryId: currentCategoryId });
+      wrap.innerHTML = `
+        <div id="btn-pick-task-category" role="button" tabindex="0" class="admin-category-picker-row w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-between text-xs hover:bg-white/10 transition cursor-pointer select-none">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${cat.color || '#0A84FF'};"></span>
+            <span class="shrink-0 text-neutral-300">${getCategorySvg(cat.iconKey, 'w-3.5 h-3.5')}</span>
+            <span class="font-semibold truncate text-white">${esc(cat.name || 'Select Category')}</span>
+          </div>
+          <svg class="w-3.5 h-3.5 text-neutral-400 shrink-0 ml-1.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </div>
+        <input type="hidden" id="adm-task-category" value="${esc(currentCategoryId)}" />
+      `;
 
-    // Claim policy: milestones never repeat, so the recurrence card is hidden for them
-    function applyClaimPolicyVisibility() {
-      const card = bodyEl.querySelector('#adm-recurrence-card');
-      if (card) card.classList.toggle('hidden', currentClaimPolicy === 'milestone');
-      const hint = bodyEl.querySelector('#adm-claim-hint');
-      if (hint) {
-        hint.textContent = currentClaimPolicy === 'milestone'
-          ? 'Awarded once per member, ever. This task does not repeat.'
-          : currentClaimPolicy === 'every_submission'
-            ? 'Points are awarded on every submission.'
-            : 'Points are awarded once per cycle. Set the recurrence below.';
+      const btn = wrap.querySelector('#btn-pick-task-category');
+      if (btn) {
+        btn.onclick = () => {
+          const items = Array.from(categoriesMap.values())
+            .filter(c => !c.archived)
+            .map(c => ({
+              id: c.id,
+              label: c.name || c.nameEn,
+              color: c.color,
+              icon: c.iconKey || c.icon || 'folder'
+            }));
+          openItemPicker({
+            title: 'Select Category',
+            items: items.length > 0 ? items : [{ id: 'uncategorized', label: 'Uncategorized', color: '#8E8E93', icon: 'folder' }],
+            selectedId: currentCategoryId,
+            onSelect: (item) => {
+              currentCategoryId = item.id;
+              updateCategoryPickerUI();
+            }
+          });
+        };
       }
     }
+    updateCategoryPickerUI();
 
-    const mountClaimPolicy = bodyEl.querySelector('#mount-task-claim-policy');
-    if (mountClaimPolicy) {
-      mountClaimPolicy.appendChild(renderSegmented({
-        id: 'segmented-task-claim-policy',
-        options: [
-          { value: 'once_per_cycle', label: 'Once per cycle' },
-          { value: 'every_submission', label: 'Every submission' },
-          { value: 'milestone', label: 'One-time milestone' }
-        ],
-        value: currentClaimPolicy,
-        onChange: (val) => {
-          currentClaimPolicy = val;
+    // Stacked Radio Group for Points Claim Policy
+    function applyClaimPolicyVisibility() {
+      const card = bodyEl.querySelector('#adm-recurrence-card');
+      const isMilestoneOrAssigned = currentClaimPolicy === 'milestone' || currentClaimPolicy === 'admin_assigned';
+      if (card) card.classList.toggle('hidden', isMilestoneOrAssigned);
+    }
+
+    function updateClaimPolicyUI() {
+      const mount = bodyEl.querySelector('#mount-task-claim-policy');
+      if (!mount) return;
+
+      const claimPolicies = [
+        { value: 'self_claim', label: 'Self-Claim', desc: 'Members claim and complete on their own' },
+        { value: 'admin_assigned', label: 'Admin-Assigned', desc: 'Admin assigns specific members' },
+        { value: 'open', label: 'Open to All', desc: 'Any member can submit without claiming' }
+      ];
+
+      let activeVal = currentClaimPolicy;
+      if (activeVal === 'once_per_cycle') activeVal = 'self_claim';
+      else if (activeVal === 'every_submission') activeVal = 'open';
+      else if (activeVal === 'milestone') activeVal = 'admin_assigned';
+
+      mount.innerHTML = `
+        <div class="space-y-2">
+          ${claimPolicies.map(opt => `
+            <label class="claim-policy-radio-card flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition select-none ${activeVal === opt.value ? 'bg-[#0A84FF]/10 border-[#0A84FF]' : 'bg-white/5 border-white/10 hover:bg-white/[0.08]'}">
+              <input type="radio" name="task-claim-policy-radio" value="${opt.value}" class="mt-0.5 accent-[#0A84FF]" ${activeVal === opt.value ? 'checked' : ''} />
+              <div class="flex-1 min-w-0">
+                <div class="text-xs font-semibold text-white">${opt.label}</div>
+                <div class="text-[11px] text-neutral-400 mt-0.5 leading-snug">${opt.desc}</div>
+              </div>
+            </label>
+          `).join('')}
+        </div>
+      `;
+
+      mount.querySelectorAll('input[name="task-claim-policy-radio"]').forEach(radio => {
+        radio.onchange = () => {
+          currentClaimPolicy = radio.value;
+          updateClaimPolicyUI();
           applyClaimPolicyVisibility();
+        };
+      });
+    }
+    updateClaimPolicyUI();
+    applyClaimPolicyVisibility();
+
+    // Mount renderDateTimeField for Task Deadline, Early Bonus, Grace Period
+    const mountDl = bodyEl.querySelector('#mount-adm-deadline-field');
+    if (mountDl) {
+      const currentDlMs = dtToMs(deadlineDateStr, deadlineTimeStr);
+      mountDl.appendChild(renderDateTimeField({
+        label: 'Deadline Date & Time',
+        valueMs: currentDlMs,
+        mode: 'datetime',
+        onChange: (ms) => {
+          deadlineDateStr = toDateStr(ms);
+          deadlineTimeStr = toTimeStr(ms);
+          updateAllWords();
         }
       }));
     }
-    applyClaimPolicyVisibility();
+
+    const mountEb = bodyEl.querySelector('#mount-adm-early-field');
+    if (mountEb) {
+      const currentEbMs = dtToMs(earlyBonusDateStr, earlyBonusTimeStr);
+      mountEb.appendChild(renderDateTimeField({
+        label: 'Bonus Ends Date & Time',
+        valueMs: currentEbMs,
+        mode: 'datetime',
+        onChange: (ms) => {
+          earlyBonusDateStr = toDateStr(ms);
+          earlyBonusTimeStr = toTimeStr(ms);
+          updateAllWords();
+        }
+      }));
+    }
+
+    const mountGr = bodyEl.querySelector('#mount-adm-grace-field');
+    if (mountGr) {
+      const currentGrMs = dtToMs(graceDateStr, graceTimeStr);
+      mountGr.appendChild(renderDateTimeField({
+        label: 'Grace Cutoff Date & Time',
+        valueMs: currentGrMs,
+        mode: 'datetime',
+        onChange: (ms) => {
+          graceDateStr = toDateStr(ms);
+          graceTimeStr = toTimeStr(ms);
+          updateAllWords();
+        }
+      }));
+    }
 
     // Schedule Type Segmented control (updates only the sub-form, never the whole modal)
     const mountTaskSchedType = bodyEl.querySelector('#adm-task-sched-type-wrap');
@@ -10960,13 +11553,13 @@ function openAdminTaskModal(taskId = null) {
     const ok = n => Number.isFinite(n);
 
     setHint(bodyEl.querySelector('#adm-deadline-words'),
-      ok(startMs) && ok(dlMs) && dlMs <= startMs ? '⚠ The deadline must be after the start date and time.' : '');
+      ok(startMs) && ok(dlMs) && dlMs <= startMs ? 'The deadline must be after the start date and time.' : '');
     setHint(bodyEl.querySelector('#adm-early-words'),
       earlyBonusEnabled && ok(ebMs) && ok(startMs) && ok(dlMs) && (ebMs <= startMs || ebMs >= dlMs)
-        ? '⚠ The bonus window must end after the start and before the deadline.' : '');
+        ? 'The bonus window must end after the start and before the deadline.' : '');
     setHint(bodyEl.querySelector('#adm-grace-words'),
       graceEnabled && ok(grMs) && ok(dlMs) && grMs <= dlMs
-        ? '⚠ The grace cutoff must be after the deadline.' : '');
+        ? 'The grace cutoff must be after the deadline.' : '');
   }
 
   function renderSchedSubform() {
@@ -10974,22 +11567,24 @@ function openAdminTaskModal(taskId = null) {
     if (!subContainer) return;
 
     const startFields = (timeLabel) => `
-      <div class="grid grid-cols-2 gap-2">
-        <div>
-          <label class="block text-[11px] text-neutral-400 mb-1">Start Date</label>
-          <input id="sched-inp-date" type="date" class="ios-input" value="${selectedDateStr}" />
-        </div>
-        <div>
-          <label class="block text-[11px] text-neutral-400 mb-1">${timeLabel}</label>
-          <input id="sched-inp-time" type="time" class="ios-input" value="${selectedTimeStr}" />
-        </div>
-      </div>`;
+      <div id="mount-sched-start-field" class="pt-1"></div>
+    `;
 
     function wireStartFields() {
-      const d = subContainer.querySelector('#sched-inp-date');
-      const t = subContainer.querySelector('#sched-inp-time');
-      if (d) { d.onchange = e => { if (e.target.value) selectedDateStr = e.target.value; updateAllWords(); }; }
-      if (t) { t.onchange = e => { if (e.target.value) selectedTimeStr = e.target.value; updateAllWords(); }; }
+      const mountStart = subContainer.querySelector('#mount-sched-start-field');
+      if (mountStart) {
+        const curStartMs = dtToMs(selectedDateStr, selectedTimeStr);
+        mountStart.appendChild(renderDateTimeField({
+          label: 'Start Date & Time',
+          valueMs: curStartMs,
+          mode: 'datetime',
+          onChange: (ms) => {
+            selectedDateStr = toDateStr(ms);
+            selectedTimeStr = toTimeStr(ms);
+            updateAllWords();
+          }
+        }));
+      }
     }
 
     const chipOn = 'bg-[#0A84FF] border-[#0A84FF] text-white';
@@ -11178,7 +11773,7 @@ function openAdminTaskModal(taskId = null) {
           const optDel = document.createElement('button');
           optDel.type = 'button';
           optDel.className = `p-1 text-rose-400 hover:bg-rose-500/10 rounded ${q.options.length <= 2 ? 'opacity-30 cursor-not-allowed' : ''}`;
-          optDel.innerHTML = '✕';
+          optDel.innerHTML = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
           optDel.onclick = () => {
             if (q.options.length > 2) {
               q.options.splice(optIdx, 1);
@@ -11389,9 +11984,35 @@ function openAdminTaskModal(taskId = null) {
   });
 }
 
+let adminSessionsSegmentedInstance = null;
+function setupAdminSessionsSegmented() {
+  const mount = document.getElementById('mount-admin-sessions-segmented');
+  if (!mount) return;
+  if (!adminSessionsSegmentedInstance || !mount.contains(adminSessionsSegmentedInstance)) {
+    mount.innerHTML = '';
+    adminSessionsSegmentedInstance = renderSegmented({
+      id: 'admin-sessions-segmented',
+      options: [
+        { value: 'active', label: 'Active Sessions' },
+        { value: 'archived', label: 'Archived' }
+      ],
+      value: adminSessionsFilter || 'active',
+      onChange: (val) => {
+        adminSessionsFilter = val;
+        renderAdminSessions();
+      }
+    });
+    mount.appendChild(adminSessionsSegmentedInstance);
+  } else if (adminSessionsSegmentedInstance.getValue && adminSessionsSegmentedInstance.getValue() !== (adminSessionsFilter || 'active')) {
+    adminSessionsSegmentedInstance.setValue(adminSessionsFilter || 'active', false);
+  }
+}
+
 function renderAdminSessions() {
   const list = document.getElementById('admin-sessions-list');
   if (!list) return;
+
+  setupAdminSessionsSegmented();
 
   const isArchived = adminSessionsFilter === 'archived';
   const filtered = state.attendanceSessions.filter(s => isArchived ? s.archived : !s.archived);
@@ -11411,7 +12032,6 @@ function renderAdminSessions() {
     const calc = computeAttendance(session, nowMs);
     const occ = getOccurrenceFor(session, nowMs);
     const occStart = occ ? occ.start : (session.schedule?.startDateTime || nowMs);
-    const occKey = occ ? occ.key : 'once';
 
     const sched = session.schedule || { type: 'once' };
     let schedDesc = sched.type;
@@ -11429,6 +12049,13 @@ function renderAdminSessions() {
 
     const isSelected = selectionState.active && selectionState.type === 'sessions' && selectionState.selectedIds.has(session.id);
 
+    const perStep = session.penaltyPerStep ?? session.finePenalty?.perStep ?? 1;
+    const stepDur = session.stepDuration ?? session.finePenalty?.stepSize ?? 6;
+    const minPen = session.minPenalty ?? session.finePenalty?.min ?? 1;
+    const maxPen = session.maxPenalty ?? session.finePenalty?.max ?? 5;
+    const penaltyMatrixText = `${perStep} EGP per ${stepDur}m late (${minPen}–${maxPen} EGP)`;
+    const windowBoundariesText = `Opens ${formatMinutesDuration(session.earlyCheckInMinutes)} early • Closes ${formatMinutesDuration(session.lateCutoffMinutes)} after`;
+
     return `
       <div class="glass-card bulk-select-card p-4 space-y-3 text-xs border-white/10 cursor-pointer hover:bg-white/[0.03] transition rounded-2xl${isSelected ? ' selected' : ''}" data-session-id="${esc(session.id)}" data-bulk-id="${esc(session.id)}">
         ${BULK_INDICATOR_HTML}
@@ -11436,7 +12063,7 @@ function renderAdminSessions() {
           <div class="flex items-start justify-between gap-2">
             <div>
               <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-              <p class="text-[11px] text-neutral-400 mt-0.5">${esc(schedDesc)} (${APP_TIMEZONE})</p>
+              <p class="text-[11px] text-neutral-400 mt-0.5">${esc(schedDesc)}</p>
             </div>
             <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${session.active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-neutral-400'}">
               ${session.active ? 'Active' : 'Inactive'}
@@ -11445,12 +12072,12 @@ function renderAdminSessions() {
 
           <div class="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-white/[0.03] text-[11px] text-neutral-300">
             <div>
-              <span class="text-[10px] text-neutral-400 block">Window Boundaries</span>
-              <span>Early: -${session.earlyCheckInMinutes}m • Cutoff: +${session.lateCutoffMinutes}m</span>
+              <span class="text-[10px] text-neutral-400 block font-medium">Window Boundaries</span>
+              <span>${windowBoundariesText}</span>
             </div>
             <div>
-              <span class="text-[10px] text-neutral-400 block">Penalty Matrix</span>
-              <span>${session.penaltyPerStep} EGP / ${session.stepDuration} ${session.penaltyUnit} (${session.minPenalty}..${session.maxPenalty} EGP)</span>
+              <span class="text-[10px] text-neutral-400 block font-medium">Penalty Matrix</span>
+              <span>${penaltyMatrixText}</span>
             </div>
           </div>
 
@@ -11461,51 +12088,46 @@ function renderAdminSessions() {
             </span>
           </div>
 
-          <div class="pt-1 border-t border-white/10">
-            <button type="button" class="btn-roster-session w-full py-2.5 rounded-xl font-semibold bg-[#0A84FF]/20 text-[#0A84FF] hover:bg-[#0A84FF]/30 transition text-center flex items-center justify-center gap-1.5" data-session-id="${esc(session.id)}" data-occ-key="${esc(occKey)}" data-occ-start="${occStart}">
-              <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-              <span>View Attendance</span>
+          <div class="flex items-center justify-between pt-2 border-t border-white/5">
+            <button type="button" class="btn-card-view-attendance text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition" data-session-id="${esc(session.id)}">
+              <span>View Attendance</span> &rarr;
+            </button>
+            <button type="button" class="btn-card-edit-session text-xs font-semibold text-neutral-400 hover:text-white flex items-center gap-1 transition" data-session-id="${esc(session.id)}">
+              <span>Edit Settings</span>
             </button>
           </div>
+
         </div>
       </div>
     `;
   }).join('');
 
   list.querySelectorAll('.bulk-select-card').forEach(card => {
-    card.onclick = (e) => {
-      if (e.target.closest('.btn-roster-session')) return;
-      if (selectionState.active && selectionState.type === 'sessions') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(card, card.dataset.bulkId);
-        return;
+    attachRowGestures(card, {
+      bulkType: 'sessions',
+      bulkId: card.dataset.bulkId,
+      onSingleTap: () => {
+        const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
+        if (targetSession) openAdminRosterModal(targetSession);
       }
-      const sId = card.dataset.sessionId;
-      openAdminSessionModal(sId);
-    };
-
-    attachLongPress(card, () => {
-      enterSelectionMode('sessions', card.dataset.bulkId);
     });
-  });
 
-  list.querySelectorAll('.btn-roster-session').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'sessions') {
-        e.preventDefault();
+    const btnView = card.querySelector('.btn-card-view-attendance');
+    if (btnView) {
+      btnView.onclick = (e) => {
         e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const sId = btn.dataset.sessionId;
-      const session = state.attendanceSessions.find(s => s.id === sId);
-      if (session) {
-        openAdminRosterModal(session, btn.dataset.occKey, Number(btn.dataset.occStart));
-      }
-    };
+        const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
+        if (targetSession) openAdminRosterModal(targetSession);
+      };
+    }
+
+    const btnEdit = card.querySelector('.btn-card-edit-session');
+    if (btnEdit) {
+      btnEdit.onclick = (e) => {
+        e.stopPropagation();
+        openAdminSessionModal(card.dataset.sessionId);
+      };
+    }
   });
 }
 
@@ -11575,6 +12197,25 @@ function openAdminSessionModal(sessionId = null) {
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
+
+  if (sessionId) {
+    const viewAttendanceBtn = document.createElement('button');
+    viewAttendanceBtn.type = 'button';
+    viewAttendanceBtn.className = 'w-full py-2.5 px-3 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 font-semibold text-xs flex items-center justify-center gap-1.5 transition';
+    viewAttendanceBtn.innerHTML = `
+      <svg class="w-4 h-4 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+        <circle cx="9" cy="7" r="4"></circle>
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+      </svg>
+      <span>View Attendance</span>
+    `;
+    viewAttendanceBtn.onclick = () => {
+      openAdminRosterModal(rawSession || session || sessionId);
+    };
+    bodyEl.appendChild(viewAttendanceBtn);
+  }
 
   // Build the entire DOM once without innerHTML destruction on toggle
   // 1. Title
@@ -12142,20 +12783,13 @@ export function renderAdminBadges() {
   }).join('');
 
   container.querySelectorAll('.bulk-select-card').forEach(card => {
-    card.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'badges') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(card, card.dataset.bulkId);
-        return;
+    attachRowGestures(card, {
+      bulkType: 'badges',
+      bulkId: card.dataset.bulkId,
+      onSingleTap: () => {
+        const badge = allBadges.find(b => b.id === card.dataset.badgeId);
+        if (badge) openBadgeModal(badge);
       }
-      const badgeId = card.dataset.badgeId;
-      const badge = allBadges.find(b => b.id === badgeId);
-      if (badge) openBadgeModal(badge);
-    };
-
-    attachLongPress(card, () => {
-      enterSelectionMode('badges', card.dataset.bulkId);
     });
   });
 }
@@ -12313,78 +12947,289 @@ function openBadgeModal(badge = null) {
   });
 }
 
-async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
-  const occKey = occurrenceKey || 'once';
-  const occMs = Number(occurrenceStart) || Date.now();
-  const dateStr = formatDateTime(occMs, { hour: undefined, minute: undefined });
+
+function formatMinutesDuration(totalMinutes) {
+  const mins = Math.max(0, Math.round(Number(totalMinutes) || 0));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
+function matchesOccurrence(log, targetOccKey, targetOccStartMs, session) {
+  if (!log) return false;
+  if (log.occurrenceKey && targetOccKey && log.occurrenceKey === targetOccKey) return true;
+  if (session?.schedule?.type === 'once' && (log.occurrenceKey === 'once' || targetOccKey === 'once')) return true;
+
+  const logMs = parseDateTimeToMs(log.checkedInAt || log.occurrenceStart);
+  const targetMs = Number(targetOccStartMs) || parseDateTimeToMs(targetOccStartMs);
+  if (logMs && targetMs) {
+    if (formatZonedDateKey(logMs, APP_TIMEZONE) === formatZonedDateKey(targetMs, APP_TIMEZONE)) {
+      return true;
+    }
+    const earlyMins = (session?.earlyCheckInMinutes || 30) + 15;
+    const lateMins = (session?.lateCutoffMinutes || 120) + 15;
+    if (logMs >= (targetMs - earlyMins * 60000) && logMs <= (targetMs + lateMins * 60000)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function openAdminLogEditModal(log, session) {
+  if (!log) return;
+  const prof = getUserProfile(log.uid, log.userName, log.userAvatar);
+  const checkedInMs = parseDateTimeToMs(log.checkedInAt || log.occurrenceStart) || Date.now();
+  const checkedInTimeStr = formatDateTime(checkedInMs);
+
+  let currentStatus = log.status || 'on_time';
+  let currentPenalty = typeof log.penalty === 'number' ? log.penalty : 0;
+  let currentFineEGP = typeof log.fineEGP === 'number' ? log.fineEGP : 0;
+  let currentNote = log.adminNote || log.note || '';
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4';
+  bodyEl.innerHTML = `
+    <div class="glass-card p-3 rounded-xl flex items-center gap-3">
+      ${renderAvatar(prof, 'w-10 h-10')}
+      <div class="min-w-0 flex-1">
+        <h4 class="font-bold text-white text-sm truncate">${esc(prof.displayName)}</h4>
+        <p class="text-xs text-neutral-400 mt-0.5">${esc(session?.title || log.sessionTitle || 'Session')} • ${checkedInTimeStr}</p>
+      </div>
+    </div>
+
+    <div class="space-y-1">
+      <label class="block text-xs font-semibold text-neutral-200">Attendance Status</label>
+      <select id="adm-log-status" class="w-full ios-input text-xs">
+        <option value="on_time" ${currentStatus === 'on_time' ? 'selected' : ''}>On Time</option>
+        <option value="late" ${currentStatus === 'late' ? 'selected' : ''}>Late</option>
+        <option value="excused" ${currentStatus === 'excused' ? 'selected' : ''}>Excused (Waiver)</option>
+        <option value="absent" ${currentStatus === 'absent' ? 'selected' : ''}>Absent</option>
+      </select>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Penalty Points</label>
+        <input id="adm-log-penalty" type="number" min="0" class="w-full ios-input text-xs font-mono" value="${currentPenalty}" />
+      </div>
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Fine (EGP)</label>
+        <input id="adm-log-fine" type="number" min="0" class="w-full ios-input text-xs font-mono" value="${currentFineEGP}" />
+      </div>
+    </div>
+
+    <div class="space-y-1">
+      <label class="block text-xs font-semibold text-neutral-200">Admin Note / Reason</label>
+      <input id="adm-log-note" type="text" class="w-full ios-input text-xs" placeholder="e.g. Approved traffic excuse or manual adjustment" value="${esc(currentNote)}" />
+    </div>
+
+    <div class="pt-2">
+      <button type="button" id="adm-log-btn-delete" class="w-full py-2 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+        <svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+        <span>Delete Attendance Log</span>
+      </button>
+    </div>
+  `;
+
+  const statusSel = bodyEl.querySelector('#adm-log-status');
+  const penaltyInp = bodyEl.querySelector('#adm-log-penalty');
+  const fineInp = bodyEl.querySelector('#adm-log-fine');
+  const noteInp = bodyEl.querySelector('#adm-log-note');
+  const deleteBtn = bodyEl.querySelector('#adm-log-btn-delete');
+
+  deleteBtn.onclick = async () => {
+    const confirmed = await confirmSheet({
+      title: 'Delete Attendance Log?',
+      message: `Are you sure you want to delete this attendance log for ${prof.displayName}? This action cannot be undone.`,
+      confirmLabel: 'Delete Log',
+      destructive: true
+    });
+    if (!confirmed) return;
+
+    try {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'attendance_logs', log.id));
+      logAdminAction(batch, {
+        action: 'attendance_log_deleted',
+        targetUid: log.uid,
+        details: { logId: log.id, sessionId: session?.id || log.sessionId }
+      });
+      await batch.commit();
+      toast('Attendance log deleted', 'success');
+      const cancelBtn = document.getElementById('shared-modal-cancel');
+      if (cancelBtn) cancelBtn.click();
+    } catch (err) {
+      console.error('Delete log error:', err);
+      toast(err.message || 'Failed to delete log', 'error');
+    }
+  };
+
+  openModal({
+    title: 'Edit Attendance Log',
+    body: bodyEl,
+    saveLabel: 'Save Changes',
+    onSave: async () => {
+      const newStatus = statusSel.value;
+      const newPenalty = Math.max(0, parseInt(penaltyInp.value, 10) || 0);
+      const newFine = Math.max(0, parseInt(fineInp.value, 10) || 0);
+      const newNote = (noteInp.value || '').trim();
+
+      try {
+        const batch = writeBatch(db);
+        const logRef = doc(db, 'attendance_logs', log.id);
+        batch.update(logRef, {
+          status: newStatus,
+          penalty: newPenalty,
+          fineEGP: newFine,
+          adminNote: newNote,
+          updatedAt: serverTimestamp()
+        });
+
+        logAdminAction(batch, {
+          action: 'attendance_log_updated',
+          targetUid: log.uid,
+          details: {
+            logId: log.id,
+            sessionId: session?.id || log.sessionId,
+            oldStatus: log.status,
+            newStatus,
+            oldPenalty: log.penalty,
+            newPenalty,
+            oldFine: log.fineEGP,
+            newFine
+          }
+        });
+
+        await batch.commit();
+        toast('Attendance log updated', 'success');
+        return true;
+      } catch (err) {
+        console.error('Save log error:', err);
+        toast(err.message || 'Failed to update log', 'error');
+        return false;
+      }
+    }
+  });
+}
+
+
+async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart) {
+  const rawSession = (typeof sessionOrId === 'string'
+    ? state.attendanceSessions.find(s => s.id === sessionOrId)
+    : sessionOrId) || sessionOrId;
+
+  if (!rawSession) {
+    toast('Session not found', 'error');
+    return;
+  }
+  const session = normalizeSession(rawSession);
+
+  // 1. Calculate assigned members (NEVER 0 when active members exist)
+  const allActiveMembers = (usersMap.size > 0
+    ? Array.from(usersMap.values())
+    : [...state.members]
+  ).filter(m => !m.disabled && (m.role === 'member' || !m.role));
+
+  let assignedMembers = allActiveMembers;
+  if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
+    assignedMembers = allActiveMembers.filter(m => (m.badges || []).some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b)));
+  } else if (session.targetType === 'custom' && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+    assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
+  } else if (Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+    assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
+  }
+  if (assignedMembers.length === 0) assignedMembers = allActiveMembers;
+
+  // 2. Resolve initial occurrence
+  const nowMs = serverNow();
+  let occ = null;
+  if (occurrenceKey && occurrenceStart) {
+    occ = { key: occurrenceKey, start: Number(occurrenceStart) || nowMs };
+  } else {
+    occ = getOccurrenceFor(session, nowMs) || resolveSessionOccurrence(session, nowMs) || { key: 'once', start: session.schedule?.startDateTime || nowMs };
+  }
+  let selectedOccKey = occ ? occ.key : 'once';
+  let selectedOccStartMs = occ ? occ.start : nowMs;
+
+  const occurrenceOptions = new Map();
+  occurrenceOptions.set(selectedOccKey, selectedOccStartMs);
+
+  let activeTab = 'occurrence';
+  let sessionLogs = [];
+  let waiversMap = new Map();
+  let unsubLogs = null;
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
   bodyEl.innerHTML = `
     <div class="p-6 text-center text-xs text-neutral-400">
-      Loading roster for ${esc(session.title)}...
+      Loading attendance for ${esc(session.title)}...
     </div>
   `;
 
   openModal({
-    title: `${session.title} Roster`,
+    title: `${session.title} Attendance`,
     body: bodyEl,
     saveLabel: 'Done',
-    onSave: async () => true
+    onSave: async () => true,
+    onClose: () => {
+      if (unsubLogs) {
+        unsubLogs();
+        unsubLogs = null;
+      }
+    }
   });
 
   try {
-    // 1. Fetch logs for this session and occurrence
-    const logsSnap = await getDocs(query(
-      collection(db, 'attendance_logs'),
-      where('sessionId', '==', session.id),
-      where('occurrenceKey', '==', occKey),
-      limit(450)
-    ));
-    const logs = logsSnap.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-
-    // 2. Fetch waiver requests for this session and occurrence
     const waiversSnap = await getDocs(query(
       collection(db, 'waiver_requests'),
       where('sessionId', '==', session.id),
-      where('occurrenceKey', '==', occKey),
-      limit(450)
-    ));
-    const waiversMap = new Map();
+      limit(300)
+    )).catch(() => ({ docs: [] }));
     waiversSnap.docs.forEach(d => {
       const w = d.data();
-      waiversMap.set(w.uid, { id: d.id, ...w });
+      if (w.status === 'approved') {
+        waiversMap.set(w.uid, { id: d.id, ...w });
+      }
+    });
+  } catch (e) {
+    console.warn('Could not fetch waivers:', e);
+  }
+
+  const qLogs = query(
+    collection(db, 'attendance_logs'),
+    where('sessionId', '==', session.id),
+    limit(300)
+  );
+
+  const renderRosterView = () => {
+    sessionLogs.forEach(l => {
+      if (l.occurrenceKey && (l.occurrenceStart || l.checkedInAt)) {
+        const ms = parseDateTimeToMs(l.occurrenceStart) || parseDateTimeToMs(l.checkedInAt);
+        if (ms && !occurrenceOptions.has(l.occurrenceKey)) {
+          occurrenceOptions.set(l.occurrenceKey, ms);
+        }
+      }
     });
 
-    // 3. Fetch active members list
-    let members = state.members.filter(m => m.role === 'member');
-    if (members.length === 0) {
-      const usersSnap = await getDocs(query(
-        collection(db, 'users'),
-        where('role', '==', 'member'),
-        limit(450)
-      ));
-      members = usersSnap.docs.map(d => normalizeUser({ uid: d.id, ...d.data() }));
-    }
-
-    // Filter by assignedUids if specified
-    if (Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-      members = members.filter(m => session.assignedUids.includes(m.uid));
-    }
-
+    const occLogs = sessionLogs.filter(l => matchesOccurrence(l, selectedOccKey, selectedOccStartMs, session));
     const attendedMap = new Map();
-    logs.forEach(l => attendedMap.set(l.uid, l));
+    occLogs.forEach(l => attendedMap.set(l.uid, l));
 
     const presentList = [];
     const excusedList = [];
     const penalizedAbsentList = [];
     const unprocessedAbsentList = [];
 
-    const nowMs = serverNow();
-    const cutoffMs = occMs + (session.lateCutoffMinutes || 120) * 60000;
-    const isClosed = nowMs > cutoffMs;
+    const occCutoffMs = selectedOccStartMs + (session.lateCutoffMinutes || 120) * 60000;
+    const isClosed = serverNow() > occCutoffMs;
 
-    members.forEach(m => {
+    assignedMembers.forEach(m => {
       if (attendedMap.has(m.uid)) {
         const log = attendedMap.get(m.uid);
         if (log.status === 'excused' || log.excused === true) {
@@ -12394,7 +13239,7 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
         } else {
           presentList.push({ member: m, log });
         }
-      } else if (waiversMap.get(m.uid)?.status === 'approved') {
+      } else if (waiversMap.has(m.uid)) {
         excusedList.push({ member: m, waiver: waiversMap.get(m.uid) });
       } else {
         unprocessedAbsentList.push(m);
@@ -12402,74 +13247,215 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
     });
 
     const onTimeCount = presentList.filter(p => p.log.status === 'on_time').length;
-    const lateCount = presentList.filter(p => p.log.status === 'late' || p.log.penalty > 0).length;
+    const lateCount = presentList.filter(p => p.log.status === 'late' || p.log.penalty > 0 || p.log.fineEGP > 0).length;
+    const excusedCount = excusedList.length;
+    const absentCount = penalizedAbsentList.length + unprocessedAbsentList.length;
+
     const totalPenalties = presentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0) +
       penalizedAbsentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0);
     const totalFines = presentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0) +
       penalizedAbsentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0);
 
-    const renderRosterContent = () => {
-      bodyEl.innerHTML = `
-        <div class="text-xs text-neutral-400 mb-2 flex items-center justify-between">
-          <span>Occurrence: <strong class="text-white">${dateStr}</strong> (${APP_TIMEZONE})</span>
-          <span class="font-mono text-[10px] px-2 py-0.5 rounded ${isClosed ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'}">
-            ${isClosed ? 'Window Closed' : 'Check-in Open'}
-          </span>
-        </div>
+    const dateStr = formatDateTime(selectedOccStartMs, { hour: undefined, minute: undefined });
 
-        <!-- Metrics Grid -->
-        <div class="grid grid-cols-4 gap-2 text-center text-xs">
-          <div class="p-2 rounded-xl bg-white/[0.03]">
-            <span class="text-[10px] text-neutral-400 block">Assigned</span>
-            <span class="font-bold font-mono text-white mt-0.5">${members.length}</span>
+    bodyEl.innerHTML = `
+      <div class="flex items-center justify-between pb-1">
+        <div class="space-y-0.5">
+          <div class="text-xs text-neutral-400 flex items-center gap-1.5">
+            <span>Occurrence: <strong class="text-white">${dateStr}</strong></span>
           </div>
-          <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-            <span class="text-[10px] text-emerald-300 block">Present</span>
-            <span class="font-bold font-mono text-emerald-400 mt-0.5">${presentList.length}</span>
-          </div>
-          <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
-            <span class="text-[10px] text-blue-300 block">Excused</span>
-            <span class="font-bold font-mono text-blue-400 mt-0.5">${excusedList.length}</span>
-          </div>
-          <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
-            <span class="text-[10px] text-rose-300 block">Absent</span>
-            <span class="font-bold font-mono text-rose-400 mt-0.5">${penalizedAbsentList.length + unprocessedAbsentList.length}</span>
+          <div class="flex items-center gap-1.5">
+            <span class="font-mono text-[10px] px-2 py-0.5 rounded-full ${isClosed ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}">
+              ${isClosed ? 'Window Closed' : 'Check-in Open'}
+            </span>
           </div>
         </div>
+        <button type="button" id="btn-roster-edit-session" class="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 transition">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+          <span>Edit Session</span>
+        </button>
+      </div>
 
-        ${(totalPenalties > 0 || totalFines > 0) ? `
-          <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center justify-between font-mono">
-            <span>Deductions Incurred:</span>
-            <span>${totalPenalties > 0 ? `-${totalPenalties} pts ` : ''}${totalFines > 0 ? `-${totalFines} EGP` : ''}</span>
+      <div class="grid grid-cols-5 gap-1.5 text-center text-xs">
+        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
+          <span class="text-[10px] text-neutral-400 block font-medium">Assigned</span>
+          <span class="font-bold font-mono text-white mt-0.5 block">${assignedMembers.length}</span>
+        </div>
+        <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+          <span class="text-[10px] text-emerald-300 block font-medium">On Time</span>
+          <span class="font-bold font-mono text-emerald-400 mt-0.5 block">${onTimeCount}</span>
+        </div>
+        <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
+          <span class="text-[10px] text-amber-300 block font-medium">Late</span>
+          <span class="font-bold font-mono text-amber-400 mt-0.5 block">${lateCount}</span>
+        </div>
+        <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
+          <span class="text-[10px] text-blue-300 block font-medium">Excused</span>
+          <span class="font-bold font-mono text-blue-400 mt-0.5 block">${excusedCount}</span>
+        </div>
+        <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
+          <span class="text-[10px] text-rose-300 block font-medium">Absent</span>
+          <span class="font-bold font-mono text-rose-400 mt-0.5 block">${absentCount}</span>
+        </div>
+      </div>
+
+      ${(totalPenalties > 0 || totalFines > 0) ? `
+        <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center justify-between font-mono">
+          <span>Deductions Incurred:</span>
+          <span>${totalPenalties > 0 ? `-${totalPenalties} pts ` : ''}${totalFines > 0 ? `-${totalFines} EGP` : ''}</span>
+        </div>
+      ` : ''}
+
+      <div id="mount-roster-tab-segmented" class="w-full"></div>
+
+      <div id="roster-tab-content" class="space-y-4"></div>
+    `;
+
+    const editSessionBtn = bodyEl.querySelector('#btn-roster-edit-session');
+    if (editSessionBtn) {
+      editSessionBtn.onclick = () => {
+        openAdminSessionModal(session.id);
+      };
+    }
+
+    const segMount = bodyEl.querySelector('#mount-roster-tab-segmented');
+    if (segMount) {
+      segMount.appendChild(renderSegmented({
+        id: 'seg-roster-view',
+        options: [
+          { value: 'occurrence', label: 'This Occurrence' },
+          { value: 'history', label: 'Session History' }
+        ],
+        value: activeTab,
+        onChange: (val) => {
+          activeTab = val;
+          renderSubContent();
+        }
+      }));
+    }
+
+    const renderSubContent = () => {
+      const container = bodyEl.querySelector('#roster-tab-content');
+      if (!container) return;
+
+      if (activeTab === 'history') {
+        if (sessionLogs.length === 0) {
+          container.innerHTML = `
+            <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
+              No attendance events recorded for this session yet.
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = `
+          <div class="space-y-2">
+            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+              <span>All Event History (${sessionLogs.length})</span>
+              <span class="text-[10px] text-neutral-400 font-normal">Tap any log to edit</span>
+            </div>
+            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-80 overflow-y-auto">
+              ${sessionLogs.map(l => {
+                const prof = getUserProfile(l.uid, l.userName, l.userAvatar);
+                const isLate = l.status === 'late' || (l.penalty > 0) || (l.fineEGP > 0);
+                const isExcused = l.status === 'excused' || l.excused;
+                const isAbsent = l.status === 'absent';
+                const timeStr = formatDateTime(l.checkedInAt || l.occurrenceStart);
+
+                let statusBadge = '';
+                if (isAbsent) {
+                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-rose-500/20 text-rose-300">Absent</span>`;
+                } else if (isExcused) {
+                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-blue-500/20 text-blue-300">Excused</span>`;
+                } else if (isLate) {
+                  const lateLabel = l.lateMinutes ? `Late +${l.lateMinutes}m` : 'Late';
+                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-amber-500/20 text-amber-300">${lateLabel}</span>`;
+                } else {
+                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-emerald-500/20 text-emerald-300">On Time</span>`;
+                }
+
+                return `
+                  <div class="log-history-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(l.id)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
+                      <div class="min-w-0 flex-1">
+                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                        <span class="text-[10px] text-neutral-400 block">${timeStr}</span>
+                      </div>
+                    </div>
+                    <div class="text-right shrink-0 flex items-center gap-2">
+                      ${(l.penalty > 0 || l.fineEGP > 0) ? `
+                        <span class="text-[10px] font-mono text-rose-400">
+                          ${l.penalty > 0 ? `-${l.penalty} pts ` : ''}${l.fineEGP > 0 ? `-${l.fineEGP} EGP` : ''}
+                        </span>
+                      ` : ''}
+                      ${statusBadge}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
           </div>
-        ` : ''}
+        `;
 
-        <!-- Present Members -->
+        container.querySelectorAll('.log-history-row').forEach(row => {
+          row.onclick = () => {
+            const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
+            if (targetLog) openAdminLogEditModal(targetLog, session);
+          };
+        });
+        return;
+      }
+
+      let occPickerHtml = '';
+      if (occurrenceOptions.size > 1) {
+        const sortedOccs = Array.from(occurrenceOptions.entries()).sort((a, b) => b[1] - a[1]);
+        occPickerHtml = `
+          <div class="flex items-center gap-2 pb-1">
+            <label class="text-[11px] text-neutral-400 shrink-0 font-medium">Select Date:</label>
+            <select id="sel-roster-occurrence" class="ios-input text-xs py-1 px-2.5 flex-1 font-mono">
+              ${sortedOccs.map(([k, ms]) => `
+                <option value="${esc(k)}" ${k === selectedOccKey ? 'selected' : ''}>
+                  ${formatDateTime(ms, { hour: undefined, minute: undefined })} (${formatDateTime(ms, { month: undefined, day: undefined })})
+                </option>
+              `).join('')}
+            </select>
+          </div>
+        `;
+      }
+
+      container.innerHTML = `
+        ${occPickerHtml}
+
         <div class="space-y-2">
           <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
             <span>Attended (${presentList.length})</span>
-            <span class="text-[10px] text-emerald-400 font-normal">${onTimeCount} on time, ${lateCount} late</span>
+            <span class="text-[10px] text-emerald-400 font-normal">${onTimeCount} on time, ${lateCount} late • Tap log to edit</span>
           </div>
-          <div class="divide-y divide-white/5 rounded-xl bg-white/[0.02] border border-white/10 max-h-40 overflow-y-auto">
+          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-48 overflow-y-auto">
             ${presentList.length === 0 ? `
-              <div class="p-3 text-xs text-neutral-400 text-center">No members checked in yet.</div>
+              <div class="p-3 text-xs text-neutral-400 text-center">No members checked in yet for this occurrence.</div>
             ` : presentList.map(({ member, log }) => {
-              const isLate = log.status === 'late' || log.penalty > 0 || log.fineEGP > 0;
+              const isLate = log.status === 'late' || (log.penalty > 0) || (log.fineEGP > 0);
               const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+              const checkInTime = formatDateTime(log.checkedInAt, { month: undefined, day: undefined });
               return `
-                <div class="roster-member-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-lg" data-member-uid="${esc(member.uid)}">
-                  <div class="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                <div class="roster-log-item p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(log.id)}">
+                  <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
                     <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
                     <div class="min-w-0 flex-1">
                       <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
-                        <span class="truncate shrink-0 max-w-[100px]">${esc(prof.displayName)}</span>
+                        <span class="truncate shrink-0 max-w-[120px]">${esc(prof.displayName)}</span>
                         <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
                       </div>
-                      <div class="text-[10px] text-neutral-400">${formatDateTime(log.checkedInAt)}</div>
+                      <div class="text-[10px] text-neutral-400">${checkInTime}</div>
                     </div>
                   </div>
                   <div class="text-right shrink-0">
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}">
                       ${isLate ? `Late (-${log.penalty} pts${log.fineEGP > 0 ? ' -' + log.fineEGP + ' EGP' : ''})` : 'On Time'}
                     </span>
                   </div>
@@ -12479,19 +13465,18 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
           </div>
         </div>
 
-        <!-- Excused Members (Approved Waivers) -->
         ${excusedList.length > 0 ? `
           <div class="space-y-2">
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
               <span>Excused (${excusedList.length})</span>
               <span class="text-[10px] text-blue-400 font-normal">Approved Waiver</span>
             </div>
-            <div class="divide-y divide-white/5 rounded-xl bg-white/[0.02] border border-white/10 max-h-32 overflow-y-auto">
+            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-36 overflow-y-auto">
               ${excusedList.map(({ member, waiver }) => {
                 const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
                 return `
-                  <div class="roster-member-row p-2 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-lg" data-member-uid="${esc(member.uid)}">
-                    <div class="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-member-uid="${esc(member.uid)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
                       <div class="shrink-0">${renderAvatar(prof, 'w-6 h-6')}</div>
                       <div class="min-w-0 flex-1">
                         <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
@@ -12508,26 +13493,24 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
           </div>
         ` : ''}
 
-        <!-- Absent Members (Penalized + Unprocessed) -->
         <div class="space-y-2">
           <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
             <span>Absent (${penalizedAbsentList.length + unprocessedAbsentList.length})</span>
             ${(isClosed && unprocessedAbsentList.length > 0) ? `
-              <button id="btn-penalize-all-absent" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
+              <button type="button" id="btn-penalize-all-absent" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
                 <span>Penalize All Unprocessed (${unprocessedAbsentList.length})</span>
               </button>
             ` : ''}
           </div>
-          <div class="divide-y divide-white/5 rounded-xl bg-white/[0.02] border border-white/10 max-h-48 overflow-y-auto">
+          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-48 overflow-y-auto">
             ${(penalizedAbsentList.length === 0 && unprocessedAbsentList.length === 0) ? `
-              <div class="p-3 text-xs text-emerald-400 text-center">All members present or excused!</div>
+              <div class="p-3 text-xs text-emerald-400 text-center">All assigned members present or excused!</div>
             ` : `
-              <!-- Penalized Absentees -->
               ${penalizedAbsentList.map(({ member, log }) => {
                 const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
                 return `
-                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-lg" data-member-uid="${esc(member.uid)}">
-                    <div class="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                  <div class="roster-log-item p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(log.id)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
                       <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
                       <div class="min-w-0 flex-1">
                         <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
@@ -12541,12 +13524,11 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
                 `;
               }).join('')}
 
-              <!-- Unprocessed Absentees -->
               ${unprocessedAbsentList.map(member => {
                 const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
                 return `
-                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-lg" data-member-uid="${esc(member.uid)}">
-                    <div class="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-xl" data-member-uid="${esc(member.uid)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
                       <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
                       <div class="min-w-0 flex-1">
                         <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
@@ -12558,7 +13540,7 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
                         ${isClosed ? 'Absent' : 'Pending'}
                       </span>
                       ${isClosed ? `
-                        <button class="btn-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
+                        <button type="button" class="btn-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
                           Penalize
                         </button>
                       ` : ''}
@@ -12571,15 +13553,29 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
         </div>
       `;
 
-      bodyEl.querySelectorAll('.badge-row-container').forEach(c => {
+      const occSelect = container.querySelector('#sel-roster-occurrence');
+      if (occSelect) {
+        occSelect.onchange = (e) => {
+          selectedOccKey = e.target.value;
+          selectedOccStartMs = occurrenceOptions.get(selectedOccKey) || nowMs;
+          renderRosterView();
+        };
+      }
+
+      container.querySelectorAll('.badge-row-container').forEach(c => {
         const uid = c.dataset.uid;
         const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-        if (mem) {
-          renderBadgeRow(c, mem.badges, mem);
-        }
+        if (mem) renderBadgeRow(c, mem.badges, mem);
       });
 
-      bodyEl.querySelectorAll('.roster-member-row').forEach(row => {
+      container.querySelectorAll('.roster-log-item').forEach(row => {
+        row.onclick = () => {
+          const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
+          if (targetLog) openAdminLogEditModal(targetLog, session);
+        };
+      });
+
+      container.querySelectorAll('.roster-member-row').forEach(row => {
         row.onclick = (e) => {
           if (e.target.closest('button')) return;
           const uid = row.dataset.memberUid;
@@ -12587,129 +13583,122 @@ async function openAdminRosterModal(session, occurrenceKey, occurrenceStart) {
         };
       });
 
-      // Wire Penalize All
-      const penalizeAllBtn = bodyEl.querySelector('#btn-penalize-all-absent');
+      const penalizeAllBtn = container.querySelector('#btn-penalize-all-absent');
       if (penalizeAllBtn) {
         penalizeAllBtn.onclick = () => {
           applyAbsencePenalties([...unprocessedAbsentList], penalizeAllBtn);
         };
       }
 
-      // Wire Penalize Single
-      bodyEl.querySelectorAll('.btn-penalize-single').forEach(btn => {
+      container.querySelectorAll('.btn-penalize-single').forEach(btn => {
         btn.onclick = (e) => {
           e.stopPropagation();
           const targetUid = btn.dataset.uid;
           const targetMember = unprocessedAbsentList.find(m => m.uid === targetUid);
-          if (targetMember) {
-            applyAbsencePenalties([targetMember], btn);
-          }
+          if (targetMember) applyAbsencePenalties([targetMember], btn);
         };
       });
     };
 
-    // Idempotent Absence Penalty Application
-    const applyAbsencePenalties = async (targetMembers, buttonEl) => {
-      if (buttonEl) {
-        buttonEl.disabled = true;
-        buttonEl.textContent = 'Processing...';
-      }
+    renderSubContent();
+  };
 
-      const penaltyPts = (session.penaltyPointsEnabled !== false) ? (session.absencePenalty || session.maxPenalty || 20) : 0;
-      const fineEGP = (session.penaltyFinesEnabled) ? (session.absenceFineEGP || session.maxPenalty || 50) : 0;
+  const applyAbsencePenalties = async (targetMembers, buttonEl) => {
+    if (buttonEl) {
+      buttonEl.disabled = true;
+      buttonEl.textContent = 'Processing...';
+    }
 
-      let processedCount = 0;
-      try {
-        for (const m of targetMembers) {
-          const deterministicId = `${session.id}_${occKey}_${m.uid}`;
+    const penaltyPts = (session.penaltyPointsEnabled !== false) ? (session.absencePenalty || session.maxPenalty || 20) : 0;
+    const fineEGP = (session.penaltyFinesEnabled) ? (session.absenceFineEGP || session.maxPenalty || 50) : 0;
 
-          // Memory & Firestore idempotency check
-          if (attendedMap.has(m.uid)) continue;
-          const snap = await getDoc(doc(db, 'attendance_logs', deterministicId));
-          if (snap.exists()) {
-            attendedMap.set(m.uid, snap.data());
-            continue;
-          }
+    let processedCount = 0;
+    try {
+      for (const m of targetMembers) {
+        const deterministicId = `${session.id}_${selectedOccKey}_${m.uid}`;
 
-          const batch = writeBatch(db);
-          const logRef = doc(db, 'attendance_logs', deterministicId);
-          const logData = {
-            sessionId: session.id,
-            sessionTitle: session.title,
-            uid: m.uid,
-            userName: m.displayName || m.name || 'Member',
-            userAvatar: m.avatarUrl || m.photoURL || '',
-            occurrenceKey: occKey,
-            occurrenceStart: Timestamp.fromMillis(occMs),
-            checkedInAt: serverTimestamp(),
-            status: 'absent',
-            penalty: penaltyPts,
-            fineEGP: fineEGP,
-            processedBy: state.user.uid
-          };
-          batch.set(logRef, logData);
+        const existingInMem = sessionLogs.find(l => l.id === deterministicId);
+        if (existingInMem) continue;
 
-          if (penaltyPts > 0) {
-            batch.update(doc(db, 'users', m.uid), {
-              penalties: increment(penaltyPts),
-              updatedAt: serverTimestamp()
-            });
-          }
+        const snap = await getDoc(doc(db, 'attendance_logs', deterministicId));
+        if (snap.exists()) continue;
 
-          if (fineEGP > 0) {
-            batch.set(doc(db, 'users_private', m.uid), {
-              finesEGP: increment(fineEGP),
-              updatedAt: serverTimestamp()
-            }, { merge: true });
+        const batch = writeBatch(db);
+        const logRef = doc(db, 'attendance_logs', deterministicId);
+        const logData = {
+          sessionId: session.id,
+          sessionTitle: session.title,
+          uid: m.uid,
+          userName: m.displayName || m.name || 'Member',
+          userAvatar: m.avatarUrl || m.photoURL || '',
+          occurrenceKey: selectedOccKey,
+          occurrenceStart: Timestamp.fromMillis(selectedOccStartMs),
+          checkedInAt: serverTimestamp(),
+          status: 'absent',
+          penalty: penaltyPts,
+          fineEGP: fineEGP,
+          processedBy: state.user.uid
+        };
+        batch.set(logRef, logData);
 
-            const txRef = doc(collection(db, 'users', m.uid, 'transactions'));
-            batch.set(txRef, {
-              type: 'fine',
-              category: 'financial',
-              amount: fineEGP,
-              reason: `Unexcused absence penalty: ${session.title}`,
-              adminUid: state.user.uid,
-              adminName: state.user.displayName || 'Admin',
-              createdAt: serverTimestamp()
-            });
-          }
-
-          createNotification(batch, {
-            uid: m.uid,
-            title: 'Absence Penalty Recorded',
-            message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''}).`,
-            type: 'attendance',
-            targetAction: { route: 'attendance' }
+        if (penaltyPts > 0) {
+          batch.update(doc(db, 'users', m.uid), {
+            penalties: increment(penaltyPts),
+            updatedAt: serverTimestamp()
           });
-
-          logAdminAction(batch, {
-            action: 'absence_penalty_applied',
-            targetUid: m.uid,
-            details: { sessionId: session.id, occKey, penaltyPts, fineEGP }
-          });
-
-          await batch.commit();
-          attendedMap.set(m.uid, logData);
-          penalizedAbsentList.push({ member: m, log: logData });
-          const idx = unprocessedAbsentList.findIndex(x => x.uid === m.uid);
-          if (idx !== -1) unprocessedAbsentList.splice(idx, 1);
-          processedCount++;
         }
 
-        toast(`Absence penalty applied for ${processedCount} member(s)`, 'success');
-        renderRosterContent();
-      } catch (err) {
-        console.error('Error applying absence penalty:', err);
-        toast(err.message || 'Failed to apply absence penalty', 'error');
-        renderRosterContent();
-      }
-    };
+        if (fineEGP > 0) {
+          batch.set(doc(db, 'users_private', m.uid), {
+            finesEGP: increment(fineEGP),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
 
-    renderRosterContent();
-  } catch (err) {
-    console.error('Load roster error:', err);
-    bodyEl.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load roster: ${esc(err.message)}</div>`;
-  }
+          const txRef = doc(collection(db, 'users', m.uid, 'transactions'));
+          batch.set(txRef, {
+            type: 'fine',
+            category: 'financial',
+            amount: fineEGP,
+            reason: `Unexcused absence penalty: ${session.title}`,
+            adminUid: state.user.uid,
+            adminName: state.user.displayName || 'Admin',
+            createdAt: serverTimestamp()
+          });
+        }
+
+        createNotification(batch, {
+          uid: m.uid,
+          title: 'Absence Penalty Recorded',
+          message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''}).`,
+          type: 'attendance',
+          targetAction: { route: 'attendance' }
+        });
+
+        logAdminAction(batch, {
+          action: 'absence_penalty_applied',
+          targetUid: m.uid,
+          details: { sessionId: session.id, occKey: selectedOccKey, penaltyPts, fineEGP }
+        });
+
+        await batch.commit();
+        processedCount++;
+      }
+
+      toast(`Absence penalty applied for ${processedCount} member(s)`, 'success');
+    } catch (err) {
+      console.error('Error applying absence penalty:', err);
+      toast(err.message || 'Failed to apply absence penalty', 'error');
+    }
+  };
+
+  unsubLogs = onSnapshot(qLogs, (snap) => {
+    sessionLogs = snap.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+    sessionLogs.sort((a, b) => (parseDateTimeToMs(b.checkedInAt) || 0) - (parseDateTimeToMs(a.checkedInAt) || 0));
+    renderRosterView();
+  }, (err) => {
+    console.error('Snapshot error for attendance logs:', err);
+    bodyEl.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load attendance logs: ${esc(err.message)}</div>`;
+  });
 }
 
 function renderAdminAttendanceLogs() {
@@ -13092,31 +14081,19 @@ function renderAdminSubmissions() {
             ` : ''}
           </div>
 
-          <div class="flex items-center justify-end gap-2 pt-1">
-            <button class="btn-sub-edit-points px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-sub-id="${esc(s.id)}">
-              Edit Points
-            </button>
-            <button class="btn-sub-revoke px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 font-semibold transition" data-sub-id="${esc(s.id)}">
-              Revoke
-            </button>
-          </div>
         </div>
       </div>
     `;
   }).join('');
 
-  list.querySelectorAll('.glass-card').forEach(card => {
-    card.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'submissions') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(card, card.dataset.bulkId);
-        return;
+  list.querySelectorAll('.bulk-select-card').forEach(card => {
+    attachRowGestures(card, {
+      bulkType: 'submissions',
+      bulkId: card.dataset.bulkId,
+      onSingleTap: () => {
+        const sub = state.submissions.find(x => x.id === card.dataset.subId);
+        if (sub) openAdminEditSubmissionModal(sub);
       }
-    };
-
-    attachLongPress(card, () => {
-      enterSelectionMode('submissions', card.dataset.bulkId);
     });
   });
 
@@ -13126,43 +14103,12 @@ function renderAdminSubmissions() {
       openMiniProfileSheet(el.dataset.memberUid);
     };
   });
-
-  // Wire action buttons
-  list.querySelectorAll('.btn-sub-edit-points').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'submissions') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const sub = state.submissions.find(x => x.id === btn.dataset.subId);
-      if (sub) openAdminEditSubmissionModal(sub);
-    };
-  });
-
-  list.querySelectorAll('.btn-sub-revoke').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'submissions') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const sub = state.submissions.find(x => x.id === btn.dataset.subId);
-      if (sub) handleAdminRevokeSubmission(sub);
-    };
-  });
 }
-
 
 // ============================================================================
 // TASK 6: ATTENDANCE ASSIGNMENTS, IDEMPOTENT ABSENCE & WAIVER REQUESTS
 // ============================================================================
+
 
 export function generateFutureOccurrences(sessionTemplate, count = 52) {
   if (!sessionTemplate) return [];
@@ -13571,7 +14517,8 @@ function renderAdminWaivers() {
     const draftNote = waiverDraftNotes.get(w.id) ?? (w.adminNote || '');
 
     return `
-      <div class="ios-card space-y-3 text-xs" style="margin-bottom:0" data-waiver-id="${esc(w.id)}">
+      <div class="ios-card bulk-select-card space-y-3 text-xs select-none" style="margin-bottom:0" data-waiver-id="${esc(w.id)}" data-bulk-id="${esc(w.id)}">
+        ${BULK_INDICATOR_HTML}
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2.5 min-w-0 flex-1">
             ${renderAvatar(prof, 'w-9 h-9')}
@@ -13597,7 +14544,7 @@ function renderAdminWaivers() {
         <div>
           <div class="text-[10px] uppercase font-semibold text-neutral-500 mb-1">Explanation</div>
           <div class="p-2.5 rounded-lg bg-black/30 text-neutral-200 leading-relaxed">${esc(w.reason)}</div>
-          ${w.adminNote ? `<div class="notification-admin-note mt-2">💬 Admin Note: "${esc(w.adminNote)}"</div>` : ''}
+          ${w.adminNote ? `<div class="notification-admin-note mt-2 flex items-start gap-1.5"><svg class="w-3.5 h-3.5 text-[#0A84FF] shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg><span>Admin Note: "${esc(w.adminNote)}"</span></div>` : ''}
         </div>
 
         ${w.status === 'pending' ? `
@@ -13608,7 +14555,6 @@ function renderAdminWaivers() {
           </div>
         ` : w.status === 'approved' ? `
           ${isFutureSession ? `
-            <input type="text" class="input-waiver-note ios-input" placeholder="Optional note for update..." value="${esc(draftNote)}" data-id="${esc(w.id)}" />
             <div class="grid grid-cols-2 gap-2">
               <button type="button" class="btn-reject-waiver py-2 rounded-xl font-bold text-white text-xs transition" style="background:#FF453A" data-id="${esc(w.id)}">Change to Rejected</button>
               <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
@@ -13620,7 +14566,6 @@ function renderAdminWaivers() {
           `}
         ` : `
           ${isFutureSession ? `
-            <input type="text" class="input-waiver-note ios-input" placeholder="Optional note for update..." value="${esc(draftNote)}" data-id="${esc(w.id)}" />
             <div class="grid grid-cols-2 gap-2">
               <button type="button" class="btn-approve-waiver py-2 rounded-xl font-bold text-black text-xs transition" style="background:#30D158" data-id="${esc(w.id)}">Change to Approved</button>
               <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
@@ -13702,10 +14647,10 @@ function renderAdminWaivers() {
       }
 
       // In-app notification for the member
-      const statusLabel = newStatus === 'approved' ? 'Approved ✅' : (newStatus === 'rejected' ? 'Rejected ❌' : 'Moved to Pending');
+      const statusLabel = newStatus === 'approved' ? 'Approved' : (newStatus === 'rejected' ? 'Rejected' : 'Moved to Pending');
       const serviceName = waiver.serviceName || waiver.sessionTitle || 'Service';
       const baseBody = `Your attendance excuse for ${serviceName} on ${targetDate} was ${statusLabel}.`;
-      const fullBody = adminNote ? `${baseBody}\n💬 Admin Note: "${adminNote}"` : baseBody;
+      const fullBody = adminNote ? `${baseBody}\nAdmin Note: "${adminNote}"` : baseBody;
 
       createNotification(batch, {
         uid: waiver.uid,
@@ -13784,6 +14729,13 @@ function renderAdminWaivers() {
     inp.onclick = stopProp;
     inp.ontouchstart = stopProp;
     inp.onfocus = stopProp;
+  });
+
+  container.querySelectorAll('.bulk-select-card').forEach(card => {
+    attachRowGestures(card, {
+      bulkType: 'waivers',
+      bulkId: card.dataset.bulkId
+    });
   });
 }
 
@@ -14025,8 +14977,9 @@ function renderAdminMembers() {
     return;
   }
 
-    tbody.innerHTML = filtered.map(m => {
+  tbody.innerHTML = filtered.map(m => {
     const isAdmin = Boolean(m.isAdmin || m.role === 'admin');
+    const isDisabled = Boolean(m.disabled);
     const isSelected = selectionState.active && selectionState.type === 'members' && selectionState.selectedIds.has(m.uid);
     const memberEmail = esc(usersPrivate.get(m.uid)?.email || m.email || '');
     const points = m.points || 0;
@@ -14034,10 +14987,10 @@ function renderAdminMembers() {
     const finesDue = m.finesDue || 0;
 
     return `
-      <div class="admin-member-row member-card-row bulk-select-card hover:bg-white/5 transition cursor-pointer select-none rounded-xl p-3 bg-white/[0.02] border border-white/5 mb-2${isSelected ? ' selected' : ''}" data-member-uid="${esc(m.uid)}" data-bulk-id="${esc(m.uid)}">
+      <div class="admin-member-row member-card-row bulk-select-card hover:bg-white/5 transition cursor-pointer select-none rounded-xl p-3 bg-white/[0.02] border border-white/5 mb-2${isDisabled ? ' member-disabled' : ''}${isSelected ? ' selected' : ''}" data-member-uid="${esc(m.uid)}" data-bulk-id="${esc(m.uid)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content flex flex-col w-full min-w-0 gap-2">
-          <!-- ROW 1 (Header): Avatar + Name + Role badge (Left) | "Manage ›" button (Right) -->
+          <!-- ROW 1 (Header): Avatar + Name + Badges (Left) | Chevron (Right) -->
           <div class="flex items-center justify-between w-full min-w-0">
             <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
               <div class="shrink-0">
@@ -14046,6 +14999,11 @@ function renderAdminMembers() {
               <div class="min-w-0 flex-1">
                 <div class="font-bold text-white text-sm truncate">${esc(m.displayName || m.name || 'Member')}</div>
               </div>
+              ${isDisabled ? `
+                <span class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">
+                  Disabled
+                </span>
+              ` : ''}
               ${isAdmin ? `
                 <span class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0">
                   Admin
@@ -14056,12 +15014,9 @@ function renderAdminMembers() {
                 </span>
               `}
             </div>
-            <button type="button" class="btn-manage-member px-3 py-1.5 rounded-xl bg-white/10 text-white text-xs font-semibold hover:bg-white/15 transition flex items-center gap-1 shrink-0">
-              <span>Manage</span>
-              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-                <path d="m9 18 6-6-6-6"></path>
-              </svg>
-            </button>
+            <div class="flex items-center gap-1 text-neutral-500 shrink-0">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </div>
           </div>
 
           <!-- ROW 2 (Details): Email + Badges (wrap) (Left) | Stat pills: pts (Green), pen (Red), EGP (Orange) (Right) -->
@@ -14074,7 +15029,7 @@ function renderAdminMembers() {
               ` : ''}
               <div class="badge-row-container flex items-center gap-1 min-w-0 flex-wrap" data-uid="${esc(m.uid)}"></div>
             </div>
-            <div class="flex items-center gap-1.5 shrink-0">
+            <div class="member-stats-wrap flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
               <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">${points} pts</span>
               <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-rose-500/15 text-rose-400 border border-rose-500/25">${penalties} pen</span>
               <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-amber-500/15 text-amber-400 border border-amber-500/25">${finesDue} EGP</span>
@@ -14094,59 +15049,19 @@ function renderAdminMembers() {
   });
 
   tbody.querySelectorAll('.admin-member-row').forEach(row => {
-    row.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'members') {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleItemSelection(row, row.dataset.bulkId);
-        return;
+    attachRowGestures(row, {
+      bulkType: 'members',
+      bulkId: row.dataset.bulkId,
+      onSingleTap: () => {
+        const member = usersMap.get(row.dataset.memberUid) || state.members.find(x => x.uid === row.dataset.memberUid);
+        if (member) openMemberControlModal(member);
       }
-      if (e.target.closest('.btn-manage-member')) return;
-      openMiniProfileSheet(row.dataset.memberUid);
-    };
-
-    attachLongPress(row, () => {
-      enterSelectionMode('members', row.dataset.bulkId);
     });
-  });
-
-  tbody.querySelectorAll('.btn-manage-member').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      if (selectionState.active && selectionState.type === 'members') {
-        e.preventDefault();
-        const row = btn.closest('.bulk-select-card');
-        if (row) toggleItemSelection(row, row.dataset.bulkId);
-        return;
-      }
-      const row = btn.closest('.admin-member-row');
-      const member = state.members.find(x => x.uid === row?.dataset.memberUid);
-      if (member) openMemberControlModal(member);
-    };
   });
 }
 
-// Preset badges for Quick Add in Admin Member Control
-const PRESET_BADGES = [
-  { id: 'top_contributor', label: 'Top Contributor', icon: 'star', color: '#FFD60A' },
-  { id: 'task_master', label: 'Task Master', icon: 'zap', color: '#0A84FF' },
-  { id: 'streak_warrior', label: 'Streak Warrior', icon: 'flame', color: '#FF9F0A' },
-  { id: 'rising_star', label: 'Rising Star', icon: 'sparkle', color: '#30D158' },
-  { id: 'quality_champion', label: 'Quality Champion', icon: 'shield', color: '#BF5AF2' },
-  { id: 'event_hero', label: 'Event Hero', icon: 'heart', color: '#FF375F' }
-];
-
-export const renderMemberLedger = (...args) => loadTransactionLedger(...args);
 export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
   if (!containerEl) return;
-  // Security check: only self or admin can view financial ledger
-  const isSelf = state.user?.uid === uid;
-  const isAdminUser = state.user?.role === 'admin';
-  if (!isSelf && !isAdminUser) {
-    containerEl.innerHTML = '<div class="p-4 text-center text-xs text-neutral-500">Access restricted.</div>';
-    return;
-  }
-
   containerEl.innerHTML = `
     <div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
       <div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
@@ -14155,48 +15070,14 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
   `;
 
   try {
-    // 1. Fetch manual admin transactions
-    const qTxs = query(
+    const q = query(
       collection(db, 'users', uid, 'transactions'),
       orderBy('createdAt', 'desc'),
       limit(50)
     );
-    const snapTxs = await getDocs(qTxs);
+    const snap = await getDocs(q);
     const txs = [];
-    snapTxs.forEach(d => {
-      const data = d.data();
-      const ms = parseDateTimeToMs(data.createdAt);
-      txs.push({ id: d.id, ...data, sortTime: ms });
-    });
-
-    // 2. Fetch member attendance logs with fineEGP > 0
-    const qLogs = query(
-      collection(db, 'attendance_logs'),
-      where('uid', '==', uid),
-      limit(50)
-    );
-    const snapLogs = await getDocs(qLogs);
-    snapLogs.forEach(d => {
-      const l = d.data();
-      const fine = Number(l.fineEGP) || 0;
-      if (fine > 0) {
-        const ms = parseDateTimeToMs(l.checkedInAt || l.occurrenceStart);
-        txs.push({
-          id: 'att_fine_' + d.id,
-          type: 'fine',
-          category: 'financial',
-          amount: fine,
-          reason: 'Attendance fine - ' + (l.sessionTitle || 'Session'),
-          adminName: l.status === 'absent' ? 'Admin' : 'System Check-In',
-          createdAt: l.checkedInAt || l.occurrenceStart,
-          sortTime: ms,
-          isAttendanceLog: true
-        });
-      }
-    });
-
-    // Sort merged ledger descending
-    txs.sort((a, b) => (b.sortTime || 0) - (a.sortTime || 0));
+    snap.forEach(d => txs.push({ id: d.id, ...d.data() }));
 
     if (countBadgeEl) {
       countBadgeEl.textContent = txs.length;
@@ -14212,7 +15093,7 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
       return;
     }
 
-        containerEl.innerHTML = `
+    containerEl.innerHTML = `
       <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
         ${txs.map(tx => {
           const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty';
@@ -14240,16 +15121,9 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
             <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
               <div class="flex items-center justify-between gap-2">
                 <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
-                <div class="flex items-center gap-2">
-                  <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
-                    ${sign}${tx.amount} ${unit}
-                  </span>
-                  ${tx.status === 'revoked' ? `
-                    <span class="text-neutral-400 font-mono text-[10px] font-medium tracking-wide">[REVOKED]</span>
-                  ` : (isAdminUser && !tx.isAttendanceLog ? `
-                    <button type="button" class="btn-text-danger btn-revoke-ledger text-xs text-rose-400 hover:text-rose-300 font-semibold transition px-2 py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20" data-id="${tx.id}">Revoke</button>
-                  ` : '')}
-                </div>
+                <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
+                  ${sign}${tx.amount} ${unit}
+                </span>
               </div>
               <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
               <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
@@ -14261,125 +15135,6 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
         }).join('')}
       </div>
     `;
-
-    containerEl.querySelectorAll('.btn-revoke-ledger').forEach(btn => {
-      btn.onclick = async (e) => {
-        e.stopPropagation();
-        const txId = btn.dataset.id;
-        const txItem = txs.find(t => t.id === txId);
-        if (!txItem) return;
-
-        const confirmed = await confirmSheet({
-          title: 'Revoke Transaction',
-          message: `Are you sure you want to revoke this ${txItem.type} transaction (${txItem.amount})? This will atomically reverse the member's balance in the database.`,
-          confirmLabel: 'Revoke',
-          destructive: true
-        });
-        if (!confirmed) return;
-
-        btn.disabled = true;
-        btn.textContent = 'Revoking...';
-
-        try {
-                    let newPoints = undefined;
-          let newPenalties = undefined;
-          let newFinesDue = undefined;
-
-          await runTransaction(db, async (t) => {
-            const txDocRef = doc(db, 'users', uid, 'transactions', txId);
-            const txSnap = await t.get(txDocRef);
-            if (!txSnap.exists()) {
-              throw new Error('Transaction record not found.');
-            }
-            const txData = txSnap.data();
-            if (txData.status === 'revoked') {
-              throw new Error('Transaction has already been revoked.');
-            }
-
-            const userDocRef = doc(db, 'users', uid);
-            const userSnap = await t.get(userDocRef);
-            const userData = userSnap.exists() ? userSnap.data() : {};
-
-            const userPoints = Number(userData.points || 0);
-            const userPenalties = Number(userData.penalties || 0);
-            const userFines = Number(userData.finesDue || 0);
-            const amount = Number(txData.amount || 0);
-
-            const userUpdates = { updatedAt: serverTimestamp() };
-
-            // Handling both new bucket/direction schema and legacy types
-            if (txData.bucket === 'points' || txData.category === 'points' || txData.type === 'bonus' || txData.type === 'points_add' || txData.type === 'points_deduct') {
-              const isAdd = txData.direction === 'add' || txData.type === 'bonus' || txData.type === 'points_add';
-              if (isAdd) {
-                newPoints = Math.max(0, userPoints - amount);
-              } else {
-                newPoints = userPoints + amount;
-              }
-              userUpdates.points = newPoints;
-              t.update(userDocRef, userUpdates);
-            } else if (txData.bucket === 'penalties' || txData.category === 'penalties' || txData.type === 'penalty' || txData.type === 'penalties_add' || txData.type === 'penalties_deduct') {
-              const isAdd = txData.direction === 'add' || txData.type === 'penalty' || txData.type === 'penalties_add';
-              if (isAdd) {
-                newPenalties = Math.max(0, userPenalties - amount);
-              } else {
-                newPenalties = userPenalties + amount;
-              }
-              userUpdates.penalties = newPenalties;
-              t.update(userDocRef, userUpdates);
-            } else if (txData.bucket === 'fines' || txData.category === 'financial' || txData.type === 'fine' || txData.type === 'payment' || txData.type === 'waive' || txData.type === 'fines_add' || txData.type === 'fines_deduct') {
-              const privDocRef = doc(db, 'users_private', uid);
-              const privSnap = await t.get(privDocRef);
-              const privData = privSnap.exists() ? privSnap.data() : {};
-              const currentFines = Number(privData.finesEGP != null ? privData.finesEGP : userFines);
-
-              const isAdd = txData.direction === 'add' || txData.type === 'fine' || txData.type === 'fines_add';
-              if (isAdd) {
-                newFinesDue = Math.max(0, currentFines - amount);
-              } else {
-                newFinesDue = currentFines + amount;
-              }
-              t.set(privDocRef, { finesEGP: newFinesDue, updatedAt: serverTimestamp() }, { merge: true });
-              t.update(userDocRef, { finesDue: newFinesDue, updatedAt: serverTimestamp() });
-            }
-
-            t.update(txDocRef, {
-              status: 'revoked',
-              revokedAt: serverTimestamp(),
-              revokedBy: state.user?.uid || 'Admin'
-            });
-          });
-
-          // Instantly update local usersMap
-          const localUser = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-          if (localUser) {
-            if (newPoints !== undefined) localUser.points = newPoints;
-            if (newPenalties !== undefined) localUser.penalties = newPenalties;
-            if (newFinesDue !== undefined) localUser.finesDue = newFinesDue;
-          }
-
-          invalidateEgpCache(uid);
-          await getMemberDerivedEgpBalance(uid, true);
-          toast('Transaction revoked and balance reversed atomically', 'success');
-          loadTransactionLedger(uid, containerEl, countBadgeEl);
-
-          // Update Adjuster summary cards in place if member control is open
-          const ptsEl = document.getElementById('ctrl-summary-points');
-          if (ptsEl && newPoints !== undefined) ptsEl.textContent = newPoints;
-          const penEl = document.getElementById('ctrl-summary-penalties');
-          if (penEl && newPenalties !== undefined) penEl.textContent = newPenalties;
-          const finEl = document.getElementById('ctrl-summary-fines');
-          if (finEl && newFinesDue !== undefined) finEl.textContent = `${newFinesDue} EGP`;
-
-          if (typeof renderAdminMembers === 'function') renderAdminMembers();
-          if (typeof renderLeaderboard === 'function') renderLeaderboard();
-        } catch (err) {
-          console.error('Revoke transaction error:', err);
-          toast('Failed to revoke transaction: ' + err.message, 'error');
-          btn.disabled = false;
-          btn.textContent = 'Revoke';
-        }
-      };
-    });
   } catch (err) {
     console.error('Error loading transaction ledger:', err);
     containerEl.innerHTML = `
@@ -14516,6 +15271,23 @@ function openMemberControlModal(member) {
           </div>
         </div>
       </div>
+
+      <!-- Account Status & Danger Zone -->
+      <div class="ios-card space-y-3">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Account Status &amp; Danger Zone</div>
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs font-semibold text-white">Disable Account</div>
+            <div class="text-[11px] text-neutral-400">Suspend member from logging in and earning points</div>
+          </div>
+          <div id="mount-switch-member-disable"></div>
+        </div>
+        <div class="pt-2 border-t border-white/10">
+          <button type="button" id="btn-delete-member-permanently" class="w-full py-2.5 rounded-xl font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-xs transition">
+            Permanently Delete Member
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- TAB 2: Universal Adjuster (Points & Financials) -->
@@ -14650,9 +15422,9 @@ function openMemberControlModal(member) {
                 <div class="flex items-center justify-between">
                   <div class="flex items-center gap-2">
                     ${isCompleted ? `
-                      <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">✓</span>
+                      <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs"><svg class="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
                     ` : `
-                      <span class="w-5 h-5 rounded-full bg-white/10 text-neutral-400 flex items-center justify-center text-xs">○</span>
+                      <span class="w-5 h-5 rounded-full bg-white/10 text-neutral-400 flex items-center justify-center text-xs"><svg class="w-3 h-3 text-neutral-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle></svg></span>
                     `}
                     <span class="font-bold text-white">${esc(task.title)}</span>
                   </div>
@@ -14832,6 +15604,57 @@ function openMemberControlModal(member) {
         markDirty();
       }
     }));
+  }
+
+  // Mount Member Disable Switch
+  const mountDisableSw = modalBody.querySelector('#mount-switch-member-disable');
+  if (mountDisableSw) {
+    mountDisableSw.appendChild(renderSwitch({
+      id: 'sw-member-disable',
+      checked: Boolean(currentMember.disabled),
+      onChange: async (chk) => {
+        try {
+          await updateDoc(doc(db, 'users', currentMember.uid), {
+            disabled: chk,
+            disabledAt: chk ? Date.now() : null,
+            updatedAt: serverTimestamp()
+          });
+          currentMember.disabled = chk;
+          const inMap = usersMap.get(currentMember.uid);
+          if (inMap) inMap.disabled = chk;
+          toast(chk ? 'Member account disabled' : 'Member account enabled', 'info');
+          renderAdminMembers();
+        } catch (err) {
+          console.error('Failed to toggle disable:', err);
+          toast('Failed to update status: ' + err.message, 'error');
+        }
+      }
+    }));
+  }
+
+  // Mount Member Permanent Delete Button
+  const delPermanentlyBtn = modalBody.querySelector('#btn-delete-member-permanently');
+  if (delPermanentlyBtn) {
+    delPermanentlyBtn.onclick = async () => {
+      const memName = currentMember.displayName || currentMember.name || 'this member';
+      const confirmed = await confirmSheet({
+        title: `Permanently Delete ${memName}?`,
+        message: `Permanently delete ${memName}? This removes all their submissions, attendance records, notifications, and balance history. This cannot be undone.`,
+        confirmLabel: 'Permanently Delete',
+        destructive: true
+      });
+      if (!confirmed) return;
+
+      try {
+        await permanentlyDeleteMember(currentMember.uid);
+        toast(`Permanently deleted ${memName}`, 'success');
+        closeModal();
+        renderAdminMembers();
+      } catch (err) {
+        console.error('Delete member error:', err);
+        toast('Failed to delete member: ' + err.message, 'error');
+      }
+    };
   }
 
   // Wire Badges Management
@@ -15299,7 +16122,7 @@ async function handleRepairTotals() {
     if (mismatches.length === 0) {
       bodyEl.innerHTML = `
         <div class="py-6 text-center space-y-3">
-          <div class="w-12 h-12 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-2xl font-bold">✓</div>
+          <div class="w-12 h-12 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-2xl font-bold"><svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></div>
           <h3 class="font-bold text-white text-base">All Member Totals &amp; Buckets In Sync</h3>
           <p class="text-xs text-neutral-400 max-w-sm mx-auto">All ${allUsers.length} member accounts match their verified points, attendance penalties, and current month/week buckets perfectly.</p>
           <div class="pt-2">
@@ -15318,7 +16141,8 @@ async function handleRepairTotals() {
       <div class="text-left space-y-4">
         <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
           <div class="font-bold text-amber-400 flex items-center gap-1.5">
-            <span>⚠ Audit Discrepancies Found</span>
+            <svg class="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            <span>Audit Discrepancies Found</span>
           </div>
           <p class="text-neutral-300">Found <strong>${mismatches.length}</strong> member(s) needing score or time-bucket synchronization. Review calculated corrections below before applying.</p>
         </div>
@@ -15809,7 +16633,7 @@ function renderAdminBroadcasts() {
     }
 
     return `
-      <div class="glass-card bulk-select-card p-3.5 space-y-2 text-xs${isSelected ? ' selected' : ''}" data-broadcast-id="${esc(b.id)}" data-bulk-id="${esc(b.id)}">
+      <div class="glass-card bulk-select-card p-3.5 space-y-2 text-xs cursor-pointer select-none rounded-xl hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-broadcast-id="${esc(b.id)}" data-bulk-id="${esc(b.id)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content space-y-2 w-full">
           <div class="flex items-start justify-between gap-2">
@@ -15830,13 +16654,8 @@ function renderAdminBroadcasts() {
                 <h3 class="font-bold text-white text-sm pt-0.5 truncate">${esc(b.title)}</h3>
               </div>
             </div>
-            <div class="flex items-center gap-1.5 flex-shrink-0">
-              <button class="btn-edit-broadcast px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-broadcast-id="${esc(b.id)}">
-                Edit
-              </button>
-              <button class="btn-delete-broadcast px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-broadcast-id="${esc(b.id)}">
-                Delete
-              </button>
+            <div class="flex items-center gap-1.5 shrink-0 text-neutral-500">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
             </div>
           </div>
 
@@ -15862,39 +16681,16 @@ function renderAdminBroadcasts() {
     `;
   }).join('');
 
-  container.querySelectorAll('.btn-edit-broadcast').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'broadcasts') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
+  container.querySelectorAll('.bulk-select-card').forEach(card => {
+    attachRowGestures(card, {
+      bulkType: 'broadcasts',
+      bulkId: card.dataset.bulkId,
+      onSingleTap: () => {
+        const b = state.broadcasts.find(x => x.id === card.dataset.broadcastId);
+        if (b) openAdminBroadcastModal(b);
       }
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) openAdminBroadcastModal(b);
-    };
+    });
   });
-
-  container.querySelectorAll('.btn-delete-broadcast').forEach(btn => {
-    btn.onclick = (e) => {
-      if (selectionState.active && selectionState.type === 'broadcasts') {
-        e.preventDefault();
-        e.stopPropagation();
-        const card = btn.closest('.bulk-select-card');
-        if (card) toggleItemSelection(card, card.dataset.bulkId);
-        return;
-      }
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) handleDeleteBroadcast(b);
-    };
-  });
-}
-
-export function renderBroadcastModal(broadcast = null) {
-  return openAdminBroadcastModal(broadcast);
 }
 
 function openAdminBroadcastModal(broadcast = null) {
@@ -16115,7 +16911,7 @@ function openAdminBroadcastModal(broadcast = null) {
         <button type="button" class="btn-toggle-badge-pill px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${isSelected ? "bg-[#0A84FF]/25 border border-[#0A84FF] text-white shadow-sm" : "bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10"}" data-badge-id="${esc(b.id)}">
           <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${b.color || "#0A84FF"}"></span>
           <span>${esc(b.label || b.name || b.id)}</span>
-          ${isSelected ? '<span class="text-[#0A84FF] text-xs font-bold">✓</span>' : ""}
+          ${isSelected ? '<svg class="w-3.5 h-3.5 text-[#0A84FF] shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ""}
         </button>
       `;
     }).join("");
@@ -16546,7 +17342,7 @@ function attachEventHandlers() {
             <div class="space-y-4 text-xs text-neutral-300">
               <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2">
                 <div class="font-bold text-white flex items-center gap-2">
-                  <span>📱 Apple iOS Safari:</span>
+                  <span>Apple iOS Safari:</span>
                 </div>
                 <ol class="list-decimal pl-4 space-y-1">
                   <li>Tap the <strong>Share</strong> button (box with upward arrow).</li>
@@ -16556,7 +17352,7 @@ function attachEventHandlers() {
               </div>
               <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2">
                 <div class="font-bold text-white flex items-center gap-2">
-                  <span>🌐 Chrome / Android / Desktop:</span>
+                  <span>Chrome / Android / Desktop:</span>
                 </div>
                 <p>Tap the three-dot browser menu and select <strong>"Install app"</strong> or <strong>"Add to Home Screen"</strong>.</p>
               </div>
@@ -17481,7 +18277,7 @@ if (typeof window !== 'undefined') {
   window.handleManualDataRefresh = handleManualDataRefresh;
   window.fetchPublicLeaderboard = fetchPublicLeaderboard;
   window.handleWaiverDecision = handleWaiverDecision;
-  window.renderBroadcastModal = renderBroadcastModal;
+  window.renderBroadcastModal = openAdminBroadcastModal;
   window.unsubscribeUserNotifications = unsubscribeUserNotifications;
   window.userNotifications = userNotifications;
   window.renderAdminAdjustments = renderAdminAdjustments;

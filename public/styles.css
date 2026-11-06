@@ -2712,18 +2712,18 @@ input[type="search"],
 /* Section 3: Floating Bulk Bar 2-Tier Layout & Segmented Control */
 .floating-bulk-bar {
   position: fixed;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
+  bottom: calc(var(--dock-height, 76px) + env(safe-area-inset-bottom, 12px) + 12px) !important;
   left: 50%;
   transform: translateX(-50%);
   width: calc(100% - 32px);
   max-width: 480px;
   height: auto !important;
-  min-height: 88px;
+  min-height: 80px;
   display: flex !important;
   flex-direction: column !important;
   justify-content: center !important;
-  gap: 10px !important;
-  padding: 12px 16px !important;
+  gap: 8px !important;
+  padding: 10px 14px !important;
   background: rgba(28, 28, 30, 0.94) !important;
   backdrop-filter: blur(28px) !important;
   -webkit-backdrop-filter: blur(28px) !important;
@@ -2744,18 +2744,37 @@ input[type="search"],
 .bulk-bar-bottom-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
 }
 
 .bulk-bar-bottom-row > button {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   text-align: center;
-  padding: 8px 12px;
+  padding: 7px 4px;
   border-radius: 12px;
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: all 0.15s ease;
+}
+
+/* Member row disabled & stat pill wrapping (Task 2) */
+.admin-member-row.member-disabled {
+  opacity: 0.55;
+}
+.admin-member-row.member-disabled:hover {
+  opacity: 0.75;
+}
+.member-stats-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 /* Section 4: Adjustments Hub Interactive Apple HIG Buttons */
@@ -2905,4 +2924,227 @@ input[type="search"],
   border-color: #0A84FF !important;
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.5) !important;
   transform: scale(1.1) !important;
+}
+
+
+/* ==========================================================================
+   RELEASE v2.2.3 (TASK 1): FREEFORM SHEETS, CROPPER 1X, MINI-PROFILE & ADJUSTMENTS
+   ========================================================================== */
+
+:root {
+  --dock-height: 76px;
+}
+
+/* ITEM 1: Inner Sheet Layout & No Header Clipping */
+.modal-sheet, .sub-modal-sheet {
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  height: 68vh;
+  max-height: 95vh;
+  overflow: hidden !important;
+  transition: height 0.32s cubic-bezier(0.32, 0.72, 0, 1), max-height 0.32s cubic-bezier(0.32, 0.72, 0, 1), transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: height, transform;
+  touch-action: pan-y;
+}
+
+.modal-header, .sub-modal-toolbar {
+  flex-shrink: 0 !important;
+}
+
+.modal-body, .sheet-body, .sub-modal-body, #shared-modal-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  padding-top: 16px !important;
+  padding-bottom: calc(env(safe-area-inset-bottom, 16px) + 24px) !important;
+}
+
+/* ITEM 2: Image Cropper Viewport & Masks */
+.ios-cropper-viewport {
+  position: relative;
+  width: 280px;
+  height: 280px;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 20px;
+  background: #1C1C1E;
+  touch-action: none !important;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ios-cropper-mask-circle {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.75);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  z-index: 10;
+}
+
+.ios-cropper-mask-rounded {
+  position: absolute;
+  inset: 10px;
+  pointer-events: none;
+  border-radius: 28px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.75);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  z-index: 10;
+}
+
+/* ITEM 3: Profile Mini-Sheet Redesign & Unclipped Avatar */
+.modal-sheet.mini-profile-sheet {
+  overflow: visible !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  max-height: 90vh !important;
+}
+
+.mini-profile-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: visible !important;
+}
+
+.mini-profile-inner-bg {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-grouped-secondary, #1C1C1E);
+  border-top-left-radius: 28px;
+  border-top-right-radius: 28px;
+  border: 0.5px solid var(--border-glass, rgba(255, 255, 255, 0.12));
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: visible !important;
+}
+
+.mini-profile-avatar-header {
+  position: relative;
+  width: 100%;
+  flex-shrink: 0;
+  padding-top: 10px;
+  overflow: visible !important;
+}
+
+.mini-profile-avatar-protruding {
+  position: absolute;
+  top: -44px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 4px solid #1C1C1E;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
+  background: #1C1C1E;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.mini-profile-scroll-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 52px 16px 24px 16px;
+}
+
+/* ITEM 4: Dock Overlap Mitigation Across All Pager Pages */
+.pager-page,
+.admin-overlay .pager-page,
+#admin-pager .pager-page,
+#user-pager .pager-page,
+#admin-panel-adjustments,
+#admin-panel-attendance,
+#admin-panel-tasks,
+#admin-panel-categories,
+#admin-panel-members,
+#admin-panel-submissions,
+#admin-panel-announcements,
+#admin-panel-overview,
+.page-view {
+  padding-bottom: calc(var(--dock-height, 76px) + env(safe-area-inset-bottom, 16px) + 32px) !important;
+  box-sizing: border-box !important;
+}
+
+/* Clean Authentic Apple HIG Segmented Controls (No Neon Glows) */
+.hub-bucket-btn {
+  border: 1px solid transparent;
+  transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+  color: rgba(235, 235, 245, 0.6);
+  box-shadow: none !important;
+}
+
+.hub-bucket-btn.active {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.hub-direction-btn {
+  border: 1px solid transparent;
+  transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+  color: rgba(235, 235, 245, 0.6);
+  box-shadow: none !important;
+}
+
+.hub-direction-btn.active {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* ITEM 5: Search Input 44px Padding & Centered Magnifier */
+input[type="search"],
+.ios-search-wrapper input,
+.search-box input,
+.search-input-wrap input,
+.sub-modal-search-row input,
+.ios-search-field,
+.search-input {
+  padding-inline-start: 44px !important;
+  padding-left: 44px !important;
+}
+
+.ios-search-wrapper svg,
+.search-box svg,
+.search-input-wrap svg,
+.sub-modal-search-row svg,
+.search-icon {
+  position: absolute !important;
+  left: 14px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 16px !important;
+  height: 16px !important;
+  pointer-events: none !important;
+  z-index: 10 !important;
+}
+
+/* Category Cards & Empty State Cards: Standard 16px Inset Rounded Corners */
+.category-card,
+.admin-category-card,
+[data-cat-id],
+.empty-state,
+.empty-card,
+.empty-state-card,
+.glass-card {
+  border-radius: 16px !important;
+  overflow: hidden !important;
 }

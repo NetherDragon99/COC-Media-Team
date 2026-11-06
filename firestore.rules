@@ -20,6 +20,7 @@ rules_version = '2';
 //   - monthBucket: string (legacy monthly key e.g. '2026-05', tolerated alongside monthKey)
 //   - badges: list (assigned by admin only, defaults to [] on create)
 //   - badgeIds: list (assigned by admin only, defaults to [] on create)
+//   - disabled: bool (account lock flag; if true, member is inactive and cannot perform write operations)
 //   - updatedAt: timestamp (editable by owner)
 //   - lastSeenAt: timestamp (legacy field tolerated; server-clock sync moved to users_private)
 //
@@ -35,6 +36,14 @@ rules_version = '2';
 //   - createdAt: timestamp
 //   - updatedAt: timestamp
 //   - lastSeenAt: timestamp (server-clock sync; editable by owner with request.time constraint)
+//
+// Collection: badges/{badgeId}
+//   - Read: signed-in users (signedIn())
+//   - Write: admin only (isAdmin())
+//
+// Collection: blocked_uids/{uid}
+//   - Read: admin or the blocked user (isAdmin() || (signedIn() && request.auth.uid == uid))
+//   - Write: admin only (isAdmin())
 //
 // Collection: tasks/{taskId}
 //   - active: bool (defaults to true)
@@ -56,7 +65,7 @@ rules_version = '2';
 //   - pointsAwarded: int (matches task base points, earlyBonus points, or legacy tiered rewards)
 //   - answers: list (optional list of submission answers, max 50 items)
 //   - Read: owner or admin
-//   - Create: admin or authenticated user completing a valid, active, non-archived task
+//   - Create: admin or active authenticated user completing a valid, active, non-archived task
 //   - Update / Delete: admin only
 //
 // Collection: missed_penalties/{penaltyId}
@@ -96,7 +105,7 @@ rules_version = '2';
 //   - fineEGP: number / int (0 if on_time, bounded financial fine calculation if late)
 //   - delaySeconds: int
 //   - Read: owner or admin
-//   - Create: admin or authenticated user checking in within allowed session window (document must not already exist)
+//   - Create: admin or active authenticated user checking in within allowed session window (document must not already exist)
 //   - Update / Delete: admin only
 //
 // Collection: waiver_requests/{waiverId}
@@ -106,7 +115,7 @@ rules_version = '2';
 //   - uid: string (author UID, matches auth.uid)
 //   - status: string ('pending' on create)
 //   - Read: owner or admin
-//   - Create: signed-in user creating pending request for self (or admin), doc must not already exist
+//   - Create: active signed-in user creating pending request for self (or admin), doc must not already exist
 //   - Update / Delete: admin only
 //
 // Collection: notifications/{notificationId}
@@ -119,8 +128,8 @@ rules_version = '2';
 //   - createdAt: timestamp
 //   - Read: admin or recipient (resource.data.uid == request.auth.uid)
 //   - Create: admin only
-//   - Delete: admin or recipient (resource.data.uid == request.auth.uid)
-//   - Update: admin, or recipient updating read state only
+//   - Delete: admin or active recipient (resource.data.uid == request.auth.uid)
+//   - Update: admin, or active recipient updating read state only
 //
 // Collection: notifications_broadcast/{broadcastId}
 //   - title: string (required)
@@ -129,7 +138,7 @@ rules_version = '2';
 //   - createdAt: timestamp
 //   - Read: signed-in users
 //   - Create / Delete: admin only
-//   - Update: admin, or signed-in user appending self to readBy
+//   - Update: admin, or active signed-in user appending self to readBy
 //
 // Collection: broadcasts/{broadcastId}
 //   - title: string (required, max length 120)
@@ -192,6 +201,13 @@ service cloud.firestore {
         request.auth.token.get('admin', false) == true ||
         request.auth.token.get('role', '') == 'admin' ||
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'member') == 'admin'
+      );
+    }
+
+    function isActive() {
+      return signedIn() && (
+        !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('disabled', false) != true
       );
     }
 
@@ -295,10 +311,12 @@ service cloud.firestore {
       // Create: Admin can create any user profile.
       // Owner can create their own profile with role 'member', zero points/penalties, and empty/default badges.
       // Explicitly restricts badges and badgeIds writes to ADMIN-ONLY (defaults to [] if missing or on creation).
+      // Blocks profile creation if the user UID exists in blocked_uids for non-admin creations.
       // When avatarUrl is present in request.resource.data (admin and owner), requires string and size <= 32000.
       allow create: if isValidAvatarUrl() && (
                        isAdmin() || (
                          isOwner(uid) &&
+                         !exists(/databases/$(database)/documents/blocked_uids/$(request.auth.uid)) &&
                          request.resource.data.get('role', 'member') == 'member' &&
                          request.resource.data.get('points', 0) == 0 &&
                          request.resource.data.get('penalties', 0) == 0 &&
@@ -309,7 +327,7 @@ service cloud.firestore {
                      );
 
       // Update: Admin can update any field (including points, weekKey, weekPoints, monthKey, monthPoints, penalties, badges, badgeIds, or roles; tolerating legacy weekBucket, monthBucket).
-      // Owner can update:
+      // Owner can update (only if active: isActive()):
       //   1. Profile fields: name, displayName, avatarUrl, photoURL, updatedAt
       //   2. Atomic point increment via atomic batch with submission:
       //      - Affected keys must strictly be in ['points', 'lastOpId', 'weekKey', 'weekPoints', 'monthKey', 'monthPoints', 'updatedAt'] (tolerating legacy monthBucket, weekBucket)
@@ -327,9 +345,11 @@ service cloud.firestore {
       //      - Attendance log document must belong to the user
       //      - Penalty delta must exactly equal the attendance log's penalty
       // Owner can NEVER change role, badges, or badgeIds (strictly admin-only).
+      // Non-admin owner must be active (isActive() == true; disabled users cannot write/update).
       // When avatarUrl is updated (admin and owner), requires string and size <= 32000. If omitted or not updated, allowed as before.
       allow update: if (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || isValidAvatarUrl()) && (
                        isAdmin() || (
+                         isActive() &&
                          isOwner(uid) &&
                          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'badges', 'badgeIds']) &&
                          (
@@ -373,17 +393,21 @@ service cloud.firestore {
       allow read: if isOwner(uid) || isAdmin();
 
       // Owner can write non-financial fields (email, fcmTokens, createdAt, updatedAt, and optional lastSeenAt; never finesEGP).
+      // Owner must be active (isActive()).
       // Admin can write/increment finesEGP and manage private docs.
-      allow create: if (
+      allow create: if isAdmin() || (
+                       isActive() &&
                        isOwner(uid) &&
                        !request.resource.data.keys().hasAny(['finesEGP']) &&
                        request.resource.data.keys().hasOnly(['email', 'fcmTokens', 'createdAt', 'updatedAt', 'lastSeenAt']) &&
                        request.resource.data.get('lastSeenAt', request.time) == request.time
-                     ) || isAdmin();
+                     );
 
       // Owner can update email, fcmTokens, updatedAt OR heartbeat lastSeenAt (request.time); never finesEGP.
+      // Owner must be active (isActive()).
       // Admin can update all fields.
-      allow update: if (
+      allow update: if isAdmin() || (
+                       isActive() &&
                        isOwner(uid) &&
                        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['finesEGP']) &&
                        (
@@ -393,10 +417,28 @@ service cloud.firestore {
                            request.resource.data.lastSeenAt == request.time
                          )
                        )
-                     ) || isAdmin();
+                     );
 
       // Delete allowed for admins
       allow delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Badges Collection
+    // ---------------------------------------------------------------
+
+    match /badges/{badgeId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Blocked Users Collection
+    // ---------------------------------------------------------------
+
+    match /blocked_uids/{uid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow write: if isAdmin();
     }
 
     // ---------------------------------------------------------------
@@ -421,7 +463,7 @@ service cloud.firestore {
       allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('userId', '') == request.auth.uid));
 
       allow create: if isAdmin() || (
-        signedIn() &&
+        isActive() &&
         request.resource.data.uid == request.auth.uid &&
         submissionId == (request.resource.data.taskId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey) &&
         request.resource.data.submittedAt == request.time &&
@@ -454,7 +496,7 @@ service cloud.firestore {
 
       allow create: if (!exists(/databases/$(database)/documents/attendance_logs/$(logId))) && (
         isAdmin() || (
-          signedIn() &&
+          isActive() &&
           request.resource.data.uid == request.auth.uid &&
           (
             logId == (request.resource.data.sessionId + '_' + request.resource.data.occurrenceKey + '_' + request.auth.uid) ||
@@ -497,11 +539,14 @@ service cloud.firestore {
 
     match /waiver_requests/{waiverId} {
       allow read: if isAdmin() || (signedIn() && resource.data.get('uid', '') == request.auth.uid);
-      allow create: if signedIn() &&
-        request.resource.data.get('uid', '') == request.auth.uid &&
-        request.resource.data.get('status', '') == 'pending' &&
-        (!exists(/databases/$(database)/documents/waiver_requests/$(waiverId))) &&
-        (isAdmin() || waiverId == ('waiver_' + request.resource.data.sessionId + '_' + request.resource.data.occurrenceKey + '_' + request.auth.uid));
+      allow create: if (!exists(/databases/$(database)/documents/waiver_requests/$(waiverId))) && (
+        isAdmin() || (
+          isActive() &&
+          request.resource.data.get('uid', '') == request.auth.uid &&
+          request.resource.data.get('status', '') == 'pending' &&
+          waiverId == ('waiver_' + request.resource.data.sessionId + '_' + request.resource.data.occurrenceKey + '_' + request.auth.uid)
+        )
+      );
       allow update, delete: if isAdmin();
     }
 
@@ -523,9 +568,12 @@ service cloud.firestore {
     match /notifications/{notificationId} {
       allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid));
       allow create: if isAdmin();
-      allow delete: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid));
+      allow delete: if isAdmin() || (
+        isActive() &&
+        (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid)
+      );
       allow update: if isAdmin() || (
-        signedIn() &&
+        isActive() &&
         (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
       );
@@ -538,13 +586,12 @@ service cloud.firestore {
     match /notifications_broadcast/{broadcastId} {
       allow read: if signedIn();
       allow create, delete: if isAdmin();
-      allow update: if signedIn() && (
-        isAdmin() || (
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']) &&
-          request.resource.data.readBy.hasAll(resource.data.get('readBy', [])) &&
-          request.resource.data.readBy.size() == resource.data.get('readBy', []).size() + 1 &&
-          request.resource.data.readBy.hasAny([request.auth.uid])
-        )
+      allow update: if isAdmin() || (
+        isActive() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']) &&
+        request.resource.data.readBy.hasAll(resource.data.get('readBy', [])) &&
+        request.resource.data.readBy.size() == resource.data.get('readBy', []).size() + 1 &&
+        request.resource.data.readBy.hasAny([request.auth.uid])
       );
     }
 

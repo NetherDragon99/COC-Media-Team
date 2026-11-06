@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v2.2.0</title>
+    <title>COC Media Team v2.2.3</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
     <!-- PWA Configuration (GitHub Pages Relative Paths) -->
@@ -80,7 +80,7 @@
     </script>
 
     <!-- Apple iOS 17/18 Design System Stylesheet -->
-    <link rel="stylesheet" href="./styles.css?v=2.2.2" />
+    <link rel="stylesheet" href="./styles.css?v=2.2.3" />
 
     <!-- Confetti & Lucide CDN for Interactions & Icons -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
@@ -107,7 +107,7 @@
       </div>
       <h2 class="ios-title-2 mb-2">Something went wrong</h2>
       <p class="ios-subhead text-neutral-400 max-w-xs mb-6" id="error-boundary-message">An unexpected error occurred while running the application.</p>
-      <button onclick="window.__cocReloadApp()" class="px-6 py-2.5 rounded-full bg-[#0A84FF] text-white font-semibold text-sm shadow-md">
+      <button type="button" onclick="window.__cocReloadApp()" class="px-6 py-2.5 rounded-full bg-[#0A84FF] text-white font-semibold text-sm shadow-md">
         Reload App
       </button>
     </div>
@@ -120,7 +120,7 @@
       </div>
       <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
         <span id="loader-app-name">COC Media Team</span>
-        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v2.2.2</span>
+        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v2.2.3</span>
       </div>
       <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
       <div class="w-7 h-7 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-spin"></div>
@@ -136,7 +136,7 @@
           <span class="font-bold text-amber-400" id="announcement-tag">Notice:</span>
           <span id="announcement-text" class="truncate text-white font-medium">Welcome to the COC Media Team platform!</span>
         </div>
-        <button id="btn-close-announcement" class="text-neutral-400 hover:text-white p-1" aria-label="Dismiss">
+        <button type="button" id="btn-close-announcement" class="text-neutral-400 hover:text-white p-1" aria-label="Dismiss">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
@@ -153,7 +153,7 @@
               <h1 class="ios-large-title text-white">Updates</h1>
               <p class="ios-subhead text-neutral-400">Team notices and announcements.</p>
             </div>
-            <button id="btn-mark-all-read" class="text-xs text-[#0A84FF] font-semibold hover:underline">
+            <button type="button" id="btn-mark-all-read" class="text-xs text-[#0A84FF] font-semibold hover:underline">
               Mark Read
             </button>
           </div>
@@ -165,13 +165,13 @@
 
         <section id="page-tasks" class="pager-page space-y-4">
           <div class="space-y-1">
-            <h1 class="ios-large-title text-white">Tasks</h1>
+            <div class="space-y-0.5"><h1 class="ios-large-title text-white">Tasks</h1><p class="text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</p></div>
             <p class="ios-subhead text-neutral-400">Pick up quotas and submit completed proofs.</p>
           </div>
 
           <!-- Category Chips Scroller -->
           <div class="task-filter-bar flex items-center gap-2 overflow-x-auto pb-1" id="category-filter-chips">
-            <button data-category="all" class="cat-filter-btn px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#0A84FF] text-white">
+            <button type="button" data-category="all" class="cat-filter-btn px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#0A84FF] text-white">
               All Tasks
             </button>
           </div>
@@ -210,7 +210,7 @@
 
           <!-- Top Bar: Floating Glass Menu (Left) and Floating Glass Bell (Right) -->
           <div class="flex items-center justify-between">
-            <button id="btn-open-drawer" class="floating-glass-btn" aria-label="Open Navigation Menu" title="Menu">
+            <button type="button" id="btn-open-drawer" class="floating-glass-btn" aria-label="Open Navigation Menu" title="Menu">
               <svg class="w-5 h-5 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <line x1="3" y1="12" x2="21" y2="12"></line>
                 <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -222,10 +222,10 @@
             <div id="brand-header-click" class="flex items-center gap-2 cursor-pointer">
               <img id="header-logo-img" src="./image_ad59c0.jpg" alt="Logo" class="w-8 h-8 rounded-full object-cover border border-white/20 shadow-sm" />
               <span id="header-app-title" class="font-bold text-sm tracking-tight text-white">COC Media</span>
-              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v2.2.0</span>
+              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v2.2.3</span>
             </div>
 
-            <button id="btn-open-notifications" class="floating-glass-btn relative" aria-label="Notifications" title="Notifications">
+            <button type="button" id="btn-open-notifications" class="floating-glass-btn relative" aria-label="Notifications" title="Notifications">
               <svg class="w-5 h-5 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
                 <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
@@ -347,7 +347,7 @@
                 <div class="text-2xl font-bold font-mono tracking-tight text-white" id="live-clock">--:--:--</div>
                 <div class="text-xs text-neutral-400" id="live-date">Loading schedule...</div>
               </div>
-              <a href="#attendance" class="px-3 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 text-xs font-semibold flex items-center gap-1 border border-emerald-500/30">
+              <a href="#attendance" id="home-attendance-checkin-cta" class="px-3 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 text-xs font-semibold flex items-center gap-1 border border-emerald-500/30">
                 Check In &rarr;
               </a>
             </div>
@@ -410,7 +410,7 @@
               <h1 class="ios-large-title text-white">Attendance</h1>
               <p class="ios-subhead text-neutral-400">Smart check-in with late deduction matrix.</p>
             </div>
-            <button id="btn-open-waiver-modal" class="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition">
+            <button type="button" id="btn-open-waiver-modal" class="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition">
               <svg class="w-4 h-4 text-amber-400 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                 <polyline points="14 2 14 8 20 8"></polyline>
@@ -473,7 +473,7 @@
                 </div>
               </div>
 
-              <button id="btn-open-edit-profile" class="p-2 rounded-xl bg-white/10 hover:bg-white/15 text-white" aria-label="Edit Profile">
+              <button type="button" id="btn-open-edit-profile" class="p-2 rounded-xl bg-white/10 hover:bg-white/15 text-white" aria-label="Edit Profile">
                 <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                   <path d="M12 20h9"></path>
                   <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
@@ -541,7 +541,7 @@
 
           <!-- Profile Footer -->
           <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
-            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge">v2.2.0</span></div>
+            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge">v2.2.3</span></div>
             <div class="text-[11px] text-neutral-500">Official Production Release</div>
           </div>
         </section>
@@ -552,7 +552,7 @@
       <nav id="user-dock" class="glass-dock" aria-label="Main Navigation">
         <div class="dock-thumb"></div>
 
-        <button data-page="notifications" class="dock-item relative" aria-label="Updates">
+        <button type="button" data-page="notifications" class="dock-item relative" aria-label="Updates">
           <svg class="stroke-current fill-none" viewBox="0 0 24 24">
             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
             <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
@@ -562,7 +562,7 @@
           <span id="dock-unread-badge" class="hidden absolute top-1 right-2 min-w-[16px] h-4 px-1 bg-[#0A84FF] text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">0</span>
         </button>
 
-        <button data-page="tasks" class="dock-item" aria-label="Tasks">
+        <button type="button" data-page="tasks" class="dock-item" aria-label="Tasks">
           <svg class="stroke-current fill-none" viewBox="0 0 24 24">
             <polyline points="9 11 12 14 22 4"></polyline>
             <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
@@ -570,7 +570,7 @@
           <span>Tasks</span>
         </button>
 
-        <button data-page="home" class="dock-item active" aria-label="Home">
+        <button type="button" data-page="home" class="dock-item active" aria-label="Home">
           <svg class="stroke-current fill-none" viewBox="0 0 24 24">
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
             <polyline points="9 22 9 12 15 12 15 22"></polyline>
@@ -578,7 +578,7 @@
           <span>Home</span>
         </button>
 
-        <button data-page="attendance" class="dock-item" aria-label="Attendance">
+        <button type="button" data-page="attendance" class="dock-item" aria-label="Attendance">
           <svg class="stroke-current fill-none" viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="10"></circle>
             <polyline points="12 6 12 12 16 14"></polyline>
@@ -586,7 +586,7 @@
           <span>Attendance</span>
         </button>
 
-        <button data-page="profile" class="dock-item" aria-label="Profile">
+        <button type="button" data-page="profile" class="dock-item" aria-label="Profile">
           <svg class="stroke-current fill-none" viewBox="0 0 24 24">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
             <circle cx="12" cy="7" r="4"></circle>
@@ -609,7 +609,7 @@
           <img src="./image_ad59c0.jpg" alt="Logo" class="w-6 h-6 rounded-full object-cover" />
           <span class="ios-headline text-white">Settings</span>
         </div>
-        <button id="btn-close-drawer" class="p-1.5 rounded-full bg-white/10 text-neutral-400 hover:text-white" aria-label="Close menu">
+        <button type="button" id="btn-close-drawer" class="p-1.5 rounded-full bg-white/10 text-neutral-400 hover:text-white" aria-label="Close menu">
           <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -750,7 +750,7 @@
               </div>
               <span class="text-xs font-semibold text-white">App Version</span>
             </div>
-            <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v2.2.0</span>
+            <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v2.2.3</span>
           </div>
         </div>
 
@@ -924,7 +924,7 @@
                   <div class="font-bold text-white text-xs">Repair Totals</div>
                   <div class="text-[11px] text-neutral-400">Recalculate member points, time buckets, and penalties from raw logs.</div>
                 </div>
-                <button id="btn-admin-repair-totals" class="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition">Repair</button>
+                <button type="button" id="btn-admin-repair-totals" class="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition">Repair</button>
               </div>
 
               <div class="flex items-center justify-between gap-3 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20">
@@ -932,7 +932,7 @@
                   <div class="font-bold text-white text-xs">Clear All Notifications from DB</div>
                   <div class="text-[11px] text-rose-300/80">Batch-delete all personal and broadcast notifications from Firestore.</div>
                 </div>
-                <button id="btn-admin-purge-notifications" class="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 transition">Purge DB</button>
+                <button type="button" id="btn-admin-purge-notifications" class="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 transition">Purge DB</button>
               </div>
 
               <div class="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
@@ -940,7 +940,7 @@
                   <div class="font-bold text-white text-xs">Reset Local Cache</div>
                   <div class="text-[11px] text-neutral-400">Clear local device cache, Service Worker cache and reload app.</div>
                 </div>
-                <button id="btn-admin-reset-cache" class="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/10 text-white hover:bg-white/20 transition">Reset Cache</button>
+                <button type="button" id="btn-admin-reset-cache" class="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/10 text-white hover:bg-white/20 transition">Reset Cache</button>
               </div>
             </div>
           </div>
@@ -950,17 +950,17 @@
         <section id="admin-panel-tasks" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
             <h1 class="ios-large-title text-white">Tasks</h1>
-            <button id="btn-admin-add-task" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
+            <button type="button" id="btn-admin-add-task" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
               + Add Task
             </button>
           </div>
 
           <!-- Filter Segment: Active vs Archived -->
           <div class="flex items-center gap-2">
-            <button id="admin-tasks-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
+            <button type="button" id="admin-tasks-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
               Active Tasks
             </button>
-            <button id="admin-tasks-filter-archived" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white">
+            <button type="button" id="admin-tasks-filter-archived" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white">
               Archived
             </button>
           </div>
@@ -975,18 +975,18 @@
         <!-- ADMIN PAGE 3: CATEGORIES -->
         <section id="admin-panel-categories" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
-            <h1 class="ios-large-title text-white">Categories</h1>
-            <button id="btn-admin-add-category" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
+            <div class="space-y-0.5"><h1 class="ios-large-title text-white">Categories</h1><p class="text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</p></div>
+            <button type="button" id="btn-admin-add-category" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
               + Category
             </button>
           </div>
 
           <!-- Filter Segment: Active vs Archived -->
           <div class="flex items-center gap-2">
-            <button id="admin-cats-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
+            <button type="button" id="admin-cats-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
               Active Categories
             </button>
-            <button id="admin-cats-filter-archived" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white">
+            <button type="button" id="admin-cats-filter-archived" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white">
               Archived
             </button>
           </div>
@@ -1001,7 +1001,7 @@
           <div class="flex items-center justify-between">
             <div>
               <h1 class="ios-large-title text-white">Team Badges</h1>
-              <p class="ios-subhead text-neutral-400">Manage team badges, titles, and roles.</p>
+              <p class="ios-subhead text-neutral-400">Manage team badges, titles, and roles. <span class="block text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</span></p>
             </div>
             <button id="btn-admin-add-badge" type="button" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition shadow-sm flex items-center gap-1">
               <span>+ New Badge</span>
@@ -1017,24 +1017,19 @@
           <div class="flex items-center justify-between">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Attendance</h1>
-              <p class="ios-subhead text-neutral-400">Manage sessions and view member attendance.</p>
+              <p class="ios-subhead text-neutral-400">Manage sessions and view member attendance. <span class="block text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</span></p>
             </div>
-            <button id="btn-admin-add-session" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white flex items-center gap-1.5 shadow-sm">
-              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
+            <button type="button" id="btn-admin-add-session" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white flex items-center gap-1.5 shadow-sm whitespace-nowrap">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
               </svg>
-              <span>+ New Session</span>
+              <span class="whitespace-nowrap font-semibold">New Session</span>
             </button>
           </div>
 
-          <!-- Filter Segmented Control: Active / Archived / Waivers -->
-          <div class="flex items-center justify-between gap-2">
-            <div class="glass-segmented-control flex-1">
-              <button id="filter-session-active" class="segmented-control-btn active" data-filter="active">Active Sessions</button>
-              <button id="filter-session-archived" class="segmented-control-btn" data-filter="archived">Archived</button>
-            </div>
-          </div>
+          <!-- Filter Segmented Control: Active Sessions / Archived -->
+          <div id="mount-admin-sessions-segmented" class="w-full"></div>
 
           <!-- Sessions List -->
           <div id="admin-sessions-list" class="space-y-3"></div>
@@ -1054,7 +1049,7 @@
           <div class="flex items-center justify-between">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Submissions</h1>
-              <p class="ios-subhead text-neutral-400">Inspect proofs, edit scores, and review records.</p>
+              <p class="ios-subhead text-neutral-400">Inspect proofs, edit scores, and review records. <span class="block text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</span></p>
             </div>
             </div>
 
@@ -1094,7 +1089,7 @@
           </div>
 
           <div id="admin-submissions-load-more-container" class="text-center pt-1 pb-2">
-            <button id="btn-load-more-submissions" class="hidden px-4 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition">
+            <button type="button" id="btn-load-more-submissions" class="hidden px-4 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition">
               Load More Submissions
             </button>
           </div>
@@ -1104,12 +1099,12 @@
         <section id="admin-panel-waivers" class="pager-page space-y-4">
           <div class="space-y-1">
             <h1 class="ios-large-title text-white">Waivers</h1>
-            <p class="ios-subhead text-neutral-400">Review attendance excuse requests.</p>
+            <p class="ios-subhead text-neutral-400">Review attendance excuse requests. <span class="block text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</span></p>
           </div>
           <div id="admin-waivers-segmented-mount"></div>
           <div class="flex items-center justify-between text-xs text-neutral-400 px-1">
             <span id="admin-waivers-filter-label">Pending</span>
-            <span id="admin-waiver-count" class="font-mono text-[11px]">0 requests</span>
+            <span id="admin-waiver-count" class="text-[11px] text-neutral-400 font-medium">0 requests</span>
           </div>
           <div id="admin-waivers-list" class="space-y-3"></div>
         </section>
@@ -1118,7 +1113,7 @@
         <section id="admin-panel-members" class="pager-page space-y-4">
           <div class="space-y-1">
             <h1 class="ios-large-title text-white">Members</h1>
-            <p class="ios-subhead text-neutral-400">Team roster, performance audits, and member controls.</p>
+            <p class="ios-subhead text-neutral-400">Team roster, performance audits, and member controls. <span class="block text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</span></p>
           </div>
 
           <div class="flex items-center gap-2">
@@ -1137,7 +1132,7 @@
           </div>
 
           <div id="admin-members-load-more-container" class="text-center pt-1 pb-2">
-            <button id="btn-load-more-members" class="hidden px-4 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition">
+            <button type="button" id="btn-load-more-members" class="hidden px-4 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition">
               Load More Members
             </button>
           </div>
@@ -1167,7 +1162,7 @@
                 <circle cx="11" cy="11" r="8"></circle>
                 <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
               </svg>
-              <input type="search" id="hubMemberSearchInput" class="ios-input ios-search-field" placeholder="Search members by name, email, badge, or role..." autocomplete="off" />
+              <input type="search" id="hubMemberSearchInput" class="ios-input ios-search-field" placeholder="Search members..." autocomplete="off" />
             </div>
 
             <!-- Always Visible Scrollable Member Roster -->
@@ -1226,9 +1221,9 @@
             <!-- Reason Input & Quick Chips -->
             <div>
               <label class="block text-neutral-300 font-semibold mb-1 text-xs">
-                Audit Reason <span class="text-rose-400">*</span>
+                Reason (Optional)
               </label>
-              <textarea id="hubAdjustReason" class="ios-input text-xs leading-relaxed" rows="2" placeholder="Required explanation for the transaction ledger..." required></textarea>
+              <textarea id="hubAdjustReason" class="ios-input text-xs leading-relaxed" rows="2" placeholder="Optional explanation for the transaction ledger..."></textarea>
               <div id="hubReasonChipsContainer" class="flex flex-wrap gap-1 mt-1.5">
                 <button type="button" class="hub-quick-chip px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-neutral-300 transition" data-reason="Meeting attendance bonus">Meeting attendance</button>
                 <button type="button" class="hub-quick-chip px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-neutral-300 transition" data-reason="Special media contribution">Special contribution</button>
@@ -1257,10 +1252,10 @@
               <p class="ios-subhead text-neutral-400">Team carousel notices, push broadcasts, and configurations.</p>
             </div>
             <div class="flex items-center gap-2">
-              <button id="btn-admin-import-legacy-announcements" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition flex items-center gap-1">
+              <button type="button" id="btn-admin-import-legacy-announcements" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition flex items-center gap-1">
                 <span>Import Old</span>
               </button>
-              <button id="btn-admin-add-broadcast" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition flex items-center gap-1 shadow-sm">
+              <button type="button" id="btn-admin-add-broadcast" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition flex items-center gap-1 shadow-sm">
                 <span>+ New Broadcast</span>
               </button>
             </div>
@@ -1372,35 +1367,35 @@
       <nav id="admin-dock" class="glass-dock" aria-label="Admin Navigation">
         <div class="dock-thumb"></div>
 
-        <button data-page="overview" class="dock-item active">
+        <button type="button" data-page="overview" class="dock-item active">
           <span>Overview</span>
         </button>
-        <button data-page="tasks" class="dock-item">
+        <button type="button" data-page="tasks" class="dock-item">
           <span>Tasks</span>
         </button>
-        <button data-page="categories" class="dock-item">
+        <button type="button" data-page="categories" class="dock-item">
           <span>Categories</span>
         </button>
-        <button data-page="badges" class="dock-item">
+        <button type="button" data-page="badges" class="dock-item">
           <span>Badges</span>
         </button>
-        <button data-page="attendance" class="dock-item">
+        <button type="button" data-page="attendance" class="dock-item">
           <span>Attendance</span>
         </button>
-        <button data-page="submissions" class="dock-item">
+        <button type="button" data-page="submissions" class="dock-item">
           <span>Submissions</span>
         </button>
-        <button data-page="waivers" class="dock-item">
+        <button type="button" data-page="waivers" class="dock-item">
           <span>Waivers</span>
           <span id="admin-waivers-dock-badge" class="dock-badge-red hidden">0</span>
         </button>
-        <button data-page="members" class="dock-item">
+        <button type="button" data-page="members" class="dock-item">
           <span>Members</span>
         </button>
-                <button data-page="adjustments" class="dock-item">
+                <button type="button" data-page="adjustments" class="dock-item">
           <span>Adjustments</span>
         </button>
-        <button data-page="broadcasts" class="dock-item">
+        <button type="button" data-page="broadcasts" class="dock-item">
           <span>Broadcasts</span>
         </button>
       </nav>
@@ -1445,8 +1440,9 @@
           <span style="width: 44px;"></span>
         </div>
         <div class="icon-picker-body">
-        <div class="sub-modal-search-row">
-          <input type="search" id="iconPickerSearch" placeholder="Search 100 icons..." />
+        <div class="sub-modal-search-row ios-search-wrapper">
+          <svg class="search-icon w-4 h-4 text-neutral-400 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="search" id="iconPickerSearch" class="ios-input ios-search-field" placeholder="Search 100 icons..." />
         </div>
         <div class="ios-pill-scroll" id="iconCategoryPills">
           <!-- Pills: All, Media, Tasks, Rewards, People, System -->
@@ -1491,9 +1487,9 @@
             <div id="shared-confirm-title" class="action-sheet-title">Confirm Action</div>
             <div id="shared-confirm-message" class="action-sheet-message">Are you sure?</div>
           </div>
-          <button id="shared-confirm-action" class="action-sheet-btn primary">Confirm</button>
+          <button type="button" id="shared-confirm-action" class="action-sheet-btn primary">Confirm</button>
         </div>
-        <button id="shared-confirm-cancel" class="action-sheet-btn cancel">Cancel</button>
+        <button type="button" id="shared-confirm-cancel" class="action-sheet-btn cancel">Cancel</button>
       </div>
     </div>
 
@@ -1526,7 +1522,7 @@
                   <span>Upload &amp; Crop</span>
                 </button>
                 <button type="button" id="btnTogglePresetsGallery" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition flex items-center gap-1.5">
-                  <span>✨ Preset Avatars</span>
+                  <span>Preset Avatars</span>
                 </button>
                 <input type="file" id="profilePhotoFileInput" accept="image/*" class="hidden" />
                 <input type="hidden" id="input-edit-profile-avatar" value="" />
@@ -1635,7 +1631,7 @@
         </div>
         <div class="modal-body space-y-4 text-center">
           <p class="ios-subhead text-neutral-400">Sign in to track quotas, earn points and rank.</p>
-          <button id="btn-auth-google" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-white/10 hover:bg-white/15 flex items-center justify-center gap-2">
+          <button type="button" id="btn-auth-google" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-white/10 hover:bg-white/15 flex items-center justify-center gap-2">
             Continue with Google
           </button>
           <div class="text-xs text-neutral-500">or enter local member name</div>
@@ -1660,9 +1656,9 @@
           <p class="text-neutral-300">Whitelisting is required for Google Auth on GitHub Pages:</p>
           <div class="flex items-center justify-between bg-black/50 p-2.5 rounded-lg border border-white/10 font-mono">
             <span id="current-hostname-label" class="text-[#0A84FF]">domain</span>
-            <button id="btn-copy-hostname" class="text-xs text-neutral-300">Copy</button>
+            <button type="button" id="btn-copy-hostname" class="text-xs text-neutral-300">Copy</button>
           </div>
-          <button id="btn-fallback-guest" class="w-full py-2.5 rounded-xl font-bold bg-[#0A84FF] text-white">Continue as Guest</button>
+          <button type="button" id="btn-fallback-guest" class="w-full py-2.5 rounded-xl font-bold bg-[#0A84FF] text-white">Continue as Guest</button>
         </div>
       </div>
     </div>
@@ -1777,10 +1773,10 @@
           <h3 id="custom-alert-title" class="ios-headline text-white">Notice</h3>
           <p id="custom-alert-message" class="ios-footnote text-neutral-300"></p>
           <div class="space-y-2 pt-2">
-            <button id="btn-custom-alert-action" class="hidden w-full py-2.5 rounded-xl font-bold bg-[#0A84FF] text-white">
+            <button type="button" id="btn-custom-alert-action" class="hidden w-full py-2.5 rounded-xl font-bold bg-[#0A84FF] text-white">
               <span id="btn-custom-alert-action-label">Action</span>
             </button>
-            <button id="btn-custom-alert-ok" class="w-full py-2.5 rounded-xl font-semibold bg-white/10 text-white">OK</button>
+            <button type="button" id="btn-custom-alert-ok" class="w-full py-2.5 rounded-xl font-semibold bg-white/10 text-white">OK</button>
           </div>
         </div>
       </div>
@@ -1793,9 +1789,9 @@
             <div id="custom-confirm-title" class="action-sheet-title">Confirm</div>
             <div id="custom-confirm-message" class="action-sheet-message">Are you sure?</div>
           </div>
-          <button id="btn-custom-confirm-ok" class="action-sheet-btn destructive">Confirm</button>
+          <button type="button" id="btn-custom-confirm-ok" class="action-sheet-btn destructive">Confirm</button>
         </div>
-        <button id="btn-custom-confirm-cancel" class="action-sheet-btn cancel">Cancel</button>
+        <button type="button" id="btn-custom-confirm-cancel" class="action-sheet-btn cancel">Cancel</button>
       </div>
     </div>
 
@@ -1880,7 +1876,19 @@
     </script>
 
     <!-- CORE VANILLA JS APPLICATION MODULE -->
-    <script type="module" src="./app.js?v=2.2.2"></script>
+    <script type="module" src="./app.js?v=2.2.3"></script>
 
+  
+    <!-- ACCOUNT STATUS OVERLAY (Disabled / Blocked) -->
+    <div id="account-status-overlay" class="fixed inset-0 z-[9999] bg-[#000000] flex items-center justify-center p-6 hidden">
+      <div class="max-w-sm w-full text-center space-y-4">
+        <div id="account-status-icon" class="w-16 h-16 mx-auto rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center">
+          <svg class="w-8 h-8 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        </div>
+        <h2 id="account-status-title" class="text-lg font-bold text-white">Account Temporarily Disabled</h2>
+        <p id="account-status-message" class="text-xs text-neutral-400 leading-relaxed">Please contact a team administrator.</p>
+        <button type="button" id="btn-account-status-signout" class="w-full py-3 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-sm transition">Sign Out</button>
+      </div>
+    </div>
   </body>
 </html>

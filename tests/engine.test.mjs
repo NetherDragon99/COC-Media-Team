@@ -37,10 +37,11 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect } = exportsObj;
+assert.strictEqual(typeof computeCropRect, 'function', 'computeCropRect must be a function');
 
 assert.strictEqual(APP_TIMEZONE, 'Africa/Cairo', 'APP_TIMEZONE must be Africa/Cairo');
 assert.strictEqual(typeof getOccurrences, 'function', 'getOccurrences must be a function');
@@ -1131,4 +1132,131 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.strictEqual(tooLate.reason, 'closed');
 }
 
+
+// ==========================================
+// TEST 11: COMPUTE CROP RECT (TASK 1)
+// ==========================================
+{
+  const assertClose = (a, b, eps = 1e-3, msg = '') => {
+    assert.ok(Math.abs(a - b) < eps, `${msg}: expected ${b}, got ${a}`);
+  };
+
+  // 11.1 Square image at zoom = 1
+  const sq1 = computeCropRect({ imgW: 500, imgH: 500, viewport: 280, zoom: 1 });
+  assertClose(sq1.coverScale, 280 / 500);
+  assertClose(sq1.containScale, 280 / 500);
+  assertClose(sq1.minZoom, 1);
+  assertClose(sq1.effectiveScale, 280 / 500);
+  assertClose(sq1.dispW, 280);
+  assertClose(sq1.dispH, 280);
+  assertClose(sq1.clampedX, 0);
+  assertClose(sq1.clampedY, 0);
+  assertClose(sq1.sx, 0);
+  assertClose(sq1.sy, 0);
+  assertClose(sq1.sw, 500);
+  assertClose(sq1.sh, 500);
+  assertClose(sq1.dx, 0);
+  assertClose(sq1.dy, 0);
+  assertClose(sq1.dw, 280);
+  assertClose(sq1.dh, 280);
+
+  // 11.2 Square image at zoom = 2
+  const sq2 = computeCropRect({ imgW: 500, imgH: 500, viewport: 280, zoom: 2 });
+  assertClose(sq2.effectiveScale, (280 / 500) * 2);
+  assertClose(sq2.dispW, 560);
+  assertClose(sq2.dispH, 560);
+  assertClose(sq2.clampedX, -140);
+  assertClose(sq2.clampedY, -140);
+  assertClose(sq2.sx, 125);
+  assertClose(sq2.sy, 125);
+  assertClose(sq2.sw, 250);
+  assertClose(sq2.sh, 250);
+  assertClose(sq2.dx, 0);
+  assertClose(sq2.dy, 0);
+  assertClose(sq2.dw, 280);
+  assertClose(sq2.dh, 280);
+
+  // 11.3 Max zoom clamp (zoom = 10 -> 4)
+  const sqMax = computeCropRect({ imgW: 500, imgH: 500, viewport: 280, zoom: 10 });
+  assertClose(sqMax.effectiveScale, (280 / 500) * 4);
+  assertClose(sqMax.dispW, 1120);
+
+  // 11.4 Min zoom clamp for square (minZoom = 1)
+  const sqMin = computeCropRect({ imgW: 500, imgH: 500, viewport: 280, zoom: 0.2 });
+  assertClose(sqMin.effectiveScale, 280 / 500);
+  assertClose(sqMin.dispW, 280);
+
+  // 11.5 Landscape image (1000x500 on 280 viewport)
+  // coverScale = 280 / 500 = 0.56
+  // containScale = 280 / 1000 = 0.28
+  // minZoom = 0.28 / 0.56 = 0.5
+  const ls1 = computeCropRect({ imgW: 1000, imgH: 500, viewport: 280, zoom: 1 });
+  assertClose(ls1.minZoom, 0.5);
+  assertClose(ls1.dispW, 560);
+  assertClose(ls1.dispH, 280);
+  assertClose(ls1.clampedX, -140); // centered horizontally
+  assertClose(ls1.clampedY, 0);
+  assertClose(ls1.sx, 250);
+  assertClose(ls1.sy, 0);
+  assertClose(ls1.sw, 500);
+  assertClose(ls1.sh, 500);
+
+  // 11.6 Landscape at minZoom (0.5)
+  const lsMin = computeCropRect({ imgW: 1000, imgH: 500, viewport: 280, zoom: 0.5 });
+  assertClose(lsMin.dispW, 280);
+  assertClose(lsMin.dispH, 140);
+  assertClose(lsMin.clampedX, 0);
+  assertClose(lsMin.clampedY, 70); // centered vertically in viewport
+  assertClose(lsMin.sx, 0);
+  assertClose(lsMin.sy, 0);
+  assertClose(lsMin.sw, 1000);
+  assertClose(lsMin.sh, 500);
+  assertClose(lsMin.dx, 0);
+  assertClose(lsMin.dy, 70);
+  assertClose(lsMin.dw, 280);
+  assertClose(lsMin.dh, 140);
+
+  // 11.7 Portrait image (500x1000 on 280 viewport) with 35% default bias
+  const pt1 = computeCropRect({ imgW: 500, imgH: 1000, viewport: 280, zoom: 1 });
+  assertClose(pt1.minZoom, 0.5);
+  assertClose(pt1.dispW, 280);
+  assertClose(pt1.dispH, 560);
+  assertClose(pt1.clampedX, 0);
+  // (280 - 560) * 0.35 = -280 * 0.35 = -98
+  assertClose(pt1.clampedY, -98);
+  assertClose(pt1.sx, 0);
+  assertClose(pt1.sy, 175); // 98 / 0.56 = 175
+  assertClose(pt1.sw, 500);
+  assertClose(pt1.sh, 500);
+  assertClose(pt1.dx, 0);
+  assertClose(pt1.dy, 0);
+  assertClose(pt1.dw, 280);
+  assertClose(pt1.dh, 280);
+
+  // 11.8 Bounds assertions across arbitrary sizes and offsets
+  const testCases = [
+    { imgW: 1920, imgH: 1080, viewport: 300, zoom: 1.5, offsetX: -100, offsetY: -50 },
+    { imgW: 400, imgH: 800, viewport: 250, zoom: 2.5, offsetX: 50, offsetY: -300 },
+    { imgW: 100, imgH: 100, viewport: 280, zoom: 0.1, offsetX: 0, offsetY: 0 },
+    { imgW: 800, imgH: 600, viewport: 280, zoom: 1, offsetX: -500, offsetY: 200 }
+  ];
+
+  for (const tc of testCases) {
+    const res = computeCropRect(tc);
+    assert.ok(res.sx >= 0, 'sx must be >= 0');
+    assert.ok(res.sy >= 0, 'sy must be >= 0');
+    assert.ok(res.sx + res.sw <= tc.imgW + 1e-4, 'sx + sw must not exceed imgW');
+    assert.ok(res.sy + res.sh <= tc.imgH + 1e-4, 'sy + sh must not exceed imgH');
+    assert.ok(res.dx >= 0, 'dx must be >= 0');
+    assert.ok(res.dy >= 0, 'dy must be >= 0');
+    assert.ok(res.dx + res.dw <= tc.viewport + 1e-4, 'dx + dw must not exceed viewport');
+    assert.ok(res.dy + res.dh <= tc.viewport + 1e-4, 'dy + dh must not exceed viewport');
+    assert.ok(res.sw > 0, 'sw must be > 0');
+    assert.ok(res.sh > 0, 'sh must be > 0');
+    assert.ok(res.dw > 0, 'dw must be > 0');
+    assert.ok(res.dh > 0, 'dh must be > 0');
+  }
+}
+
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
+
