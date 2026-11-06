@@ -40,7 +40,7 @@ export function updateDockHeight() {
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.5';
+export const APP_VERSION = '2.2.6';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -506,6 +506,115 @@ export const IOS_SYSTEM_COLORS = [
 
 export const CATEGORY_COLORS = IOS_SYSTEM_COLORS.map(c => c.hex);
 
+const CUSTOM_COLOR_HISTORY_KEY = 'coc_custom_color_history_v1';
+
+export function getCustomColorHistory() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(CUSTOM_COLOR_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(c => typeof c === 'string' && /^#[0-9A-Fa-f]{6}$/.test(c)).slice(0, 10);
+  } catch (e) {
+    return [];
+  }
+}
+
+export function pushCustomColorHistory(hex) {
+  if (!hex || typeof hex !== 'string') return getCustomColorHistory();
+  const normalized = hex.trim().toUpperCase();
+  if (!/^#[0-9A-F]{6}$/.test(normalized)) return getCustomColorHistory();
+  // Don't duplicate system presets in custom history
+  if (CATEGORY_COLORS.some(c => c.toUpperCase() === normalized)) {
+    return getCustomColorHistory();
+  }
+  const current = getCustomColorHistory().filter(c => c.toUpperCase() !== normalized);
+  current.unshift(normalized);
+  // Keep max 10 items; the 11th item pushes the oldest out
+  const trimmed = current.slice(0, 10);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(CUSTOM_COLOR_HISTORY_KEY, JSON.stringify(trimmed));
+    }
+  } catch (e) { /* ignore storage quota errors */ }
+  return trimmed;
+}
+
+/**
+ * Shared Unified Advanced Color Picker (FIX 6):
+ * Renders 14 Apple HIG preset dots + custom color input trigger + 10-item FIFO custom hex history queue.
+ */
+export function renderAdvancedColorPicker({ selectedColor = '#0A84FF', onChange }) {
+  let current = (selectedColor || '#0A84FF').toUpperCase();
+  const root = document.createElement('div');
+  root.className = 'unified-color-picker';
+
+  function renderSwatches() {
+    const history = getCustomColorHistory();
+    root.innerHTML = `
+      <div class="unified-color-presets-row">
+        ${CATEGORY_COLORS.map(c => {
+          const isSel = c.toUpperCase() === current;
+          return `<button type="button" class="color-swatch unified-color-swatch ${isSel ? 'selected active' : ''}" style="background-color: ${c};" data-color="${c}" title="${c}"></button>`;
+        }).join('')}
+        <label class="unified-custom-color-trigger" title="Pick Custom Color">
+          <input type="color" class="unified-custom-color-input" value="${/^#[0-9A-F]{6}$/i.test(current) ? current : '#0A84FF'}" />
+        </label>
+      </div>
+      <div class="unified-color-history-wrap ${history.length > 0 ? '' : 'hidden'}">
+        <div class="text-[10px] font-semibold text-neutral-400 mb-1 flex items-center justify-between">
+          <span>Custom Colors</span>
+          <span class="font-mono text-neutral-500">${history.length}/10</span>
+        </div>
+        <div class="unified-color-history-row">
+          ${history.map(c => {
+            const isSel = c.toUpperCase() === current;
+            return `<button type="button" class="color-swatch unified-color-swatch ${isSel ? 'selected active' : ''}" style="background-color: ${c};" data-color="${c}" title="Custom ${c}"></button>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+
+    const updateSelectionActiveState = () => {
+      root.querySelectorAll('.unified-color-swatch').forEach(btn => {
+        const isMatch = (btn.dataset.color || '').toUpperCase() === current;
+        btn.classList.toggle('selected', isMatch);
+        btn.classList.toggle('active', isMatch);
+      });
+    };
+
+    root.querySelectorAll('.unified-color-swatch').forEach(btn => {
+      btn.onclick = (e) => {
+        e.preventDefault();
+        current = (btn.dataset.color || '#0A84FF').toUpperCase();
+        const colorInp = root.querySelector('.unified-custom-color-input');
+        if (colorInp && /^#[0-9A-F]{6}$/i.test(current)) colorInp.value = current;
+        updateSelectionActiveState();
+        if (typeof onChange === 'function') onChange(current);
+      };
+    });
+
+    const customInput = root.querySelector('.unified-custom-color-input');
+    if (customInput) {
+      customInput.oninput = (e) => {
+        current = (e.target.value || '#0A84FF').toUpperCase();
+        updateSelectionActiveState();
+        if (typeof onChange === 'function') onChange(current);
+      };
+      customInput.onchange = (e) => {
+        current = (e.target.value || '#0A84FF').toUpperCase();
+        pushCustomColorHistory(current);
+        renderSwatches();
+        if (typeof onChange === 'function') onChange(current);
+      };
+    }
+  }
+
+  renderSwatches();
+  return root;
+}
+
 export const CATEGORY_ICONS = {
   camera: `<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle>`,
   video: `<polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>`,
@@ -604,6 +713,9 @@ function normalizeTask(raw) {
   };
 
   const assignedUids = Array.isArray(raw.assignedUids) ? raw.assignedUids : [];
+  const excludedUids = Array.isArray(raw.excludedUids) ? raw.excludedUids : [];
+  const claimPolicy = (raw.claimPolicy === 'admin_assigned' || raw.claimPolicy === 'milestone') ? 'admin_assigned' : 'open';
+  const enableDefaultTextField = Boolean(raw.enableDefaultTextField);
 
   return {
     id: raw.id || '',
@@ -611,10 +723,14 @@ function normalizeTask(raw) {
     description: raw.description || raw.descEn || raw.descAr || '',
     categoryId,
     category: categoryId,
+    color: raw.color || '',
     points: typeof raw.points === 'number' ? raw.points : 5,
     tieredRewards,
     missedPenalty,
+    claimPolicy,
     assignedUids,
+    excludedUids,
+    enableDefaultTextField,
     schedule: raw.schedule || { type: 'once', startDateTime: raw.startDate || raw.startDateTime || Date.now() },
     isPermanent: Boolean(raw.isPermanent),
     durationMinutes: raw.isPermanent ? null : durationMinutes,
@@ -626,6 +742,23 @@ function normalizeTask(raw) {
     createdAt: raw.createdAt || null,
     updatedAt: raw.updatedAt || null
   };
+}
+
+export function isTaskVisibleToUser(task, uid) {
+  if (!task) return false;
+  if (!uid) {
+    return task.claimPolicy !== 'admin_assigned';
+  }
+  if (Array.isArray(task.excludedUids) && task.excludedUids.includes(uid)) {
+    return false;
+  }
+  if (task.claimPolicy === 'admin_assigned') {
+    if (Array.isArray(task.assignedUids) && task.assignedUids.length > 0) {
+      return task.assignedUids.includes(uid);
+    }
+    return false;
+  }
+  return true;
 }
 
 export const usersMap = new Map();
@@ -824,6 +957,7 @@ export function normalizeBroadcast(raw) {
     startDateTime: isNaN(startMs) ? 0 : startMs,
     endDateTime: isNaN(endMs) ? 0 : endMs,
     icon,
+    color: raw.color || '#0A84FF',
     targetType,
     badgeIds,
     customFooter,
@@ -6145,6 +6279,8 @@ export async function applyAccountAdjustment(opts) {
   let newPoints = undefined;
   let newPenalties = undefined;
   let newFinesDue = undefined;
+  const nowMs = serverNow();
+  const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
 
   await runTransaction(db, async (t) => {
     const userDocRef = doc(db, 'users', targetUid);
@@ -6159,12 +6295,15 @@ export async function applyAccountAdjustment(opts) {
     const userUpdates = { updatedAt: serverTimestamp() };
 
     if (bucket === 'points') {
-      if (direction === 'add') {
-        newPoints = currentPoints + cleanAmount;
-      } else {
-        newPoints = Math.max(0, currentPoints - cleanAmount);
-      }
+      const delta = direction === 'add' ? cleanAmount : -cleanAmount;
+      newPoints = Math.max(0, currentPoints + delta);
+      const curMonthPts = (userData.monthKey === curMonthKey) ? (Number(userData.monthPoints) || 0) : 0;
+      const curWeekPts = (userData.weekKey === curWeekKey) ? (Number(userData.weekPoints) || 0) : 0;
       userUpdates.points = newPoints;
+      userUpdates.monthKey = curMonthKey;
+      userUpdates.monthPoints = Math.max(0, curMonthPts + delta);
+      userUpdates.weekKey = curWeekKey;
+      userUpdates.weekPoints = Math.max(0, curWeekPts + delta);
       t.update(userDocRef, userUpdates);
     } else if (bucket === 'penalties') {
       if (direction === 'add') {
@@ -6190,9 +6329,11 @@ export async function applyAccountAdjustment(opts) {
       t.update(userDocRef, userUpdates);
     }
 
-    // Write transaction ledger entry
+    // Write transaction ledger entry under user's transactions subcollection
     const txDocRef = doc(collection(db, 'users', targetUid, 'transactions'));
     const txData = {
+      uid: targetUid,
+      userId: targetUid,
       bucket,
       direction,
       type: `${bucket}_${direction}`,
@@ -6202,24 +6343,29 @@ export async function applyAccountAdjustment(opts) {
       adminUid: state.user.uid,
       adminName: state.user.displayName || 'Admin',
       status: 'active',
-      createdAt: serverTimestamp()
+      createdAt: serverTimestamp(),
+      timestamp: serverTimestamp(),
+      createdAtMs: nowMs
     };
     t.set(txDocRef, txData);
 
-    // Send notification
-    const notifDocRef = doc(collection(db, 'users', targetUid, 'notifications'));
+    // Send notification to top-level notifications collection
+    const notifDocRef = doc(collection(db, 'notifications'));
     const notifUnit = bucket === 'fines' ? 'EGP' : 'pts';
     const notifAction = direction === 'add' ? 'added to' : 'deducted from';
     const notifType = direction === 'add' ? (bucket === 'penalties' ? 'penalty' : 'bonus') : (bucket === 'penalties' ? 'bonus' : 'warning');
     const notifData = {
       uid: targetUid,
+      userId: targetUid,
       title: 'Account Adjusted',
       message: `Admin ${direction === 'add' ? 'added' : 'deducted'} ${cleanAmount} ${notifUnit} ${notifAction} your ${bucket} balance.`,
       body: `Admin ${direction === 'add' ? 'added' : 'deducted'} ${cleanAmount} ${notifUnit} ${notifAction} your ${bucket} balance.\nAdmin Note: ${cleanReason}`,
       adminNote: cleanReason,
       type: notifType,
       read: false,
-      createdAt: serverTimestamp()
+      timestamp: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      createdAtMs: nowMs
     };
     t.set(notifDocRef, notifData);
   });
@@ -6229,12 +6375,18 @@ export async function applyAccountAdjustment(opts) {
   if (localMem) {
     if (newPoints !== undefined) localMem.points = newPoints;
     if (newPenalties !== undefined) localMem.penalties = newPenalties;
-    if (newFinesDue !== undefined) localMem.finesDue = newFinesDue;
+    if (newFinesDue !== undefined) {
+      localMem.finesDue = newFinesDue;
+      localMem.finesEGP = newFinesDue;
+    }
   }
   if (state.user && state.user.uid === targetUid) {
     if (newPoints !== undefined) state.user.points = newPoints;
     if (newPenalties !== undefined) state.user.penalties = newPenalties;
-    if (newFinesDue !== undefined) state.user.finesDue = newFinesDue;
+    if (newFinesDue !== undefined) {
+      state.user.finesDue = newFinesDue;
+      state.user.finesEGP = newFinesDue;
+    }
     updateHeroStats();
   }
 
@@ -6626,10 +6778,12 @@ export async function submitHubAdjustment() {
 
   try {
     const targetUids = Array.from(selectedUids);
-    const chunkSize = 250;
+    const chunkSize = 150;
     const now = serverNow();
+    const { curMonthKey, curWeekKey } = getTimeBucketKeys(now, APP_TIMEZONE);
     const adminEmail = state.user?.email || 'admin';
     const adminUid = state.user?.uid || 'admin';
+    const adminName = state.user?.displayName || state.user?.name || 'Admin';
 
     for (let i = 0; i < targetUids.length; i += chunkSize) {
       const chunk = targetUids.slice(i, i + chunkSize);
@@ -6640,65 +6794,111 @@ export async function submitHubAdjustment() {
         const userRef = doc(db, 'users', targetUid);
         const privateRef = doc(db, 'users_private', targetUid);
 
-        let delta = direction === 'add' ? numAmount : -numAmount;
+        const delta = direction === 'add' ? numAmount : -numAmount;
 
         if (bucket === 'points') {
-          const currentPts = member.points || 0;
-          const currentTotal = member.totalPoints || currentPts;
+          const currentPts = Number(member.points || 0);
           const newPts = Math.max(0, currentPts + delta);
-          const updateData = buildPointsUpdate({
-            currentPoints: currentPts,
-            currentTotalPoints: currentTotal,
-            delta,
-            nowMs: now
+          const curMonthPts = (member.monthKey === curMonthKey) ? (Number(member.monthPoints) || 0) : 0;
+          const curWeekPts = (member.weekKey === curWeekKey) ? (Number(member.weekPoints) || 0) : 0;
+          const newMonthPts = Math.max(0, curMonthPts + delta);
+          const newWeekPts = Math.max(0, curWeekPts + delta);
+
+          batch.update(userRef, {
+            points: newPts,
+            monthKey: curMonthKey,
+            monthPoints: newMonthPts,
+            weekKey: curWeekKey,
+            weekPoints: newWeekPts,
+            updatedAt: serverTimestamp()
           });
-          batch.update(userRef, updateData);
+
+          member.points = newPts;
+          member.monthKey = curMonthKey;
+          member.monthPoints = newMonthPts;
+          member.weekKey = curWeekKey;
+          member.weekPoints = newWeekPts;
         } else if (bucket === 'penalties') {
-          const curPen = member.penalties || 0;
+          const curPen = Number(member.penalties || 0);
           const newPen = Math.max(0, curPen + delta);
           batch.update(userRef, {
             penalties: newPen,
             updatedAt: serverTimestamp()
           });
+          member.penalties = newPen;
         } else if (bucket === 'fines') {
-          const curFines = member.finesEGP || 0;
+          const curFines = Number(member.finesEGP != null ? member.finesEGP : (member.finesDue || 0));
           const newFines = Math.max(0, curFines + delta);
           batch.set(privateRef, {
             finesEGP: newFines,
             updatedAt: serverTimestamp()
           }, { merge: true });
+          batch.update(userRef, {
+            finesDue: newFines,
+            updatedAt: serverTimestamp()
+          });
+          member.finesEGP = newFines;
+          member.finesDue = newFines;
+          invalidateEgpCache(targetUid);
         }
 
-        // Ledger audit record
-        const ledgerRef = doc(collection(db, 'transactions'));
+        // Ledger audit record under user's transactions subcollection (matches firestore.rules & loadTransactionLedger)
+        const ledgerRef = doc(collection(db, 'users', targetUid, 'transactions'));
         batch.set(ledgerRef, {
+          uid: targetUid,
           userId: targetUid,
+          adminUid,
+          adminName,
           performedBy: adminUid,
           performedByEmail: adminEmail,
           bucket,
           direction,
+          type: `${bucket}_${direction}`,
+          category: bucket === 'fines' ? 'financial' : bucket,
           amount: numAmount,
           reason: finalReason,
+          status: 'active',
+          createdAt: serverTimestamp(),
           timestamp: serverTimestamp(),
           createdAtMs: now
         });
 
-        // Push notification
+        // Push notification in top-level notifications collection
         const notifRef = doc(collection(db, 'notifications'));
         const dirWord = direction === 'add' ? 'added' : 'deducted';
+        const notifUnit = bucket === 'fines' ? 'EGP' : (bucket === 'penalties' ? 'penalties' : 'pts');
+        const notifType = direction === 'add' ? (bucket === 'penalties' ? 'penalty' : 'bonus') : (bucket === 'penalties' ? 'bonus' : 'warning');
         batch.set(notifRef, {
+          uid: targetUid,
           userId: targetUid,
-          type: 'account_adjustment',
+          type: notifType,
           title: 'Account Adjustment',
-          body: `Admin ${dirWord} ${numAmount} ${bucket} for: "${finalReason}"`,
+          message: `Admin ${dirWord} ${numAmount} ${notifUnit} for: "${finalReason}"`,
+          body: `Admin ${dirWord} ${numAmount} ${notifUnit} for: "${finalReason}"\nAdmin Note: ${finalReason}`,
+          adminNote: finalReason,
           read: false,
           timestamp: serverTimestamp(),
+          createdAt: serverTimestamp(),
           createdAtMs: now
         });
       }
 
       await batch.commit();
     }
+
+    if (state.user && selectedUids.has(state.user.uid)) {
+      const myMem = usersMap.get(state.user.uid);
+      if (myMem) {
+        state.user.points = myMem.points;
+        state.user.penalties = myMem.penalties;
+        state.user.finesDue = myMem.finesDue;
+        state.user.finesEGP = myMem.finesEGP;
+      }
+      updateHeroStats();
+    }
+
+    if (typeof renderAdminMembers === 'function') renderAdminMembers();
+    if (typeof renderLeaderboard === 'function') renderLeaderboard();
 
     toast(`Successfully applied adjustment to ${targetUids.length} member${targetUids.length > 1 ? 's' : ''}`, 'success');
 
@@ -8968,7 +9168,7 @@ function populateCategoryFilters() {
   if (!container) return;
 
   // Count active tasks per category for current member view
-  const activeTasks = (state.tasks || []).filter(t => !t.archived && t.active !== false);
+  const activeTasks = (state.tasks || []).filter(t => !t.archived && t.active !== false && isTaskVisibleToUser(t, state.user?.uid));
   const activeCatIds = new Set();
   activeTasks.forEach(t => {
     const cId = t.categoryId || t.category;
@@ -9019,6 +9219,7 @@ function renderTasks() {
   const now = serverNow();
   let filtered = state.tasks.filter(t => {
     if (t.archived || t.active === false) return false;
+    if (!isTaskVisibleToUser(t, state.user?.uid)) return false;
     if (state.selectedCategory !== 'all' && (t.categoryId !== state.selectedCategory && t.category !== state.selectedCategory)) return false;
     if (state.searchQuery) {
       const q = state.searchQuery.toLowerCase();
@@ -9251,12 +9452,12 @@ function openTaskDetailsModal(taskId) {
     bannerHtml = '<div class="p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium text-center">Deadline passed: in grace period. Submissions earn standard points.</div>';
   }
 
-  const commentHtml = `
+  const commentHtml = task.enableDefaultTextField === true ? `
     <div class="space-y-1 pt-3 border-t border-white/10">
       <label class="block text-xs font-medium text-neutral-300">Comment / Proof Notes (Optional)</label>
       <textarea id="task-detail-comment" rows="2" class="w-full glass-input text-xs" placeholder="Add submission notes..." ${isDone || win?.state === 'closed' ? 'disabled' : ''}></textarea>
     </div>
-  `;
+  ` : '';
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-3';
@@ -9303,7 +9504,8 @@ function openTaskDetailsModal(taskId) {
     });
   });
 
-  const canSubmit = state.user && !isDone && (win?.state === 'open' || win?.state === 'grace');
+  const isEligible = isTaskVisibleToUser(task, state.user?.uid);
+  const canSubmit = state.user && isEligible && !isDone && (win?.state === 'open' || win?.state === 'grace');
 
   openModal({
     title: 'Task Details',
@@ -9872,7 +10074,7 @@ function renderAttendanceLogs() {
         </div>
         <div class="text-right">
           <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}">
-            ${isLate ? `Late (-${log.penalty} EGP)` : 'On Time'}
+            ${isLate ? `Late (-${log.penalty} pts)` : 'On Time'}
           </span>
           ${log.delaySeconds > 0 ? `
             <div class="text-[10px] text-neutral-500 mt-0.5">+${Math.floor(log.delaySeconds / 60)}m ${log.delaySeconds % 60}s delay</div>
@@ -9906,7 +10108,7 @@ function renderProfileAttendance() {
         </div>
         <div class="text-right">
           <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">
-            ${isLate ? `Late (-${log.penalty} EGP)` : 'On Time'}
+            ${isLate ? `Late (-${log.penalty} pts)` : 'On Time'}
           </span>
           ${log.delaySeconds > 0 ? `
             <div class="text-[10px] text-neutral-500 mt-0.5">${Math.floor(log.delaySeconds / 60)}m ${log.delaySeconds % 60}s late</div>
@@ -10286,262 +10488,489 @@ function updateNotificationBadges() {
    ========================================================================== */
 
 /* ==========================================================================
-   UNIFIED 100-ICON CATALOG (v2.1.10)
-   5 Categories x 20 Curated SVG Icons
-   Media (20), Tasks (20), Rewards (20), People (20), System (20)
+   PRECISION 100 SVG ICON LIBRARY (v2.2.6) — LAZY-LOADED
+   5 Categories x 20 Distinct Minimalist SVG Icons
+   Media (1–20), Tasks (21–40), Rewards (41–60), People (61–80), System (81–100)
    ========================================================================== */
 export const UNIFIED_ICON_KEYS = [
-  "mic",
-  "camera",
-  "video",
-  "film",
-  "music",
-  "radio",
-  "play",
-  "podcast",
+  // Category 1: Media (1-20)
+  "dslr-camera",
+  "video-camcorder",
+  "cinema-camera",
+  "camera-lens",
+  "tripod",
+  "studio-mic",
+  "lavalier-mic",
+  "audio-mixer",
+  "audio-waveform",
   "projector",
-  "sliders",
-  "volume",
+  "projection-screen",
+  "clapboard",
+  "play-btn",
+  "pause-btn",
+  "record-btn",
+  "live-stream",
+  "film-reel",
+  "desktop-monitor",
+  "audio-cable",
   "headphones",
-  "disc",
-  "aperture",
-  "live",
-  "lens",
-  "monitor",
-  "screen",
-  "broadcast",
-  "airplay",
-  "checkmark",
+  // Category 2: Tasks (21-40)
+  "checklist",
   "clipboard",
-  "list",
   "calendar",
-  "clock",
-  "flag",
-  "target",
-  "bookmark",
-  "pin",
-  "folder",
-  "tag",
-  "archive",
-  "timer",
-  "alarm",
+  "wall-clock",
+  "stopwatch",
   "hourglass",
-  "sparkler",
+  "map-pin",
+  "folder",
+  "price-tag",
+  "archive-box",
   "scissors",
   "paperclip",
-  "tray",
-  "ribbon",
-  "trophy",
-  "star",
-  "medal",
-  "crown",
-  "gem",
-  "flame",
-  "lightning",
-  "heart",
-  "thumbsup",
-  "smile",
-  "rocket",
-  "shield",
-  "award",
-  "bolt",
-  "gift",
-  "sparkle",
-  "sun",
-  "diamond",
-  "compass",
-  "key",
-  "person",
-  "person-2",
-  "person-3",
-  "person-crop-circle",
-  "hand-wave",
-  "hand-raised",
-  "person-badge",
-  "person-text",
-  "person-bubble",
-  "message",
-  "envelope",
-  "phone",
-  "share",
-  "chat",
-  "group",
-  "handshake",
-  "eye",
-  "face-id",
-  "voice",
-  "walking",
-  "gear",
+  "inbox-tray",
+  "outbox-tray",
+  "bar-chart",
+  "line-graph",
+  "bullseye-target",
+  "rocket-ship",
   "wrench",
-  "sliders-horizontal",
   "hammer",
-  "key-fill",
-  "lock",
-  "unlock",
-  "bell",
-  "globe",
-  "wifi",
-  "cloud",
-  "bolt-horizontal",
-  "cpu",
-  "terminal",
-  "cube",
-  "layers",
-  "square-grid",
-  "switch",
-  "circle-stack",
-  "sliders-vertical"
+  // Category 3: Rewards (41-60)
+  "trophy",
+  "solid-star",
+  "military-medal",
+  "royal-crown",
+  "gemstone",
+  "diamond",
+  "security-shield",
+  "ribbon-award",
+  "wrapped-gift",
+  "sparkles",
+  "fire-flame",
+  "lightning-bolt",
+  "heart",
+  "thumbs-up",
+  "sheriff-badge",
+  "coin",
+  "checkmark-circle",
+  "flag",
+  "certificate",
+  "open-hands",
+  // Category 4: People (61-80)
+  "person-portrait",
+  "two-people",
+  "group-three",
+  "id-badge",
+  "hand-waving",
+  "handshake",
+  "raised-hand",
+  "message-bubble",
+  "mail-envelope",
+  "phone-receiver",
+  "double-chat",
+  "team-network",
+  "eye-views",
+  "smiling-face",
+  "speaking-head",
+  "person-running",
+  "person-walking",
+  "person-standing",
+  "person-sitting",
+  "user-admin-gear",
+  // Category 5: System (81-100)
+  "settings-gear",
+  "padlock-closed",
+  "padlock-open",
+  "notification-bell",
+  "globe-web",
+  "wifi-signal",
+  "cloud-sync",
+  "microchip",
+  "terminal-prompt",
+  "stacked-layers",
+  "database-server",
+  "control-sliders",
+  "home-house",
+  "magnifying-glass",
+  "hamburger-menu",
+  "trash-can",
+  "edit-pencil",
+  "share-nodes",
+  "chain-link",
+  "exit-door"
 ];
 
 export const ICON_ALIASES = {
-  "checklist": "list",
-  "inbox": "tray",
-  "upload": "cloud",
-  "check-circle": "checkmark",
-  "sparkles": "sparkle",
-  "zap": "lightning",
-  "coins": "diamond",
-  "alert-triangle": "bell",
-  "slash-circle": "archive",
-  "user": "person",
-  "users": "person-2",
-  "badge": "person-badge",
-  "id": "person-badge",
-  "settings": "gear",
-  "database": "circle-stack",
-  "refresh": "bolt-horizontal",
-  "trash": "archive",
-  "link": "globe",
-  "info": "bell",
-  "tv": "monitor",
-  "antenna": "broadcast",
-  "waveform": "music",
-  "clapperboard": "film",
-  "palette": "sparkle",
-  "pen": "clipboard",
-  "wand": "sparkle",
-  "megaphone": "broadcast"
+  // Legacy Media aliases
+  "mic": "studio-mic",
+  "camera": "dslr-camera",
+  "video": "video-camcorder",
+  "film": "film-reel",
+  "music": "audio-waveform",
+  "waveform": "audio-waveform",
+  "radio": "live-stream",
+  "play": "play-btn",
+  "pause": "pause-btn",
+  "record": "record-btn",
+  "podcast": "lavalier-mic",
+  "sliders": "audio-mixer",
+  "volume": "audio-waveform",
+  "disc": "film-reel",
+  "aperture": "camera-lens",
+  "live": "live-stream",
+  "lens": "camera-lens",
+  "monitor": "desktop-monitor",
+  "tv": "desktop-monitor",
+  "screen": "projection-screen",
+  "broadcast": "live-stream",
+  "antenna": "live-stream",
+  "megaphone": "live-stream",
+  "airplay": "projection-screen",
+  "clapperboard": "clapboard",
+  // Legacy Tasks aliases
+  "checkmark": "checkmark-circle",
+  "check-circle": "checkmark-circle",
+  "list": "checklist",
+  "clock": "wall-clock",
+  "target": "bullseye-target",
+  "bookmark": "price-tag",
+  "pin": "map-pin",
+  "tag": "price-tag",
+  "archive": "archive-box",
+  "slash-circle": "archive-box",
+  "timer": "stopwatch",
+  "alarm": "stopwatch",
+  "sparkler": "sparkles",
+  "tray": "inbox-tray",
+  "inbox": "inbox-tray",
+  "upload": "outbox-tray",
+  "ribbon": "ribbon-award",
+  "rocket": "rocket-ship",
+  // Legacy Rewards aliases
+  "star": "solid-star",
+  "medal": "military-medal",
+  "crown": "royal-crown",
+  "gem": "gemstone",
+  "flame": "fire-flame",
+  "lightning": "lightning-bolt",
+  "bolt": "lightning-bolt",
+  "zap": "lightning-bolt",
+  "thumbsup": "thumbs-up",
+  "smile": "smiling-face",
+  "shield": "security-shield",
+  "award": "ribbon-award",
+  "gift": "wrapped-gift",
+  "sparkle": "sparkles",
+  "palette": "sparkles",
+  "wand": "sparkles",
+  "sun": "sparkles",
+  "coins": "coin",
+  "compass": "bullseye-target",
+  "key": "certificate",
+  // Legacy People aliases
+  "person": "person-portrait",
+  "user": "person-portrait",
+  "person-2": "two-people",
+  "users": "two-people",
+  "person-3": "group-three",
+  "group": "group-three",
+  "person-crop-circle": "person-portrait",
+  "hand-wave": "hand-waving",
+  "wave": "hand-waving",
+  "hand-raised": "raised-hand",
+  "person-badge": "id-badge",
+  "badge": "id-badge",
+  "id": "id-badge",
+  "person-text": "id-badge",
+  "person-bubble": "double-chat",
+  "message": "message-bubble",
+  "chat": "double-chat",
+  "envelope": "mail-envelope",
+  "phone": "phone-receiver",
+  "eye": "eye-views",
+  "face-id": "smiling-face",
+  "voice": "speaking-head",
+  "walking": "person-walking",
+  // Legacy System aliases
+  "gear": "settings-gear",
+  "settings": "settings-gear",
+  "sliders-horizontal": "control-sliders",
+  "sliders-vertical": "control-sliders",
+  "key-fill": "padlock-closed",
+  "lock": "padlock-closed",
+  "unlock": "padlock-open",
+  "bell": "notification-bell",
+  "alert-triangle": "notification-bell",
+  "info": "notification-bell",
+  "globe": "globe-web",
+  "wifi": "wifi-signal",
+  "cloud": "cloud-sync",
+  "bolt-horizontal": "cloud-sync",
+  "refresh": "cloud-sync",
+  "cpu": "microchip",
+  "terminal": "terminal-prompt",
+  "cube": "stacked-layers",
+  "layers": "stacked-layers",
+  "square-grid": "stacked-layers",
+  "switch": "control-sliders",
+  "circle-stack": "database-server",
+  "database": "database-server",
+  "trash": "trash-can",
+  "pen": "edit-pencil",
+  "edit": "edit-pencil",
+  "share": "share-nodes",
+  "link": "chain-link",
+  "home": "home-house",
+  "search": "magnifying-glass",
+  "menu": "hamburger-menu",
+  "logout": "exit-door"
 };
 
-export const UNIFIED_ICONS = new Map([
-  ['mic', { category: 'media', label: 'Microphone', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>' }],
-  ['camera', { category: 'media', label: 'Camera', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>' }],
-  ['video', { category: 'media', label: 'Video Camera', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>' }],
-  ['film', { category: 'media', label: 'Film Roll', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>' }],
-  ['music', { category: 'media', label: 'Music', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>' }],
-  ['radio', { category: 'media', label: 'Radio', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="14" r="4"></circle><path d="M4 10h16v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V10z"></path><line x1="6" y1="6" x2="18" y2="6"></line><line x1="12" y1="2" x2="12" y2="6"></line></svg>' }],
-  ['play', { category: 'media', label: 'Play', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>' }],
-  ['podcast', { category: 'media', label: 'Podcast', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="11" r="1"></circle><path d="M12 1a10 10 0 0 0-7.07 17.07"></path><path d="M12 5a6 6 0 0 0-4.24 10.24"></path><path d="M19.07 18.07A10 10 0 0 0 12 1"></path><path d="M16.24 15.24A6 6 0 0 0 12 5"></path><path d="M12 12v9"></path></svg>' }],
-  ['projector', { category: 'media', label: 'Projector', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="2"></rect><circle cx="9" cy="12.5" r="2.5"></circle><line x1="16" y1="11" x2="18" y2="11"></line><line x1="16" y1="14" x2="18" y2="14"></line><line x1="5" y1="18" x2="4" y2="21"></line><line x1="19" y1="18" x2="20" y2="21"></line></svg>' }],
-  ['sliders', { category: 'media', label: 'Audio Mixer', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>' }],
-  ['volume', { category: 'media', label: 'Volume', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>' }],
-  ['headphones', { category: 'media', label: 'Headphones', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>' }],
-  ['disc', { category: 'media', label: 'Compact Disc', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>' }],
-  ['aperture', { category: 'media', label: 'Aperture', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="14.31" y1="8" x2="20.05" y2="17.94"></line><line x1="9.69" y1="8" x2="21.17" y2="8"></line><line x1="7.38" y1="12" x2="13.12" y2="2.06"></line><line x1="9.69" y1="16" x2="3.95" y2="6.06"></line><line x1="14.31" y1="16" x2="2.83" y2="16"></line><line x1="16.62" y1="12" x2="10.88" y2="21.94"></line></svg>' }],
-  ['live', { category: 'media', label: 'Live', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.48"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.48"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path></svg>' }],
-  ['lens', { category: 'media', label: 'Camera Lens', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="12" r="1"></circle></svg>' }],
-  ['monitor', { category: 'media', label: 'Studio Monitor', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>' }],
-  ['screen', { category: 'media', label: 'Screen Display', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><polyline points="8 21 12 17 16 21"></polyline></svg>' }],
-  ['broadcast', { category: 'media', label: 'Broadcast', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.48"></path><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.48"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>' }],
-  ['airplay', { category: 'media', label: 'AirPlay', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"></path><polygon points="12 15 17 21 7 21 12 15"></polygon></svg>' }],
-  ['checkmark', { category: 'tasks', label: 'Checkmark', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' }],
-  ['clipboard', { category: 'tasks', label: 'Clipboard', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>' }],
-  ['list', { category: 'tasks', label: 'Task List', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>' }],
-  ['calendar', { category: 'tasks', label: 'Calendar', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>' }],
-  ['clock', { category: 'tasks', label: 'Clock', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' }],
-  ['flag', { category: 'tasks', label: 'Milestone Flag', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>' }],
-  ['target', { category: 'tasks', label: 'Target Goal', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>' }],
-  ['bookmark', { category: 'tasks', label: 'Bookmark', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>' }],
-  ['pin', { category: 'tasks', label: 'Pin', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>' }],
-  ['folder', { category: 'tasks', label: 'Folder', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' }],
-  ['tag', { category: 'tasks', label: 'Tag', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>' }],
-  ['archive', { category: 'tasks', label: 'Archive', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>' }],
-  ['timer', { category: 'tasks', label: 'Timer', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="10" y1="2" x2="14" y2="2"></line><line x1="12" y1="14" x2="15" y2="11"></line><circle cx="12" cy="14" r="8"></circle></svg>' }],
-  ['alarm', { category: 'tasks', label: 'Alarm', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2 2"></path><path d="M5 3L2 6"></path><path d="M22 6l-3-3"></path><path d="M6.38 18.7L4 21"></path><path d="M17.64 18.67L20 21"></path></svg>' }],
-  ['hourglass', { category: 'tasks', label: 'Hourglass', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path></svg>' }],
-  ['sparkler', { category: 'tasks', label: 'Sparkler', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="m15 4 5 5"></path><path d="m18 1 5 5"></path><path d="M2 22 17 7"></path><path d="M8 2l.7 2.1L11 5l-2.3.9L8 8l-.7-2.1L5 5l2.3-.9Z"></path></svg>' }],
-  ['scissors', { category: 'tasks', label: 'Scissors', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><line x1="20" y1="4" x2="8.12" y2="15.88"></line><line x1="14.47" y1="14.48" x2="20" y2="20"></line><line x1="8.12" y1="8.12" x2="12" y2="12"></line></svg>' }],
-  ['paperclip', { category: 'tasks', label: 'Paperclip', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>' }],
-  ['tray', { category: 'tasks', label: 'Inbox Tray', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>' }],
-  ['ribbon', { category: 'tasks', label: 'Ribbon', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>' }],
-  ['trophy', { category: 'rewards', label: 'Trophy', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1 .45-1 1v1h12v-1c0-.55-.45-1-1-1h-2c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 4H6v7a6 6 0 0 0 12 0V4z"></path></svg>' }],
-  ['star', { category: 'rewards', label: 'Star', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' }],
-  ['medal', { category: 'rewards', label: 'Medal', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="6"></circle><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"></path></svg>' }],
-  ['crown', { category: 'rewards', label: 'Crown', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14v2H5v-2z"></path></svg>' }],
-  ['gem', { category: 'rewards', label: 'Gem', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 3h12l4 6-10 12L2 9z"></path><path d="M11 3 8 9l4 12 4-12-3-6"></path><path d="M2 9h20"></path></svg>' }],
-  ['flame', { category: 'rewards', label: 'Streak Fire', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>' }],
-  ['lightning', { category: 'rewards', label: 'Lightning', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>' }],
-  ['heart', { category: 'rewards', label: 'Heart', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>' }],
-  ['thumbsup', { category: 'rewards', label: 'Thumbs Up', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>' }],
-  ['smile', { category: 'rewards', label: 'Smile', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>' }],
-  ['rocket', { category: 'rewards', label: 'Rocket', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></svg>' }],
-  ['shield', { category: 'rewards', label: 'Shield', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>' }],
-  ['award', { category: 'rewards', label: 'Award', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>' }],
-  ['bolt', { category: 'rewards', label: 'Energy Bolt', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>' }],
-  ['gift', { category: 'rewards', label: 'Gift', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="20 12 20 22 4 22 4 12"></polyline><rect x="2" y="7" width="20" height="5"></rect><line x1="12" y1="22" x2="12" y2="7"></line><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path></svg>' }],
-  ['sparkle', { category: 'rewards', label: 'Sparkle', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 3v3m0 12v3m9-9h-3M6 12H3m14.5-6.5l-2.1 2.1M8.6 15.4l-2.1 2.1m11-2.1l-2.1-2.1M8.6 8.6L6.5 6.5"></path></svg>' }],
-  ['sun', { category: 'rewards', label: 'Sun', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>' }],
-  ['diamond', { category: 'rewards', label: 'Diamond', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 22 8.5 12 22 2 8.5 12 2"></polygon></svg>' }],
-  ['compass', { category: 'rewards', label: 'Compass', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>' }],
-  ['key', { category: 'rewards', label: 'Key', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l-1.5-1.5L10 7M3 13a7 7 0 1 0 14 0 7 7 0 0 0-14 0z"></path></svg>' }],
-  ['person', { category: 'people', label: 'Member', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>' }],
-  ['person-2', { category: 'people', label: 'Two Members', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>' }],
-  ['person-3', { category: 'people', label: 'Group', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>' }],
-  ['person-crop-circle', { category: 'people', label: 'Profile Circle', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="10" r="3"></circle><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"></path></svg>' }],
-  ['hand-wave', { category: 'people', label: 'Wave', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>' }],
-  ['hand-raised', { category: 'people', label: 'Hand Raised', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0v5"></path><path d="M14 10V4a2 2 0 0 0-4 0v6"></path><path d="M10 10V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>' }],
-  ['person-badge', { category: 'people', label: 'ID Badge', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="12" cy="10" r="2.5"></circle><path d="M8 17a4 4 0 0 1 8 0"></path><line x1="9" y1="2" x2="15" y2="2"></line></svg>' }],
-  ['person-text', { category: 'people', label: 'Member Notes', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><circle cx="12" cy="11" r="2"></circle><path d="M9 16a3 3 0 0 1 6 0"></path></svg>' }],
-  ['person-bubble', { category: 'people', label: 'Testimonial', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>' }],
-  ['message', { category: 'people', label: 'Message', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>' }],
-  ['envelope', { category: 'people', label: 'Mail', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>' }],
-  ['phone', { category: 'people', label: 'Phone', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>' }],
-  ['share', { category: 'people', label: 'Share', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>' }],
-  ['chat', { category: 'people', label: 'Chat Bubble', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>' }],
-  ['group', { category: 'people', label: 'Team Group', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>' }],
-  ['handshake', { category: 'people', label: 'Partnership', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M11 17a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-2z"></path><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>' }],
-  ['eye', { category: 'people', label: 'Audience Eye', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>' }],
-  ['face-id', { category: 'people', label: 'Face ID', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M7 3H5a2 2 0 0 0-2 2v2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M3 17v2a2 2 0 0 0 2 2h2"></path><path d="M9 10h.01"></path><path d="M15 10h.01"></path><path d="M9.5 15a3.5 3.5 0 0 0 5 0"></path></svg>' }],
-  ['voice', { category: 'people', label: 'Voice', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>' }],
-  ['walking', { category: 'people', label: 'Field Crew', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="13" cy="4" r="2"></circle><path d="m14.5 9-3 4-2.5-1.5-3 5"></path><path d="m10 14.5 1.5 5.5 3.5-1"></path><path d="m9 9 2-2 3.5 1 2.5 3"></path></svg>' }],
-  ['gear', { category: 'system', label: 'Settings', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>' }],
-  ['wrench', { category: 'system', label: 'Wrench', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>' }],
-  ['sliders-horizontal', { category: 'system', label: 'Horizontal Sliders', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="21" y1="4" x2="14" y2="4"></line><line x1="10" y1="4" x2="3" y2="4"></line><line x1="21" y1="12" x2="12" y2="12"></line><line x1="8" y1="12" x2="3" y2="12"></line><line x1="21" y1="20" x2="16" y2="20"></line><line x1="12" y1="20" x2="3" y2="20"></line><line x1="14" y1="2" x2="14" y2="6"></line><line x1="8" y1="10" x2="8" y2="14"></line><line x1="16" y1="18" x2="16" y2="22"></line></svg>' }],
-  ['hammer', { category: 'system', label: 'Hammer', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0 0 0 0 0 0 0a2.12 2.12 0 0 1 0-3L12 9"></path><path d="m17.64 4.36 2-2a2 2 0 0 1 2.83 0l1.17 1.17a2 2 0 0 1 0 2.83l-2 2"></path><path d="m14 8 4 4"></path></svg>' }],
-  ['key-fill', { category: 'system', label: 'Master Key', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l-1.5-1.5L10 7M3 13a7 7 0 1 0 14 0 7 7 0 0 0-14 0z"></path></svg>' }],
-  ['lock', { category: 'system', label: 'Lock', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>' }],
-  ['unlock', { category: 'system', label: 'Unlock', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>' }],
-  ['bell', { category: 'system', label: 'Notification', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>' }],
-  ['globe', { category: 'system', label: 'Globe', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>' }],
-  ['wifi', { category: 'system', label: 'WiFi', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>' }],
-  ['cloud', { category: 'system', label: 'Cloud Sync', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>' }],
-  ['bolt-horizontal', { category: 'system', label: 'Fast Sync', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>' }],
-  ['cpu', { category: 'system', label: 'Processor', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>' }],
-  ['terminal', { category: 'system', label: 'Console', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' }],
-  ['cube', { category: 'system', label: 'Cube Component', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>' }],
-  ['layers', { category: 'system', label: 'Layers', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>' }],
-  ['square-grid', { category: 'system', label: 'Grid Dashboard', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>' }],
-  ['switch', { category: 'system', label: 'Toggle Switch', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="1" y="5" width="22" height="14" rx="7" ry="7"></rect><circle cx="8" cy="12" r="3"></circle></svg>' }],
-  ['circle-stack', { category: 'system', label: 'Database', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>' }],
-  ['sliders-vertical', { category: 'system', label: 'Sliders Vertical', svg: '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>' }]
-]);
+const SVG_WRAP_OPEN = '<svg class="{CLASS}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">';
+const SVG_WRAP_CLOSE = '</svg>';
 
-// Register legacy aliases for backward compatibility
-for (const [alias, targetKey] of Object.entries(ICON_ALIASES)) {
-  const target = UNIFIED_ICONS.get(targetKey);
-  if (target) {
-    UNIFIED_ICONS.set(alias, target);
+const RAW_ICON_DEFS = [
+  // ======================== CATEGORY 1: MEDIA (1-20) ========================
+  // 1. DSLR Camera
+  ['dslr-camera', 'media', 'DSLR Camera', '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'],
+  // 2. Video Camcorder
+  ['video-camcorder', 'media', 'Video Camcorder', '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>'],
+  // 3. Cinema Camera (with film reels)
+  ['cinema-camera', 'media', 'Cinema Camera', '<circle cx="7" cy="7" r="3"/><circle cx="15" cy="7" r="3"/><rect x="3" y="10" width="14" height="10" rx="2"/><polygon points="17 13 22 10 22 20 17 17 17 13"/>'],
+  // 4. Camera Lens
+  ['camera-lens', 'media', 'Camera Lens', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/>'],
+  // 5. Tripod
+  ['tripod', 'media', 'Tripod', '<rect x="8" y="3" width="8" height="4" rx="1"/><line x1="12" y1="7" x2="12" y2="21"/><line x1="12" y1="10" x2="5" y2="21"/><line x1="12" y1="10" x2="19" y2="21"/>'],
+  // 6. Studio Microphone
+  ['studio-mic', 'media', 'Studio Microphone', '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>'],
+  // 7. Lavalier Mic
+  ['lavalier-mic', 'media', 'Lavalier Mic', '<ellipse cx="12" cy="6" rx="3" ry="4"/><line x1="12" y1="10" x2="12" y2="16"/><path d="M9 13h6l2 3H7l2-3z"/><path d="M12 16v3a3 3 0 0 0 6 0v-2"/>'],
+  // 8. Audio Mixer (Sliders)
+  ['audio-mixer', 'media', 'Audio Mixer', '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'],
+  // 9. Audio Waveform
+  ['audio-waveform', 'media', 'Audio Waveform', '<line x1="2" y1="10" x2="2" y2="14"/><line x1="6" y1="6" x2="6" y2="18"/><line x1="10" y1="3" x2="10" y2="21"/><line x1="14" y1="8" x2="14" y2="16"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="10" x2="22" y2="14"/>'],
+  // 10. Projector
+  ['projector', 'media', 'Projector', '<rect x="2" y="7" width="20" height="10" rx="2"/><circle cx="9" cy="12" r="2.5"/><line x1="15" y1="11" x2="18" y2="11"/><line x1="15" y1="14" x2="18" y2="14"/><line x1="5" y1="17" x2="4" y2="20"/><line x1="19" y1="17" x2="20" y2="20"/>'],
+  // 11. Projection Screen
+  ['projection-screen', 'media', 'Projection Screen', '<line x1="2" y1="3" x2="22" y2="3"/><rect x="4" y="3" width="16" height="12" rx="1"/><line x1="12" y1="15" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/>'],
+  // 12. Clapboard
+  ['clapboard', 'media', 'Clapboard', '<path d="M4 11h16v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8z"/><path d="M4 11V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5"/><line x1="8" y1="4" x2="10" y2="11"/><line x1="14" y1="4" x2="16" y2="11"/>'],
+  // 13. Play Button
+  ['play-btn', 'media', 'Play Button', '<polygon points="6 4 20 12 6 20 6 4"/>'],
+  // 14. Pause Button
+  ['pause-btn', 'media', 'Pause Button', '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'],
+  // 15. Record Button (circle)
+  ['record-btn', 'media', 'Record Button', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>'],
+  // 16. Live Stream (Radio waves)
+  ['live-stream', 'media', 'Live Stream', '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.48"/><path d="M7.76 16.24a6 6 0 0 1 0-8.48"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>'],
+  // 17. Film Reel
+  ['film-reel', 'media', 'Film Reel', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="7" r="1"/><circle cx="12" cy="17" r="1"/><circle cx="7" cy="12" r="1"/><circle cx="17" cy="12" r="1"/><path d="M12 21h9"/>'],
+  // 18. Desktop Monitor
+  ['desktop-monitor', 'media', 'Desktop Monitor', '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'],
+  // 19. Audio Cable (Jack)
+  ['audio-cable', 'media', 'Audio Cable', '<line x1="12" y1="2" x2="12" y2="6"/><rect x="9" y="6" width="6" height="7" rx="1"/><path d="M10 13v3h4v-3"/><path d="M12 16v3a3 3 0 0 0 6 0v-4"/>'],
+  // 20. Headphones
+  ['headphones', 'media', 'Headphones', '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>'],
+
+  // ======================== CATEGORY 2: TASKS (21-40) ========================
+  // 21. Checklist
+  ['checklist', 'tasks', 'Checklist', '<polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 13 6 15 10 11"/><line x1="13" y1="13" x2="20" y2="13"/><polyline points="4 19 6 21 10 17"/><line x1="13" y1="19" x2="20" y2="19"/>'],
+  // 22. Clipboard
+  ['clipboard', 'tasks', 'Clipboard', '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>'],
+  // 23. Calendar
+  ['calendar', 'tasks', 'Calendar', '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'],
+  // 24. Wall Clock
+  ['wall-clock', 'tasks', 'Wall Clock', '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'],
+  // 25. Stopwatch (Timer)
+  ['stopwatch', 'tasks', 'Stopwatch', '<circle cx="12" cy="13" r="8"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="13" x2="15" y2="15"/><line x1="10" y1="2" x2="14" y2="2"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="18" y1="5" x2="20" y2="7"/>'],
+  // 26. Hourglass
+  ['hourglass', 'tasks', 'Hourglass', '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>'],
+  // 27. Map Pin
+  ['map-pin', 'tasks', 'Map Pin', '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'],
+  // 28. Folder
+  ['folder', 'tasks', 'Folder', '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'],
+  // 29. Price Tag
+  ['price-tag', 'tasks', 'Price Tag', '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>'],
+  // 30. Archive Box
+  ['archive-box', 'tasks', 'Archive Box', '<polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>'],
+  // 31. Scissors
+  ['scissors', 'tasks', 'Scissors', '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>'],
+  // 32. Paperclip
+  ['paperclip', 'tasks', 'Paperclip', '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'],
+  // 33. Inbox Tray
+  ['inbox-tray', 'tasks', 'Inbox Tray', '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'],
+  // 34. Outbox Tray
+  ['outbox-tray', 'tasks', 'Outbox Tray', '<polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="14"/><path d="M20 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5"/>'],
+  // 35. Bar Chart
+  ['bar-chart', 'tasks', 'Bar Chart', '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/>'],
+  // 36. Line Graph
+  ['line-graph', 'tasks', 'Line Graph', '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>'],
+  // 37. Bullseye Target
+  ['bullseye-target', 'tasks', 'Bullseye Target', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'],
+  // 38. Rocket Ship
+  ['rocket-ship', 'tasks', 'Rocket Ship', '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'],
+  // 39. Wrench
+  ['wrench', 'tasks', 'Wrench', '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'],
+  // 40. Hammer
+  ['hammer', 'tasks', 'Hammer', '<path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0a2.12 2.12 0 0 1 0-3L12 9"/><path d="m17.64 4.36 2-2a2 2 0 0 1 2.83 0l1.17 1.17a2 2 0 0 1 0 2.83l-2 2"/><path d="m14 8 4 4"/>'],
+
+  // ======================== CATEGORY 3: REWARDS (41-60) ========================
+  // 41. Trophy
+  ['trophy', 'rewards', 'Trophy', '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1 .45-1 1v1h12v-1c0-.55-.45-1-1-1h-2c-.55 0-1-.45-1-1v-2.34"/><path d="M18 4H6v7a6 6 0 0 0 12 0V4z"/>'],
+  // 42. Solid Star
+  ['solid-star', 'rewards', 'Solid Star', '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'],
+  // 43. Military Medal
+  ['military-medal', 'rewards', 'Military Medal', '<polygon points="7 2 17 2 15 9 9 9 7 2"/><circle cx="12" cy="15" r="5"/><line x1="12" y1="13" x2="12" y2="17"/>'],
+  // 44. Royal Crown
+  ['royal-crown', 'rewards', 'Royal Crown', '<path d="M2 5l3 12h14l3-12-6 6-4-7-4 7-6-6zm3 15h14"/>'],
+  // 45. Gemstone
+  ['gemstone', 'rewards', 'Gemstone', '<path d="M6 3h12l4 6-10 12L2 9z"/><path d="M11 3 8 9l4 12 4-12-3-6"/><path d="M2 9h20"/>'],
+  // 46. Diamond
+  ['diamond', 'rewards', 'Diamond', '<polygon points="12 2 21 12 12 22 3 12 12 2"/>'],
+  // 47. Security Shield
+  ['security-shield', 'rewards', 'Security Shield', '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'],
+  // 48. Ribbon Award
+  ['ribbon-award', 'rewards', 'Ribbon Award', '<circle cx="12" cy="8" r="6"/><polyline points="8.21 13.89 7 22 12 19 17 22 15.79 13.88"/>'],
+  // 49. Wrapped Gift
+  ['wrapped-gift', 'rewards', 'Wrapped Gift', '<polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>'],
+  // 50. Sparkles (Magic)
+  ['sparkles', 'rewards', 'Sparkles', '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 16l.9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16z"/><path d="M5 2l.7 1.6L7.3 4.3 5.7 5 5 6.6 4.3 5 2.7 4.3 4.3 3.6 5 2z"/>'],
+  // 51. Fire (Flame)
+  ['fire-flame', 'rewards', 'Fire Flame', '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>'],
+  // 52. Lightning Bolt
+  ['lightning-bolt', 'rewards', 'Lightning Bolt', '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'],
+  // 53. Heart
+  ['heart', 'rewards', 'Heart', '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>'],
+  // 54. Thumbs Up
+  ['thumbs-up', 'rewards', 'Thumbs Up', '<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>'],
+  // 55. Sheriff (Police Badge)
+  ['sheriff-badge', 'rewards', 'Sheriff Badge', '<polygon points="12 3 14.8 7.5 20 8.5 16.5 12.5 17.5 18 12 15.5 6.5 18 7.5 12.5 4 8.5 9.2 7.5 12 3"/><circle cx="12" cy="11" r="2"/>'],
+  // 56. Coin
+  ['coin', 'rewards', 'Coin', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="6"/><line x1="12" y1="9" x2="12" y2="15"/>'],
+  // 57. Checkmark Circle
+  ['checkmark-circle', 'rewards', 'Checkmark Circle', '<circle cx="12" cy="12" r="10"/><polyline points="8.5 12.5 11 15 16 9.5"/>'],
+  // 58. Flag
+  ['flag', 'rewards', 'Flag', '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'],
+  // 59. Certificate (Diploma)
+  ['certificate', 'rewards', 'Certificate', '<rect x="3" y="4" width="18" height="14" rx="2"/><line x1="7" y1="8" x2="17" y2="8"/><line x1="7" y1="12" x2="12" y2="12"/><circle cx="16" cy="15" r="2.5"/><polyline points="15 17.5 14.5 21 16 20 17.5 21 17 17.5"/>'],
+  // 60. Open Hands (Giving)
+  ['open-hands', 'rewards', 'Open Hands', '<path d="M3 14c1.5 0 3 1 4.5 2.5L10 19h8a2 2 0 0 0 2-2c0-1.1-.9-2-2-2h-5"/><path d="M10 15l2.5-2.5a2 2 0 0 0-2.8-2.8L6 13H2"/><circle cx="15" cy="7" r="3"/>'],
+
+  // ======================== CATEGORY 4: PEOPLE (61-80) ========================
+  // 61. Single Person Portrait
+  ['person-portrait', 'people', 'Single Person Portrait', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'],
+  // 62. Two People
+  ['two-people', 'people', 'Two People', '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'],
+  // 63. Group of Three
+  ['group-three', 'people', 'Group of Three', '<circle cx="12" cy="7" r="3.5"/><path d="M7 21v-2a5 5 0 0 1 10 0v2"/><circle cx="5" cy="9" r="2.5"/><path d="M1.5 21v-1.5a3.5 3.5 0 0 1 3.5-3.5"/><circle cx="19" cy="9" r="2.5"/><path d="M22.5 21v-1.5a3.5 3.5 0 0 0-3.5-3.5"/>'],
+  // 64. ID Badge (with Lanyard)
+  ['id-badge', 'people', 'ID Badge', '<path d="M10 2l2 3 2-3"/><rect x="4" y="5" width="16" height="16" rx="2"/><circle cx="12" cy="11" r="2.5"/><path d="M8 18a4 4 0 0 1 8 0"/>'],
+  // 65. Hand Waving (Human hand with open palm, spread fingers, and motion lines)
+  ['hand-waving', 'people', 'Hand Waving', '<path d="M18 11V6a2 2 0 0 0-4 0v4"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V5.5a2 2 0 0 0-4 0v8.5"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/><path d="M2.5 6.5a5 5 0 0 1 2-3.5"/><path d="M20.5 3a5 5 0 0 1 2 3.5"/>'],
+  // 66. Handshake
+  ['handshake', 'people', 'Handshake', '<path d="M2 11l5-5 4 4 4-4 7 5"/><path d="M7 16l3 3a2 2 0 0 0 2.8 0l5.2-5.2a2 2 0 0 0 0-2.8L15 8l-4 4-2-2-5 5z"/><line x1="9" y1="18" x2="11" y2="16"/><line x1="12" y1="19" x2="14" y2="17"/>'],
+  // 67. Raised Hand (asking question)
+  ['raised-hand', 'people', 'Raised Hand', '<path d="M18 11V5a1.5 1.5 0 0 0-3 0v5"/><path d="M15 10V3.5a1.5 1.5 0 0 0-3 0V10"/><path d="M12 10V4.5a1.5 1.5 0 0 0-3 0V12"/><path d="M9 12H7.5a1.5 1.5 0 0 0 0 3H9"/><path d="M9 12v4a6 6 0 0 0 12 0v-5a1.5 1.5 0 0 0-3 0"/>'],
+  // 68. Message Bubble
+  ['message-bubble', 'people', 'Message Bubble', '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'],
+  // 69. Mail Envelope
+  ['mail-envelope', 'people', 'Mail Envelope', '<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/>'],
+  // 70. Phone Receiver
+  ['phone-receiver', 'people', 'Phone Receiver', '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>'],
+  // 71. Double Chat Bubbles
+  ['double-chat', 'people', 'Double Chat Bubbles', '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>'],
+  // 72. Team Network Graph
+  ['team-network', 'people', 'Team Network Graph', '<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><line x1="10.5" y1="7" x2="6.5" y2="17"/><line x1="13.5" y1="7" x2="17.5" y2="17"/><line x1="7.5" y1="19" x2="16.5" y2="19"/>'],
+  // 73. Eye (Audience/Views)
+  ['eye-views', 'people', 'Eye Views', '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'],
+  // 74. Smiling Face
+  ['smiling-face', 'people', 'Smiling Face', '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>'],
+  // 75. Voice (Speaking head)
+  ['speaking-head', 'people', 'Speaking Head', '<path d="M9 18v3H5v-4a6 6 0 1 1 9-5.2L15.5 14H13v4H9z"/><path d="M18 10a3 3 0 0 1 0 4"/><path d="M20.5 8a6 6 0 0 1 0 8"/>'],
+  // 76. Person Running
+  ['person-running', 'people', 'Person Running', '<circle cx="15" cy="4" r="2"/><path d="M10.5 9.5L7 12l2 3.5"/><path d="M13.5 9.5l3 3 3-1"/><path d="M8 15.5L4 19"/><path d="M10.5 9.5l3 4.5-2 7"/><path d="M13.5 14l4.5 2 1 5"/>'],
+  // 77. Person Walking
+  ['person-walking', 'people', 'Person Walking', '<circle cx="13" cy="4" r="2"/><path d="m14.5 9-3 4-2.5-1.5-3 5"/><path d="m10 14.5 1.5 5.5 3.5-1"/><path d="m9 9 2-2 3.5 1 2.5 3"/>'],
+  // 78. Person Standing
+  ['person-standing', 'people', 'Person Standing', '<circle cx="12" cy="4" r="2"/><line x1="12" y1="6" x2="12" y2="14"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="12" y1="14" x2="9" y2="21"/><line x1="12" y1="14" x2="15" y2="21"/>'],
+  // 79. Person Sitting
+  ['person-sitting', 'people', 'Person Sitting', '<circle cx="11" cy="4" r="2"/><path d="M11 6v6h5l2 6"/><path d="M7 9v6h5"/><line x1="7" y1="15" x2="7" y2="20"/>'],
+  // 80. User Profile with Gear (Admin)
+  ['user-admin-gear', 'people', 'User Admin Gear', '<path d="M14 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7.5" cy="7" r="4"/><circle cx="18" cy="16" r="2.5"/><line x1="18" y1="12" x2="18" y2="13.5"/><line x1="18" y1="18.5" x2="18" y2="20"/><line x1="14" y1="16" x2="15.5" y2="16"/><line x1="20.5" y1="16" x2="22" y2="16"/>'],
+
+  // ======================== CATEGORY 5: SYSTEM (81-100) ========================
+  // 81. Settings Gear
+  ['settings-gear', 'system', 'Settings Gear', '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'],
+  // 82. Closed Padlock
+  ['padlock-closed', 'system', 'Closed Padlock', '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'],
+  // 83. Open Padlock
+  ['padlock-open', 'system', 'Open Padlock', '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'],
+  // 84. Notification Bell
+  ['notification-bell', 'system', 'Notification Bell', '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'],
+  // 85. Globe (Web)
+  ['globe-web', 'system', 'Globe Web', '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'],
+  // 86. WiFi Signal
+  ['wifi-signal', 'system', 'WiFi Signal', '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>'],
+  // 87. Cloud Sync
+  ['cloud-sync', 'system', 'Cloud Sync', '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><polyline points="10 13 12 11 14 13"/><line x1="12" y1="11" x2="12" y2="17"/>'],
+  // 88. Microchip (Processor)
+  ['microchip', 'system', 'Microchip Processor', '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>'],
+  // 89. Terminal (Console Prompt)
+  ['terminal-prompt', 'system', 'Terminal Prompt', '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'],
+  // 90. Stacked Layers
+  ['stacked-layers', 'system', 'Stacked Layers', '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'],
+  // 91. Database Server
+  ['database-server', 'system', 'Database Server', '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>'],
+  // 92. Control Sliders
+  ['control-sliders', 'system', 'Control Sliders', '<line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/>'],
+  // 93. Home House
+  ['home-house', 'system', 'Home House', '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>'],
+  // 94. Magnifying Glass
+  ['magnifying-glass', 'system', 'Magnifying Glass', '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'],
+  // 95. Hamburger Menu
+  ['hamburger-menu', 'system', 'Hamburger Menu', '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>'],
+  // 96. Trash Can
+  ['trash-can', 'system', 'Trash Can', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>'],
+  // 97. Edit Pencil
+  ['edit-pencil', 'system', 'Edit Pencil', '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>'],
+  // 98. Share Nodes
+  ['share-nodes', 'system', 'Share Nodes', '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>'],
+  // 99. Chain Link
+  ['chain-link', 'system', 'Chain Link', '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'],
+  // 100. Exit (Logout Door)
+  ['exit-door', 'system', 'Exit Door', '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>']
+];
+
+export const UNIFIED_ICONS = new Map();
+export const ICON_LIBRARY = {};
+let _iconsHydrated = false;
+
+export function ensureUnifiedIconsLoaded() {
+  if (_iconsHydrated) return UNIFIED_ICONS;
+  _iconsHydrated = true;
+  for (const [key, category, label, inner] of RAW_ICON_DEFS) {
+    const entry = { category, label, svg: SVG_WRAP_OPEN + inner + SVG_WRAP_CLOSE };
+    UNIFIED_ICONS.set(key, entry);
+    ICON_LIBRARY[key] = entry;
   }
+  for (const [alias, targetKey] of Object.entries(ICON_ALIASES)) {
+    const target = UNIFIED_ICONS.get(targetKey);
+    if (target) {
+      UNIFIED_ICONS.set(alias, target);
+      ICON_LIBRARY[alias] = target;
+    }
+  }
+  return UNIFIED_ICONS;
 }
 
 export const ICON_CATALOG = UNIFIED_ICONS;
-export const ICON_LIBRARY = Object.fromEntries(UNIFIED_ICONS);
 
 export function getIconSvg(iconKey, className = 'w-5 h-5') {
+  ensureUnifiedIconsLoaded();
   const resolved = ICON_ALIASES[iconKey] || iconKey;
-  const item = UNIFIED_ICONS.get(resolved) || ICON_LIBRARY[resolved] || UNIFIED_ICONS.get('star') || UNIFIED_ICONS.get('bell');
+  const item = UNIFIED_ICONS.get(resolved) || ICON_LIBRARY[resolved] || UNIFIED_ICONS.get('solid-star') || UNIFIED_ICONS.get('notification-bell');
   if (!item || !item.svg) {
-    return '<svg class="' + className + '" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+    return '<svg class="' + className + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
   }
   return item.svg.replace('{CLASS}', className);
 }
@@ -10584,10 +11013,11 @@ export function closeSubModal() {
 }
 
 export function openUnifiedIconPicker(param1, onSelectParam) {
-  let selectedKey = 'star';
+  ensureUnifiedIconsLoaded();
+  let selectedKey = 'solid-star';
   let onSelect = null;
   if (typeof param1 === 'object' && param1 !== null) {
-    selectedKey = param1.selectedKey || param1.currentIconId || 'star';
+    selectedKey = param1.selectedKey || param1.currentIconId || 'solid-star';
     onSelect = param1.onSelect;
   } else if (typeof param1 === 'string') {
     selectedKey = param1;
@@ -10697,6 +11127,8 @@ export function closeUnifiedIconPicker() {
   const overlay = document.getElementById('unifiedIconPickerOverlay') || document.getElementById('subModalOverlay');
   if (overlay) {
     overlay.classList.add('is-hidden');
+    const gridContainer = overlay.querySelector('#iconPickerGrid') || overlay.querySelector('#sub-modal-body');
+    if (gridContainer) gridContainer.innerHTML = '';
   }
 }
 
@@ -11224,7 +11656,7 @@ function renderHomeDueTasks() {
   if (!container) return;
 
   const now = serverNow();
-  const activeTasks = state.tasks.filter(t => t.active && !t.archived);
+  const activeTasks = state.tasks.filter(t => t.active && !t.archived && isTaskVisibleToUser(t, state.user?.uid));
 
   // Filter tasks that are open/due today
   const dueTasks = activeTasks.filter(task => {
@@ -11323,15 +11755,7 @@ function openCategoryModal(categoryId = null) {
 
       <div>
         <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Color Theme</label>
-        <div class="flex flex-wrap items-center gap-2.5" id="cat-color-swatches">
-          ${CATEGORY_COLORS.map(c => `
-            <button type="button" class="color-swatch cat-color-swatch-btn ${currentColor === c ? 'selected active' : ''}" style="background-color: ${c};" data-color="${c}"></button>
-          `).join('')}
-          <div class="relative w-8 h-8 rounded-full overflow-hidden border border-white/20 flex-shrink-0 flex items-center justify-center cursor-pointer hover:scale-105 transition" title="Custom Color">
-            <input id="cat-modal-custom-color" type="color" value="${currentColor}" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
-            <svg class="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 8 12 12 14 14"></polyline></svg>
-          </div>
-        </div>
+        <div id="cat-color-picker-mount"></div>
       </div>
 
       <div>
@@ -11364,28 +11788,16 @@ function openCategoryModal(categoryId = null) {
       if (previewLabel) previewLabel.textContent = currentName || 'Category Name Preview';
     };
 
-    bodyEl.querySelectorAll('.cat-color-swatch-btn').forEach(btn => {
-      btn.onclick = () => {
-        currentColor = btn.dataset.color;
-        isDirty = true;
-        updatePreviewStyles();
-        bodyEl.querySelectorAll('.cat-color-swatch-btn').forEach(b => {
-          if (b.dataset.color === currentColor) {
-            b.classList.add('selected', 'active');
-          } else {
-            b.classList.remove('selected', 'active');
-          }
-        });
-      };
-    });
-
-    const customColorInput = bodyEl.querySelector('#cat-modal-custom-color');
-    if (customColorInput) {
-      customColorInput.oninput = (e) => {
-        currentColor = e.target.value;
-        isDirty = true;
-        updatePreviewStyles();
-      };
+    const colorMount = bodyEl.querySelector('#cat-color-picker-mount');
+    if (colorMount) {
+      colorMount.appendChild(renderAdvancedColorPicker({
+        selectedColor: currentColor,
+        onChange: (newColor) => {
+          currentColor = newColor;
+          isDirty = true;
+          updatePreviewStyles();
+        }
+      }));
     }
 
     const catIconBtn = bodyEl.querySelector('#btn-cat-icon-picker');
@@ -11616,9 +12028,13 @@ function openAdminTaskModal(taskId = null) {
   let currentTitle = task ? task.title : '';
   let currentDesc = task ? task.description : '';
   let currentCategoryId = task ? (task.categoryId || task.category || (state.categories[0]?.id || '')) : (state.categories[0]?.id || '');
+  let currentColor = task ? (task.color || getCategoryForTask({ categoryId: currentCategoryId })?.color || '#0A84FF') : (getCategoryForTask({ categoryId: currentCategoryId })?.color || '#0A84FF');
   let currentPoints = task ? (task.points !== undefined ? String(task.points) : '') : '';
   let currentLink = task ? (task.link || '') : '';
-  let currentClaimPolicy = task ? (task.claimPolicy || 'once_per_cycle') : 'once_per_cycle';
+  let currentClaimPolicy = task ? ((task.claimPolicy === 'admin_assigned' || task.claimPolicy === 'milestone') ? 'admin_assigned' : 'open') : 'open';
+  let currentExcludedUids = Array.isArray(task?.excludedUids) ? [...task.excludedUids] : [];
+  let currentAssignedUids = Array.isArray(task?.assignedUids) ? [...task.assignedUids] : [];
+  let enableDefaultTextField = task ? Boolean(task.enableDefaultTextField) : false;
   let currentIsPermanent = task ? Boolean(task.isPermanent) : false;
 
   // Normalized tiers & schedule
@@ -11727,14 +12143,20 @@ function openAdminTaskModal(taskId = null) {
           <input id="adm-task-link" type="url" class="w-full glass-input text-xs font-mono" placeholder="https://..." value="${esc(currentLink)}" />
         </div>
 
-        <!-- Points Claim Policy Card (Apple HIG Stacked Radio Group) -->
+        <!-- Unified Advanced Color Picker (FIX 6) -->
+        <div class="ios-card space-y-2" style="margin-bottom:0">
+          <div class="text-xs font-bold text-white uppercase tracking-wider">Task Accent Color</div>
+          <div id="adm-task-color-picker-mount"></div>
+        </div>
+
+        <!-- Points Claim Policy Card (Apple HIG Stacked Radio Group - FIX 3) -->
         <div class="ios-card space-y-2.5" style="margin-bottom:0">
           <div class="text-xs font-bold text-white uppercase tracking-wider">Points Claim Policy</div>
           <div id="mount-task-claim-policy"></div>
         </div>
 
-        <!-- Schedule / Recurrence Card (hidden for one-time milestones) -->
-        <div id="adm-recurrence-card" class="ios-card space-y-3 ${currentClaimPolicy === 'milestone' || currentClaimPolicy === 'admin_assigned' ? 'hidden' : ''}" style="margin-bottom:0">
+        <!-- Schedule / Recurrence Card -->
+        <div id="adm-recurrence-card" class="ios-card space-y-3" style="margin-bottom:0">
           <div class="text-xs font-bold text-white uppercase tracking-wider">Recurrence &amp; Schedule</div>
           <div>
             <label class="block text-xs text-neutral-300 mb-1">Schedule Type</label>
@@ -11826,6 +12248,15 @@ function openAdminTaskModal(taskId = null) {
             </button>
           </div>
 
+          <!-- Optional Default Text Field Toggle (FIX 4: OFF by default) -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-white/[0.04] border border-white/10">
+            <div class="pr-2">
+              <div class="text-xs font-semibold text-white">Enable default text field</div>
+              <div class="text-[11px] text-neutral-400">Show general "Comment / Proof Notes" box on submission</div>
+            </div>
+            <div id="mount-switch-default-text-field"></div>
+          </div>
+
           <div id="adm-questions-list" class="space-y-3 pt-1"></div>
         </div>
       </div>
@@ -11885,11 +12316,33 @@ function openAdminTaskModal(taskId = null) {
     }
     updateCategoryPickerUI();
 
-    // Stacked Radio Group for Points Claim Policy
+    // Mount Unified Advanced Color Picker for Task (FIX 6)
+    const taskColorMount = bodyEl.querySelector('#adm-task-color-picker-mount');
+    if (taskColorMount) {
+      taskColorMount.appendChild(renderAdvancedColorPicker({
+        selectedColor: currentColor,
+        onChange: (newColor) => {
+          currentColor = newColor;
+        }
+      }));
+    }
+
+    // Mount Default Text Field Switch (FIX 4: OFF by default)
+    const mountDefaultTextSw = bodyEl.querySelector('#mount-switch-default-text-field');
+    if (mountDefaultTextSw) {
+      mountDefaultTextSw.appendChild(renderSwitch({
+        id: 'adm-task-default-text-sw',
+        checked: enableDefaultTextField,
+        onChange: (chk) => {
+          enableDefaultTextField = Boolean(chk);
+        }
+      }));
+    }
+
+    // Stacked Radio Group for Points Claim Policy (FIX 3: Only Open to All & Admin-Assigned + Exclude Members)
     function applyClaimPolicyVisibility() {
       const card = bodyEl.querySelector('#adm-recurrence-card');
-      const isMilestoneOrAssigned = currentClaimPolicy === 'milestone' || currentClaimPolicy === 'admin_assigned';
-      if (card) card.classList.toggle('hidden', isMilestoneOrAssigned);
+      if (card) card.classList.remove('hidden');
     }
 
     function updateClaimPolicyUI() {
@@ -11897,18 +12350,18 @@ function openAdminTaskModal(taskId = null) {
       if (!mount) return;
 
       const claimPolicies = [
-        { value: 'self_claim', label: 'Self-Claim', desc: 'Members claim and complete on their own' },
-        { value: 'admin_assigned', label: 'Admin-Assigned', desc: 'Admin assigns specific members' },
-        { value: 'open', label: 'Open to All', desc: 'Any member can submit without claiming' }
+        { value: 'open', label: 'Open to All', desc: 'Any member can submit (with optional exclusions)' },
+        { value: 'admin_assigned', label: 'Admin-Assigned', desc: 'Only specific assigned members can see and submit' }
       ];
 
-      let activeVal = currentClaimPolicy;
-      if (activeVal === 'once_per_cycle') activeVal = 'self_claim';
-      else if (activeVal === 'every_submission') activeVal = 'open';
-      else if (activeVal === 'milestone') activeVal = 'admin_assigned';
+      let activeVal = (currentClaimPolicy === 'admin_assigned' || currentClaimPolicy === 'milestone') ? 'admin_assigned' : 'open';
+      currentClaimPolicy = activeVal;
+
+      const excludedCount = currentExcludedUids.length;
+      const assignedCount = currentAssignedUids.length;
 
       mount.innerHTML = `
-        <div class="space-y-2">
+        <div class="space-y-2.5">
           ${claimPolicies.map(opt => `
             <label class="claim-policy-radio-card flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition select-none ${activeVal === opt.value ? 'bg-[#0A84FF]/10 border-[#0A84FF]' : 'bg-white/5 border-white/10 hover:bg-white/[0.08]'}">
               <input type="radio" name="task-claim-policy-radio" value="${opt.value}" class="mt-0.5 accent-[#0A84FF]" ${activeVal === opt.value ? 'checked' : ''} />
@@ -11918,6 +12371,30 @@ function openAdminTaskModal(taskId = null) {
               </div>
             </label>
           `).join('')}
+
+          ${activeVal === 'open' ? `
+            <div class="pt-1">
+              <button type="button" id="btn-task-exclude-members" class="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-between text-xs transition">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-neutral-200">Exclude Members (Optional)</span>
+                </div>
+                <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${excludedCount > 0 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-white/10 text-neutral-400'}">
+                  ${excludedCount > 0 ? `${excludedCount} excluded` : 'None excluded'} &rarr;
+                </span>
+              </button>
+            </div>
+          ` : `
+            <div class="pt-1">
+              <button type="button" id="btn-task-assign-members" class="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-between text-xs transition">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-neutral-200">Select Assigned Members</span>
+                </div>
+                <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${assignedCount > 0 ? 'bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30' : 'bg-amber-500/20 text-amber-300'}">
+                  ${assignedCount > 0 ? `${assignedCount} assigned` : 'Choose members'} &rarr;
+                </span>
+              </button>
+            </div>
+          `}
         </div>
       `;
 
@@ -11928,6 +12405,38 @@ function openAdminTaskModal(taskId = null) {
           applyClaimPolicyVisibility();
         };
       });
+
+      const excludeBtn = mount.querySelector('#btn-task-exclude-members');
+      if (excludeBtn) {
+        excludeBtn.onclick = (e) => {
+          e.preventDefault();
+          openMemberPicker({
+            multi: true,
+            includeAllOption: false,
+            selectedUids: currentExcludedUids,
+            onConfirm: (selected) => {
+              currentExcludedUids = Array.isArray(selected) ? selected.filter(u => u !== 'all') : [];
+              updateClaimPolicyUI();
+            }
+          });
+        };
+      }
+
+      const assignBtn = mount.querySelector('#btn-task-assign-members');
+      if (assignBtn) {
+        assignBtn.onclick = (e) => {
+          e.preventDefault();
+          openMemberPicker({
+            multi: true,
+            includeAllOption: false,
+            selectedUids: currentAssignedUids,
+            onConfirm: (selected) => {
+              currentAssignedUids = Array.isArray(selected) ? selected.filter(u => u !== 'all') : [];
+              updateClaimPolicyUI();
+            }
+          });
+        };
+      }
     }
     updateClaimPolicyUI();
     applyClaimPolicyVisibility();
@@ -12510,13 +13019,17 @@ function openAdminTaskModal(taskId = null) {
         link: currentLink.trim(),
         categoryId: currentCategoryId || 'general',
         category: currentCategoryId || 'general',
+        color: currentColor || '#0A84FF',
         points: Number(currentPoints) || 5,
         earlyBonus: finalEarlyBonus,
         grace: finalGrace,
         missedPenalty: finalMissedPenalty,
         schedule: finalSchedule,
         isPermanent: currentIsPermanent,
-        claimPolicy: currentClaimPolicy || 'once_per_cycle',
+        claimPolicy: currentClaimPolicy === 'admin_assigned' ? 'admin_assigned' : 'open',
+        excludedUids: currentClaimPolicy === 'open' ? currentExcludedUids : [],
+        assignedUids: currentClaimPolicy === 'admin_assigned' ? currentAssignedUids : [],
+        enableDefaultTextField: Boolean(enableDefaultTextField),
         durationMinutes: currentIsPermanent ? null : finalDurationMinutes,
         questions: validQuestions,
         active: true,
@@ -12612,12 +13125,23 @@ function renderAdminSessions() {
 
     const isSelected = selectionState.active && selectionState.type === 'sessions' && selectionState.selectedIds.has(session.id);
 
-    const perStep = session.penaltyPerStep ?? session.finePenalty?.perStep ?? 1;
-    const stepDur = session.stepDuration ?? session.finePenalty?.stepSize ?? 6;
-    const minPen = session.minPenalty ?? session.finePenalty?.min ?? 1;
-    const maxPen = session.maxPenalty ?? session.finePenalty?.max ?? 5;
-    const penaltyMatrixText = `${perStep} EGP per ${stepDur}m late (${minPen}–${maxPen} EGP)`;
+    const perStep = session.penaltyPerStep ?? session.pointsPenalty?.perStep ?? session.finePenalty?.perStep ?? 1;
+    const stepDur = session.stepDuration ?? session.pointsPenalty?.stepSize ?? session.finePenalty?.stepSize ?? 6;
+    const minPen = session.minPenalty ?? session.pointsPenalty?.min ?? session.finePenalty?.min ?? 1;
+    const maxPen = session.maxPenalty ?? session.pointsPenalty?.max ?? session.finePenalty?.max ?? 5;
+    const penaltyMatrixText = `${perStep} pts per ${stepDur}m late (${minPen}–${maxPen} pts)`;
     const windowBoundariesText = `Opens ${formatMinutesDuration(session.earlyCheckInMinutes)} early • Closes ${formatMinutesDuration(session.lateCutoffMinutes)} after`;
+
+    let statusPillHtml = '';
+    if (calc.status === 'on_time') {
+      statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">On Time</span>`;
+    } else if (calc.status === 'late') {
+      statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-rose-500/20 text-rose-400 border border-rose-500/30">Late Window</span>`;
+    } else if (calc.reason === 'early') {
+      statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-blue-500/15 text-blue-300 border border-blue-500/25">Opens Soon</span>`;
+    } else {
+      statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-white/10 text-neutral-400 border border-white/15">Check-in Closed</span>`;
+    }
 
     return `
       <div class="glass-card bulk-select-card p-4 space-y-3 text-xs border-white/10 cursor-pointer hover:bg-white/[0.03] transition rounded-2xl${isSelected ? ' selected' : ''}" data-session-id="${esc(session.id)}" data-bulk-id="${esc(session.id)}">
@@ -12646,9 +13170,7 @@ function renderAdminSessions() {
 
           <div class="p-2 rounded-lg bg-black/20 text-[11px] flex items-center justify-between text-neutral-300">
             <span>Current Occurrence: <strong class="text-white">${formatDateTime(occStart)}</strong></span>
-            <span class="font-mono text-xs ${calc.status === 'on_time' ? 'text-emerald-400' : (calc.status === 'late' ? 'text-rose-400' : 'text-neutral-400')}">
-              ${calc.status.toUpperCase()}
-            </span>
+            ${statusPillHtml}
           </div>
 
           <div class="flex items-center justify-between pt-2 border-t border-white/5">
@@ -13401,14 +13923,10 @@ function openBadgeModal(badge = null) {
           </button>
         </div>
 
-        <!-- 14 System Color Swatches -->
+        <!-- Unified Advanced Color Picker (FIX 6) -->
         <div>
           <label class="block text-xs font-semibold text-neutral-200 mb-1.5">Badge Color</label>
-          <div class="flex flex-wrap gap-2.5 pt-0.5">
-            ${CATEGORY_COLORS.map(c => `
-              <button type="button" class="color-swatch btn-color-swatch ${selectedColor === c ? 'selected active' : ''}" style="background-color: ${c};" data-color="${c}"></button>
-            `).join('')}
-          </div>
+          <div id="badge-color-picker-mount"></div>
         </div>
 
         <!-- Explicit Cancel Button -->
@@ -13440,24 +13958,20 @@ function openBadgeModal(badge = null) {
       };
     }
 
-    bodyEl.querySelectorAll('.btn-color-swatch').forEach(btn => {
-      btn.onclick = (e) => {
-        e.preventDefault();
-        selectedColor = btn.dataset.color;
-        const previewEl = bodyEl.querySelector('#badge-icon-preview');
-        if (previewEl) {
-          previewEl.style.backgroundColor = `${selectedColor}25`;
-          previewEl.style.color = selectedColor;
-        }
-        bodyEl.querySelectorAll('.btn-color-swatch').forEach(b => {
-          if (b.dataset.color === selectedColor) {
-            b.classList.add('selected', 'active');
-          } else {
-            b.classList.remove('selected', 'active');
+    const badgeColorMount = bodyEl.querySelector('#badge-color-picker-mount');
+    if (badgeColorMount) {
+      badgeColorMount.appendChild(renderAdvancedColorPicker({
+        selectedColor,
+        onChange: (newColor) => {
+          selectedColor = newColor;
+          const previewEl = bodyEl.querySelector('#badge-icon-preview');
+          if (previewEl) {
+            previewEl.style.backgroundColor = `${selectedColor}25`;
+            previewEl.style.color = selectedColor;
           }
-        });
-      };
-    });
+        }
+      }));
+    }
 
     const cancelBtn = bodyEl.querySelector('#badgeCancelBtn');
     if (cancelBtn) {
@@ -14320,7 +14834,7 @@ function renderAdminAttendanceLogs() {
         </div>
         <div class="flex items-center gap-2">
           <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">
-            ${isLate ? `-${l.penalty} EGP` : 'On Time'}
+            ${isLate ? `-${l.penalty} pts` : 'On Time'}
           </span>
           <button class="btn-delete-attendance-log text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-rose-500/10" data-log-id="${esc(l.id)}">
             Remove
@@ -17309,6 +17823,7 @@ function openAdminBroadcastModal(broadcast = null) {
   }
 
   let selectedIcon = broadcast?.icon || "megaphone";
+  let selectedColor = broadcast?.color || "#0A84FF";
   let targetType = broadcast?.targetType === "badge" ? "badge" : "all";
   let selectedBadgeIds = Array.isArray(broadcast?.badgeIds) ? [...broadcast.badgeIds] : [];
   let durationSeconds = typeof broadcast?.durationSeconds === "number" && broadcast.durationSeconds >= 3 && broadcast.durationSeconds <= 30
@@ -17327,7 +17842,7 @@ function openAdminBroadcastModal(broadcast = null) {
         <!-- Broadcast Icon Row -->
         <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/5 border border-white/10">
           <div class="flex items-center gap-3 min-w-0">
-            <div id="broadcastIconPreview" class="w-10 h-10 rounded-xl bg-[#0A84FF]/20 border border-[#0A84FF]/30 flex items-center justify-center text-[#0A84FF] shrink-0">
+            <div id="broadcastIconPreview" class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background-color: ${selectedColor}25; border: 1px solid ${selectedColor}50; color: ${selectedColor};">
               ${getIconSvg(selectedIcon, "w-5 h-5")}
             </div>
             <div class="min-w-0">
@@ -17338,6 +17853,12 @@ function openAdminBroadcastModal(broadcast = null) {
           <button type="button" id="btnChangeBroadcastIcon" class="text-xs font-semibold text-[#0A84FF] hover:opacity-80 transition shrink-0">
             Change ›
           </button>
+        </div>
+
+        <!-- Unified Advanced Color Picker (FIX 6) -->
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1.5">Accent Color</label>
+          <div id="broadcast-color-picker-mount"></div>
         </div>
 
         <!-- Title -->
@@ -17421,7 +17942,23 @@ function openAdminBroadcastModal(broadcast = null) {
   }
 
   function wireForm() {
-    // 1. Icon Change Button
+    // 1. Icon Change Button & Unified Color Picker (FIX 6)
+    const broadcastColorMount = modalBody.querySelector("#broadcast-color-picker-mount");
+    if (broadcastColorMount) {
+      broadcastColorMount.appendChild(renderAdvancedColorPicker({
+        selectedColor,
+        onChange: (newColor) => {
+          selectedColor = newColor;
+          const preview = modalBody.querySelector("#broadcastIconPreview");
+          if (preview) {
+            preview.style.backgroundColor = `${selectedColor}25`;
+            preview.style.borderColor = `${selectedColor}50`;
+            preview.style.color = selectedColor;
+          }
+        }
+      }));
+    }
+
     const changeBtn = modalBody.querySelector("#btnChangeBroadcastIcon");
     if (changeBtn) {
       changeBtn.onclick = () => {
@@ -17586,6 +18123,7 @@ function openAdminBroadcastModal(broadcast = null) {
           title,
           description: desc || "",
           icon: selectedIcon,
+          color: selectedColor || "#0A84FF",
           targetType,
           badgeIds: targetType === "badge" ? selectedBadgeIds : [],
           durationSeconds: durVal,
@@ -18024,6 +18562,10 @@ function attachEventHandlers() {
 
       if (!task || !state.user) {
         toast('Please sign in to submit tasks', 'error');
+        return;
+      }
+      if (!isTaskVisibleToUser(task, state.user.uid)) {
+        toast('You are not eligible to submit this task', 'error');
         return;
       }
 

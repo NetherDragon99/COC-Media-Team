@@ -26,8 +26,16 @@ rules_version = '2';
 //
 // Subcollection: users/{uid}/transactions/{txId}
 //   - Read: owner or admin
+//   - Create: admin or owner (with validSelfTransactionCreate)
+//   - Update / Delete: admin only
+//
+// Subcollection: users/{uid}/notifications/{notifId}
+//   - Read, update, delete: owner or admin
 //   - Create: admin only
-//   - Update / Delete: false (append-only immutable financial balance log)
+//
+// Collection: transactions/{txId}
+//   - Read: admin or transaction owner (resource.data.uid == request.auth.uid || resource.data.userId == request.auth.uid)
+//   - Create, update, delete: admin only
 //
 // Collection: users_private/{uid}
 //   - email: string (owner or admin managed)
@@ -211,6 +219,10 @@ service cloud.firestore {
       );
     }
 
+    function validSelfTransactionCreate(data) {
+      return data.get('uid', request.auth.uid) == request.auth.uid;
+    }
+
     // Validates that pointsAwarded matches one of the allowed point values configured on the task:
     //   - Base / on-time points: task.get('points', 5)
     //   - Early bonus: task.earlyBonus.points (if task.get('earlyBonus', {}).get('enabled', false) == true)
@@ -294,6 +306,15 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------------
+    // Top-Level Transactions Collection
+    // ---------------------------------------------------------------
+
+    match /transactions/{txId} {
+      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('userId', '') == request.auth.uid));
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
     // Default Deny Root
     // ---------------------------------------------------------------
     match /{document=**} {
@@ -313,20 +334,19 @@ service cloud.firestore {
       // Explicitly restricts badges and badgeIds writes to ADMIN-ONLY (defaults to [] if missing or on creation).
       // Blocks profile creation if the user UID exists in blocked_uids for non-admin creations.
       // When avatarUrl is present in request.resource.data (admin and owner), requires string and size <= 32000.
-      allow create: if isValidAvatarUrl() && (
-                       isAdmin() || (
-                         isOwner(uid) &&
-                         !exists(/databases/$(database)/documents/blocked_uids/$(request.auth.uid)) &&
-                         request.resource.data.get('role', 'member') == 'member' &&
-                         request.resource.data.get('points', 0) == 0 &&
-                         request.resource.data.get('penalties', 0) == 0 &&
-                         request.resource.data.get('totalPenalties', 0) == 0 &&
-                         request.resource.data.get('badges', []) == [] &&
-                         request.resource.data.get('badgeIds', []) == []
-                       )
+      allow create: if isAdmin() || (
+                       isValidAvatarUrl() &&
+                       isOwner(uid) &&
+                       !exists(/databases/$(database)/documents/blocked_uids/$(request.auth.uid)) &&
+                       request.resource.data.get('role', 'member') == 'member' &&
+                       request.resource.data.get('points', 0) == 0 &&
+                       request.resource.data.get('penalties', 0) == 0 &&
+                       request.resource.data.get('totalPenalties', 0) == 0 &&
+                       request.resource.data.get('badges', []) == [] &&
+                       request.resource.data.get('badgeIds', []) == []
                      );
 
-      // Update: Admin can update any field (including points, weekKey, weekPoints, monthKey, monthPoints, penalties, badges, badgeIds, or roles; tolerating legacy weekBucket, monthBucket).
+      // Update: Admin can update any field (including points, totalPoints, weekKey, weekPoints, monthKey, monthPoints, penalties, finesDue, badges, badgeIds, roles, updatedAt; tolerating legacy weekBucket, monthBucket).
       // Owner can update (only if active: isActive()):
       //   1. Profile fields: name, displayName, avatarUrl, photoURL, updatedAt
       //   2. Atomic point increment via atomic batch with submission:
@@ -347,31 +367,30 @@ service cloud.firestore {
       // Owner can NEVER change role, badges, or badgeIds (strictly admin-only).
       // Non-admin owner must be active (isActive() == true; disabled users cannot write/update).
       // When avatarUrl is updated (admin and owner), requires string and size <= 32000. If omitted or not updated, allowed as before.
-      allow update: if (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || isValidAvatarUrl()) && (
-                       isAdmin() || (
-                         isActive() &&
-                         isOwner(uid) &&
-                         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'badges', 'badgeIds']) &&
+      allow update: if isAdmin() || (
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || isValidAvatarUrl()) &&
+                       isActive() &&
+                       isOwner(uid) &&
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'badges', 'badgeIds']) &&
+                       (
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'avatarUrl', 'photoURL', 'updatedAt']) ||
                          (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'avatarUrl', 'photoURL', 'updatedAt']) ||
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId', 'weekKey', 'weekPoints', 'monthKey', 'monthPoints', 'updatedAt', 'monthBucket', 'weekBucket']) &&
+                           request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
+                           !exists(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
+                           existsAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
+                           getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
+                           isValidSubmissionPointUpdate(getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.pointsAwarded)
+                         ) ||
+                         (
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penalties', 'totalPenalties', 'lastOpId', 'updatedAt']) &&
+                           request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
+                           !exists(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
+                           existsAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
+                           getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
                            (
-                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId', 'weekKey', 'weekPoints', 'monthKey', 'monthPoints', 'updatedAt', 'monthBucket', 'weekBucket']) &&
-                             request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
-                             !exists(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
-                             existsAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)) &&
-                             getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
-                             isValidSubmissionPointUpdate(getAfter(/databases/$(database)/documents/submissions/$(request.resource.data.lastOpId)).data.pointsAwarded)
-                           ) ||
-                           (
-                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penalties', 'totalPenalties', 'lastOpId', 'updatedAt']) &&
-                             request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&
-                             !exists(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
-                             existsAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)) &&
-                             getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.uid == request.auth.uid &&
-                             (
-                               (request.resource.data.diff(resource.data).affectedKeys().hasAny(['penalties']) && request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty) ||
-                               (request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalPenalties']) && request.resource.data.totalPenalties - resource.data.get('totalPenalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty)
-                             )
+                             (request.resource.data.diff(resource.data).affectedKeys().hasAny(['penalties']) && request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty) ||
+                             (request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalPenalties']) && request.resource.data.totalPenalties - resource.data.get('totalPenalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty)
                            )
                          )
                        )
@@ -383,8 +402,14 @@ service cloud.firestore {
       // Subcollection: transactions (financial balance history)
       match /transactions/{txId} {
         allow read: if isOwner(uid) || isAdmin();
+        allow create: if isAdmin() || (isOwner(uid) && validSelfTransactionCreate(request.resource.data));
+        allow update, delete: if isAdmin();
+      }
+
+      // Subcollection: notifications
+      match /notifications/{notifId} {
+        allow read, update, delete: if isOwner(uid) || isAdmin();
         allow create: if isAdmin();
-        allow update, delete: if false; // strictly immutable and append-only
       }
     }
 
@@ -394,7 +419,7 @@ service cloud.firestore {
 
       // Owner can write non-financial fields (email, fcmTokens, createdAt, updatedAt, and optional lastSeenAt; never finesEGP).
       // Owner must be active (isActive()).
-      // Admin can write/increment finesEGP and manage private docs.
+      // Admin has full permissions to create (e.g. set with merge when initializing finesEGP), update, or delete.
       allow create: if isAdmin() || (
                        isActive() &&
                        isOwner(uid) &&

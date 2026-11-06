@@ -3139,3 +3139,118 @@ input[type="search"],
   border-radius: 16px !important;
   overflow: hidden !important;
 }
+
+/* ==========================================================================
+   RELEASE v2.2.6: PRIMARY ACTION BUTTON & UNIFIED ADVANCED COLOR PICKER
+   ========================================================================== */
+.ios-btn-primary,
+#btnHubSubmitAdjustment {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100%;
+  min-height: 48px;
+  padding: 13px 18px !important;
+  border-radius: 14px !important;
+  background: linear-gradient(180deg, #1E8FFF 0%, #0A84FF 100%) !important;
+  color: #FFFFFF !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
+  text-align: center !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 6px 20px rgba(10, 132, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25) !important;
+  transition: transform 0.15s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.ios-btn-primary:hover:not(:disabled),
+#btnHubSubmitAdjustment:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: 0 8px 24px rgba(10, 132, 255, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+}
+
+.ios-btn-primary:active:not(:disabled),
+#btnHubSubmitAdjustment:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ios-btn-primary:disabled,
+#btnHubSubmitAdjustment:disabled {
+  opacity: 0.42 !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+}
+
+/* Unified Advanced Color Picker (Preset Dots + Custom Color Trigger + 10-Item History Queue) */
+.unified-color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.unified-color-presets-row,
+.unified-color-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.unified-color-swatch {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  border-radius: 50% !important;
+  border: 2px solid rgba(255, 255, 255, 0.18) !important;
+  cursor: pointer;
+  padding: 0 !important;
+  position: relative;
+  transition: transform 0.15s cubic-bezier(0.32, 0.72, 0, 1), border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+.unified-color-swatch:hover {
+  transform: scale(1.1);
+}
+
+.unified-color-swatch.selected,
+.unified-color-swatch.active {
+  border-color: #FFFFFF !important;
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.85), 0 2px 8px rgba(0, 0, 0, 0.5) !important;
+  transform: scale(1.12);
+}
+
+.unified-custom-color-trigger {
+  position: relative;
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  border-radius: 50% !important;
+  overflow: hidden;
+  border: 2px dashed rgba(255, 255, 255, 0.45) !important;
+  background: conic-gradient(from 0deg, #FF453A, #FF9F0A, #FFD60A, #30D158, #64D2FF, #0A84FF, #BF5AF2, #FF375F, #FF453A);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.unified-custom-color-trigger:hover {
+  transform: scale(1.1);
+  border-color: #FFFFFF !important;
+}
+
+.unified-custom-color-trigger input[type="color"] {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  opacity: 0;
+  cursor: pointer;
+  min-height: 0 !important;
+  min-width: 0 !important;
+}
+
