@@ -1871,8 +1871,9 @@ textarea:focus-visible {
   display: none;
 }
 
-/* Cropper stacking above admin overlay */
-.cropper-modal-sheet, #shared-modal-root.has-cropper { z-index: 2500 !important; }
+/* Cropper and shared modal stacking above all static modal backdrops & admin overlay */
+#shared-modal-root { z-index: 2600 !important; }
+.cropper-modal-sheet, #shared-modal-root.has-cropper { z-index: 2700 !important; }
 
 /* Stepper Control and iOS Stepper Touch Target Fix (Task 2 / Section 2) */
 .stepper-control, .ios-stepper {
@@ -2693,7 +2694,16 @@ input[type="search"],
 }
 
 /* Section 3: Floating Bulk Bar 2-Tier Layout & Segmented Control */
-.floating-bulk-bar {
+.floating-bulk-bar.hidden,
+#bulk-selection-bar.hidden,
+body:not(.selection-mode-active) #bulk-selection-bar {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.floating-bulk-bar:not(.hidden) {
   position: fixed;
   bottom: calc(var(--dock-height, 64px) + env(safe-area-inset-bottom, 12px) + 10px) !important;
   left: 50%;

@@ -40,7 +40,7 @@ export function updateDockHeight() {
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.4';
+export const APP_VERSION = '2.2.5';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -795,16 +795,6 @@ function normalizeNotification(raw) {
   };
 }
 
-// Preset badges for Quick Add in Admin Member Control
-export const PRESET_BADGES = [
-  { id: 'top_contributor', label: 'Top Contributor', icon: 'star', color: '#FFD60A' },
-  { id: 'task_master', label: 'Task Master', icon: 'zap', color: '#0A84FF' },
-  { id: 'streak_warrior', label: 'Streak Warrior', icon: 'flame', color: '#FF9F0A' },
-  { id: 'rising_star', label: 'Rising Star', icon: 'sparkle', color: '#30D158' },
-  { id: 'quality_champion', label: 'Quality Champion', icon: 'shield', color: '#BF5AF2' },
-  { id: 'event_hero', label: 'Event Hero', icon: 'heart', color: '#FF375F' }
-];
-
 export function getAllAvailableBadges() {
   if (badgesMap.size > 0) {
     return Array.from(badgesMap.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -1233,11 +1223,17 @@ function normalizeScheduleObject(input) {
   if (!input) return { type: 'once', startDateTime: 0 };
   if (typeof input === 'string') return { type: input, startDateTime: 0 };
   const type = input.type || 'once';
+  const days = Array.isArray(input.days) && input.days.length > 0
+    ? input.days
+    : (Array.isArray(input.weekdays) && type === 'weekly' ? input.weekdays : []);
+  const monthDates = Array.isArray(input.monthDates) && input.monthDates.length > 0
+    ? input.monthDates.map(Number)
+    : (Array.isArray(input.dates) ? input.dates.map(Number) : []);
   return {
     type,
     startDateTime: input.startDateTime || input.startTime || 0,
-    days: Array.isArray(input.days) ? input.days : [],
-    monthDates: Array.isArray(input.monthDates) ? input.monthDates.map(Number) : [],
+    days,
+    monthDates,
     weeks: Array.isArray(input.weeks) ? input.weeks : [],
     weekdays: Array.isArray(input.weekdays) ? input.weekdays : []
   };
@@ -1602,7 +1598,10 @@ function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'fun
   const sched = normalizeScheduleObject(session?.schedule || session);
   const startMs = parseDateTimeToMs(sched.startDateTime);
   const nowMs = parseDateTimeToMs(nowInput);
-  const lateCutoffMinutes = typeof session?.lateCutoffMinutes === 'number' ? session.lateCutoffMinutes : 120;
+  const earlyCheckInMinutes = typeof session?.earlyCheckInMinutes === 'number'
+    ? session.earlyCheckInMinutes
+    : (typeof session?.earlyWindowMinutes === 'number' ? session.earlyWindowMinutes : 30);
+  const earlyMs = earlyCheckInMinutes * 60000;
 
   if (sched.type === 'once') {
     return {
@@ -1611,8 +1610,8 @@ function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'fun
     };
   }
 
-  const fromMs = Math.max(startMs, nowMs - 35 * 86400000);
-  const toMs = nowMs + 35 * 86400000;
+  const fromMs = Math.max(startMs, nowMs - 60 * 86400000);
+  const toMs = nowMs + 60 * 86400000;
   const occs = getOccurrences(sched, fromMs, toMs);
 
   if (occs.length === 0) {
@@ -1622,44 +1621,21 @@ function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'fun
     };
   }
 
-  const past = occs.filter(o => o <= nowMs);
-  const upcoming = occs.filter(o => o > nowMs);
-
-  const lastPast = past.length > 0 ? past[past.length - 1] : null;
-  const nextUpcoming = upcoming.length > 0 ? upcoming[0] : null;
-
-  if (lastPast && nowMs <= lastPast + lateCutoffMinutes * 60000) {
+  // Keep the most recent occurrence whose check-in window has opened;
+  // only advance to the next scheduled occurrence once its check-in window (o - earlyMs) opens.
+  const pastOrOpen = occs.filter(o => (o - earlyMs) <= nowMs);
+  if (pastOrOpen.length > 0) {
+    const activeOcc = pastOrOpen[pastOrOpen.length - 1];
     return {
-      start: lastPast,
-      key: formatZonedDateKey(lastPast, APP_TIMEZONE)
+      start: activeOcc,
+      key: formatZonedDateKey(activeOcc, APP_TIMEZONE)
     };
   }
 
-  if (lastPast && nextUpcoming) {
-    const timeSinceClosed = nowMs - (lastPast + lateCutoffMinutes * 60000);
-    const timeUntilNext = nextUpcoming - nowMs;
-    if (timeSinceClosed < timeUntilNext && timeSinceClosed < 12 * 3600000) {
-      return {
-        start: lastPast,
-        key: formatZonedDateKey(lastPast, APP_TIMEZONE)
-      };
-    }
-    return {
-      start: nextUpcoming,
-      key: formatZonedDateKey(nextUpcoming, APP_TIMEZONE)
-    };
-  }
-
-  if (nextUpcoming) {
-    return {
-      start: nextUpcoming,
-      key: formatZonedDateKey(nextUpcoming, APP_TIMEZONE)
-    };
-  }
-
+  const firstUpcoming = occs[0];
   return {
-    start: lastPast || startMs,
-    key: formatZonedDateKey(lastPast || startMs, APP_TIMEZONE)
+    start: firstUpcoming,
+    key: formatZonedDateKey(firstUpcoming, APP_TIMEZONE)
   };
 }
 
@@ -3020,7 +2996,7 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
  * Pick image file, crop in interactive 280px sheet, compress to Base64 data URI.
  * Returns Promise<dataURI | null>
  */
-export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = false, maxChars = 32000 } = {}) {
+export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = false, maxChars = 32000, onDone, onCropped } = {}) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -3092,8 +3068,8 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
         let panX = undefined;
         let panY = undefined;
 
-        // Initial geometry computation
-        let geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize, isLogo });
+        // Initial geometry computation for the 280x280 preview canvas (outSize = viewport)
+        let geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize: viewport, isLogo });
         panX = geom.clampedX;
         panY = geom.clampedY;
 
@@ -3125,7 +3101,7 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
           const canvas = bodyEl.querySelector('#cropper-canvas');
           if (!canvas) return;
           const ctx = canvas.getContext('2d');
-          geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize, isLogo });
+          geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize: viewport, isLogo });
           panX = geom.clampedX;
           panY = geom.clampedY;
 
@@ -3175,10 +3151,14 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
               dataUri = outCanvas.toDataURL('image/jpeg', 0.6);
             }
 
+            if (typeof onDone === 'function') onDone(dataUri);
+            if (typeof onCropped === 'function') onCropped(dataUri);
             resolve(dataUri);
             return true;
           }
         });
+
+        redraw();
 
         setTimeout(() => {
           redraw();
@@ -3400,7 +3380,7 @@ export const showCustomConfirm = (title, message) => confirmSheet({ title, messa
  */
 export const modalStack = [];
 
-function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel, sheetClass = '' }) {
+function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel, cancelLabel, sheetClass = '', clearStack = false }) {
   const root = document.getElementById('shared-modal-root');
   const titleEl = document.getElementById('shared-modal-title');
   const bodyEl = document.getElementById('shared-modal-body');
@@ -3412,36 +3392,43 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
     return { close: () => {}, modalEl: null };
   }
 
-  // Reset interactive detent state
-  if (modalSheet) {
-    modalSheet.classList.remove('sheet-detent-large');
-    modalSheet.style.height = '';
-    modalSheet.style.maxHeight = '';
-    modalSheet.style.transform = '';
+  if (clearStack) {
+    modalStack.length = 0;
   }
 
   // Nested modal support: preserve parent modal state & DOM nodes cleanly
-  if (root.classList.contains('open')) {
+  if (root.classList.contains('open') && !clearStack) {
     const savedNodes = Array.from(bodyEl.childNodes);
     modalStack.push({
       title: titleEl.textContent,
       nodes: savedNodes,
       onSave: saveBtn.onclick,
+      onCancel: cancelBtn.onclick,
+      onRootClick: root.onclick,
       saveVisible: !saveBtn.classList.contains('hidden'),
       saveDisabled: saveBtn.disabled,
       saveText: saveBtn.textContent,
       cancelText: cancelBtn.textContent,
-      sheetClass: modalSheet ? modalSheet.className : '',
-      scrollTop: bodyEl.scrollTop,
-      onClose
+      sheetClass: modalSheet ? modalSheet.className : 'modal-sheet',
+      rootHasCropper: root.classList.contains('has-cropper'),
+      scrollTop: bodyEl.scrollTop
     });
   }
 
-  if (sheetClass && modalSheet) {
-    sheetClass.split(' ').filter(Boolean).forEach(c => modalSheet.classList.add(c));
+  // Reset interactive detent state & classes for the new sheet
+  if (modalSheet) {
+    modalSheet.className = 'modal-sheet';
+    modalSheet.style.height = '';
+    modalSheet.style.maxHeight = '';
+    modalSheet.style.transform = '';
+    if (sheetClass) {
+      sheetClass.split(' ').filter(Boolean).forEach(c => modalSheet.classList.add(c));
+    }
   }
+  root.classList.toggle('has-cropper', Boolean(sheetClass && sheetClass.includes('cropper')));
 
   titleEl.textContent = title || '';
+  cancelBtn.textContent = cancelLabel || 'Cancel';
   const modalBodyContent = body !== undefined ? body : bodyHtml;
   if (typeof modalBodyContent === 'string') {
     bodyEl.innerHTML = modalBodyContent;
@@ -3462,6 +3449,14 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   root.classList.add('open');
 
   let isClosing = false;
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      if (typeof cancelBtn.onclick === 'function') {
+        cancelBtn.onclick(e);
+      }
+    }
+  };
+
   const tryClose = async () => {
     if (isClosing) return;
     if (typeof isDirty === 'function' && isDirty()) {
@@ -3479,17 +3474,22 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   const close = () => {
     if (isClosing) return;
     isClosing = true;
+    window.removeEventListener('keydown', onKeyDown);
     if (typeof onClose === 'function') onClose();
 
-    // If a parent modal is stacked, pop and restore its exact nodes and input states
+    // If a parent modal is stacked, pop and restore its exact nodes, handlers, and input states
     if (modalStack.length > 0) {
       const prev = modalStack.pop();
       titleEl.textContent = prev.title || '';
       bodyEl.innerHTML = '';
       prev.nodes.forEach(n => bodyEl.appendChild(n));
-      if (modalSheet && prev.sheetClass) {
-        modalSheet.className = prev.sheetClass;
+      if (modalSheet) {
+        modalSheet.className = prev.sheetClass || 'modal-sheet';
+        modalSheet.style.height = '';
+        modalSheet.style.maxHeight = '';
+        modalSheet.style.transform = '';
       }
+      root.classList.toggle('has-cropper', Boolean(prev.rootHasCropper));
       if (prev.saveVisible) {
         saveBtn.classList.remove('hidden');
         saveBtn.disabled = prev.saveDisabled;
@@ -3499,24 +3499,24 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
         saveBtn.classList.add('hidden');
         saveBtn.onclick = null;
       }
-      cancelBtn.textContent = prev.cancelText;
+      cancelBtn.textContent = prev.cancelText || 'Cancel';
+      cancelBtn.onclick = prev.onCancel;
+      root.onclick = prev.onRootClick;
       bodyEl.scrollTop = prev.scrollTop;
       return;
     }
 
-    root.classList.remove('open');
-    if (sheetClass && modalSheet) {
-      sheetClass.split(' ').filter(Boolean).forEach(c => modalSheet.classList.remove(c));
+    root.classList.remove('open', 'has-cropper');
+    if (modalSheet) {
+      modalSheet.className = 'modal-sheet';
+      modalSheet.style.height = '';
+      modalSheet.style.maxHeight = '';
+      modalSheet.style.transform = '';
     }
     document.body.style.overflow = '';
-    window.removeEventListener('keydown', onKeyDown);
     root.onclick = null;
     cancelBtn.onclick = null;
     saveBtn.onclick = null;
-  };
-
-  const onKeyDown = (e) => {
-    if (e.key === 'Escape') tryClose();
   };
 
   cancelBtn.onclick = tryClose;
@@ -4756,6 +4756,7 @@ export function enterSelectionMode(type, initialSelectedId = null) {
   const bar = document.getElementById('bulk-selection-bar');
   if (bar) {
     bar.classList.remove('hidden');
+    bar.style.display = 'flex';
   }
 
   updateSelectionUI();
@@ -4795,6 +4796,7 @@ export function exitSelectionMode() {
   const bar = document.getElementById('bulk-selection-bar');
   if (bar) {
     bar.classList.add('hidden');
+    bar.style.display = 'none';
   }
 }
 
@@ -5390,20 +5392,34 @@ export function handleBulkBadge(isAdd = true) {
   const count = ids.length;
   if (count === 0) return;
 
+  const availableBadges = getAllAvailableBadges();
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-3';
   bodyEl.innerHTML = `
     <p class="text-xs text-neutral-300">
       ${isAdd ? 'Select a badge to assign to' : 'Select a badge to remove from'} <strong>${count}</strong> member(s):
     </p>
-    <div class="grid grid-cols-2 gap-2 pt-2 max-h-60 overflow-y-auto">
-      ${PRESET_BADGES.map(preset => `
-        <button type="button" class="btn-bulk-badge-pick p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-left transition flex items-center gap-2" data-preset-id="${esc(preset.id)}">
-          <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${preset.color}"></span>
-          <span class="font-bold text-white text-xs">${esc(preset.label)}</span>
-        </button>
-      `).join('')}
-    </div>
+    ${availableBadges.length === 0 ? `
+      <div class="p-4 rounded-xl bg-white/5 border border-dashed border-white/10 text-center text-xs text-neutral-400">
+        No badges created yet in Team Badges.
+      </div>
+    ` : `
+      <div class="grid grid-cols-1 gap-2 pt-2 max-h-60 overflow-y-auto">
+        ${availableBadges.map(badge => {
+          const color = badge.color || '#0A84FF';
+          const iconSvg = getIconSvg(badge.icon || badge.iconKey || 'star', 'w-4 h-4');
+          const label = badge.label || badge.name || badge.id;
+          return `
+            <button type="button" class="btn-bulk-badge-pick p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-left transition flex items-center gap-2.5" data-preset-id="${esc(badge.id)}">
+              <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background-color: ${color}25; border: 1px solid ${color}50; color: ${color};">
+                ${iconSvg}
+              </div>
+              <span class="font-bold text-white text-xs">${esc(label)}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+    `}
   `;
 
   openModal({
@@ -5416,8 +5432,9 @@ export function handleBulkBadge(isAdd = true) {
   bodyEl.querySelectorAll('.btn-bulk-badge-pick').forEach(btn => {
     btn.onclick = async () => {
       const presetId = btn.dataset.presetId;
-      const preset = PRESET_BADGES.find(p => p.id === presetId);
+      const preset = availableBadges.find(p => p.id === presetId);
       if (!preset) return;
+      const badgeLabel = preset.label || preset.name || preset.id;
 
       closeModal();
       try {
@@ -5433,7 +5450,7 @@ export function handleBulkBadge(isAdd = true) {
 
             if (isAdd) {
               if (!curBadgeIds.includes(preset.id)) {
-                curBadges.push(preset);
+                curBadges.push({ id: preset.id, label: badgeLabel, icon: preset.icon || preset.iconKey || 'star', color: preset.color || '#0A84FF' });
                 curBadgeIds.push(preset.id);
               }
             } else {
@@ -5450,7 +5467,7 @@ export function handleBulkBadge(isAdd = true) {
             createNotification(batch, {
               uid,
               title: isAdd ? 'Badge Awarded!' : 'Badge Removed',
-              message: isAdd ? `You have been awarded the "${preset.label}" badge!` : `The "${preset.label}" badge was removed from your profile.`,
+              message: isAdd ? `You have been awarded the "${badgeLabel}" badge!` : `The "${badgeLabel}" badge was removed from your profile.`,
               type: 'badge'
             });
 
@@ -5464,7 +5481,7 @@ export function handleBulkBadge(isAdd = true) {
         }
 
         renderMembersAdmin();
-        toast(`Badge "${preset.label}" ${isAdd ? 'added to' : 'removed from'} ${count} member(s)`, 'success');
+        toast(`Badge "${badgeLabel}" ${isAdd ? 'added to' : 'removed from'} ${count} member(s)`, 'success');
         exitSelectionMode();
       } catch (err) {
         console.error('Bulk badge error:', err);
@@ -5638,6 +5655,9 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
 
   function updateDockThumb(index, immediate = false) {
     if (index < 0 || index >= pages.length) return;
+    if (selectionState.active && !immediate && index !== activeIndex) {
+      exitSelectionMode();
+    }
     activeIndex = index;
 
     dockItems.forEach((btn, i) => {
@@ -8473,7 +8493,8 @@ export function initAdminPushConsole() {
             </div>
           `;
         } else if (val === 'badge') {
-          const defaultBadge = (state.badges && state.badges[0]) || (typeof PRESET_BADGES !== 'undefined' && PRESET_BADGES[0]) || { id: 'media', label: 'Media Team' };
+          const allBadges = getAllAvailableBadges();
+          const defaultBadge = allBadges[0] || { id: 'media', label: 'Media Team', color: '#0A84FF' };
           targetInput.value = 'badge:' + defaultBadge.id;
           detailsContainer.innerHTML = `
             <button type="button" id="btn-push-pick-badge" class="w-full glass-card p-2.5 rounded-xl flex items-center justify-between hover:border-white/25 transition text-left">
@@ -11570,12 +11591,12 @@ export function renderAttendance() {
 }
 
 export function openBadgePickerSheet({ onSelect }) {
-  const presets = typeof PRESET_BADGES !== 'undefined' ? PRESET_BADGES : [];
-  const items = presets.map(b => ({
+  const allBadges = getAllAvailableBadges();
+  const items = allBadges.map(b => ({
     id: b.id,
-    label: b.label,
-    icon: b.icon,
-    color: b.color,
+    label: b.label || b.name || b.id,
+    icon: b.icon || b.iconKey || 'star',
+    color: b.color || '#0A84FF',
     badge: b
   }));
   openItemPicker({
@@ -12572,7 +12593,7 @@ function renderAdminSessions() {
 
   list.innerHTML = filtered.map(session => {
     const calc = computeAttendance(session, nowMs);
-    const occ = getOccurrenceFor(session, nowMs);
+    const occ = resolveSessionOccurrence(session, nowMs);
     const occStart = occ ? occ.start : (session.schedule?.startDateTime || nowMs);
 
     const sched = session.schedule || { type: 'once' };
@@ -12646,8 +12667,7 @@ function renderAdminSessions() {
       bulkType: 'sessions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
-        const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
-        if (targetSession) openAdminRosterModal(targetSession);
+        openAdminSessionModal(card.dataset.sessionId);
       }
     });
 
@@ -12736,25 +12756,6 @@ function openAdminSessionModal(sessionId = null) {
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
-
-  if (sessionId) {
-    const viewAttendanceBtn = document.createElement('button');
-    viewAttendanceBtn.type = 'button';
-    viewAttendanceBtn.className = 'w-full py-2.5 px-3 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 font-semibold text-xs flex items-center justify-center gap-1.5 transition';
-    viewAttendanceBtn.innerHTML = `
-      <svg class="w-4 h-4 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-        <circle cx="9" cy="7" r="4"></circle>
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-      </svg>
-      <span>View Attendance</span>
-    `;
-    viewAttendanceBtn.onclick = () => {
-      openAdminRosterModal(rawSession || session || sessionId);
-    };
-    bodyEl.appendChild(viewAttendanceBtn);
-  }
 
   // Build the entire DOM once without innerHTML destruction on toggle
   // 1. Title
@@ -13150,6 +13151,7 @@ function openAdminSessionModal(sessionId = null) {
     title: sessionId ? 'Edit Attendance Session' : 'New Attendance Session',
     body: bodyEl,
     saveLabel: sessionId ? 'Save Changes' : 'Create Session',
+    clearStack: true,
     onSave: async () => {
       const title = currentTitle.trim();
       if (!title) {
@@ -13526,8 +13528,9 @@ function formatMinutesDuration(totalMinutes) {
 
 function matchesOccurrence(log, targetOccKey, targetOccStartMs, session) {
   if (!log) return false;
+  const schedType = session?.schedule?.type || session?.type || 'once';
+  if (schedType === 'once') return true;
   if (log.occurrenceKey && targetOccKey && log.occurrenceKey === targetOccKey) return true;
-  if (session?.schedule?.type === 'once' && (log.occurrenceKey === 'once' || targetOccKey === 'once')) return true;
 
   const logMs = parseDateTimeToMs(log.checkedInAt || log.occurrenceStart);
   const targetMs = Number(targetOccStartMs) || parseDateTimeToMs(targetOccStartMs);
@@ -13696,29 +13699,37 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
   }
   const session = normalizeSession(rawSession);
 
-  // 1. Calculate assigned members (NEVER 0 when active members exist)
-  const allActiveMembers = (usersMap.size > 0
-    ? Array.from(usersMap.values())
-    : [...state.members]
-  ).filter(m => !m.disabled && (m.role === 'member' || !m.role));
+  const getAssignedRosterMembers = () => {
+    const allActiveMembers = (usersMap.size > 0
+      ? Array.from(usersMap.values())
+      : [...state.members]
+    ).filter(m => m && !m.disabled && !m.blocked);
 
-  let assignedMembers = allActiveMembers;
-  if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
-    assignedMembers = allActiveMembers.filter(m => (m.badges || []).some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b)));
-  } else if (session.targetType === 'custom' && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-    assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
-  } else if (Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-    assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
-  }
-  if (assignedMembers.length === 0) assignedMembers = allActiveMembers;
+    let filtered = allActiveMembers;
+    if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
+      filtered = allActiveMembers.filter(m => {
+        const userBadges = Array.isArray(m.badges) ? m.badges : (Array.isArray(m.badgeIds) ? m.badgeIds : []);
+        return userBadges.some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b));
+      });
+    } else if (session.targetType === 'custom' && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      filtered = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
+    } else if (!session.targetType && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      filtered = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
+    }
+    return filtered.length > 0 ? filtered : allActiveMembers;
+  };
 
   // 2. Resolve initial occurrence
   const nowMs = serverNow();
+  const isOnceSession = (session.schedule?.type || session.type || 'once') === 'once';
   let occ = null;
   if (occurrenceKey && occurrenceStart) {
     occ = { key: occurrenceKey, start: Number(occurrenceStart) || nowMs };
+  } else if (isOnceSession) {
+    const startMs = parseDateTimeToMs(session.schedule?.startDateTime || session.startDateTime) || nowMs;
+    occ = { key: 'once', start: startMs };
   } else {
-    occ = getOccurrenceFor(session, nowMs) || resolveSessionOccurrence(session, nowMs) || { key: 'once', start: session.schedule?.startDateTime || nowMs };
+    occ = resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs) || { key: 'once', start: session.schedule?.startDateTime || nowMs };
   }
   let selectedOccKey = occ ? occ.key : 'once';
   let selectedOccStartMs = occ ? occ.start : nowMs;
@@ -13743,6 +13754,7 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
     title: `${session.title} Attendance`,
     body: bodyEl,
     saveLabel: 'Done',
+    clearStack: true,
     onSave: async () => true,
     onClose: () => {
       if (unsubLogs) {
@@ -13775,14 +13787,18 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
   );
 
   const renderRosterView = () => {
-    sessionLogs.forEach(l => {
-      if (l.occurrenceKey && (l.occurrenceStart || l.checkedInAt)) {
-        const ms = parseDateTimeToMs(l.occurrenceStart) || parseDateTimeToMs(l.checkedInAt);
-        if (ms && !occurrenceOptions.has(l.occurrenceKey)) {
-          occurrenceOptions.set(l.occurrenceKey, ms);
+    const assignedMembers = getAssignedRosterMembers();
+
+    if (!isOnceSession) {
+      sessionLogs.forEach(l => {
+        if (l.occurrenceKey && (l.occurrenceStart || l.checkedInAt)) {
+          const ms = parseDateTimeToMs(l.occurrenceStart) || parseDateTimeToMs(l.checkedInAt);
+          if (ms && !occurrenceOptions.has(l.occurrenceKey)) {
+            occurrenceOptions.set(l.occurrenceKey, ms);
+          }
         }
-      }
-    });
+      });
+    }
 
     const occLogs = sessionLogs.filter(l => matchesOccurrence(l, selectedOccKey, selectedOccStartMs, session));
     const attendedMap = new Map();
@@ -13792,11 +13808,13 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
     const excusedList = [];
     const penalizedAbsentList = [];
     const unprocessedAbsentList = [];
+    const handledUids = new Set();
 
     const occCutoffMs = selectedOccStartMs + (session.lateCutoffMinutes || 120) * 60000;
     const isClosed = serverNow() > occCutoffMs;
 
     assignedMembers.forEach(m => {
+      handledUids.add(m.uid);
       if (attendedMap.has(m.uid)) {
         const log = attendedMap.get(m.uid);
         if (log.status === 'excused' || log.excused === true) {
@@ -13813,7 +13831,28 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
       }
     });
 
-    const onTimeCount = presentList.filter(p => p.log.status === 'on_time').length;
+    // Ensure any member with a valid check-in log for this occurrence is included even if not in assignedMembers
+    occLogs.forEach(log => {
+      if (!log.uid || handledUids.has(log.uid)) return;
+      handledUids.add(log.uid);
+      const fallbackMember = usersMap.get(log.uid) || {
+        uid: log.uid,
+        displayName: log.userName || 'Member',
+        name: log.userName || 'Member',
+        photoURL: log.userAvatar || '',
+        avatarUrl: log.userAvatar || ''
+      };
+      if (log.status === 'excused' || log.excused === true) {
+        excusedList.push({ member: fallbackMember, log, waiver: waiversMap.get(log.uid) });
+      } else if (log.status === 'absent') {
+        penalizedAbsentList.push({ member: fallbackMember, log });
+      } else {
+        presentList.push({ member: fallbackMember, log });
+      }
+    });
+
+    const totalAssignedCount = Math.max(assignedMembers.length, handledUids.size);
+    const onTimeCount = presentList.filter(p => p.log.status === 'on_time' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
     const lateCount = presentList.filter(p => p.log.status === 'late' || p.log.penalty > 0 || p.log.fineEGP > 0).length;
     const excusedCount = excusedList.length;
     const absentCount = penalizedAbsentList.length + unprocessedAbsentList.length;
@@ -13837,19 +13876,12 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
             </span>
           </div>
         </div>
-        <button type="button" id="btn-roster-edit-session" class="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 transition">
-          <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M12 20h9"></path>
-            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-          </svg>
-          <span>Edit Session</span>
-        </button>
       </div>
 
       <div class="grid grid-cols-5 gap-1.5 text-center text-xs">
         <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
           <span class="text-[10px] text-neutral-400 block font-medium">Assigned</span>
-          <span class="font-bold text-white mt-0.5 block" style="font-variant-numeric: tabular-nums;">${assignedMembers.length}</span>
+          <span class="font-bold text-white mt-0.5 block" style="font-variant-numeric: tabular-nums;">${totalAssignedCount}</span>
         </div>
         <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
           <span class="text-[10px] text-emerald-300 block font-medium">On Time</span>
@@ -13880,13 +13912,6 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
 
       <div id="roster-tab-content" class="space-y-4"></div>
     `;
-
-    const editSessionBtn = bodyEl.querySelector('#btn-roster-edit-session');
-    if (editSessionBtn) {
-      editSessionBtn.onclick = () => {
-        openAdminSessionModal(session.id);
-      };
-    }
 
     const segMount = bodyEl.querySelector('#mount-roster-tab-segmented');
     if (segMount) {
@@ -15804,38 +15829,15 @@ function openMemberControlModal(member) {
         <div class="flex items-center justify-between">
           <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Member Badges</span>
           <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline">
-            + Add Custom Badge
+            + Create New Badge
           </button>
         </div>
 
-        <div id="ctrl-badges-list" class="flex flex-wrap gap-1.5 min-h-8 items-center">
-          ${Array.isArray(currentMember.badges) && currentMember.badges.length > 0 ? currentMember.badges.map(b => {
-            const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
-            return `
-              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${norm.color || '#3A3A3C'}40">
-                <span class="w-2 h-2 rounded-full" style="background-color: ${norm.color || '#3A3A3C'}"></span>
-                <span>${esc(norm.label)}</span>
-                <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(norm.id)}" aria-label="Remove badge">&times;</button>
-              </span>
-            `;
-          }).join('') : `
-            <span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>
-          `}
-        </div>
+        <div id="ctrl-badges-list" class="flex flex-wrap gap-1.5 min-h-8 items-center"></div>
 
         <div>
-          <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Quick Add Presets:</label>
-          <div class="flex flex-wrap gap-1.5">
-            ${PRESET_BADGES.map(preset => {
-              const alreadyHas = (currentMember.badges || []).some(b => (b.id || b.label || b) === preset.id);
-              return `
-                <button type="button" class="btn-quick-add-badge text-[11px] px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${alreadyHas ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/10 text-neutral-400' : 'bg-white/10 hover:bg-white/15 border-white/10 text-white'}" data-preset-id="${preset.id}" ${alreadyHas ? 'disabled' : ''}>
-                  <span class="w-2 h-2 rounded-full" style="background-color: ${preset.color}"></span>
-                  <span>+ ${preset.label}</span>
-                </button>
-              `;
-            }).join('')}
-          </div>
+          <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Available Badges (Tap to Toggle):</label>
+          <div id="ctrl-live-badges-grid" class="flex flex-wrap gap-1.5"></div>
         </div>
       </div>
 
@@ -16032,7 +16034,7 @@ function openMemberControlModal(member) {
           ${state.attendanceSessions.filter(s => !s.archived).map(session => {
             const occ = resolveSessionOccurrence(session, serverNow());
             const occKey = occ ? occ.key : 'once';
-            const log = state.attendanceLogs.find(l => l.uid === currentMember.uid && l.sessionId === session.id && l.occurrenceKey === occKey);
+            const log = state.attendanceLogs.find(l => l.uid === currentMember.uid && l.sessionId === session.id && matchesOccurrence(l, occKey, occ?.start, session));
 
             return `
               <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
@@ -16224,69 +16226,160 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Badges Management
+  // Wire Badges Management (Live Badges from Firestore)
+  function getMemberBadgeIdsSet() {
+    const set = new Set();
+    if (Array.isArray(currentMember.badgeIds)) {
+      currentMember.badgeIds.forEach(id => { if (id) set.add(String(id)); });
+    }
+    if (Array.isArray(currentMember.badges)) {
+      currentMember.badges.forEach(b => {
+        const id = typeof b === 'string' ? b : (b?.id || b?.label || b?.name);
+        if (id) set.add(String(id));
+      });
+    }
+    return set;
+  }
+
+  async function toggleMemberBadge(badgeObj) {
+    if (!badgeObj || !badgeObj.id) return;
+    const allBadges = getAllAvailableBadges();
+    const assignedIds = getMemberBadgeIdsSet();
+    const isRemoving = assignedIds.has(badgeObj.id);
+
+    if (isRemoving) {
+      assignedIds.delete(badgeObj.id);
+    } else {
+      assignedIds.add(badgeObj.id);
+    }
+
+    const newBadgeIds = Array.from(assignedIds);
+    const newBadges = newBadgeIds.map(id => {
+      const found = allBadges.find(b => b.id === id);
+      if (found) {
+        return {
+          id: found.id,
+          label: found.label || found.name || found.id,
+          name: found.name || found.label || found.id,
+          color: found.color || '#0A84FF',
+          icon: found.icon || found.iconKey || 'star'
+        };
+      }
+      const existing = (currentMember.badges || []).find(b => (typeof b === 'string' ? b : b?.id) === id);
+      return typeof existing === 'object' && existing ? existing : { id, label: id, color: '#0A84FF', icon: 'star' };
+    });
+
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'users', currentMember.uid), {
+        badges: newBadges,
+        badgeIds: newBadgeIds,
+        updatedAt: serverTimestamp()
+      });
+
+      if (!isRemoving) {
+        createNotification(batch, {
+          uid: currentMember.uid,
+          title: 'Badge Awarded!',
+          message: `You have been awarded the "${badgeObj.label || badgeObj.name}" badge!`,
+          type: 'badge'
+        });
+      }
+
+      logAdminAction(batch, {
+        action: isRemoving ? 'badge_removed' : 'badge_awarded',
+        targetUid: currentMember.uid,
+        details: { badgeId: badgeObj.id, badgeLabel: badgeObj.label || badgeObj.name }
+      });
+
+      await batch.commit();
+      currentMember.badges = newBadges;
+      currentMember.badgeIds = newBadgeIds;
+      const inMap = usersMap.get(currentMember.uid);
+      if (inMap) {
+        inMap.badges = newBadges;
+        inMap.badgeIds = newBadgeIds;
+      }
+      toast(isRemoving ? `Badge "${badgeObj.label || badgeObj.name}" removed` : `Badge "${badgeObj.label || badgeObj.name}" awarded!`, isRemoving ? 'info' : 'success');
+      refreshBadgesDOM();
+      renderAdminMembers();
+      renderLeaderboard();
+    } catch (err) {
+      console.error('Error toggling badge:', err);
+      toast('Failed to update badge: ' + (err.message || err), 'error');
+    }
+  }
+
   function refreshBadgesDOM() {
     const badgesList = modalBody.querySelector('#ctrl-badges-list');
-    if (!badgesList) return;
-    if (Array.isArray(currentMember.badges) && currentMember.badges.length > 0) {
-      badgesList.innerHTML = currentMember.badges.map(b => {
-        const norm = typeof b === 'string' ? { id: b, label: b, color: '#3A3A3C' } : b;
-        return `
-          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-white border border-white/10" style="background-color: ${norm.color || '#3A3A3C'}40">
-            <span class="w-2 h-2 rounded-full" style="background-color: ${norm.color || '#3A3A3C'}"></span>
-            <span>${esc(norm.label)}</span>
-            <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5" data-badge-id="${esc(norm.id)}" aria-label="Remove badge">&times;</button>
-          </span>
-        `;
-      }).join('');
-    } else {
-      badgesList.innerHTML = '<span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>';
+    const liveGrid = modalBody.querySelector('#ctrl-live-badges-grid');
+    const allBadges = getAllAvailableBadges();
+    const assignedIds = getMemberBadgeIdsSet();
+
+    if (badgesList) {
+      const assignedList = Array.from(assignedIds).map(id => {
+        const live = allBadges.find(b => b.id === id);
+        if (live) return live;
+        const raw = (currentMember.badges || []).find(b => (typeof b === 'string' ? b : b?.id) === id);
+        return typeof raw === 'object' && raw ? raw : { id, label: id, color: '#0A84FF', icon: 'star' };
+      });
+
+      if (assignedList.length > 0) {
+        badgesList.innerHTML = assignedList.map(b => {
+          const color = b.color || '#0A84FF';
+          const iconKey = b.icon || b.iconKey || 'star';
+          const label = b.label || b.name || b.id;
+          return `
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition" style="background-color: ${color}24; border-color: ${color}55; color: ${color};">
+              <span class="w-3.5 h-3.5 flex items-center justify-center shrink-0">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
+              <span class="text-white">${esc(label)}</span>
+              <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5 text-white/70" data-badge-id="${esc(b.id)}" aria-label="Remove badge">&times;</button>
+            </span>
+          `;
+        }).join('');
+      } else {
+        badgesList.innerHTML = '<span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>';
+      }
+
+      badgesList.querySelectorAll('.btn-remove-member-badge').forEach(btn => {
+        btn.onclick = () => {
+          const bId = btn.dataset.badgeId;
+          const found = allBadges.find(b => b.id === bId) || { id: bId, label: bId };
+          toggleMemberBadge(found);
+        };
+      });
     }
-    wireBadgeRemoveHandlers();
 
-    modalBody.querySelectorAll('.btn-quick-add-badge').forEach(btn => {
-      const presetId = btn.dataset.presetId;
-      const alreadyHas = (currentMember.badges || []).some(b => (b.id || b.label || b) === presetId);
-      btn.disabled = alreadyHas;
-      btn.className = `btn-quick-add-badge text-[11px] px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${alreadyHas ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/10 text-neutral-400' : 'bg-white/10 hover:bg-white/15 border-white/10 text-white'}`;
-    });
+    if (liveGrid) {
+      if (allBadges.length === 0) {
+        liveGrid.innerHTML = '<span class="text-neutral-500 italic text-[11px] py-1">No badges created in Badges manager yet.</span>';
+      } else {
+        liveGrid.innerHTML = allBadges.map(badge => {
+          const alreadyHas = assignedIds.has(badge.id);
+          const color = badge.color || '#0A84FF';
+          const iconKey = badge.icon || badge.iconKey || 'star';
+          const label = badge.label || badge.name || badge.id;
+          return `
+            <button type="button" class="btn-toggle-live-badge text-[11px] px-2.5 py-1.5 rounded-xl border transition flex items-center gap-1.5 font-semibold ${alreadyHas ? 'ring-1 ring-white/30 text-white' : ' hover:bg-white/10 text-neutral-200'}" data-badge-id="${esc(badge.id)}" style="background-color: ${alreadyHas ? color + '38' : 'rgba(255,255,255,0.05)'}; border-color: ${alreadyHas ? color : 'rgba(255,255,255,0.12)'};">
+              <span class="w-3.5 h-3.5 flex items-center justify-center shrink-0" style="color: ${color};">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
+              <span>${esc(label)}</span>
+              <span class="text-[10px] ml-0.5 ${alreadyHas ? 'text-emerald-300' : 'text-neutral-400'}">${alreadyHas ? '✓' : '+'}</span>
+            </button>
+          `;
+        }).join('');
+
+        liveGrid.querySelectorAll('.btn-toggle-live-badge').forEach(btn => {
+          btn.onclick = () => {
+            const bId = btn.dataset.badgeId;
+            const badgeObj = allBadges.find(b => b.id === bId);
+            if (badgeObj) toggleMemberBadge(badgeObj);
+          };
+        });
+      }
+    }
   }
 
-  function wireBadgeRemoveHandlers() {
-    modalBody.querySelectorAll('.btn-remove-member-badge').forEach(btn => {
-      btn.onclick = async () => {
-        const badgeId = btn.dataset.badgeId;
-        const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
-        const newBadges = curBadges.filter(b => (b.id || b.label || b) !== badgeId);
-        const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
-
-        try {
-          const batch = writeBatch(db);
-          batch.update(doc(db, 'users', currentMember.uid), {
-            badges: newBadges,
-            badgeIds: newBadgeIds,
-            updatedAt: serverTimestamp()
-          });
-
-          logAdminAction(batch, {
-            action: 'badge_removed',
-            targetUid: currentMember.uid,
-            details: { badgeId }
-          });
-
-          await batch.commit();
-          currentMember.badges = newBadges;
-          currentMember.badgeIds = newBadgeIds;
-          toast('Badge removed', 'info');
-          refreshBadgesDOM();
-        } catch (err) {
-          console.error('Error removing badge:', err);
-          toast('Failed to remove badge', 'error');
-        }
-      };
-    });
-  }
-  wireBadgeRemoveHandlers();
+  refreshBadgesDOM();
 
   const openBadgePickerBtn = modalBody.querySelector('#btn-open-badge-picker');
   if (openBadgePickerBtn) {
@@ -16294,91 +16387,14 @@ function openMemberControlModal(member) {
       openBadgePickerSheet({
         onSelect: async (badgeObj) => {
           if (!badgeObj) return;
-          const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
-          if (curBadges.some(b => (b.id || b.label || b) === badgeObj.id)) return;
-
-          const newBadges = [...curBadges, badgeObj];
-          const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
-
-          try {
-            const batch = writeBatch(db);
-            batch.update(doc(db, 'users', currentMember.uid), {
-              badges: newBadges,
-              badgeIds: newBadgeIds,
-              updatedAt: serverTimestamp()
-            });
-
-            createNotification(batch, {
-              uid: currentMember.uid,
-              title: 'Badge Awarded!',
-              message: `You have been awarded the "${badgeObj.label}" badge!`,
-              type: 'badge'
-            });
-
-            logAdminAction(batch, {
-              action: 'badge_awarded',
-              targetUid: currentMember.uid,
-              details: { badgeId: badgeObj.id, badgeLabel: badgeObj.label }
-            });
-
-            await batch.commit();
-            currentMember.badges = newBadges;
-            currentMember.badgeIds = newBadgeIds;
-            toast(`Badge "${badgeObj.label}" awarded!`, 'success');
-            refreshBadgesDOM();
-          } catch (err) {
-            console.error('Error adding badge:', err);
-            toast('Failed to add badge', 'error');
+          const assignedIds = getMemberBadgeIdsSet();
+          if (!assignedIds.has(badgeObj.id)) {
+            await toggleMemberBadge(badgeObj);
           }
         }
       });
     };
   }
-
-  modalBody.querySelectorAll('.btn-quick-add-badge').forEach(btn => {
-    btn.onclick = async () => {
-      const presetId = btn.dataset.presetId;
-      const preset = PRESET_BADGES.find(p => p.id === presetId);
-      if (!preset) return;
-
-      const curBadges = Array.isArray(currentMember.badges) ? [...currentMember.badges] : [];
-      if (curBadges.some(b => (b.id || b.label || b) === preset.id)) return;
-
-      const newBadges = [...curBadges, preset];
-      const newBadgeIds = newBadges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
-
-      try {
-        const batch = writeBatch(db);
-        batch.update(doc(db, 'users', currentMember.uid), {
-          badges: newBadges,
-          badgeIds: newBadgeIds,
-          updatedAt: serverTimestamp()
-        });
-
-        createNotification(batch, {
-          uid: currentMember.uid,
-          title: 'Badge Awarded!',
-          message: `You have been awarded the "${preset.label}" badge by an administrator!`,
-          type: 'badge'
-        });
-
-        logAdminAction(batch, {
-          action: 'badge_awarded',
-          targetUid: currentMember.uid,
-          details: { badgeId: preset.id, badgeLabel: preset.label }
-        });
-
-        await batch.commit();
-        currentMember.badges = newBadges;
-        currentMember.badgeIds = newBadgeIds;
-        toast(`Badge "${preset.label}" awarded!`, 'success');
-        refreshBadgesDOM();
-      } catch (err) {
-        console.error('Error adding preset badge:', err);
-        toast('Failed to add badge', 'error');
-      }
-    };
-  });
 
   // Wire Adjuster Category Segmented (In-place switching)
   const adjCatWrap = modalBody.querySelector('#ctrl-adj-cat-wrap');
@@ -17856,11 +17872,15 @@ function attachEventHandlers() {
   if (closeAdminBtn) closeAdminBtn.onclick = closeAdminDashboard;
 
   // Floating Bulk Selection Action Bar Handlers
+  exitSelectionMode();
   const selectAllBtn = document.getElementById('btn-bulk-select-all');
   if (selectAllBtn) selectAllBtn.onclick = toggleSelectAll;
 
   const deleteBulkBtn = document.getElementById('btn-bulk-delete');
   if (deleteBulkBtn) deleteBulkBtn.onclick = handleBulkDelete;
+
+  const cancelBulkBtn = document.getElementById('btn-bulk-cancel');
+  if (cancelBulkBtn) cancelBulkBtn.onclick = exitSelectionMode;
 
   const doneBulkBtn = document.getElementById('btn-bulk-done');
   if (doneBulkBtn) doneBulkBtn.onclick = exitSelectionMode;
