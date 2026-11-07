@@ -40,7 +40,7 @@ export function updateDockHeight() {
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.7';
+export const APP_VERSION = '2.2.8';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -166,7 +166,7 @@ const ADMIN_MASTER_PASSWORD = '$J@@s#COC1982';
    ========================================================================== */
 export function createNotification(batch, { uid, title, message, body, type = 'system', icon = 'bell', targetAction = null, refId = null }) {
   const notifRef = doc(collection(db, 'notifications'));
-  batch.set(notifRef, {
+  const payload = {
     uid,
     title,
     message: message || body || '',
@@ -178,7 +178,12 @@ export function createNotification(batch, { uid, title, message, body, type = 's
     read: false,
     timestamp: serverTimestamp(),
     createdAt: serverTimestamp()
-  });
+  };
+  batch.set(notifRef, payload);
+  if (uid) {
+    const userSubRef = doc(db, 'users', uid, 'notifications', notifRef.id);
+    batch.set(userSubRef, payload);
+  }
   return notifRef;
 }
 
@@ -677,6 +682,7 @@ function normalizeCategory(raw) {
     iconKey: raw.iconKey || raw.icon || 'film',
     icon: raw.iconKey || raw.icon || 'film',
     color: raw.color || '#0A84FF',
+    order: typeof raw.order === 'number' ? raw.order : 999999,
     archived: Boolean(raw.archived)
   };
 }
@@ -738,6 +744,7 @@ function normalizeTask(raw) {
     active: raw.active !== false && raw.status !== 'archived',
     archived: Boolean(raw.archived || raw.status === 'archived'),
     status: raw.status || (raw.archived ? 'archived' : 'active'),
+    order: typeof raw.order === 'number' ? raw.order : 999999,
     link: raw.link || '',
     createdAt: raw.createdAt || null,
     updatedAt: raw.updatedAt || null
@@ -934,10 +941,10 @@ function normalizeNotification(raw) {
 
 export function getAllAvailableBadges() {
   if (badgesMap.size > 0) {
-    return Array.from(badgesMap.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
+    return Array.from(badgesMap.values()).sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
   }
   if (Array.isArray(state.badges) && state.badges.length > 0) {
-    return state.badges;
+    return [...state.badges].sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
   }
   return [];
 }
@@ -3929,27 +3936,105 @@ export function renderAvatar(user, sizeClass = 'w-10 h-10') {
 export function normalizeBadgeItem(b) {
   if (!b) return null;
   if (typeof b === 'string') {
-    return { id: b, label: b, icon: 'star', color: '#0A84FF', description: '' };
+    const fromMap = badgesMap.get(b) || (Array.isArray(state?.badges) ? state.badges.find(x => x.id === b) : null);
+    if (fromMap) {
+      return {
+        id: fromMap.id || b,
+        label: fromMap.name || fromMap.label || b,
+        name: fromMap.name || fromMap.label || b,
+        icon: fromMap.iconKey || fromMap.icon || 'star',
+        iconKey: fromMap.iconKey || fromMap.icon || 'star',
+        color: fromMap.color || '#0A84FF',
+        description: fromMap.description || '',
+        order: typeof fromMap.order === 'number' ? fromMap.order : 999999
+      };
+    }
+    return { id: b, label: b, name: b, icon: 'star', iconKey: 'star', color: '#0A84FF', description: '', order: 999999 };
   }
+  const id = b.id || b.label || b.name || 'badge';
+  const fromMap = badgesMap.get(id);
+  const label = fromMap?.name || fromMap?.label || b.label || b.name || id || 'Badge';
+  const icon = fromMap?.iconKey || fromMap?.icon || b.iconKey || b.icon || 'star';
+  const color = fromMap?.color || b.color || '#0A84FF';
+  const description = fromMap?.description || b.description || '';
+  const order = typeof b.order === 'number' ? b.order : (typeof fromMap?.order === 'number' ? fromMap.order : 999999);
   return {
-    id: b.id || b.label || 'badge',
-    label: b.label || b.name || b.id || 'Badge',
-    icon: b.icon || 'star',
-    color: b.color || '#0A84FF',
-    description: b.description || ''
+    id,
+    label,
+    name: label,
+    icon,
+    iconKey: icon,
+    color,
+    description,
+    order
   };
+}
+
+/**
+ * Resolves a user's badges strictly preserving the exact order of IDs in their `badgeIds` array
+ * (Index 0 is the primary featured badge).
+ */
+export function resolveOrderedUserBadges(badgesInput, member = null) {
+  const memberObj = (member && typeof member === 'object') ? member : (typeof member === 'string' ? usersMap.get(member) : null);
+  const rawBadgeIds = Array.isArray(memberObj?.badgeIds) && memberObj.badgeIds.length > 0
+    ? memberObj.badgeIds
+    : (Array.isArray(badgesInput) ? badgesInput.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean) : []);
+  const fallbackArr = Array.isArray(badgesInput) ? badgesInput : (Array.isArray(memberObj?.badges) ? memberObj.badges : []);
+
+  const ordered = [];
+  const seen = new Set();
+
+  rawBadgeIds.forEach(bid => {
+    const id = typeof bid === 'string' ? bid : bid?.id;
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const live = badgesMap.get(id) || (Array.isArray(state?.badges) ? state.badges.find(x => x.id === id) : null);
+    if (live) {
+      ordered.push(normalizeBadgeItem(live));
+    } else {
+      const fb = fallbackArr.find(x => (typeof x === 'string' ? x : x?.id) === id);
+      ordered.push(normalizeBadgeItem(fb || id));
+    }
+  });
+
+  fallbackArr.forEach(item => {
+    const norm = normalizeBadgeItem(item);
+    if (norm && norm.id && !seen.has(norm.id)) {
+      seen.add(norm.id);
+      ordered.push(norm);
+    }
+  });
+
+  return ordered.filter(Boolean);
+}
+
+/**
+ * Expanded Mode (Discord-Style Pills): Horizontal wrapping pills with SVG icon + Badge Name.
+ */
+export function renderExpandedBadgesHtml(badgesInput, member = null) {
+  const ordered = resolveOrderedUserBadges(badgesInput, member);
+  if (ordered.length === 0) return '';
+  return ordered.map((b, idx) => `
+    <span class="badge-pill-expanded inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold leading-none shrink-0" data-badge-id="${esc(b.id)}" data-badge-index="${idx}" style="background: ${b.color}20; color: ${b.color}; border: 1px solid ${b.color}45;" title="${esc(b.description || b.label)}">
+      ${getCategorySvg(b.icon || 'star', 'w-3.5 h-3.5 shrink-0')}
+      <span>${esc(b.label)}</span>
+    </span>
+  `).join('');
 }
 
 const badgeRowObservers = new WeakMap();
 
 /**
- * Renders space-aware badge pills using ResizeObserver.
- * Strictly prioritizes member name and points metric remaining 100% visible and unclipped.
+ * Compact Mode (Icon-Only Responsive Strip):
+ * Used in cramped spaces like the Admin Members List and Leaderboard rows.
+ * Renders ONLY micro 22px SVG icons with a soft background tint of the badge color (NO text),
+ * strictly ordered by `badgeIds` (Index 0 first), hiding any overflow cleanly without breaking layout.
  */
 export function renderBadgeRow(container, badges, member) {
   if (!container) return;
-  const rawList = Array.isArray(badges) ? badges : (member?.badges && Array.isArray(member.badges) ? member.badges : []);
-  const normBadges = rawList.map(normalizeBadgeItem).filter(Boolean);
+  const normBadges = resolveOrderedUserBadges(badges, member);
+
+  container.classList.add('badge-strip-compact');
 
   if (normBadges.length === 0) {
     container.innerHTML = '';
@@ -3961,94 +4046,28 @@ export function renderBadgeRow(container, badges, member) {
     return;
   }
 
-  const memberUid = member?.uid || (typeof member === 'string' ? member : container.dataset.uid);
-
   const updateBadgesLayout = () => {
     const availableWidth = container.clientWidth;
-    if (availableWidth <= 0) return;
-
-    // Fast offscreen measurement to compute exact font/padding dimensions
-    const offscreen = document.createElement('div');
-    offscreen.className = 'flex items-center gap-1';
-    offscreen.style.cssText = 'position: absolute; visibility: hidden; pointer-events: none; left: -9999px; top: -9999px; white-space: nowrap; font-size: 10px;';
-
-    normBadges.forEach(b => {
-      const chip = document.createElement('span');
-      chip.className = 'badge-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none shrink-0';
-      chip.innerHTML = `${getCategorySvg(b.icon || 'star', 'w-2.5 h-2.5')}<span class="truncate max-w-[70px]">${esc(b.label)}</span>`;
-      offscreen.appendChild(chip);
-    });
-
-    const morePill = document.createElement('button');
-    morePill.className = 'badge-more-pill inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none shrink-0';
-    morePill.textContent = `+${normBadges.length}`;
-    offscreen.appendChild(morePill);
-
-    document.body.appendChild(offscreen);
-
-    const chipWidths = [];
-    for (let i = 0; i < normBadges.length; i++) {
-      chipWidths.push(offscreen.children[i].getBoundingClientRect().width);
-    }
-    const moreWidth = offscreen.children[normBadges.length].getBoundingClientRect().width;
-    document.body.removeChild(offscreen);
-
+    const iconSize = 22;
     const gap = 4;
-    let visibleCount = 0;
-    let hasMore = false;
 
-    // Check if ALL badges fit without +N
-    const totalAll = chipWidths.reduce((a, b) => a + b, 0) + (normBadges.length - 1) * gap;
-    if (totalAll <= availableWidth) {
-      visibleCount = normBadges.length;
-      hasMore = false;
-    } else {
-      // Find maximum k complete chips that fit cleanly with +N counter pill
-      for (let k = normBadges.length - 1; k >= 1; k--) {
-        const subSum = chipWidths.slice(0, k).reduce((a, b) => a + b, 0) + k * gap + moreWidth;
-        if (subSum <= availableWidth) {
-          visibleCount = k;
-          hasMore = true;
-          break;
-        }
-      }
-      if (visibleCount === 0) {
-        // Space only fits 1 chip (or less) -> render at most 1 chip + compact gray +N counter pill
-        visibleCount = 1;
-        hasMore = normBadges.length > 1;
-      }
+    let visibleCount = normBadges.length;
+    if (availableWidth > 0) {
+      visibleCount = Math.max(0, Math.floor((availableWidth + gap) / (iconSize + gap)));
+      visibleCount = Math.min(normBadges.length, visibleCount);
     }
 
     const htmlParts = [];
     for (let i = 0; i < visibleCount; i++) {
       const b = normBadges[i];
       htmlParts.push(`
-        <span class="badge-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none shrink-0" style="background:${b.color}20; color:${b.color}; border: 1px solid ${b.color}40;" title="${esc(b.label)}">
-          ${getCategorySvg(b.icon || 'star', 'w-2.5 h-2.5')}
-          <span class="truncate max-w-[70px]">${esc(b.label)}</span>
+        <span class="badge-icon-micro rounded-full inline-flex items-center justify-center shrink-0" data-badge-id="${esc(b.id)}" style="width:22px; height:22px; background:${b.color}22; color:${b.color}; border: 1px solid ${b.color}40;" title="${esc(b.label)}">
+          ${getCategorySvg(b.icon || 'star', 'w-3 h-3')}
         </span>
       `);
     }
 
-    if (hasMore && normBadges.length > visibleCount) {
-      const remaining = normBadges.length - visibleCount;
-      htmlParts.push(`
-        <button type="button" class="badge-more-pill inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none shrink-0 cursor-pointer hover:bg-white/20 transition" style="background: rgba(142,142,147,0.24); color: #E5E5EA; border: 1px solid rgba(255,255,255,0.1);" title="${remaining} more badges" data-uid="${esc(memberUid || '')}">
-          +${remaining}
-        </button>
-      `);
-    }
-
     container.innerHTML = htmlParts.join('');
-
-    const moreBtn = container.querySelector('.badge-more-pill');
-    if (moreBtn) {
-      moreBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (memberUid) openMiniProfileSheet(memberUid);
-      };
-    }
   };
 
   let ro = badgeRowObservers.get(container);
@@ -4072,34 +4091,8 @@ export function openMiniProfileSheet(uidOrMember) {
   const uid = typeof uidOrMember === 'string' ? uidOrMember : (uidOrMember?.uid || '');
   const userProf = getUserProfile(uid, uidOrMember?.displayName || uidOrMember?.name || 'Member', uidOrMember?.photoURL || uidOrMember?.avatarUrl || '');
 
-  // Resolve badges via live badgesMap (FIX 3)
-  const rawBadgeIds = Array.isArray(userProf.badgeIds) ? userProf.badgeIds : (
-    Array.isArray(userProf.badges) ? userProf.badges.map(b => typeof b === 'object' ? b?.id : b).filter(Boolean) : []
-  );
-
-  const resolvedBadges = [];
-  const seenIds = new Set();
-  rawBadgeIds.forEach(bid => {
-    if (seenIds.has(bid)) return;
-    seenIds.add(bid);
-    const fromMap = badgesMap.get(bid);
-    if (fromMap) {
-      resolvedBadges.push(fromMap);
-    } else if (Array.isArray(userProf.badges)) {
-      const fallback = userProf.badges.find(b => (typeof b === 'object' ? b?.id : b) === bid);
-      if (fallback && typeof fallback === 'object') {
-        resolvedBadges.push({
-          id: bid,
-          name: fallback.label || fallback.name || bid,
-          label: fallback.label || fallback.name || bid,
-          description: fallback.description || '',
-          iconKey: fallback.icon || 'star',
-          icon: fallback.icon || 'star',
-          color: fallback.color || '#FFD60A'
-        });
-      }
-    }
-  });
+  // Resolve badges in exact badgeIds order (Index 0 is primary featured badge)
+  const resolvedBadges = resolveOrderedUserBadges(userProf.badges, userProf);
 
   const wrapperEl = document.createElement('div');
   wrapperEl.className = 'mini-profile-root relative w-full h-full';
@@ -4141,7 +4134,7 @@ export function openMiniProfileSheet(uidOrMember) {
           </div>
         </div>
 
-        <!-- Badges resolved via live badgesMap -->
+        <!-- Expanded Mode (Discord-Style Pills) for Badges -->
         <div class="space-y-2 pt-1">
           <div class="flex items-center justify-between">
             <span class="text-xs font-bold text-white uppercase tracking-wider">Badges (${resolvedBadges.length})</span>
@@ -4151,18 +4144,8 @@ export function openMiniProfileSheet(uidOrMember) {
               No badges yet.
             </div>
           ` : `
-            <div class="grid grid-cols-1 gap-2">
-              ${resolvedBadges.map(b => `
-                <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 flex items-start gap-3">
-                  <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: ${b.color}20; color: ${b.color}; border: 1px solid ${b.color}40;">
-                    ${getCategorySvg(b.iconKey || b.icon || 'star', 'w-4 h-4')}
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="font-bold text-xs text-white truncate">${esc(b.name || b.label)}</div>
-                    <div class="text-[11px] text-neutral-400 mt-0.5 leading-snug">${esc(b.description || 'Verified Team Achievement')}</div>
-                  </div>
-                </div>
-              `).join('')}
+            <div class="badge-pills-expanded-wrap flex flex-wrap items-center gap-1.5 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+              ${renderExpandedBadgesHtml(resolvedBadges, userProf)}
             </div>
           `}
         </div>
@@ -4862,7 +4845,8 @@ export function getBulkActions(listType) {
 
   if (listType === 'notifications' || listType === 'updates') {
     return [
-      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: PRIMARY_CLS }
+      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: PRIMARY_CLS },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
@@ -5501,12 +5485,19 @@ export async function handleBulkDelete() {
       state.attendanceLogs = state.attendanceLogs.filter(l => !selectionState.selectedIds.has(l.id));
       state.myAttendanceLogs = state.myAttendanceLogs.filter(l => !selectionState.selectedIds.has(l.id));
       renderAttendanceLogs();
+    } else if (type === 'notifications' || type === 'updates' || type === 'notifications_admin') {
+      const targetUid = state.user?.uid;
+      await Promise.all(ids.map(id => deleteSingleNotificationFromFirestore(id, targetUid)));
+      state.notifications = state.notifications.filter(n => !selectionState.selectedIds.has(n.id));
+      state.personalNotifications = (state.personalNotifications || []).filter(n => !selectionState.selectedIds.has(n.id));
+      userNotifications = (userNotifications || []).filter(n => !selectionState.selectedIds.has(n.id));
+      updateNotificationBadges();
+      renderNotifications();
     } else {
       let colName = 'tasks';
       if (type === 'categories') colName = 'categories';
       else if (type === 'sessions') colName = 'attendance_sessions';
       else if (type === 'broadcasts') colName = 'broadcasts';
-      else if (type === 'notifications' || type === 'notifications_admin') colName = 'notifications';
       else if (type === 'waivers') colName = 'waiver_requests';
       else if (type === 'badges') colName = 'badges';
 
@@ -5673,43 +5664,81 @@ export function handleBulkBadge(isAdd = true) {
   });
 }
 
+export async function markSingleNotificationReadInFirestore(notifOrId, uid = state.user?.uid, readState = true) {
+  const id = typeof notifOrId === 'object' ? notifOrId?.id : notifOrId;
+  if (!id) return;
+  const notif = typeof notifOrId === 'object' ? notifOrId : state.notifications.find(n => n.id === id);
+
+  if (notif) notif.read = readState;
+  const pItem = (state.personalNotifications || []).find(n => n.id === id);
+  if (pItem) pItem.read = readState;
+  const uItem = (userNotifications || []).find(n => n.id === id);
+  if (uItem) uItem.read = readState;
+
+  if (!db || !uid) return;
+
+  if (notif?.isBroadcast) {
+    try {
+      await updateDoc(doc(db, 'notifications_broadcast', id), {
+        readBy: readState ? arrayUnion(uid) : arrayRemove(uid)
+      });
+    } catch (_) { /* ignore missing doc */ }
+    return;
+  }
+
+  const targetUid = notif?.uid || uid;
+  const ops = [];
+  if (targetUid) {
+    ops.push(updateDoc(doc(db, 'users', targetUid, 'notifications', id), { read: readState }).catch(() => {}));
+  }
+  ops.push(updateDoc(doc(db, 'notifications', id), { read: readState }).catch(() => {}));
+  await Promise.all(ops);
+}
+
+export async function deleteSingleNotificationFromFirestore(notifOrId, uid = state.user?.uid) {
+  const id = typeof notifOrId === 'object' ? notifOrId?.id : notifOrId;
+  if (!id) return;
+  const notif = typeof notifOrId === 'object' ? notifOrId : state.notifications.find(n => n.id === id);
+
+  state.notifications = (state.notifications || []).filter(n => n.id !== id);
+  state.personalNotifications = (state.personalNotifications || []).filter(n => n.id !== id);
+  userNotifications = (userNotifications || []).filter(n => n.id !== id);
+  state.broadcastNotificationsAll = (state.broadcastNotificationsAll || []).filter(n => n.id !== id);
+  state.broadcastNotificationsBadge = (state.broadcastNotificationsBadge || []).filter(n => n.id !== id);
+
+  if (!db) return;
+  const targetUid = notif?.uid || uid;
+  const ops = [];
+  if (targetUid) {
+    ops.push(deleteDoc(doc(db, 'users', targetUid, 'notifications', id)).catch(() => {}));
+  }
+  ops.push(deleteDoc(doc(db, 'notifications', id)).catch(() => {}));
+  await Promise.all(ops);
+}
+
 export async function handleBulkMarkRead() {
   const ids = Array.from(selectionState.selectedIds);
   const count = ids.length;
   if (count === 0) return;
 
+  const uid = state.user?.uid;
+  ids.forEach(id => {
+    const notif = state.notifications.find(n => n.id === id);
+    if (notif) notif.read = true;
+    const pItem = (state.personalNotifications || []).find(n => n.id === id);
+    if (pItem) pItem.read = true;
+    const uItem = (userNotifications || []).find(n => n.id === id);
+    if (uItem) uItem.read = true;
+  });
+
+  updateNotificationBadges();
+  renderNotifications();
+  exitSelectionMode();
+
   try {
-    const CHUNK_SIZE = 450;
-    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-
-      chunk.forEach(id => {
-        const notif = state.notifications.find(n => n.id === id);
-        if (notif?.isBroadcast) {
-          batch.update(doc(db, 'notifications_broadcast', id), {
-            readBy: arrayUnion(state.user.uid)
-          });
-        } else {
-          batch.update(doc(db, 'notifications', id), {
-            read: true
-          });
-        }
-      });
-      await batch.commit();
-    }
-
-    ids.forEach(id => {
-      const notif = state.notifications.find(n => n.id === id);
-      if (notif) notif.read = true;
-    });
-
-    renderNotifications();
-    toast(`Marked ${count} notification(s) as read`, 'success');
-    exitSelectionMode();
+    await Promise.all(ids.map(id => markSingleNotificationReadInFirestore(id, uid, true)));
   } catch (err) {
-    console.error('Bulk mark read error:', err);
-    toast('Failed to mark notifications as read: ' + err.message, 'error');
+    console.warn('Mark read sync warning:', err);
   }
 }
 
@@ -6397,8 +6426,9 @@ export async function applyAccountAdjustment(opts) {
     };
     t.set(txDocRef, txData);
 
-    // Send notification to top-level notifications collection
+    // Send notification to both top-level notifications collection and users/{uid}/notifications subcollection
     const notifDocRef = doc(collection(db, 'notifications'));
+    const userNotifDocRef = doc(db, 'users', targetUid, 'notifications', notifDocRef.id);
     const notifUnit = bucket === 'fines' ? 'EGP' : 'pts';
     const notifAction = direction === 'add' ? 'added to' : 'deducted from';
     const notifType = direction === 'add' ? (bucket === 'penalties' ? 'penalty' : 'bonus') : (bucket === 'penalties' ? 'bonus' : 'warning');
@@ -6416,6 +6446,7 @@ export async function applyAccountAdjustment(opts) {
       createdAtMs: nowMs
     };
     t.set(notifDocRef, notifData);
+    t.set(userNotifDocRef, notifData);
   });
 
   // Update local memory
@@ -8167,16 +8198,21 @@ function mergeAndRenderNotifications() {
   personal.forEach(n => {
     combinedMap.set(n.id, {
       ...n,
+      _inRoot: true,
       isBroadcast: false,
       read: Boolean(n.read)
     });
   });
 
   userSubs.forEach(n => {
+    const existing = combinedMap.get(n.id);
     combinedMap.set(n.id, {
+      ...(existing || {}),
       ...n,
+      _inRoot: Boolean(existing?._inRoot),
+      _inUserSub: true,
       isBroadcast: false,
-      read: Boolean(n.read)
+      read: Boolean(existing?.read || n.read)
     });
   });
 
@@ -9053,8 +9089,9 @@ async function handleAdminSendPush(e) {
       });
       toast(`Notification broadcast to badge group "${badgeId}"!`, 'success');
     } else {
-      // Direct personal notification
-      await addDoc(collection(db, 'notifications'), {
+      // Direct personal notification (write to both root notifications and users/{uid}/notifications)
+      const directBatch = writeBatch(db);
+      createNotification(directBatch, {
         uid: target,
         title,
         message: body,
@@ -9062,10 +9099,9 @@ async function handleAdminSendPush(e) {
         type,
         icon,
         targetAction,
-        refId: null,
-        read: false,
-        createdAt: serverTimestamp()
+        refId: null
       });
+      await directBatch.commit();
       toast('Personal notification sent!', 'success');
     }
 
@@ -9109,7 +9145,12 @@ function initFirestoreListeners() {
   // 1. Categories (limit 100)
   try {
     const unsubCats = onSnapshot(query(collection(db, 'categories'), limit(100)), (snapshot) => {
-      state.categories = snapshot.docs.map(d => normalizeCategory({ id: d.id, ...d.data() }));
+      categoriesMap.clear();
+      state.categories = snapshot.docs
+        .map(d => normalizeCategory({ id: d.id, ...d.data() }))
+        .filter(Boolean)
+        .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      state.categories.forEach(c => categoriesMap.set(c.id, c));
       populateCategoryFilters();
       renderAdminCategories();
       renderTasks();
@@ -9120,7 +9161,10 @@ function initFirestoreListeners() {
   // 2. Tasks (limit 200)
   try {
     const unsubTasks = onSnapshot(query(collection(db, 'tasks'), limit(200)), (snapshot) => {
-      state.tasks = snapshot.docs.map(d => normalizeTask({ id: d.id, ...d.data() }));
+      state.tasks = snapshot.docs
+        .map(d => normalizeTask({ id: d.id, ...d.data() }))
+        .filter(Boolean)
+        .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
       renderTasks();
       renderAdminTasks();
       updateHeroStats();
@@ -9140,7 +9184,7 @@ function initFirestoreListeners() {
     listeners.add('attendance_sessions', unsubSessions);
   } catch (e) { console.warn(e); }
 
-  // Badges Realtime Listener (FIX 3)
+  // Badges Realtime Listener (FIX 3 & FIX 6)
   try {
     const unsubBadges = onSnapshot(collection(db, 'badges'), (snapshot) => {
       badgesMap.clear();
@@ -9154,11 +9198,12 @@ function initFirestoreListeners() {
           iconKey: data.iconKey || data.icon || 'star',
           icon: data.iconKey || data.icon || 'star',
           color: data.color || '#FFD60A',
-          order: typeof data.order === 'number' ? data.order : 0
+          order: typeof data.order === 'number' ? data.order : 999999
         };
-        badgesMap.set(d.id, badgeObj);
         return badgeObj;
-      });
+      }).sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+
+      state.badges.forEach(b => badgesMap.set(b.id, b));
 
       renderAdminBadges();
       renderLeaderboard();
@@ -9214,6 +9259,13 @@ function initFirestoreListeners() {
       }
     }, (err) => console.warn('Settings general listener:', err));
     listeners.add('settings_general', unsubSettingsGeneral);
+
+    const unsubWhatsNew = onSnapshot(doc(db, 'settings', 'whats_new'), (docSnap) => {
+      if (docSnap.exists()) {
+        state.whatsNew = docSnap.data();
+      }
+    }, (err) => console.warn('Whats new listener:', err));
+    listeners.add('settings_whats_new', unsubWhatsNew);
   } catch (e) { console.warn(e); }
 }
 
@@ -9247,8 +9299,9 @@ function populateCategoryFilters() {
     </button>
   `;
 
-  // Only render categories that have active tasks > 0
-  state.categories.filter(c => !c.archived && activeCatIds.has(c.id)).forEach(cat => {
+  // Only render categories that have active tasks > 0, sorted by order
+  const orderedCats = [...state.categories].sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+  orderedCats.filter(c => !c.archived && activeCatIds.has(c.id)).forEach(cat => {
     const isSelected = current === cat.id;
     html += `
       <button type="button" data-category="${esc(cat.id)}" class="cat-filter-btn inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${isSelected ? 'text-white' : 'bg-white/10 text-neutral-300'}" style="${isSelected ? `background-color: ${cat.color || '#0A84FF'};` : ''}">
@@ -9291,7 +9344,7 @@ function renderTasks() {
       if (state.statusFilter === 'pending' && isCompleted) return false;
     }
     return true;
-  });
+  }).sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
   if (filtered.length === 0) {
     container.innerHTML = '';
@@ -10385,14 +10438,15 @@ export function renderLeaderboard() {
     const isFirst = defaultPlace === 1;
     const avatarSize = isFirst ? 'w-14 h-14' : 'w-11 h-11';
 
-    // Up to 2 compact badge chips below the score
-    const memberBadges = (member.badges || []).slice(0, 2);
+    // Up to 3 micro badge icons below the score in exact badgeIds order
+    const memberBadges = resolveOrderedUserBadges(member.badges, member).slice(0, 3);
     const badgesHtml = memberBadges.length > 0 ? `
-      <div class="flex items-center justify-center gap-1 mt-1 flex-wrap">
-        ${memberBadges.map(b => {
-          const bObj = typeof b === 'string' ? { label: b, color: '#0A84FF' } : b;
-          return `<span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold text-white truncate max-w-[70px]" style="background-color: ${bObj.color || '#0A84FF'}30; border: 1px solid ${bObj.color || '#0A84FF'}50;">${esc(bObj.label || bObj.name || bObj.id || 'Badge')}</span>`;
-        }).join('')}
+      <div class="flex items-center justify-center gap-1 mt-1 overflow-hidden">
+        ${memberBadges.map(b => `
+          <span class="badge-icon-micro rounded-full inline-flex items-center justify-center shrink-0" style="width:20px; height:20px; background:${b.color}22; color:${b.color}; border: 1px solid ${b.color}40;" title="${esc(b.label)}">
+            ${getCategorySvg(b.icon || 'star', 'w-2.5 h-2.5')}
+          </span>
+        `).join('')}
       </div>
     ` : '';
 
@@ -10449,14 +10503,15 @@ export function renderLeaderboard() {
         
         <!-- Col 3: Middle Info Column -->
         <div class="flex-1 min-w-0 mr-3">
-          <!-- Line 1: Member Name + YOU badge -->
+          <!-- Line 1: Member Name + YOU badge + Compact Icon-Only Badge Strip -->
           <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-semibold text-xs text-white truncate max-w-[180px]">${esc(member.displayName || member.name || 'Member')}</span>
+            <span class="font-semibold text-xs text-white truncate shrink-0 max-w-[145px]">${esc(member.displayName || member.name || 'Member')}</span>
             ${isMe ? '<span class="you-badge shrink-0">YOU</span>' : ''}
+            <div class="badge-row-container badge-strip-compact flex items-center gap-1 flex-1 min-w-0 overflow-hidden" data-uid="${esc(member.uid)}"></div>
           </div>
-          <!-- Line 2: Badges Row (or subtle role label if no badges) -->
-          <div class="badge-row-container flex flex-wrap gap-1 mt-1 min-w-0" data-uid="${esc(member.uid)}">
-            ${(!member.badges || member.badges.length === 0) ? '<span class="text-[10px] text-neutral-500 font-medium capitalize">' + esc(member.role || 'Member') + '</span>' : ''}
+          <!-- Line 2: Subtle role label -->
+          <div class="text-[10px] text-neutral-500 font-medium capitalize mt-0.5 truncate">
+            ${esc(member.role || 'Member')}
           </div>
         </div>
         
@@ -10487,9 +10542,10 @@ export function renderLeaderboard() {
   listEl.querySelectorAll('.badge-row-container').forEach(c => {
     const uid = c.dataset.uid;
     const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-    if (mem && mem.badges && mem.badges.length > 0) {
+    const ordered = mem ? resolveOrderedUserBadges(mem.badges, mem) : [];
+    if (ordered.length > 0) {
       c.innerHTML = '';
-      renderBadgeRow(c, mem.badges, mem);
+      renderBadgeRow(c, ordered, mem);
     }
   });
 
@@ -11268,22 +11324,28 @@ export function renderNotifications() {
     const { snippet, hasNote } = getNotificationSnippet(n);
 
     return `
-      <div class="notification-card bulk-select-card ${isUnread ? 'unread border-l-4 border-l-[#0A84FF]' : 'read opacity-85'}${isSelected ? ' selected' : ''}" data-notif-id="${esc(n.id)}" data-bulk-id="${esc(n.id)}" role="button" tabindex="0">
-        ${BULK_INDICATOR_HTML}
-        <div class="bulk-card-content flex items-center gap-3 w-full min-w-0">
-          <div class="notification-squircle ${squircleClass} !w-9 !h-9 shrink-0 flex items-center justify-center">
-            ${iconSvg}
-          </div>
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-1.5 min-w-0 truncate">
-                ${isUnread ? '<span class="w-1.5 h-1.5 rounded-full bg-[#0A84FF] shrink-0"></span>' : ''}
-                <div class="font-bold text-white text-xs truncate">${esc(n.title)}</div>
-              </div>
-              <span class="text-[10px] text-neutral-400 shrink-0 font-mono">${timeFormatted}</span>
+      <div class="notif-swipe-wrapper" data-notif-id="${esc(n.id)}">
+        <div class="notif-swipe-bg" data-delete-notif-id="${esc(n.id)}" role="button" aria-label="Delete notification">
+          <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          <span>Delete</span>
+        </div>
+        <div class="notification-card bulk-select-card ${isUnread ? 'unread border-l-4 border-l-[#0A84FF]' : 'read opacity-85'}${isSelected ? ' selected' : ''}" data-notif-id="${esc(n.id)}" data-bulk-id="${esc(n.id)}" role="button" tabindex="0">
+          ${BULK_INDICATOR_HTML}
+          <div class="bulk-card-content flex items-center gap-3 w-full min-w-0">
+            <div class="notification-squircle ${squircleClass} !w-9 !h-9 shrink-0 flex items-center justify-center">
+              ${iconSvg}
             </div>
-            <div class="text-neutral-400 text-xs truncate mt-0.5">
-              ${esc(snippet)}${hasNote ? ' <span class="text-[#0A84FF] font-semibold text-[10px]">[Note]</span>' : ''}
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-1.5 min-w-0 truncate">
+                  ${isUnread ? '<span class="w-1.5 h-1.5 rounded-full bg-[#0A84FF] shrink-0"></span>' : ''}
+                  <div class="font-bold text-white text-xs truncate">${esc(n.title)}</div>
+                </div>
+                <span class="text-[10px] text-neutral-400 shrink-0 font-mono">${timeFormatted}</span>
+              </div>
+              <div class="text-neutral-400 text-xs truncate mt-0.5">
+                ${esc(snippet)}${hasNote ? ' <span class="text-[#0A84FF] font-semibold text-[10px]">[Note]</span>' : ''}
+              </div>
             </div>
           </div>
         </div>
@@ -11291,8 +11353,148 @@ export function renderNotifications() {
     `;
   }).join('');
 
-  container.querySelectorAll('.notification-card').forEach(card => {
+  const executeSwipeDelete = async (wrapperEl, notifId) => {
+    if (!wrapperEl || wrapperEl.dataset.deleting === 'true') return;
+    wrapperEl.dataset.deleting = 'true';
+    const cardEl = wrapperEl.querySelector('.notification-card');
+    if (cardEl) {
+      cardEl.style.transition = 'transform 0.22s cubic-bezier(0.32, 0.72, 0, 1)';
+      cardEl.style.transform = 'translateX(-105%)';
+    }
+    wrapperEl.style.maxHeight = `${wrapperEl.offsetHeight || 72}px`;
+    requestAnimationFrame(() => {
+      wrapperEl.classList.add('collapsing');
+    });
+    setTimeout(async () => {
+      await deleteSingleNotificationFromFirestore(notifId, state.user?.uid);
+      updateNotificationBadges();
+      renderNotifications();
+    }, 220);
+  };
+
+  container.querySelectorAll('.notif-swipe-wrapper').forEach(wrapper => {
+    const card = wrapper.querySelector('.notification-card');
+    const bgBtn = wrapper.querySelector('.notif-swipe-bg');
+    const notifId = wrapper.dataset.notifId;
+    if (!card || !notifId) return;
+
+    let startX = 0;
+    let startY = 0;
+    let currentX = 0;
+    let isSwiping = false;
+    let isScrolling = false;
+    let suppressNextClick = false;
+
+    const onStart = (clientX, clientY) => {
+      if (selectionState.active) return;
+      startX = clientX;
+      startY = clientY;
+      currentX = wrapper.classList.contains('is-open') ? -84 : 0;
+      isSwiping = false;
+      isScrolling = false;
+    };
+
+    const onMove = (clientX, clientY, e) => {
+      if (selectionState.active || isScrolling) return;
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+
+      if (!isSwiping) {
+        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 8) {
+          isScrolling = true;
+          return;
+        }
+        if (Math.abs(dx) > 10 && dx < 0) {
+          isSwiping = true;
+          wrapper.classList.add('is-swiping');
+        } else if (wrapper.classList.contains('is-open') && Math.abs(dx) > 8) {
+          isSwiping = true;
+          wrapper.classList.add('is-swiping');
+        }
+      }
+
+      if (isSwiping) {
+        if (e && e.cancelable) e.preventDefault();
+        if (e && e.stopPropagation) e.stopPropagation();
+        const baseOffset = wrapper.classList.contains('is-open') ? -84 : 0;
+        const nextX = Math.min(0, Math.max(-wrapper.offsetWidth, baseOffset + dx));
+        currentX = nextX;
+        card.style.transform = `translateX(${nextX}px)`;
+      }
+    };
+
+    const onEnd = () => {
+      if (!isSwiping) return;
+      isSwiping = false;
+      suppressNextClick = true;
+      setTimeout(() => { suppressNextClick = false; }, 260);
+      wrapper.classList.remove('is-swiping');
+
+      const width = wrapper.offsetWidth || 320;
+      if (currentX < -Math.min(115, width * 0.42)) {
+        executeSwipeDelete(wrapper, notifId);
+      } else if (currentX < -42) {
+        wrapper.classList.add('is-open');
+        card.style.transform = 'translateX(-84px)';
+      } else {
+        wrapper.classList.remove('is-open');
+        card.style.transform = 'translateX(0px)';
+      }
+    };
+
+    card.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      onStart(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+
+    card.addEventListener('touchmove', (e) => {
+      if (e.touches.length !== 1) return;
+      onMove(e.touches[0].clientX, e.touches[0].clientY, e);
+    }, { passive: false });
+
+    card.addEventListener('touchend', onEnd);
+    card.addEventListener('touchcancel', onEnd);
+
+    let pointerDown = false;
+    card.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      pointerDown = true;
+      onStart(e.clientX, e.clientY);
+    });
+    card.addEventListener('pointermove', (e) => {
+      if (!pointerDown || e.pointerType === 'touch') return;
+      onMove(e.clientX, e.clientY, e);
+    });
+    card.addEventListener('pointerup', (e) => {
+      if (!pointerDown || e.pointerType === 'touch') return;
+      pointerDown = false;
+      onEnd();
+    });
+    card.addEventListener('pointercancel', () => {
+      if (!pointerDown) return;
+      pointerDown = false;
+      onEnd();
+    });
+
+    if (bgBtn) {
+      bgBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        executeSwipeDelete(wrapper, notifId);
+      };
+    }
+
     card.onclick = (e) => {
+      if (suppressNextClick) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (wrapper.classList.contains('is-open')) {
+        wrapper.classList.remove('is-open');
+        card.style.transform = 'translateX(0px)';
+        return;
+      }
       if (selectionState.active && selectionState.type === 'notifications') {
         e.preventDefault();
         e.stopPropagation();
@@ -11310,24 +11512,12 @@ export function renderNotifications() {
 }
 
 export function openNotificationDetailModal(notif) {
-  // Mark as read in Firestore
+  // Mark as read in Firestore silently & immediately
   if (!notif.read && state.user) {
     notif.read = true;
-    try {
-      if (notif.isBroadcast) {
-        updateDoc(doc(db, 'notifications_broadcast', notif.id), {
-          readBy: arrayUnion(state.user.uid)
-        }).catch(err => console.warn('Error marking broadcast notification read:', err));
-      } else {
-        updateDoc(doc(db, 'notifications', notif.id), { read: true }).catch(err => {
-          console.warn('Error marking notification read:', err);
-        });
-      }
-    } catch (e) {
-      console.warn('Mark as read exception:', e);
-    }
     updateNotificationBadges();
     renderNotifications();
+    markSingleNotificationReadInFirestore(notif, state.user.uid, true).catch(() => {});
   }
 
   const timeFormatted = formatDateTime(notif.timestamp || notif.createdAt);
@@ -11463,29 +11653,17 @@ async function markAllNotificationsRead() {
     return;
   }
 
+  const uid = state.user.uid;
+  unreads.forEach(n => {
+    n.read = true;
+  });
+  updateNotificationBadges();
+  renderNotifications();
+
   try {
-    const CHUNK_SIZE = 450;
-    for (let i = 0; i < unreads.length; i += CHUNK_SIZE) {
-      const chunk = unreads.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      chunk.forEach(n => {
-        if (n.isBroadcast) {
-          batch.update(doc(db, 'notifications_broadcast', n.id), {
-            readBy: arrayUnion(state.user.uid)
-          });
-        } else {
-          batch.update(doc(db, 'notifications', n.id), { read: true });
-        }
-        n.read = true;
-      });
-      await batch.commit();
-    }
-    updateNotificationBadges();
-    renderNotifications();
-    toast('All notifications marked as read', 'success');
+    await Promise.all(unreads.map(n => markSingleNotificationReadInFirestore(n, uid, true)));
   } catch (err) {
-    console.error('Error marking all notifications read:', err);
-    toast(err.message || 'Failed to mark all as read', 'error');
+    console.warn('Mark all notifications read warning:', err);
   }
 }
 
@@ -11533,17 +11711,20 @@ function updateProfileUI() {
     if (emailEl) emailEl.textContent = emailToDisplay;
     if (avatarEl && state.user.photoURL) avatarEl.src = state.user.photoURL;
 
+    const resolvedMyBadges = resolveOrderedUserBadges(state.user.badges, state.user);
     if (profileBadgesEl) {
-      const userBadgeIds = Array.isArray(state.user.badgeIds) ? state.user.badgeIds : (
-        Array.isArray(state.user.badges) ? state.user.badges.map(b => typeof b === 'object' ? b?.id : b).filter(Boolean) : []
-      );
-      const badgeObjs = userBadgeIds.map(bid => badgesMap.get(bid) || (Array.isArray(state.user.badges) ? state.user.badges.find(x => (x?.id || x) === bid) : null)).filter(Boolean);
-      profileBadgesEl.innerHTML = badgeObjs.map(b => {
-        const bObj = typeof b === 'object' ? b : { id: b, label: b, color: '#0A84FF', icon: 'star' };
-        const color = bObj.color || '#0A84FF';
-        const label = bObj.label || bObj.name || bObj.id;
-        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1" style="background-color: ${color}25; color: ${color}; border: 1px solid ${color}40;">${getCategorySvg(bObj.iconKey || bObj.icon || 'star', 'w-2.5 h-2.5')}<span>${esc(label)}</span></span>`;
-      }).join('');
+      profileBadgesEl.className = 'badge-pills-expanded-wrap flex flex-wrap items-center gap-1.5 mt-2 empty:hidden';
+      profileBadgesEl.innerHTML = renderExpandedBadgesHtml(resolvedMyBadges, state.user);
+    }
+
+    const reorderBadgesBtn = document.getElementById('btn-reorder-my-badges');
+    if (reorderBadgesBtn) {
+      if (resolvedMyBadges.length > 0) {
+        reorderBadgesBtn.classList.remove('hidden');
+      } else {
+        reorderBadgesBtn.classList.add('hidden');
+      }
+      reorderBadgesBtn.onclick = () => openMemberBadgeReorderSheet();
     }
 
     const avatarCropBtn = document.getElementById('btn-profile-avatar-crop');
@@ -11836,6 +12017,208 @@ function renderHomeDueTasks() {
 }
 
 /* ==========================================================================
+   GLOBAL DRAG-AND-DROP REORDERING HELPER & MEMBER BADGE REORDERING (v2.2.8)
+   ========================================================================== */
+export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrderCommitted) {
+  if (!containerEl) return;
+  const handles = containerEl.querySelectorAll('.drag-reorder-handle');
+  handles.forEach(handle => {
+    if (handle.dataset.dragBound === 'true') return;
+    handle.dataset.dragBound = 'true';
+
+    let draggingItem = null;
+    let pointerId = null;
+    let initialIds = [];
+
+    const getOrderedIds = () => Array.from(containerEl.querySelectorAll(itemSelector))
+      .map(el => el.getAttribute(idAttr))
+      .filter(Boolean);
+
+    const onPointerDown = (e) => {
+      if (selectionState.active) return;
+      if (e.button !== undefined && e.button !== 0) return;
+      const item = handle.closest(itemSelector);
+      if (!item) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      draggingItem = item;
+      pointerId = e.pointerId;
+      initialIds = getOrderedIds();
+      draggingItem.classList.add('dragging-reorder-item');
+      try {
+        if (handle.setPointerCapture && pointerId != null) {
+          handle.setPointerCapture(pointerId);
+        }
+      } catch (err) { /* ignore */ }
+    };
+
+    const onPointerMove = (e) => {
+      if (!draggingItem) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const clientY = e.clientY;
+      const clientX = e.clientX;
+      const siblings = Array.from(containerEl.querySelectorAll(itemSelector)).filter(el => el !== draggingItem);
+
+      for (const sib of siblings) {
+        const rect = sib.getBoundingClientRect();
+        const isHorizontal = rect.width < containerEl.clientWidth * 0.65 && siblings.some(s => Math.abs(s.getBoundingClientRect().top - rect.top) < 12);
+        if (isHorizontal) {
+          const midX = rect.left + rect.width / 2;
+          if (clientY >= rect.top - 12 && clientY <= rect.bottom + 12) {
+            if (clientX < midX) {
+              containerEl.insertBefore(draggingItem, sib);
+              break;
+            } else if (clientX > midX) {
+              containerEl.insertBefore(draggingItem, sib.nextSibling);
+            }
+          }
+        } else {
+          const midY = rect.top + rect.height / 2;
+          if (clientY < midY && rect.bottom > clientY) {
+            containerEl.insertBefore(draggingItem, sib);
+            break;
+          } else if (clientY >= midY && rect.top < clientY) {
+            containerEl.insertBefore(draggingItem, sib.nextSibling);
+          }
+        }
+      }
+    };
+
+    const onPointerEnd = async (e) => {
+      if (!draggingItem) return;
+      e.stopPropagation();
+      const item = draggingItem;
+      draggingItem = null;
+      item.classList.remove('dragging-reorder-item');
+      try {
+        if (handle.releasePointerCapture && pointerId != null) {
+          handle.releasePointerCapture(pointerId);
+        }
+      } catch (err) { /* ignore */ }
+      pointerId = null;
+
+      const finalIds = getOrderedIds();
+      const changed = finalIds.length === initialIds.length && finalIds.some((id, idx) => id !== initialIds[idx]);
+      if (changed && typeof onOrderCommitted === 'function') {
+        await onOrderCommitted(finalIds);
+      }
+    };
+
+    handle.addEventListener('pointerdown', onPointerDown);
+    handle.addEventListener('pointermove', onPointerMove);
+    handle.addEventListener('pointerup', onPointerEnd);
+    handle.addEventListener('pointercancel', onPointerEnd);
+  });
+}
+
+export function openMemberBadgeReorderSheet() {
+  if (!state.user) {
+    toast('Please sign in to reorder your badges', 'warning');
+    return;
+  }
+  const currentOrdered = resolveOrderedUserBadges(state.user.badges, state.user);
+  if (currentOrdered.length < 2) {
+    toast('You need at least 2 badges to reorder them.', 'info');
+    return;
+  }
+
+  let draftIds = currentOrdered.map(b => b.id);
+  const badgeLookup = new Map(currentOrdered.map(b => [b.id, b]));
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-3 text-xs';
+
+  const renderList = () => {
+    bodyEl.innerHTML = `
+      <div class="p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-300 leading-relaxed">
+        Drag the <strong class="text-white">≡</strong> handle to set your badge priority. The <strong class="text-[#0A84FF]">first badge (Index 0)</strong> is your featured Primary Badge shown first next to your name.
+      </div>
+      <div id="member-badge-reorder-list" class="space-y-2">
+        ${draftIds.map((id, idx) => {
+          const b = badgeLookup.get(id) || normalizeBadgeItem(id);
+          const color = b?.color || '#0A84FF';
+          const iconSvg = getIconSvg(b?.icon || b?.iconKey || 'star', 'w-4 h-4');
+          return `
+            <div class="member-badge-reorder-item glass-card p-3 rounded-xl flex items-center justify-between gap-3 select-none" data-badge-id="${esc(id)}">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <span class="w-5 h-5 rounded-full bg-white/10 text-[10px] font-mono font-bold text-neutral-300 flex items-center justify-center shrink-0">${idx + 1}</span>
+                <span class="badge-pill-expanded" style="background-color: ${color}1F; border-color: ${color}4D;">
+                  <span class="badge-pill-icon" style="color: ${color};">${iconSvg}</span>
+                  <span>${esc(b?.label || b?.name || id)}</span>
+                </span>
+                ${idx === 0 ? '<span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/40">Primary</span>' : ''}
+              </div>
+              <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+    const listEl = bodyEl.querySelector('#member-badge-reorder-list');
+    attachDragReorderList(listEl, '.member-badge-reorder-item', 'data-badge-id', (newOrder) => {
+      draftIds = newOrder;
+      renderList();
+    });
+  };
+
+  renderList();
+
+  openModal({
+    title: 'Reorder My Badges',
+    body: bodyEl,
+    saveLabel: 'Save Priority',
+    onSave: async () => {
+      try {
+        const newBadges = draftIds.map(id => {
+          const b = badgeLookup.get(id) || normalizeBadgeItem(id);
+          return {
+            id: b.id,
+            label: b.label || b.name || b.id,
+            name: b.name || b.label || b.id,
+            color: b.color || '#0A84FF',
+            icon: b.icon || b.iconKey || 'star'
+          };
+        });
+
+        await updateDoc(doc(db, 'users', state.user.uid), {
+          badgeIds: draftIds,
+          badges: newBadges,
+          updatedAt: serverTimestamp()
+        });
+
+        state.user.badgeIds = [...draftIds];
+        state.user.badges = newBadges;
+        if (usersMap.has(state.user.uid)) {
+          const u = usersMap.get(state.user.uid);
+          u.badgeIds = [...draftIds];
+          u.badges = newBadges;
+        }
+        const mIdx = state.members.findIndex(m => m.uid === state.user.uid);
+        if (mIdx !== -1) {
+          state.members[mIdx].badgeIds = [...draftIds];
+          state.members[mIdx].badges = newBadges;
+        }
+
+        updateProfileUI();
+        renderLeaderboard();
+        renderAdminMembers();
+        toast('Badge priority order saved!', 'success');
+        return true;
+      } catch (err) {
+        console.error('Error saving badge order:', err);
+        toast(err.message || 'Failed to save badge order', 'error');
+        return false;
+      }
+    }
+  });
+}
+
+/* ==========================================================================
    ADMIN CONTROLLER & OPERATIONS
    ========================================================================== */
 function openCategoryModal(categoryId = null) {
@@ -11958,6 +12341,7 @@ function openCategoryModal(categoryId = null) {
         iconKey: currentIconKey,
         icon: currentIconKey,
         color: currentColor,
+        order: existingCat && typeof existingCat.order === 'number' ? existingCat.order : (state.categories || []).length,
         archived: false
       };
 
@@ -11991,7 +12375,9 @@ function renderAdminCategories() {
   if (!list) return;
 
   const isArchivedView = state.adminCatsFilter === 'archived';
-  const filtered = state.categories.filter(c => isArchivedView ? c.archived : !c.archived);
+  const filtered = [...state.categories]
+    .filter(c => isArchivedView ? c.archived : !c.archived)
+    .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
   if (filtered.length === 0) {
     list.innerHTML = `<div class="glass-card p-6 text-center text-xs text-neutral-400">No ${isArchivedView ? 'archived' : 'active'} categories found.</div>`;
@@ -12015,7 +12401,8 @@ function renderAdminCategories() {
               <div class="text-[10px] text-neutral-400">${taskCount} active tasks</div>
             </div>
           </div>
-          <div class="flex items-center gap-2 shrink-0 text-neutral-500">
+          <div class="flex items-center gap-1.5 shrink-0 text-neutral-500">
+            <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
@@ -12030,6 +12417,26 @@ function renderAdminCategories() {
       onSingleTap: () => openCategoryModal(card.dataset.catId)
     });
   });
+
+  attachDragReorderList(list, '.bulk-select-card', 'data-cat-id', async (orderedIds) => {
+    try {
+      const batch = writeBatch(db);
+      orderedIds.forEach((id, idx) => {
+        const cat = state.categories.find(c => c.id === id);
+        if (cat) cat.order = idx;
+        if (categoriesMap.has(id)) categoriesMap.get(id).order = idx;
+        batch.update(doc(db, 'categories', id), { order: idx, updatedAt: serverTimestamp() });
+      });
+      state.categories.sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      await batch.commit();
+      populateCategoryFilters();
+      renderTasks();
+      toast('Category order updated', 'success');
+    } catch (err) {
+      console.error('Reorder categories error:', err);
+      toast(err.message || 'Failed to reorder categories', 'error');
+    }
+  });
 }
 
 export function renderAdminTasks() {
@@ -12037,7 +12444,9 @@ export function renderAdminTasks() {
   if (!tbody) return;
 
   const isArchivedView = state.adminTasksFilter === 'archived';
-  const filtered = (state.tasks || []).filter(t => isArchivedView ? t.archived : !t.archived);
+  const filtered = [...(state.tasks || [])]
+    .filter(t => isArchivedView ? t.archived : !t.archived)
+    .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
   if (filtered.length === 0) {
     tbody.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No ${isArchivedView ? 'archived' : 'active'} tasks found.</div>`;
@@ -12064,7 +12473,8 @@ export function renderAdminTasks() {
               <span>${t.isPermanent ? 'Permanent' : (t.schedule?.type || 'once')}</span>
             </div>
           </div>
-          <div class="flex items-center gap-2 shrink-0 text-neutral-500">
+          <div class="flex items-center gap-1.5 shrink-0 text-neutral-500">
+            <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
@@ -12078,6 +12488,25 @@ export function renderAdminTasks() {
       bulkId: row.dataset.bulkId,
       onSingleTap: () => openAdminTaskModal(row.dataset.taskId)
     });
+  });
+
+  attachDragReorderList(tbody, '.bulk-select-card', 'data-task-id', async (orderedIds) => {
+    try {
+      const batch = writeBatch(db);
+      orderedIds.forEach((id, idx) => {
+        const task = state.tasks.find(t => t.id === id);
+        if (task) task.order = idx;
+        batch.update(doc(db, 'tasks', id), { order: idx, updatedAt: serverTimestamp() });
+      });
+      state.tasks.sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      await batch.commit();
+      renderTasks();
+      renderHomeDueTasks();
+      toast('Task order updated', 'success');
+    } catch (err) {
+      console.error('Reorder tasks error:', err);
+      toast(err.message || 'Failed to reorder tasks', 'error');
+    }
   });
 }
 
@@ -13136,6 +13565,7 @@ function openAdminTaskModal(taskId = null) {
         enableDefaultTextField: Boolean(enableDefaultTextField),
         durationMinutes: currentIsPermanent ? null : finalDurationMinutes,
         questions: validQuestions,
+        order: task && typeof task.order === 'number' ? task.order : (state.tasks || []).length,
         active: true,
         archived: false
       };
@@ -13966,10 +14396,11 @@ function renderAdminBadges() {
             </div>
           </div>
 
-          <div class="flex items-center gap-3 shrink-0">
+          <div class="flex items-center gap-2 shrink-0">
             <span class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white/5 border border-white/10 text-neutral-300 whitespace-nowrap" style="font-variant-numeric: tabular-nums;">
               ${memberCount} member${memberCount === 1 ? '' : 's'}
             </span>
+            <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
             <svg class="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
@@ -13986,6 +14417,28 @@ function renderAdminBadges() {
         if (badge) openBadgeModal(badge);
       }
     });
+  });
+
+  attachDragReorderList(container, '.bulk-select-card', 'data-badge-id', async (orderedIds) => {
+    try {
+      const batch = writeBatch(db);
+      orderedIds.forEach((id, idx) => {
+        const b = (state.badges || []).find(x => x.id === id);
+        if (b) b.order = idx;
+        if (badgesMap.has(id)) badgesMap.get(id).order = idx;
+        batch.update(doc(db, 'badges', id), { order: idx, updatedAt: serverTimestamp() });
+      });
+      if (Array.isArray(state.badges)) {
+        state.badges.sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      }
+      await batch.commit();
+      renderLeaderboard();
+      renderAdminMembers();
+      toast('Badge display order updated', 'success');
+    } catch (err) {
+      console.error('Reorder badges error:', err);
+      toast(err.message || 'Failed to reorder badges', 'error');
+    }
   });
 }
 
@@ -14108,6 +14561,7 @@ function openBadgeModal(badge = null) {
         description: description.trim(),
         color: selectedColor,
         icon: selectedIcon,
+        order: badge && typeof badge.order === 'number' ? badge.order : (state.badges || []).length,
         updatedAt: serverTimestamp()
       };
 
@@ -16200,14 +16654,15 @@ function renderAdminMembers() {
       <div class="admin-member-row member-card-row bulk-select-card hover:bg-white/5 transition cursor-pointer select-none rounded-xl p-3 bg-white/[0.02] border border-white/5 mb-2${isDisabled ? ' member-disabled' : ''}${isSelected ? ' selected' : ''}" data-member-uid="${esc(m.uid)}" data-bulk-id="${esc(m.uid)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content flex flex-col w-full min-w-0 gap-2">
-          <!-- ROW 1 (Header): Avatar + Name + Badges (Left) | Chevron (Right) -->
+          <!-- ROW 1 (Header): Avatar + Name + Compact Icon-Only Badge Strip (Left) | Role & Chevron (Right) -->
           <div class="flex items-center justify-between w-full min-w-0">
             <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
               <div class="shrink-0">
                 ${renderAvatar(m, 'w-10 h-10')}
               </div>
-              <div class="min-w-0 flex-1">
-                <div class="font-bold text-white text-sm truncate">${esc(m.displayName || m.name || 'Member')}</div>
+              <div class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
+                <div class="font-bold text-white text-sm truncate shrink-0 max-w-[160px]">${esc(m.displayName || m.name || 'Member')}</div>
+                <div class="badge-row-container badge-strip-compact flex items-center gap-1 flex-1 min-w-0 overflow-hidden" data-uid="${esc(m.uid)}"></div>
               </div>
               ${isDisabled ? `
                 <span class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">
@@ -16229,15 +16684,14 @@ function renderAdminMembers() {
             </div>
           </div>
 
-          <!-- ROW 2 (Details): Email + Badges (wrap) (Left) | Stat pills: pts (Green), pen (Red), EGP (Orange) (Right) -->
+          <!-- ROW 2 (Details): Email (Left) | Stat pills: pts (Green), pen (Red), EGP (Orange) (Right) -->
           <div class="flex items-center justify-between w-full min-w-0 pt-2 border-t border-white/5 gap-2">
-            <div class="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
+            <div class="flex items-center gap-2 min-w-0 flex-1">
               ${memberEmail ? `
-                <span style="font-size:12px; color:#8E8E93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;">
+                <span style="font-size:12px; color:#8E8E93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px;">
                   ${memberEmail}
                 </span>
-              ` : ''}
-              <div class="badge-row-container flex items-center gap-1 min-w-0 flex-wrap" data-uid="${esc(m.uid)}"></div>
+              ` : '<span class="text-[11px] text-neutral-500">Active Member</span>'}
             </div>
             <div class="member-stats-wrap flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
               <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">${points} pts</span>
@@ -16420,10 +16874,14 @@ function openMemberControlModal(member) {
         <div class="min-w-0 flex-1">
           <div class="font-bold text-white text-base truncate" id="member-ctrl-hero-name">${esc(currentMember.displayName || currentMember.name || 'Member')}</div>
           <div class="text-[12px] text-neutral-400 truncate">${esc(memberEmail)}</div>
-          <div class="mt-1">
+          <div class="mt-1 flex items-center gap-2 flex-wrap">
             <span id="member-ctrl-hero-role-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}">
               ${isAdmin ? 'ADMIN' : 'MEMBER'}
             </span>
+            <button type="button" id="btn-ctrl-open-member-notifs" class="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#0A84FF]/15 hover:bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/30 transition flex items-center gap-1">
+              <svg class="w-3 h-3 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+              <span>Notification History &amp; Push</span>
+            </button>
           </div>
         </div>
       </div>
@@ -16442,20 +16900,23 @@ function openMemberControlModal(member) {
         </div>
       </div>
 
-      <!-- Badges Management Card -->
+      <!-- Badges Management Card (Zero-Latency Local Draft + Drag Reorder) -->
       <div class="ios-card space-y-3">
         <div class="flex items-center justify-between">
-          <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Member Badges</span>
-          <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline">
+          <div>
+            <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Member Badges (Draft)</span>
+            <p class="text-[10px] text-neutral-400">Drag <strong class="text-white">≡</strong> to set Primary badge (Index 0). Saved when you tap Save.</p>
+          </div>
+          <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline shrink-0">
             + Create New Badge
           </button>
         </div>
 
-        <div id="ctrl-badges-list" class="flex flex-wrap gap-1.5 min-h-8 items-center"></div>
+        <div id="ctrl-badges-list" class="badge-pills-expanded-wrap min-h-8 items-center"></div>
 
         <div>
-          <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Available Badges (Tap to Toggle):</label>
-          <div id="ctrl-live-badges-grid" class="flex flex-wrap gap-1.5"></div>
+          <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Available Badges (Tap to Toggle in Draft):</label>
+          <div id="ctrl-live-badges-grid" class="badge-pills-expanded-wrap"></div>
         </div>
       </div>
 
@@ -16844,35 +17305,26 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Badges Management (Live Badges from Firestore)
-  function getMemberBadgeIdsSet() {
-    const set = new Set();
-    if (Array.isArray(currentMember.badgeIds)) {
-      currentMember.badgeIds.forEach(id => { if (id) set.add(String(id)); });
-    }
-    if (Array.isArray(currentMember.badges)) {
-      currentMember.badges.forEach(b => {
-        const id = typeof b === 'string' ? b : (b?.id || b?.label || b?.name);
-        if (id) set.add(String(id));
-      });
-    }
-    return set;
+  // Wire Member Notification Center Quick Button (FIX 3)
+  const openMemberNotifsBtn = modalBody.querySelector('#btn-ctrl-open-member-notifs');
+  if (openMemberNotifsBtn) {
+    openMemberNotifsBtn.onclick = () => {
+      openAdminMemberNotificationCenter(currentMember.uid);
+    };
   }
 
-  async function toggleMemberBadge(badgeObj) {
-    if (!badgeObj || !badgeObj.id) return;
+  // Wire Badges Management (FIX 5: Zero-Latency Draft State + FIX 7: Admin Drag-and-Drop Priority Reordering + FIX 9: Discord-Style Pills)
+  const initialOrderedBadges = resolveOrderedUserBadges(currentMember.badges, currentMember);
+  const initialBadgeIds = initialOrderedBadges.map(b => String(b.id));
+  let draftBadgeIds = [...initialBadgeIds];
+
+  function getMemberBadgeIdsSet() {
+    return new Set(draftBadgeIds);
+  }
+
+  function resolveDraftBadgeObjects(idsList) {
     const allBadges = getAllAvailableBadges();
-    const assignedIds = getMemberBadgeIdsSet();
-    const isRemoving = assignedIds.has(badgeObj.id);
-
-    if (isRemoving) {
-      assignedIds.delete(badgeObj.id);
-    } else {
-      assignedIds.add(badgeObj.id);
-    }
-
-    const newBadgeIds = Array.from(assignedIds);
-    const newBadges = newBadgeIds.map(id => {
+    return idsList.map(id => {
       const found = allBadges.find(b => b.id === id);
       if (found) {
         return {
@@ -16884,48 +17336,23 @@ function openMemberControlModal(member) {
         };
       }
       const existing = (currentMember.badges || []).find(b => (typeof b === 'string' ? b : b?.id) === id);
-      return typeof existing === 'object' && existing ? existing : { id, label: id, color: '#0A84FF', icon: 'star' };
+      return typeof existing === 'object' && existing ? existing : { id, label: id, name: id, color: '#0A84FF', icon: 'star' };
     });
+  }
 
-    try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'users', currentMember.uid), {
-        badges: newBadges,
-        badgeIds: newBadgeIds,
-        updatedAt: serverTimestamp()
-      });
+  function toggleMemberBadge(badgeObj) {
+    if (!badgeObj || !badgeObj.id) return;
+    const targetId = String(badgeObj.id);
+    const existingIdx = draftBadgeIds.indexOf(targetId);
 
-      if (!isRemoving) {
-        createNotification(batch, {
-          uid: currentMember.uid,
-          title: 'Badge Awarded!',
-          message: `You have been awarded the "${badgeObj.label || badgeObj.name}" badge!`,
-          type: 'badge'
-        });
-      }
-
-      logAdminAction(batch, {
-        action: isRemoving ? 'badge_removed' : 'badge_awarded',
-        targetUid: currentMember.uid,
-        details: { badgeId: badgeObj.id, badgeLabel: badgeObj.label || badgeObj.name }
-      });
-
-      await batch.commit();
-      currentMember.badges = newBadges;
-      currentMember.badgeIds = newBadgeIds;
-      const inMap = usersMap.get(currentMember.uid);
-      if (inMap) {
-        inMap.badges = newBadges;
-        inMap.badgeIds = newBadgeIds;
-      }
-      toast(isRemoving ? `Badge "${badgeObj.label || badgeObj.name}" removed` : `Badge "${badgeObj.label || badgeObj.name}" awarded!`, isRemoving ? 'info' : 'success');
-      refreshBadgesDOM();
-      renderAdminMembers();
-      renderLeaderboard();
-    } catch (err) {
-      console.error('Error toggling badge:', err);
-      toast('Failed to update badge: ' + (err.message || err), 'error');
+    if (existingIdx !== -1) {
+      draftBadgeIds.splice(existingIdx, 1);
+    } else {
+      draftBadgeIds.push(targetId);
     }
+
+    markDirty();
+    refreshBadgesDOM();
   }
 
   function refreshBadgesDOM() {
@@ -16935,32 +17362,36 @@ function openMemberControlModal(member) {
     const assignedIds = getMemberBadgeIdsSet();
 
     if (badgesList) {
-      const assignedList = Array.from(assignedIds).map(id => {
-        const live = allBadges.find(b => b.id === id);
-        if (live) return live;
-        const raw = (currentMember.badges || []).find(b => (typeof b === 'string' ? b : b?.id) === id);
-        return typeof raw === 'object' && raw ? raw : { id, label: id, color: '#0A84FF', icon: 'star' };
-      });
+      const assignedList = resolveDraftBadgeObjects(draftBadgeIds);
 
       if (assignedList.length > 0) {
-        badgesList.innerHTML = assignedList.map(b => {
+        badgesList.innerHTML = assignedList.map((b, idx) => {
           const color = b.color || '#0A84FF';
           const iconKey = b.icon || b.iconKey || 'star';
           const label = b.label || b.name || b.id;
           return `
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition" style="background-color: ${color}24; border-color: ${color}55; color: ${color};">
-              <span class="w-3.5 h-3.5 flex items-center justify-center shrink-0">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
-              <span class="text-white">${esc(label)}</span>
+            <span class="badge-pill-expanded ctrl-assigned-badge-item select-none" data-badge-id="${esc(b.id)}" style="background-color: ${color}1F; border-color: ${color}4D;">
+              <span class="drag-reorder-handle !w-4 !h-4 !text-[12px] mr-0.5" data-no-row-tap="true" title="Drag to reorder badge priority">≡</span>
+              <span class="badge-pill-icon" style="color: ${color};">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
+              <span>${esc(label)}</span>
+              ${idx === 0 ? '<span class="px-1.5 py-0.2 rounded text-[9px] font-bold uppercase bg-[#0A84FF]/30 text-[#0A84FF]">Primary</span>' : ''}
               <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5 text-white/70" data-badge-id="${esc(b.id)}" aria-label="Remove badge">&times;</button>
             </span>
           `;
         }).join('');
+
+        attachDragReorderList(badgesList, '.ctrl-assigned-badge-item', 'data-badge-id', (newOrder) => {
+          draftBadgeIds = newOrder;
+          markDirty();
+          refreshBadgesDOM();
+        });
       } else {
         badgesList.innerHTML = '<span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>';
       }
 
       badgesList.querySelectorAll('.btn-remove-member-badge').forEach(btn => {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
           const bId = btn.dataset.badgeId;
           const found = allBadges.find(b => b.id === bId) || { id: bId, label: bId };
           toggleMemberBadge(found);
@@ -16978,10 +17409,10 @@ function openMemberControlModal(member) {
           const iconKey = badge.icon || badge.iconKey || 'star';
           const label = badge.label || badge.name || badge.id;
           return `
-            <button type="button" class="btn-toggle-live-badge text-[11px] px-2.5 py-1.5 rounded-xl border transition flex items-center gap-1.5 font-semibold ${alreadyHas ? 'ring-1 ring-white/30 text-white' : ' hover:bg-white/10 text-neutral-200'}" data-badge-id="${esc(badge.id)}" style="background-color: ${alreadyHas ? color + '38' : 'rgba(255,255,255,0.05)'}; border-color: ${alreadyHas ? color : 'rgba(255,255,255,0.12)'};">
-              <span class="w-3.5 h-3.5 flex items-center justify-center shrink-0" style="color: ${color};">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
+            <button type="button" class="btn-toggle-live-badge badge-pill-expanded cursor-pointer transition ${alreadyHas ? 'ring-1 ring-white/40' : 'opacity-75 hover:opacity-100'}" data-badge-id="${esc(badge.id)}" style="background-color: ${alreadyHas ? color + '30' : 'rgba(255,255,255,0.05)'}; border-color: ${alreadyHas ? color : 'rgba(255,255,255,0.12)'};">
+              <span class="badge-pill-icon" style="color: ${color};">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
               <span>${esc(label)}</span>
-              <span class="text-[10px] ml-0.5 ${alreadyHas ? 'text-emerald-300' : 'text-neutral-400'}">${alreadyHas ? '✓' : '+'}</span>
+              <span class="text-[10px] ml-0.5 ${alreadyHas ? 'text-emerald-300 font-bold' : 'text-neutral-400'}">${alreadyHas ? '✓' : '+'}</span>
             </button>
           `;
         }).join('');
@@ -17003,11 +17434,11 @@ function openMemberControlModal(member) {
   if (openBadgePickerBtn) {
     openBadgePickerBtn.onclick = () => {
       openBadgePickerSheet({
-        onSelect: async (badgeObj) => {
+        onSelect: (badgeObj) => {
           if (!badgeObj) return;
           const assignedIds = getMemberBadgeIdsSet();
           if (!assignedIds.has(badgeObj.id)) {
-            await toggleMemberBadge(badgeObj);
+            toggleMemberBadge(badgeObj);
           }
         }
       });
@@ -17172,19 +17603,32 @@ function openMemberControlModal(member) {
       try {
         const batch = writeBatch(db);
         const userRef = doc(db, 'users', member.uid);
+        const newBadges = resolveDraftBadgeObjects(draftBadgeIds);
+        const newlyAddedBadges = newBadges.filter(b => !initialBadgeIds.includes(String(b.id)));
 
         batch.update(userRef, {
           displayName: cleanName,
           name: cleanName,
           role: selectedRole,
           isAdmin: selectedRole === 'admin',
+          badgeIds: draftBadgeIds,
+          badges: newBadges,
           updatedAt: serverTimestamp()
+        });
+
+        newlyAddedBadges.forEach(badgeObj => {
+          createNotification(batch, {
+            uid: member.uid,
+            title: 'Badge Awarded!',
+            message: `You have been awarded the "${badgeObj.label || badgeObj.name}" badge!`,
+            type: 'badge'
+          });
         });
 
         logAdminAction(batch, {
           action: 'member_updated',
           targetUid: member.uid,
-          details: { displayName: cleanName, role: selectedRole }
+          details: { displayName: cleanName, role: selectedRole, badgeIds: draftBadgeIds }
         });
 
         await batch.commit();
@@ -17193,6 +17637,10 @@ function openMemberControlModal(member) {
         member.name = cleanName;
         member.role = selectedRole;
         member.isAdmin = (selectedRole === 'admin');
+        member.badgeIds = [...draftBadgeIds];
+        member.badges = newBadges;
+        currentMember.badgeIds = [...draftBadgeIds];
+        currentMember.badges = newBadges;
 
         const u = usersMap.get(member.uid);
         if (u) {
@@ -17200,10 +17648,22 @@ function openMemberControlModal(member) {
           u.name = cleanName;
           u.role = selectedRole;
           u.isAdmin = (selectedRole === 'admin');
+          u.badgeIds = [...draftBadgeIds];
+          u.badges = newBadges;
+        }
+        if (state.user?.uid === member.uid) {
+          state.user.displayName = cleanName;
+          state.user.name = cleanName;
+          state.user.role = selectedRole;
+          state.user.isAdmin = (selectedRole === 'admin');
+          state.user.badgeIds = [...draftBadgeIds];
+          state.user.badges = newBadges;
+          updateProfileUI();
         }
 
         renderMembersAdmin();
-        toast('Member profile saved successfully', 'success');
+        renderLeaderboard();
+        toast('Member profile & badges saved successfully', 'success');
         hasPendingChanges = false;
         return true;
       } catch (err) {
@@ -17859,26 +18319,6 @@ function renderAdminBroadcasts() {
       }
     }
 
-    const actionsHtml = isArchivedItem ? `
-      <div class="flex items-center gap-1.5" data-no-row-tap="true">
-        <button type="button" class="btn-broadcast-restore px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Restore
-        </button>
-        <button type="button" class="btn-broadcast-delete px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Permanent Delete
-        </button>
-      </div>
-    ` : `
-      <div class="flex items-center gap-1.5" data-no-row-tap="true">
-        <button type="button" class="btn-broadcast-archive px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/10 hover:bg-white/15 text-neutral-200 border border-white/15 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Archive
-        </button>
-        <button type="button" class="btn-broadcast-delete px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Delete
-        </button>
-      </div>
-    `;
-
     return `
       <div class="glass-card bulk-select-card p-3.5 space-y-2 text-xs cursor-pointer select-none rounded-xl hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-broadcast-id="${esc(b.id)}" data-bulk-id="${esc(b.id)}">
         ${BULK_INDICATOR_HTML}
@@ -17924,36 +18364,11 @@ function renderAdminBroadcasts() {
               <span>Schedule:</span>
               <span>${startFormatted} &rarr; ${endFormatted}</span>
             </div>
-            ${actionsHtml}
           </div>
         </div>
       </div>
     `;
   }).join('');
-
-  container.querySelectorAll('.btn-broadcast-archive').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) handleArchiveBroadcast(b, true);
-    };
-  });
-
-  container.querySelectorAll('.btn-broadcast-restore').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) handleArchiveBroadcast(b, false);
-    };
-  });
-
-  container.querySelectorAll('.btn-broadcast-delete').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) handleDeleteBroadcast(b);
-    };
-  });
 
   container.querySelectorAll('.bulk-select-card').forEach(card => {
     attachRowGestures(card, {
@@ -18113,21 +18528,6 @@ function openAdminBroadcastModal(broadcast = null) {
         <input type="text" id="broadcastFooter" class="ios-input text-white text-xs" maxlength="80" placeholder="e.g. Bring your laptop and ID badge" value="${esc(broadcast?.customFooter || "")}" />
         <p class="text-[10px] text-neutral-400">Displayed at the bottom of the member detail card. Leave empty to omit the footer.</p>
       </div>
-
-      ${broadcast ? `
-        <!-- Card 5: Broadcast Actions (Archive / Restore / Delete) -->
-        <div class="ios-card space-y-2">
-          <div class="text-[11px] font-bold text-neutral-400 tracking-wider">BROADCAST ACTIONS</div>
-          <div class="grid grid-cols-2 gap-2">
-            <button type="button" id="btnModalArchiveBroadcast" class="py-2.5 px-3 rounded-xl text-xs font-semibold ${(broadcast.isArchived || broadcast.archived) ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30' : 'bg-white/10 hover:bg-white/15 text-white border border-white/15'} transition cursor-pointer">
-              ${(broadcast.isArchived || broadcast.archived) ? 'Restore Broadcast' : 'Archive Broadcast'}
-            </button>
-            <button type="button" id="btnModalDeleteBroadcast" class="py-2.5 px-3 rounded-xl text-xs font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer">
-              ${(broadcast.isArchived || broadcast.archived) ? 'Permanent Delete' : 'Delete Broadcast'}
-            </button>
-          </div>
-        </div>
-      ` : ''}
     `;
 
     wireForm();
@@ -18205,23 +18605,6 @@ function openAdminBroadcastModal(broadcast = null) {
             b.classList.toggle("active", parseInt(b.dataset.sec, 10) === val);
           });
         }
-      };
-    }
-
-    const modalArchiveBtn = modalBody.querySelector("#btnModalArchiveBroadcast");
-    if (modalArchiveBtn && broadcast) {
-      modalArchiveBtn.onclick = async () => {
-        const isCurrentlyArchived = Boolean(broadcast.isArchived || broadcast.archived);
-        closeAllModals();
-        await handleArchiveBroadcast(broadcast, !isCurrentlyArchived);
-      };
-    }
-
-    const modalDeleteBtn = modalBody.querySelector("#btnModalDeleteBroadcast");
-    if (modalDeleteBtn && broadcast) {
-      modalDeleteBtn.onclick = async () => {
-        closeAllModals();
-        await handleDeleteBroadcast(broadcast);
       };
     }
   }
@@ -18671,6 +19054,830 @@ export async function handleChangeAppLogo() {
   }
 }
 
+/* ==========================================================================
+   FIX 3: ADMIN HUB — MEMBER NOTIFICATION CENTER (HISTORY AUDIT & CUSTOM PUSH)
+   ========================================================================== */
+export async function openAdminMemberNotificationCenter(initialUid = null) {
+  const getAllMembersList = () => {
+    const list = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
+    return list.sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  };
+
+  let membersList = getAllMembersList();
+  let selectedUid = initialUid || (membersList[0]?.uid || state.user?.uid || '');
+  let memberSearchQuery = '';
+  let historyItems = [];
+  let loadingHistory = false;
+  let customTitle = '';
+  let customMessage = '';
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4 text-xs';
+
+  async function fetchMemberNotificationHistory(uid) {
+    if (!uid || !db) {
+      historyItems = [];
+      return;
+    }
+    loadingHistory = true;
+    renderHistorySection();
+
+    try {
+      const mergedMap = new Map();
+
+      const [subSnap, rootSnap] = await Promise.all([
+        getDocs(query(collection(db, 'users', uid, 'notifications'), limit(100))).catch(() => ({ docs: [] })),
+        getDocs(query(collection(db, 'notifications'), where('uid', '==', uid), limit(100))).catch(() => ({ docs: [] }))
+      ]);
+
+      subSnap.docs.forEach(d => {
+        const norm = normalizeNotification({ id: d.id, uid, ...d.data() });
+        if (norm) mergedMap.set(norm.id, norm);
+      });
+
+      rootSnap.docs.forEach(d => {
+        const norm = normalizeNotification({ id: d.id, uid, ...d.data() });
+        if (norm) {
+          const existing = mergedMap.get(norm.id);
+          if (existing) {
+            existing.read = Boolean(existing.read || norm.read);
+          } else {
+            mergedMap.set(norm.id, norm);
+          }
+        }
+      });
+
+      historyItems = Array.from(mergedMap.values()).sort((a, b) => {
+        const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
+        const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
+        return tB - tA;
+      });
+    } catch (err) {
+      console.warn('Error fetching member notification history:', err);
+      historyItems = [];
+    } finally {
+      loadingHistory = false;
+      renderHistorySection();
+    }
+  }
+
+  function renderMainLayout() {
+    membersList = getAllMembersList();
+    if (!selectedUid && membersList.length > 0) {
+      selectedUid = membersList[0].uid;
+    }
+    const selectedMember = usersMap.get(selectedUid) || membersList.find(m => m.uid === selectedUid) || { uid: selectedUid, displayName: 'Select Member', name: 'Select Member' };
+
+    bodyEl.innerHTML = `
+      <!-- 1. Member Selector & Search -->
+      <div class="ios-card space-y-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">1. Select Target Member</div>
+          <button type="button" id="btn-mnc-open-picker" class="text-[11px] font-semibold text-[#0A84FF] hover:underline">
+            Full Member Picker &rarr;
+          </button>
+        </div>
+
+        <input type="search" id="input-mnc-member-search" class="ios-input text-white text-xs w-full" placeholder="Search member by name or UID..." value="${esc(memberSearchQuery)}" />
+
+        <div id="mnc-member-chips" class="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none"></div>
+
+        <div id="mnc-selected-member-banner" class="p-2.5 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
+            ${renderAvatar(selectedMember, 'w-8 h-8')}
+            <div class="min-w-0">
+              <div class="font-bold text-white text-xs truncate">${esc(selectedMember.displayName || selectedMember.name || 'Member')}</div>
+              <div class="text-[10px] text-neutral-400 font-mono truncate">${esc(selectedMember.uid || 'No member selected')}</div>
+            </div>
+          </div>
+          <button type="button" id="btn-mnc-refresh-history" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 font-semibold text-[11px] transition shrink-0">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- 2. Push Custom Notification Directly to Selected Member -->
+      <div class="ios-card space-y-2.5">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">2. Push Custom Notification</div>
+        <div>
+          <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Notification Title *</label>
+          <input type="text" id="input-mnc-push-title" class="ios-input text-white text-xs w-full" placeholder="e.g. Action Required: Media Upload" value="${esc(customTitle)}" />
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Message Body *</label>
+          <textarea id="input-mnc-push-message" rows="2" class="ios-input text-white text-xs w-full" placeholder="Write a personal message to this member...">${esc(customMessage)}</textarea>
+        </div>
+        <button type="button" id="btn-mnc-send-push" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-sm">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.2" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          <span>Send Custom Notification</span>
+        </button>
+      </div>
+
+      <!-- 3. Chronological Notification History Feed -->
+      <div class="ios-card space-y-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">3. Member Notification History</span>
+          <span id="mnc-history-count" class="text-[11px] font-mono text-neutral-400">0 items</span>
+        </div>
+        <div id="mnc-history-feed" class="space-y-2 max-h-80 overflow-y-auto pr-1"></div>
+      </div>
+    `;
+
+    renderMemberChips();
+    renderHistorySection();
+    wireEvents();
+  }
+
+  function renderMemberChips() {
+    const chipsContainer = bodyEl.querySelector('#mnc-member-chips');
+    if (!chipsContainer) return;
+
+    const q = memberSearchQuery.toLowerCase().trim();
+    const filteredMembers = membersList.filter(m => {
+      if (!q) return true;
+      const name = (m.displayName || m.name || '').toLowerCase();
+      return name.includes(q) || (m.uid || '').toLowerCase().includes(q);
+    }).slice(0, 30);
+
+    if (filteredMembers.length === 0) {
+      chipsContainer.innerHTML = '<span class="text-[11px] text-neutral-500 italic py-1">No matching members</span>';
+      return;
+    }
+
+    chipsContainer.innerHTML = filteredMembers.map(m => {
+      const isSel = m.uid === selectedUid;
+      return `
+        <button type="button" class="btn-mnc-member-chip px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition shrink-0 ${isSel ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/10 text-neutral-300 hover:bg-white/15'}" data-uid="${esc(m.uid)}">
+          ${esc(m.displayName || m.name || 'Member')}
+        </button>
+      `;
+    }).join('');
+
+    chipsContainer.querySelectorAll('.btn-mnc-member-chip').forEach(btn => {
+      btn.onclick = () => {
+        selectedUid = btn.dataset.uid;
+        renderMainLayout();
+        fetchMemberNotificationHistory(selectedUid);
+      };
+    });
+  }
+
+  function renderHistorySection() {
+    const feedEl = bodyEl.querySelector('#mnc-history-feed');
+    const countEl = bodyEl.querySelector('#mnc-history-count');
+    if (!feedEl) return;
+
+    if (countEl) {
+      countEl.textContent = `${historyItems.length} item${historyItems.length === 1 ? '' : 's'}`;
+    }
+
+    if (loadingHistory) {
+      feedEl.innerHTML = `
+        <div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+          <div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
+          <span>Loading member notifications...</span>
+        </div>
+      `;
+      return;
+    }
+
+    if (historyItems.length === 0) {
+      feedEl.innerHTML = `
+        <div class="p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-xl">
+          No personal notifications found for this member.
+        </div>
+      `;
+      return;
+    }
+
+    feedEl.innerHTML = historyItems.map(n => {
+      const isRead = Boolean(n.read);
+      const timeStr = formatDateTime(n.timestamp || n.createdAt);
+      const bodyText = n.body || n.message || '';
+
+      return `
+        <div class="p-3 rounded-xl bg-white/5 border ${isRead ? 'border-white/10 opacity-85' : 'border-[#0A84FF]/40 bg-[#0A84FF]/[0.06]'} space-y-2" data-mnc-notif-id="${esc(n.id)}">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${isRead ? 'bg-white/10 text-neutral-400' : 'bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/40'}">
+                  ${isRead ? 'Read' : 'Unread'}
+                </span>
+                <span class="text-[10px] font-mono text-neutral-400">${timeStr}</span>
+              </div>
+              <div class="font-bold text-white text-xs mt-1">${esc(n.title)}</div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" class="btn-mnc-toggle-read px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 font-semibold text-[10px] transition" data-notif-id="${esc(n.id)}">
+                ${isRead ? 'Mark Unread' : 'Mark Read'}
+              </button>
+              <button type="button" class="btn-mnc-delete-notif px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[10px] transition" data-notif-id="${esc(n.id)}">
+                Delete
+              </button>
+            </div>
+          </div>
+          <p class="text-neutral-300 text-[11px] whitespace-pre-line leading-relaxed bg-black/20 p-2 rounded-lg border border-white/5">${esc(bodyText)}</p>
+        </div>
+      `;
+    }).join('');
+
+    feedEl.querySelectorAll('.btn-mnc-toggle-read').forEach(btn => {
+      btn.onclick = async () => {
+        const notifId = btn.dataset.notifId;
+        const item = historyItems.find(x => x.id === notifId);
+        if (!item || !selectedUid) return;
+        const nextRead = !item.read;
+        item.read = nextRead;
+        renderHistorySection();
+        try {
+          await markSingleNotificationReadInFirestore(item, selectedUid, nextRead);
+          if (state.user?.uid === selectedUid) {
+            const localItem = state.notifications.find(x => x.id === notifId);
+            if (localItem) localItem.read = nextRead;
+            updateNotificationBadges();
+            renderNotifications();
+          }
+          toast(`Notification marked as ${nextRead ? 'read' : 'unread'}`, 'info');
+        } catch (err) {
+          toast('Failed to toggle read state: ' + (err.message || err), 'error');
+        }
+      };
+    });
+
+    feedEl.querySelectorAll('.btn-mnc-delete-notif').forEach(btn => {
+      btn.onclick = async () => {
+        const notifId = btn.dataset.notifId;
+        const item = historyItems.find(x => x.id === notifId);
+        if (!item || !selectedUid) return;
+        historyItems = historyItems.filter(x => x.id !== notifId);
+        renderHistorySection();
+        try {
+          await deleteSingleNotificationFromFirestore(item, selectedUid);
+          if (state.user?.uid === selectedUid) {
+            updateNotificationBadges();
+            renderNotifications();
+          }
+          toast('Notification deleted from member history', 'info');
+        } catch (err) {
+          toast('Failed to delete notification: ' + (err.message || err), 'error');
+        }
+      };
+    });
+  }
+
+  function wireEvents() {
+    const searchInp = bodyEl.querySelector('#input-mnc-member-search');
+    if (searchInp) {
+      searchInp.oninput = (e) => {
+        memberSearchQuery = e.target.value;
+        renderMemberChips();
+      };
+    }
+
+    const openPickerBtn = bodyEl.querySelector('#btn-mnc-open-picker');
+    if (openPickerBtn) {
+      openPickerBtn.onclick = () => {
+        openMemberPicker({
+          multi: false,
+          includeAllOption: false,
+          selectedUids: selectedUid ? [selectedUid] : [],
+          onConfirm: (selected) => {
+            if (selected && selected[0]) {
+              selectedUid = selected[0];
+              renderMainLayout();
+              fetchMemberNotificationHistory(selectedUid);
+            }
+          }
+        });
+      };
+    }
+
+    const refreshBtn = bodyEl.querySelector('#btn-mnc-refresh-history');
+    if (refreshBtn) {
+      refreshBtn.onclick = () => {
+        if (selectedUid) fetchMemberNotificationHistory(selectedUid);
+      };
+    }
+
+    const titleInp = bodyEl.querySelector('#input-mnc-push-title');
+    if (titleInp) titleInp.oninput = (e) => { customTitle = e.target.value; };
+
+    const msgInp = bodyEl.querySelector('#input-mnc-push-message');
+    if (msgInp) msgInp.oninput = (e) => { customMessage = e.target.value; };
+
+    const sendBtn = bodyEl.querySelector('#btn-mnc-send-push');
+    if (sendBtn) {
+      sendBtn.onclick = async () => {
+        const cleanTitle = customTitle.trim();
+        const cleanMsg = customMessage.trim();
+        if (!selectedUid) {
+          toast('Please select a target member first', 'error');
+          return;
+        }
+        if (!cleanTitle || !cleanMsg) {
+          toast('Please enter both a Title and Message', 'warning');
+          return;
+        }
+
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sending...';
+
+        try {
+          const batch = writeBatch(db);
+          createNotification(batch, {
+            uid: selectedUid,
+            title: cleanTitle,
+            message: cleanMsg,
+            body: cleanMsg,
+            type: 'system',
+            icon: 'bell'
+          });
+          logAdminAction(batch, {
+            action: 'admin_member_custom_notification',
+            targetUid: selectedUid,
+            details: { title: cleanTitle, message: cleanMsg }
+          });
+          await batch.commit();
+
+          customTitle = '';
+          customMessage = '';
+          if (titleInp) titleInp.value = '';
+          if (msgInp) msgInp.value = '';
+
+          toast('Custom notification sent to member!', 'success');
+          await fetchMemberNotificationHistory(selectedUid);
+        } catch (err) {
+          console.error('Error sending custom member notification:', err);
+          toast('Failed to send notification: ' + (err.message || err), 'error');
+        } finally {
+          sendBtn.disabled = false;
+          sendBtn.innerHTML = '<span>Send Custom Notification</span>';
+        }
+      };
+    }
+  }
+
+  renderMainLayout();
+  if (selectedUid) {
+    fetchMemberNotificationHistory(selectedUid);
+  }
+
+  openModal({
+    title: 'Member Notification Center',
+    body: bodyEl,
+    saveLabel: null,
+    cancelLabel: 'Close'
+  });
+}
+
+/* ==========================================================================
+   FIX 8: "WHAT'S NEW" CHANGELOG & PERSISTENT DRAFT EDITOR (IndexedDB + localStorage)
+   ========================================================================== */
+const WHATS_NEW_IDB_NAME = 'coc_media_drafts_db';
+const WHATS_NEW_IDB_STORE = 'drafts';
+const WHATS_NEW_DRAFT_KEY = 'whats_new_draft';
+const WHATS_NEW_LS_KEY = 'coc_whats_new_draft_v1';
+
+const DEFAULT_WHATS_NEW_NOTES = {
+  version: APP_VERSION,
+  title: `What's New in v${APP_VERSION}`,
+  content: [
+    '• Unified Discord-style horizontal badge pills & compact 22px icon strips across lists and leaderboards.',
+    '• Personal notification swipe-to-delete & bulk Delete action pill in Updates.',
+    '• Member & Admin drag-and-drop badge priority reordering (Index 0 is your Primary Badge).',
+    '• Global Admin drag-and-drop reordering for Categories, Badges, and Tasks.',
+    '• New Admin Member Notification Center to audit member notification history and send custom one-off alerts.',
+    '• Zero-latency Draft state for Member Control badge assignments.'
+  ].join('\n')
+};
+
+function openWhatsNewDraftDB() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      resolve(null);
+      return;
+    }
+    try {
+      const req = indexedDB.open(WHATS_NEW_IDB_NAME, 1);
+      req.onupgradeneeded = (e) => {
+        const idb = e.target.result;
+        if (!idb.objectStoreNames.contains(WHATS_NEW_IDB_STORE)) {
+          idb.createObjectStore(WHATS_NEW_IDB_STORE);
+        }
+      };
+      req.onsuccess = (e) => resolve(e.target.result);
+      req.onerror = () => resolve(null);
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
+export async function loadWhatsNewLocalDraft() {
+  try {
+    const idb = await openWhatsNewDraftDB();
+    if (idb) {
+      const fromIdb = await new Promise((resolve) => {
+        try {
+          const tx = idb.transaction(WHATS_NEW_IDB_STORE, 'readonly');
+          const store = tx.objectStore(WHATS_NEW_IDB_STORE);
+          const getReq = store.get(WHATS_NEW_DRAFT_KEY);
+          getReq.onsuccess = () => resolve(getReq.result || null);
+          getReq.onerror = () => resolve(null);
+        } catch (e) {
+          resolve(null);
+        }
+      });
+      if (fromIdb && (fromIdb.title || fromIdb.content)) {
+        return fromIdb;
+      }
+    }
+  } catch (e) { /* fallback to localStorage */ }
+
+  try {
+    const raw = localStorage.getItem(WHATS_NEW_LS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch (e) { /* ignore */ }
+
+  return null;
+}
+
+export async function saveWhatsNewLocalDraft(draftObj) {
+  const payload = {
+    version: draftObj?.version || APP_VERSION,
+    title: draftObj?.title ?? '',
+    content: draftObj?.content ?? '',
+    updatedAtMs: Date.now()
+  };
+
+  try {
+    localStorage.setItem(WHATS_NEW_LS_KEY, JSON.stringify(payload));
+  } catch (e) { /* ignore */ }
+
+  try {
+    const idb = await openWhatsNewDraftDB();
+    if (idb) {
+      await new Promise((resolve) => {
+        try {
+          const tx = idb.transaction(WHATS_NEW_IDB_STORE, 'readwrite');
+          const store = tx.objectStore(WHATS_NEW_IDB_STORE);
+          store.put(payload, WHATS_NEW_DRAFT_KEY);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        } catch (e) {
+          resolve(false);
+        }
+      });
+    }
+  } catch (e) { /* ignore */ }
+
+  return payload;
+}
+
+export async function clearWhatsNewLocalDraft() {
+  try {
+    localStorage.removeItem(WHATS_NEW_LS_KEY);
+  } catch (e) { /* ignore */ }
+
+  try {
+    const idb = await openWhatsNewDraftDB();
+    if (idb) {
+      await new Promise((resolve) => {
+        try {
+          const tx = idb.transaction(WHATS_NEW_IDB_STORE, 'readwrite');
+          const store = tx.objectStore(WHATS_NEW_IDB_STORE);
+          store.delete(WHATS_NEW_DRAFT_KEY);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        } catch (e) {
+          resolve(false);
+        }
+      });
+    }
+  } catch (e) { /* ignore */ }
+}
+
+export async function openWhatsNewSheet() {
+  let liveData = state.whatsNew || null;
+  if (db) {
+    try {
+      const snap = await getDoc(doc(db, 'settings', 'whats_new'));
+      if (snap.exists()) {
+        liveData = snap.data();
+        state.whatsNew = liveData;
+      }
+    } catch (e) {
+      console.warn('Fetch settings/whats_new:', e);
+    }
+  }
+
+  const displayVersion = liveData?.version || APP_VERSION;
+  const displayTitle = liveData?.title || DEFAULT_WHATS_NEW_NOTES.title;
+  const displayContent = liveData?.content || liveData?.notes || liveData?.body || DEFAULT_WHATS_NEW_NOTES.content;
+  const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin' || state.isAdminUnlocked);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4 text-xs';
+  bodyEl.innerHTML = `
+    <div class="p-4 rounded-2xl bg-gradient-to-br from-[#0A84FF]/20 via-[#BF5AF2]/10 to-transparent border border-[#0A84FF]/30 flex items-center justify-between gap-3">
+      <div class="space-y-1">
+        <div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/40">
+          Release v${esc(displayVersion)}
+        </div>
+        <h3 class="text-base font-bold text-white">${esc(displayTitle)}</h3>
+      </div>
+      <div class="w-11 h-11 rounded-2xl bg-[#0A84FF]/20 border border-[#0A84FF]/40 flex items-center justify-center text-[#0A84FF] shrink-0">
+        ${getIconSvg('sparkles', 'w-5 h-5')}
+      </div>
+    </div>
+
+    <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs">
+      ${esc(displayContent)}
+    </div>
+
+    ${isAdmin ? `
+      <button type="button" id="btn-whats-new-open-admin-editor" class="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[#0A84FF] font-bold text-xs transition">
+        Edit Release Notes (Live &amp; Draft) &rarr;
+      </button>
+    ` : ''}
+  `;
+
+  const editBtn = bodyEl.querySelector('#btn-whats-new-open-admin-editor');
+  if (editBtn) {
+    editBtn.onclick = () => {
+      closeModal();
+      openAdminWhatsNewEditorModal();
+    };
+  }
+
+  openModal({
+    title: "What's New",
+    body: bodyEl,
+    saveLabel: null,
+    cancelLabel: 'Done'
+  });
+}
+
+export async function openAdminWhatsNewEditorModal() {
+  let activeTab = 'draft'; // 'live' | 'draft'
+  let liveData = state.whatsNew || null;
+
+  if (db) {
+    try {
+      const snap = await getDoc(doc(db, 'settings', 'whats_new'));
+      if (snap.exists()) {
+        liveData = snap.data();
+        state.whatsNew = liveData;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  let liveVersion = liveData?.version || APP_VERSION;
+  let liveTitle = liveData?.title || DEFAULT_WHATS_NEW_NOTES.title;
+  let liveContent = liveData?.content || liveData?.notes || DEFAULT_WHATS_NEW_NOTES.content;
+
+  const savedDraft = await loadWhatsNewLocalDraft();
+  let draftVersion = savedDraft?.version || APP_VERSION;
+  let draftTitle = savedDraft?.title ?? liveTitle;
+  let draftContent = savedDraft?.content ?? '';
+  let lastSavedAtMs = savedDraft?.updatedAtMs || null;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-3.5 text-xs';
+
+  function renderEditor() {
+    bodyEl.innerHTML = `
+      <div id="whats-new-editor-seg-mount"></div>
+
+      <!-- LIVE TAB -->
+      <div id="whats-new-tab-live" class="${activeTab === 'live' ? 'space-y-3' : 'hidden'}">
+        <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-neutral-200 flex items-center justify-between gap-2">
+          <span>Editing <strong>Live Release Notes</strong> in Firestore (<code>/settings/whats_new</code>).</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">LIVE</span>
+        </div>
+
+        <div class="ios-card space-y-3">
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Version</label>
+              <input type="text" id="wn-live-version" class="ios-input text-white font-mono text-xs w-full" value="${esc(liveVersion)}" />
+            </div>
+            <div class="col-span-2">
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Headline Title</label>
+              <input type="text" id="wn-live-title" class="ios-input text-white text-xs w-full" value="${esc(liveTitle)}" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Release Notes (Live)</label>
+            <textarea id="wn-live-content" rows="8" class="ios-input text-white text-xs leading-relaxed w-full" placeholder="Enter live changelog notes...">${esc(liveContent)}</textarea>
+          </div>
+
+          <button type="button" id="btn-wn-save-live" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold text-xs transition shadow-sm">
+            Save Changes to Live
+          </button>
+        </div>
+      </div>
+
+      <!-- DRAFT TAB (Persistent Local Auto-Save via IndexedDB + localStorage) -->
+      <div id="whats-new-tab-draft" class="${activeTab === 'draft' ? 'space-y-3' : 'hidden'}">
+        <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-neutral-200 flex items-center justify-between gap-2">
+          <div>
+            <div class="font-bold text-amber-300">Persistent Device Draft (Auto-Saves Locally)</div>
+            <div id="wn-draft-status" class="text-[10px] text-neutral-400">
+              ${lastSavedAtMs ? `Restored from device storage (${formatDateTime(lastSavedAtMs)})` : 'Auto-saves every keystroke to IndexedDB & localStorage'}
+            </div>
+          </div>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">DRAFT</span>
+        </div>
+
+        <div class="ios-card space-y-3">
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Version</label>
+              <input type="text" id="wn-draft-version" class="ios-input text-white font-mono text-xs w-full" value="${esc(draftVersion)}" />
+            </div>
+            <div class="col-span-2">
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Headline</label>
+              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v2.2.8" value="${esc(draftTitle)}" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Release Notes</label>
+            <textarea id="wn-draft-content" rows="8" class="ios-input text-white text-xs leading-relaxed w-full" placeholder="Write your upcoming release notes here. You can close the browser and return days later—your draft stays saved on this device...">${esc(draftContent)}</textarea>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button type="button" id="btn-wn-clear-draft" class="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-300 font-semibold text-xs transition">
+              Clear Local Draft
+            </button>
+            <button type="button" id="btn-wn-publish-draft" class="py-2.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition shadow-md">
+              Publish to Live &rarr;
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const segMount = bodyEl.querySelector('#whats-new-editor-seg-mount');
+    if (segMount) {
+      segMount.appendChild(renderSegmented({
+        id: 'whats-new-mode-segmented',
+        options: [
+          { value: 'live', label: 'Live (Firestore)' },
+          { value: 'draft', label: 'Draft (Device Auto-Save)' }
+        ],
+        value: activeTab,
+        onChange: (val) => {
+          activeTab = val;
+          renderEditor();
+        }
+      }));
+    }
+
+    // Wire Live inputs
+    const liveVerInp = bodyEl.querySelector('#wn-live-version');
+    const liveTitleInp = bodyEl.querySelector('#wn-live-title');
+    const liveContentInp = bodyEl.querySelector('#wn-live-content');
+    if (liveVerInp) liveVerInp.oninput = (e) => { liveVersion = e.target.value; };
+    if (liveTitleInp) liveTitleInp.oninput = (e) => { liveTitle = e.target.value; };
+    if (liveContentInp) liveContentInp.oninput = (e) => { liveContent = e.target.value; };
+
+    const saveLiveBtn = bodyEl.querySelector('#btn-wn-save-live');
+    if (saveLiveBtn) {
+      saveLiveBtn.onclick = async () => {
+        if (!liveContent.trim()) {
+          toast('Release notes content cannot be empty', 'warning');
+          return;
+        }
+        saveLiveBtn.disabled = true;
+        saveLiveBtn.textContent = 'Saving to Live...';
+        try {
+          const payload = {
+            version: liveVersion.trim() || APP_VERSION,
+            title: liveTitle.trim() || `What's New in v${APP_VERSION}`,
+            content: liveContent.trim(),
+            notes: liveContent.trim(),
+            updatedAt: serverTimestamp(),
+            updatedBy: state.user?.uid || 'admin'
+          };
+          await setDoc(doc(db, 'settings', 'whats_new'), payload, { merge: true });
+          state.whatsNew = payload;
+          toast('Live release notes updated!', 'success');
+        } catch (err) {
+          toast('Failed to save live notes: ' + (err.message || err), 'error');
+        } finally {
+          saveLiveBtn.disabled = false;
+          saveLiveBtn.textContent = 'Save Changes to Live';
+        }
+      };
+    }
+
+    // Wire Draft Auto-Save inputs
+    const draftVerInp = bodyEl.querySelector('#wn-draft-version');
+    const draftTitleInp = bodyEl.querySelector('#wn-draft-title');
+    const draftContentInp = bodyEl.querySelector('#wn-draft-content');
+    const draftStatusEl = bodyEl.querySelector('#wn-draft-status');
+
+    const triggerDraftAutoSave = async () => {
+      const saved = await saveWhatsNewLocalDraft({
+        version: draftVersion,
+        title: draftTitle,
+        content: draftContent
+      });
+      lastSavedAtMs = saved.updatedAtMs;
+      if (draftStatusEl) {
+        draftStatusEl.textContent = `Auto-saved to device storage at ${new Date(lastSavedAtMs).toLocaleTimeString()}`;
+      }
+    };
+
+    if (draftVerInp) {
+      draftVerInp.oninput = (e) => {
+        draftVersion = e.target.value;
+        triggerDraftAutoSave();
+      };
+    }
+    if (draftTitleInp) {
+      draftTitleInp.oninput = (e) => {
+        draftTitle = e.target.value;
+        triggerDraftAutoSave();
+      };
+    }
+    if (draftContentInp) {
+      draftContentInp.oninput = (e) => {
+        draftContent = e.target.value;
+        triggerDraftAutoSave();
+      };
+    }
+
+    const clearDraftBtn = bodyEl.querySelector('#btn-wn-clear-draft');
+    if (clearDraftBtn) {
+      clearDraftBtn.onclick = async () => {
+        await clearWhatsNewLocalDraft();
+        draftVersion = APP_VERSION;
+        draftTitle = `What's New in v${APP_VERSION}`;
+        draftContent = '';
+        lastSavedAtMs = null;
+        renderEditor();
+        toast('Local draft cleared', 'info');
+      };
+    }
+
+    const publishDraftBtn = bodyEl.querySelector('#btn-wn-publish-draft');
+    if (publishDraftBtn) {
+      publishDraftBtn.onclick = async () => {
+        if (!draftContent.trim()) {
+          toast('Please write release notes in the draft before publishing to Live', 'warning');
+          return;
+        }
+        publishDraftBtn.disabled = true;
+        publishDraftBtn.textContent = 'Publishing...';
+        try {
+          const payload = {
+            version: draftVersion.trim() || APP_VERSION,
+            title: draftTitle.trim() || `What's New in v${APP_VERSION}`,
+            content: draftContent.trim(),
+            notes: draftContent.trim(),
+            updatedAt: serverTimestamp(),
+            updatedBy: state.user?.uid || 'admin'
+          };
+          await setDoc(doc(db, 'settings', 'whats_new'), payload, { merge: true });
+          state.whatsNew = payload;
+          liveVersion = payload.version;
+          liveTitle = payload.title;
+          liveContent = payload.content;
+
+          await clearWhatsNewLocalDraft();
+          draftContent = '';
+          lastSavedAtMs = null;
+          activeTab = 'live';
+          renderEditor();
+          toast('Draft published to Live and local draft cleared!', 'success');
+        } catch (err) {
+          console.error('Publish whats_new error:', err);
+          toast('Failed to publish draft: ' + (err.message || err), 'error');
+        } finally {
+          publishDraftBtn.disabled = false;
+          publishDraftBtn.textContent = 'Publish to Live →';
+        }
+      };
+    }
+  }
+
+  renderEditor();
+
+  openModal({
+    title: "Release Notes Editor (What's New)",
+    body: bodyEl,
+    saveLabel: null,
+    cancelLabel: 'Close'
+  });
+}
+
 function attachEventHandlers() {
   // Navigation & Drawer
   const menuBtn = document.getElementById('btn-open-drawer');
@@ -18681,6 +19888,33 @@ function attachEventHandlers() {
 
   const backdrop = document.getElementById('side-drawer-backdrop');
   if (backdrop) backdrop.onclick = closeDrawer;
+
+  // What's New Changelog Triggers (FIX 8)
+  const drawerRowAbout = document.getElementById('drawer-row-about');
+  if (drawerRowAbout) {
+    drawerRowAbout.onclick = () => {
+      closeDrawer();
+      openWhatsNewSheet();
+    };
+  }
+  const profileFooterVer = document.getElementById('profile-footer-version');
+  if (profileFooterVer) {
+    profileFooterVer.onclick = () => openWhatsNewSheet();
+  }
+  const btnAdminWhatsNew = document.getElementById('btn-admin-whats-new-editor');
+  if (btnAdminWhatsNew) {
+    btnAdminWhatsNew.onclick = () => openAdminWhatsNewEditorModal();
+  }
+
+  // Admin Member Notification Center Triggers (FIX 3)
+  const btnAdminMemberNotifCenter = document.getElementById('btn-admin-member-notif-center');
+  if (btnAdminMemberNotifCenter) {
+    btnAdminMemberNotifCenter.onclick = () => openAdminMemberNotificationCenter();
+  }
+  const btnBroadcastsMemberNotifCenter = document.getElementById('btn-broadcasts-member-notif-center');
+  if (btnBroadcastsMemberNotifCenter) {
+    btnBroadcastsMemberNotifCenter.onclick = () => openAdminMemberNotificationCenter();
+  }
 
   const notifBell = document.getElementById('btn-open-notifications');
   if (notifBell) {
@@ -19722,4 +20956,9 @@ if (typeof window !== 'undefined') {
   window.openAvatarCropper = openAvatarCropper;
   window.getPresetAvatars = getPresetAvatars;
   window.initEditProfileModal = initEditProfileModal;
+  window.openAdminMemberNotificationCenter = openAdminMemberNotificationCenter;
+  window.openWhatsNewSheet = openWhatsNewSheet;
+  window.openAdminWhatsNewEditorModal = openAdminWhatsNewEditorModal;
+  window.openMemberBadgeReorderSheet = openMemberBadgeReorderSheet;
+  window.attachDragReorderList = attachDragReorderList;
 }

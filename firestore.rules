@@ -18,8 +18,8 @@ rules_version = '2';
 //   - monthPoints: int (monthly points tally, reset on new monthKey or incremented via atomic batch with submission or admin)
 //   - weekBucket: string (legacy weekly key e.g. '2026-W18', tolerated alongside weekKey)
 //   - monthBucket: string (legacy monthly key e.g. '2026-05', tolerated alongside monthKey)
-//   - badges: list (assigned by admin only, defaults to [] on create)
-//   - badgeIds: list (assigned by admin only, defaults to [] on create)
+//   - badges: list (assigned by admin only, defaults to [] on create; owner may reorder existing elements)
+//   - badgeIds: list (assigned by admin only, defaults to [] on create; owner may reorder existing elements)
 //   - disabled: bool (account lock flag; if true, member is inactive and cannot perform write operations)
 //   - updatedAt: timestamp (editable by owner)
 //   - lastSeenAt: timestamp (legacy field tolerated; server-clock sync moved to users_private)
@@ -291,6 +291,29 @@ service cloud.firestore {
         (request.resource.data.logoUrl is string && request.resource.data.logoUrl.size() <= 64000);
     }
 
+    function isValidBadgeReorder() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let oldBadgeIds = resource.data.get('badgeIds', []);
+      let oldBadges = resource.data.get('badges', []);
+      return (
+        !changed.hasAny(['badgeIds']) || (
+          request.resource.data.badgeIds is list &&
+          oldBadgeIds is list &&
+          request.resource.data.badgeIds.size() == oldBadgeIds.size() &&
+          request.resource.data.badgeIds.hasAll(oldBadgeIds) &&
+          oldBadgeIds.hasAll(request.resource.data.badgeIds)
+        )
+      ) && (
+        !changed.hasAny(['badges']) || (
+          request.resource.data.badges is list &&
+          oldBadges is list &&
+          request.resource.data.badges.size() == oldBadges.size() &&
+          request.resource.data.badges.hasAll(oldBadges) &&
+          oldBadges.hasAll(request.resource.data.badges)
+        )
+      );
+    }
+
     function isValidSubmissionPointUpdate(d) {
       let oldWeekKey = resource.data.get('weekKey', resource.data.get('weekBucket', ''));
       let newWeekKey = request.resource.data.get('weekKey', request.resource.data.get('weekBucket', oldWeekKey));
@@ -348,7 +371,8 @@ service cloud.firestore {
 
       // Update: Admin can update any field (including points, totalPoints, weekKey, weekPoints, monthKey, monthPoints, penalties, finesDue, badges, badgeIds, roles, updatedAt; tolerating legacy weekBucket, monthBucket).
       // Owner can update (only if active: isActive()):
-      //   1. Profile fields: name, displayName, avatarUrl, photoURL, updatedAt
+      //   1. Profile fields & badge priority reordering: name, displayName, avatarUrl, photoURL, badgeIds, badges, updatedAt
+      //      - Owners may reorder their existing badgeIds/badges arrays (strict permutation check via isValidBadgeReorder(): same size and mutual hasAll) without adding unearned badges.
       //   2. Atomic point increment via atomic batch with submission:
       //      - Affected keys must strictly be in ['points', 'lastOpId', 'weekKey', 'weekPoints', 'monthKey', 'monthPoints', 'updatedAt'] (tolerating legacy monthBucket, weekBucket)
       //      - lastOpId must differ from existing lastOpId
@@ -364,16 +388,19 @@ service cloud.firestore {
       //      - Attendance log document must exist after the batch (existsAfter)
       //      - Attendance log document must belong to the user
       //      - Penalty delta must exactly equal the attendance log's penalty
-      // Owner can NEVER change role, badges, or badgeIds (strictly admin-only).
+      // Owner can NEVER change role (strictly admin-only) or add/remove badges (only reorder existing earned badges).
       // Non-admin owner must be active (isActive() == true; disabled users cannot write/update).
       // When avatarUrl is updated (admin and owner), requires string and size <= 32000. If omitted or not updated, allowed as before.
       allow update: if isAdmin() || (
                        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || isValidAvatarUrl()) &&
                        isActive() &&
                        isOwner(uid) &&
-                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'badges', 'badgeIds']) &&
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) &&
                        (
-                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'avatarUrl', 'photoURL', 'updatedAt']) ||
+                         (
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'avatarUrl', 'photoURL', 'badgeIds', 'badges', 'updatedAt']) &&
+                           isValidBadgeReorder()
+                         ) ||
                          (
                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lastOpId', 'weekKey', 'weekPoints', 'monthKey', 'monthPoints', 'updatedAt', 'monthBucket', 'weekBucket']) &&
                            request.resource.data.lastOpId != resource.data.get('lastOpId', '') &&

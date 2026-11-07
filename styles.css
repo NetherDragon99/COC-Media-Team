@@ -3278,3 +3278,152 @@ input[type="search"],
   min-width: 0 !important;
 }
 
+/* ==========================================================================
+   RELEASE v2.2.8: SWIPE-TO-DELETE, DRAG REORDERING & UNIFIED BADGE UI SYSTEM
+   ========================================================================== */
+
+/* Fix 2: iOS-Style Swipe-to-Delete for Personal Notifications */
+.notif-swipe-wrapper {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: max-height 0.25s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.22s ease, margin 0.25s ease;
+}
+
+.notif-swipe-wrapper.collapsing {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  pointer-events: none;
+}
+
+.notif-swipe-bg {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(255, 69, 58, 0.85) 0%, #FF453A 100%);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 20px;
+  color: #FFFFFF;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.notif-swipe-wrapper.is-swiping .notif-swipe-bg,
+.notif-swipe-wrapper.is-open .notif-swipe-bg {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.notif-swipe-wrapper .notification-card {
+  position: relative;
+  z-index: 2;
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+  touch-action: pan-y;
+}
+
+.notif-swipe-wrapper.is-swiping .notification-card {
+  transition: none !important;
+}
+
+/* Fix 6 & Fix 7: Drag-and-Drop Reordering Handle & Active Card States */
+.drag-reorder-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.42);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.drag-reorder-handle:hover,
+.drag-reorder-handle:active {
+  color: #FFFFFF;
+  background-color: rgba(255, 255, 255, 0.1);
+  cursor: grabbing;
+}
+
+.dragging-reorder-item {
+  z-index: 50 !important;
+  opacity: 0.92 !important;
+  transform: scale(1.02) !important;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.65), 0 0 0 1.5px rgba(10, 132, 255, 0.65) !important;
+  transition: transform 0.12s ease, box-shadow 0.12s ease !important;
+}
+
+/* Fix 9: Unified Badge UI System (Discord-Style Expanded Pills vs Compact Icon-Only Strip) */
+.badge-pills-expanded-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge-pill-expanded {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  max-width: 100%;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.badge-pill-expanded svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.badge-strip-compact {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 0%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.badge-icon-micro {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+  border-radius: 9999px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  padding: 0 !important;
+}
+
+.badge-icon-micro svg {
+  width: 12px !important;
+  height: 12px !important;
+  flex-shrink: 0 !important;
+}
+
+
