@@ -2869,6 +2869,9 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   flex-wrap: nowrap !important;
   align-items: center !important;
   gap: 4px !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
   overflow: hidden !important;
 }
 
@@ -2953,9 +2956,34 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   flex: 1 1 auto !important;
   min-height: 0 !important;
   overflow-y: auto !important;
+  overflow-x: hidden !important;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   padding-top: 16px !important;
   padding-bottom: calc(env(safe-area-inset-bottom, 16px) + 24px) !important;
+}
+
+.modal-body::-webkit-scrollbar,
+.sheet-body::-webkit-scrollbar,
+.sub-modal-body::-webkit-scrollbar,
+#shared-modal-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.modal-body::-webkit-scrollbar-track,
+.sheet-body::-webkit-scrollbar-track,
+.sub-modal-body::-webkit-scrollbar-track,
+#shared-modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb,
+.sheet-body::-webkit-scrollbar-thumb,
+.sub-modal-body::-webkit-scrollbar-thumb,
+#shared-modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
 }
 
 /* ITEM 2: Image Cropper Viewport & Masks */
@@ -3367,11 +3395,28 @@ input[type="search"],
 }
 
 .dragging-reorder-item {
-  z-index: 50 !important;
-  opacity: 0.92 !important;
-  transform: scale(1.02) !important;
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.65), 0 0 0 1.5px rgba(10, 132, 255, 0.65) !important;
-  transition: transform 0.12s ease, box-shadow 0.12s ease !important;
+  z-index: 9999 !important;
+  opacity: 0.98 !important;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 0 2px rgba(10, 132, 255, 0.8) !important;
+}
+
+.dragging-reorder-floating {
+  position: fixed !important;
+  z-index: 9999 !important;
+  pointer-events: none !important;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 0 2px rgba(10, 132, 255, 0.8) !important;
+  opacity: 0.98 !important;
+  will-change: transform, top, left !important;
+}
+
+.drag-reorder-placeholder {
+  box-sizing: border-box !important;
+  border: 2px dashed rgba(10, 132, 255, 0.45) !important;
+  background-color: rgba(10, 132, 255, 0.06) !important;
+  border-radius: 12px !important;
+  pointer-events: none !important;
+  flex-shrink: 0 !important;
+  transition: all 0.18s cubic-bezier(0.2, 0, 0, 1) !important;
 }
 
 /* Fix 9: Unified Badge UI System (Discord-Style Expanded Pills vs Compact Icon-Only Strip) */
@@ -3403,14 +3448,14 @@ input[type="search"],
 }
 
 .badge-strip-compact {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 1 1 0%;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  white-space: nowrap;
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
 }
 
 .badge-icon-micro {
@@ -3437,15 +3482,6 @@ input[type="search"],
    ========================================================================== */
 
 /* Fix 5: Lift State & Sibling Slot Displacement for Drag-and-Drop Reordering */
-.dragging-reorder-item {
-  z-index: 60 !important;
-  opacity: 0.96 !important;
-  transform: scale(1.03) !important;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75), 0 0 0 2px rgba(10, 132, 255, 0.75) !important;
-  transition: transform 0.05s ease, box-shadow 0.15s ease !important;
-  pointer-events: none !important;
-}
-
 .drag-reorder-displaced {
   transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1) !important;
   will-change: transform;
@@ -3475,15 +3511,12 @@ input[type="search"],
   min-width: 22px !important;
   min-height: 22px !important;
   border-radius: 9999px !important;
-  background: rgba(255, 255, 255, 0.1) !important;
-  border: 1px solid rgba(255, 255, 255, 0.16) !important;
-  color: rgba(255, 255, 255, 0.6) !important;
-  font-size: 10px !important;
-  font-weight: 700 !important;
-  line-height: 1 !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: rgba(255, 255, 255, 0.75) !important;
   flex-shrink: 0 !important;
   user-select: none !important;
-  letter-spacing: -0.5px !important;
+  padding: 0 !important;
 }
 
 /* Fix 7: Universal Dual-Direction Swipe Action Mechanics */
@@ -3515,35 +3548,42 @@ input[type="search"],
   font-size: 12px;
   font-weight: 700;
   gap: 6px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
   pointer-events: none;
   z-index: 1;
+  overflow: hidden;
 }
 
 .universal-swipe-bg-archive {
-  background: linear-gradient(90deg, #F59E0B 0%, rgba(245, 158, 11, 0.85) 100%);
   justify-content: flex-start;
-  padding-left: 18px;
+  padding-left: 20px;
   color: #FFFFFF;
 }
 
 .universal-swipe-bg-delete {
-  background: linear-gradient(90deg, rgba(255, 69, 58, 0.85) 0%, #FF453A 100%);
   justify-content: flex-end;
-  padding-right: 18px;
+  padding-right: 20px;
   color: #FFFFFF;
+}
+
+.universal-swipe-icon-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  will-change: transform, opacity;
+  transform: scale(0.5);
+  opacity: 0;
 }
 
 .universal-swipe-wrapper.is-swiping .universal-swipe-bg,
 .universal-swipe-wrapper.is-open .universal-swipe-bg {
-  opacity: 1;
   pointer-events: auto;
 }
 
 .universal-swipe-wrapper > .swipe-target-card,
 .universal-swipe-wrapper > .bulk-select-card,
-.universal-swipe-wrapper > .notification-card {
+.universal-swipe-wrapper > .notification-card,
+.universal-swipe-wrapper > .universal-swipe-card-content,
+.universal-swipe-wrapper > .bulk-card-content {
   position: relative;
   z-index: 2;
   transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
@@ -3552,7 +3592,9 @@ input[type="search"],
 
 .universal-swipe-wrapper.is-swiping > .swipe-target-card,
 .universal-swipe-wrapper.is-swiping > .bulk-select-card,
-.universal-swipe-wrapper.is-swiping > .notification-card {
+.universal-swipe-wrapper.is-swiping > .notification-card,
+.universal-swipe-wrapper.is-swiping > .universal-swipe-card-content,
+.universal-swipe-wrapper.is-swiping > .bulk-card-content {
   transition: none !important;
 }
 

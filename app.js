@@ -40,7 +40,7 @@ export function updateDockHeight() {
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.9';
+export const APP_VERSION = '2.2.10';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -3170,7 +3170,7 @@ export function renderDateTimeField({ label = 'Date & Time', valueMs = null, mod
  * Opens an iOS Item Picker Half-Sheet modal with optional search and icons.
  * Returns Promise<selectedId | null>
  */
-export function openItemPicker({ title = 'Select Item', items = [], selectedId = null, searchable = false, emptyText = 'No items found' } = {}) {
+export function openItemPicker({ title = 'Select Item', items = [], selectedId = null, searchable = false, emptyText = 'No items found', onSelect = null } = {}) {
   return new Promise((resolve) => {
     let curSel = selectedId;
     let filterQuery = '';
@@ -3184,19 +3184,30 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
       }
 
       return filtered.map((it) => {
-        const isSelected = it.id === curSel;
-        const iconSvg = it.iconKey && ICON_LIBRARY[it.iconKey] ? ICON_LIBRARY[it.iconKey] : '';
+        const isSelected = String(it.id) === String(curSel);
+        const colorDot = it.color ? `<span class="w-3 h-3 rounded-full shrink-0" style="background-color: ${esc(it.color)};"></span>` : '';
+        let iconSvg = '';
+        if (it.iconSvg) {
+          iconSvg = it.iconSvg;
+        } else if (it.iconKey) {
+          iconSvg = getCategorySvg(it.iconKey, 'w-4 h-4') || (ICON_LIBRARY[it.iconKey] || '');
+        } else if (it.icon) {
+          iconSvg = getCategorySvg(it.icon, 'w-4 h-4') || (ICON_LIBRARY[it.icon] || '');
+        }
+        const iconDisplay = iconSvg ? `<span class="w-7 h-7 rounded-lg bg-white/10 text-white flex items-center justify-center shrink-0">${iconSvg}</span>` : '';
+
         return `
-          <button type="button" class="item-picker-row w-full p-3 rounded-xl flex items-center justify-between text-left transition hover:bg-white/5 active:bg-white/10 ${isSelected ? 'bg-white/[0.08]' : ''}" data-id="${esc(it.id)}">
+          <button type="button" class="item-picker-row w-full p-3 rounded-xl flex items-center justify-between text-left transition hover:bg-white/5 active:bg-white/10 active:scale-[0.98] cursor-pointer select-none ${isSelected ? 'bg-white/[0.08]' : ''}" data-id="${esc(it.id)}">
             <div class="flex items-center gap-3 min-w-0 pr-2">
-              ${iconSvg ? `<span class="w-7 h-7 rounded-lg bg-white/10 text-[#0A84FF] flex items-center justify-center shrink-0">${iconSvg}</span>` : ''}
+              ${colorDot}
+              ${iconDisplay}
               <div class="min-w-0 flex-1 break-words">
                 <div class="text-sm font-semibold text-white break-words">${esc(it.label)}</div>
                 ${it.sublabel ? `<div class="text-xs text-neutral-400 break-words mt-0.5">${esc(it.sublabel)}</div>` : ''}
               </div>
             </div>
             ${isSelected ? `
-              <svg class="w-5 h-5 text-[#0A84FF] shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-[#0A84FF] shrink-0 ml-2" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
               </svg>
             ` : ''}
@@ -3229,18 +3240,24 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
     });
 
     setTimeout(() => {
-      const modalEl = document.getElementById('shared-modal');
+      const modalEl = document.getElementById('shared-modal-root') || document.body;
       if (!modalEl) return;
 
       const searchInp = modalEl.querySelector('#item-picker-search');
       const listEl = modalEl.querySelector('#item-picker-list');
+      if (!listEl) return;
 
       function wireRows() {
         listEl.querySelectorAll('.item-picker-row').forEach((row) => {
-          row.onclick = () => {
+          row.onclick = (e) => {
+            e.preventDefault();
             const id = row.dataset.id;
+            const foundItem = items.find(it => String(it.id) === String(id)) || { id };
+            if (typeof onSelect === 'function') {
+              try { onSelect(foundItem); } catch (err) { console.error('Picker onSelect error:', err); }
+            }
             modal.close();
-            resolve(id);
+            resolve(foundItem);
           };
         });
       }
@@ -4163,9 +4180,10 @@ export function renderBadgeRow(container, badges, member) {
       if (maxFullFit < normBadges.length) {
         hasOverflow = true;
         // Reserve 1 slot (iconSize + gap) for the 22px ellipsis pill
-        visibleCount = Math.max(0, Math.floor((availableWidth - iconSize) / (iconSize + gap)));
+        visibleCount = Math.max(0, maxFullFit - 1);
       } else {
         visibleCount = normBadges.length;
+        hasOverflow = false;
       }
     }
 
@@ -4183,7 +4201,13 @@ export function renderBadgeRow(container, badges, member) {
       const remainingCount = normBadges.length - visibleCount;
       const remainingLabels = normBadges.slice(visibleCount).map(b => b.label).join(', ');
       htmlParts.push(`
-        <span class="badge-overflow-pill shrink-0 flex items-center justify-center cursor-pointer" data-no-row-tap="true" data-member-uid="${esc(member?.uid || '')}" title="${remainingCount} more badges: ${esc(remainingLabels)}" style="width:22px; height:22px; min-width:22px;">...</span>
+        <span class="badge-overflow-pill shrink-0 flex items-center justify-center cursor-pointer" data-no-row-tap="true" data-member-uid="${esc(member?.uid || '')}" title="${remainingCount} more badges: ${esc(remainingLabels)}" style="width:22px; height:22px; min-width:22px;">
+          <svg class="w-3.5 h-3.5 text-white/70" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="2"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+            <circle cx="19" cy="12" r="2"></circle>
+          </svg>
+        </span>
       `);
     }
 
@@ -5891,6 +5915,7 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
   let startX = 0;
   let startY = 0;
   let isCardSwiping = false;
+  let isTracking = false;
   const pagerEl = cardEl.closest('.pager-container') || document.getElementById('user-pager');
 
   const origOverflowX = pagerEl ? pagerEl.style.overflowX : '';
@@ -5900,25 +5925,41 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
     if (selectionState.active) return;
     if (e.touches.length !== 1) return;
     const touch = e.touches[0];
-    startX = touch.clientX;
-    startY = touch.clientY;
-    isCardSwiping = false;
+    const clientX = touch.clientX;
+    const rect = cardEl.getBoundingClientRect();
+    const cardWidth = rect.width;
+    if (cardWidth <= 0) return;
 
-    // Screen edge navigation zones: reserve 24px bezel at viewport edges for pager swipe
-    if (startX < 24 || startX > window.innerWidth - 24) {
+    const relX = clientX - rect.left;
+    const edgeThreshold = cardWidth * 0.20;
+    const isLeftEdge = (relX >= 0 && relX <= edgeThreshold);
+    const isRightEdge = (relX >= cardWidth - edgeThreshold && relX <= cardWidth);
+
+    if (!isLeftEdge && !isRightEdge) {
+      isTracking = false;
+      isCardSwiping = false;
       return;
     }
+
+    startX = clientX;
+    startY = touch.clientY;
+    isTracking = true;
+    isCardSwiping = false;
   };
 
   const onTouchMove = (e) => {
+    if (!isTracking) return;
     if (e.touches.length !== 1) return;
-    if (startX < 24 || startX > window.innerWidth - 24) return;
 
     const touch = e.touches[0];
     const deltaX = touch.clientX - startX;
     const deltaY = touch.clientY - startY;
 
     if (!isCardSwiping) {
+      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) >= Math.abs(deltaX)) {
+        isTracking = false;
+        return;
+      }
       if (Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
         isCardSwiping = true;
         if (pagerEl) {
@@ -5929,6 +5970,7 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
     }
 
     if (isCardSwiping) {
+      if (e.cancelable) e.preventDefault();
       e.stopPropagation();
       cardEl.style.transform = `translateX(${deltaX}px)`;
       cardEl.style.transition = 'none';
@@ -5949,6 +5991,7 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
       }
     }
 
+    isTracking = false;
     isCardSwiping = false;
     if (pagerEl) {
       pagerEl.style.overflowX = origOverflowX;
@@ -6054,9 +6097,11 @@ export function attachUniversalSwipeActions(wrapperEl, {
   wrapperEl.classList.add('universal-swipe-wrapper');
   wrapperEl.setAttribute('data-swipe-card', 'true');
 
-  // CRITICAL FIX: The animated sliding card MUST be an immediate direct child of wrapperEl.
-  // Querying for .bulk-card-content matches descendants in nested structures (e.g. notifications),
-  // which causes parent.insertBefore(bg, contentCard) to fail fatally if contentCard is not a direct child.
+  // Remove any legacy static backgrounds if present
+  const oldBg = wrapperEl.querySelector('.notif-swipe-bg');
+  if (oldBg) oldBg.remove();
+
+  // Find the sliding content card (must be a direct child of wrapperEl)
   let contentCard = null;
   for (const child of wrapperEl.children) {
     if (child.classList.contains('universal-swipe-card-content') ||
@@ -6088,15 +6133,18 @@ export function attachUniversalSwipeActions(wrapperEl, {
   if (!contentCard) return () => {};
   contentCard.classList.add('universal-swipe-card-content');
 
+  // Progressive background containers
   let bgArchive = wrapperEl.querySelector('.universal-swipe-bg-archive');
   if (!bgArchive && onArchive) {
     bgArchive = document.createElement('div');
     bgArchive.className = 'universal-swipe-bg universal-swipe-bg-archive';
     bgArchive.style.display = 'none';
     bgArchive.innerHTML = `
-      <div class="flex items-center gap-2">
-        <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
-        <span>${esc(archiveLabel)}</span>
+      <div class="universal-swipe-icon-container flex items-center gap-2">
+        <svg class="universal-swipe-icon w-6 h-6 text-white shrink-0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+          <path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/>
+        </svg>
+        <span class="universal-swipe-label text-xs font-bold text-white tracking-wide uppercase">${esc(archiveLabel)}</span>
       </div>
     `;
     safeInsertBefore(wrapperEl, bgArchive, contentCard);
@@ -6108,9 +6156,14 @@ export function attachUniversalSwipeActions(wrapperEl, {
     bgDelete.className = 'universal-swipe-bg universal-swipe-bg-delete';
     bgDelete.style.display = 'none';
     bgDelete.innerHTML = `
-      <div class="flex items-center gap-2">
-        <span>${esc(deleteLabel)}</span>
-        <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+      <div class="universal-swipe-icon-container flex items-center gap-2">
+        <span class="universal-swipe-label text-xs font-bold text-white tracking-wide uppercase">${esc(deleteLabel)}</span>
+        <svg class="universal-swipe-icon w-6 h-6 text-white shrink-0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <line x1="10" y1="11" x2="10" y2="17"></line>
+          <line x1="14" y1="11" x2="14" y2="17"></line>
+        </svg>
       </div>
     `;
     safeInsertBefore(wrapperEl, bgDelete, contentCard);
@@ -6119,37 +6172,78 @@ export function attachUniversalSwipeActions(wrapperEl, {
   let startX = 0;
   let startY = 0;
   let startTime = 0;
+  let isTracking = false;
   let isSwiping = false;
+  let initialEdge = null;
+  let cardRect = null;
+
+  const canArchive = typeof onArchive === 'function';
+  const canDelete = typeof onDelete === 'function';
 
   const pagerEl = wrapperEl.closest('.pager-container') || document.getElementById('user-pager');
 
-  const onTouchStart = (e) => {
-    if (selectionState && selectionState.active) return;
-    if (e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    startX = touch.clientX;
-    startY = touch.clientY;
-    startTime = Date.now();
-    isSwiping = false;
+  const startDrag = (clientX, clientY, e) => {
+    if (selectionState && selectionState.active) return false;
 
-    // Disambiguation: ignore if touch initiates within 24px of screen edges
-    if (startX < 24 || startX > window.innerWidth - 24) return;
+    // Strict 20% Edge Hit Zone calculation using getBoundingClientRect()
+    cardRect = (contentCard || wrapperEl).getBoundingClientRect();
+    const cardWidth = cardRect.width;
+    if (cardWidth <= 0) return false;
+
+    const relX = clientX - cardRect.left;
+    const edgeThreshold = cardWidth * 0.20;
+
+    const isLeftEdge = (relX >= 0 && relX <= edgeThreshold);
+    const isRightEdge = (relX >= cardWidth - edgeThreshold && relX <= cardWidth);
+
+    const isLeftHit = isLeftEdge && canArchive;
+    const isRightHit = isRightEdge && canDelete;
+
+    // STRICT RULE: If the initial touch falls anywhere in the middle 60% of the card,
+    // you MUST completely ignore the touch. Do not call preventDefault, do not stop propagation,
+    // and do not track the drag. Let the touch bubble up naturally so the user can swipe the page horizontally.
+    if (!isLeftHit && !isRightHit) {
+      isTracking = false;
+      isSwiping = false;
+      initialEdge = null;
+      return false;
+    }
+
+    isTracking = true;
+    isSwiping = false;
+    startX = clientX;
+    startY = clientY;
+    startTime = Date.now();
+    initialEdge = isLeftHit ? 'left' : 'right';
+
+    if (e && typeof e.stopPropagation === 'function') {
+      e.stopPropagation();
+    }
+    return true;
   };
 
-  const onTouchMove = (e) => {
-    if (e.touches.length !== 1) return;
-    if (startX < 24 || startX > window.innerWidth - 24) return;
+  const moveDrag = (clientX, clientY, e) => {
+    if (!isTracking) return;
 
-    const touch = e.touches[0];
-    const dx = touch.clientX - startX;
-    const dy = touch.clientY - startY;
+    const dx = clientX - startX;
+    const dy = clientY - startY;
 
     if (!isSwiping) {
-      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-        if (dx > 0 && !onArchive) return;
-        if (dx < 0 && !onDelete) return;
+      // Disambiguate against vertical scrolling
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
+        isTracking = false;
+        return;
+      }
 
-        isSwiping = true;
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        if (initialEdge === 'left' && dx > 0 && canArchive) {
+          isSwiping = true;
+        } else if (initialEdge === 'right' && dx < 0 && canDelete) {
+          isSwiping = true;
+        } else {
+          return;
+        }
+
         if (pagerEl) {
           pagerEl.style.overflowX = 'hidden';
           pagerEl.style.touchAction = 'pan-y';
@@ -6158,63 +6252,173 @@ export function attachUniversalSwipeActions(wrapperEl, {
     }
 
     if (isSwiping) {
-      if (e.cancelable) e.preventDefault();
-      e.stopPropagation();
+      if (e && e.cancelable && typeof e.preventDefault === 'function') {
+        e.preventDefault();
+      }
+      if (e && typeof e.stopPropagation === 'function') {
+        e.stopPropagation();
+      }
 
-      const cardWidth = wrapperEl.offsetWidth || 300;
+      const cardWidth = (cardRect && cardRect.width) || wrapperEl.offsetWidth || 300;
+      const threshold = Math.max(80, cardWidth * 0.35);
+
       let clampedDx = dx;
       if (dx > 0) {
         clampedDx = dx > cardWidth * 0.5 ? cardWidth * 0.5 + (dx - cardWidth * 0.5) * 0.25 : dx;
-        if (bgArchive) bgArchive.style.display = 'flex';
-        if (bgDelete) bgDelete.style.display = 'none';
       } else {
         clampedDx = dx < -cardWidth * 0.5 ? -cardWidth * 0.5 + (dx + cardWidth * 0.5) * 0.25 : dx;
-        if (bgArchive) bgArchive.style.display = 'none';
-        if (bgDelete) bgDelete.style.display = 'flex';
       }
+
+      const progress = Math.min(1, Math.max(0, Math.abs(clampedDx) / threshold));
 
       contentCard.style.transform = `translateX(${clampedDx}px)`;
       contentCard.style.transition = 'none';
+
+      if (dx < 0 && canDelete) {
+        // Swipe Right-to-Left (Delete):
+        // Dynamically interpolate the background color moving towards a bright Crimson Red.
+        // Simultaneously, scale up and fade in a Trash Bin SVG icon tied to the drag percentage.
+        if (bgArchive) bgArchive.style.display = 'none';
+        if (bgDelete) {
+          bgDelete.style.display = 'flex';
+          bgDelete.style.transition = 'none';
+
+          const r = Math.round(140 + (220 - 140) * progress);
+          const g = Math.round(20 + (38 - 20) * progress);
+          const b = Math.round(20 + (38 - 20) * progress);
+          const a = Math.min(1, Math.max(0, 0.15 + 0.85 * progress)).toFixed(3);
+          bgDelete.style.backgroundColor = progress >= 1 ? '#DC2626' : `rgba(${r}, ${g}, ${b}, ${a})`;
+
+          const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+          if (ic) {
+            ic.style.transition = 'none';
+            const scale = (0.5 + 0.5 * Math.min(1.15, progress)).toFixed(3);
+            const opacity = Math.min(1, Math.max(0, progress * 1.1)).toFixed(3);
+            ic.style.transform = `scale(${scale})`;
+            ic.style.opacity = opacity;
+            ic.style.transformOrigin = 'right center';
+          }
+        }
+      } else if (dx > 0 && canArchive) {
+        // Swipe Left-to-Right (Archive):
+        // Dynamically interpolate the background color towards a vivid Amber/Yellow.
+        // Simultaneously, scale up and fade in an Archive SVG icon.
+        if (bgDelete) bgDelete.style.display = 'none';
+        if (bgArchive) {
+          bgArchive.style.display = 'flex';
+          bgArchive.style.transition = 'none';
+
+          const r = Math.round(160 + (245 - 160) * progress);
+          const g = Math.round(90 + (158 - 90) * progress);
+          const b = Math.round(10 + (11 - 10) * progress);
+          const a = Math.min(1, Math.max(0, 0.15 + 0.85 * progress)).toFixed(3);
+          bgArchive.style.backgroundColor = progress >= 1 ? '#F59E0B' : `rgba(${r}, ${g}, ${b}, ${a})`;
+
+          const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+          if (ic) {
+            ic.style.transition = 'none';
+            const scale = (0.5 + 0.5 * Math.min(1.15, progress)).toFixed(3);
+            const opacity = Math.min(1, Math.max(0, progress * 1.1)).toFixed(3);
+            ic.style.transform = `scale(${scale})`;
+            ic.style.opacity = opacity;
+            ic.style.transformOrigin = 'left center';
+          }
+        }
+      }
     }
   };
 
-  const onTouchEnd = (e) => {
-    if (!isSwiping) return;
+  const endDrag = (clientX, e) => {
+    if (!isTracking && !isSwiping) return;
 
-    const touch = e.changedTouches[0];
-    const dx = touch ? touch.clientX - startX : 0;
+    if (!isSwiping) {
+      isTracking = false;
+      return;
+    }
+
+    const dx = clientX - startX;
     const dt = Math.max(1, Date.now() - startTime);
     const velocity = Math.abs(dx) / dt;
-    const cardWidth = wrapperEl.offsetWidth || 300;
-    const threshold = cardWidth * 0.38;
+    const cardWidth = (cardRect && cardRect.width) || wrapperEl.offsetWidth || 300;
+    const threshold = Math.max(80, cardWidth * 0.35);
 
     isSwiping = false;
+    isTracking = false;
+
     if (pagerEl) {
       pagerEl.style.overflowX = '';
       pagerEl.style.touchAction = '';
     }
 
-    const isLtrTriggered = onArchive && dx > 0 && (dx >= threshold || velocity > 0.45);
-    const isRtlTriggered = onDelete && dx < 0 && (Math.abs(dx) >= threshold || velocity > 0.45);
+    const isLtrTriggered = canArchive && initialEdge === 'left' && dx > 0 && (dx >= threshold || (dx > 40 && velocity > 0.45));
+    const isRtlTriggered = canDelete && initialEdge === 'right' && dx < 0 && (Math.abs(dx) >= threshold || (Math.abs(dx) > 40 && velocity > 0.45));
 
     if (isLtrTriggered) {
+      // Released past threshold: color fills completely and item is removed
+      if (bgArchive) {
+        bgArchive.style.transition = 'background-color 0.15s ease';
+        bgArchive.style.backgroundColor = '#F59E0B';
+        const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+        if (ic) {
+          ic.style.transition = 'transform 0.15s ease, opacity 0.15s ease';
+          ic.style.transform = 'scale(1)';
+          ic.style.opacity = '1';
+        }
+      }
       contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
       contentCard.style.transform = `translateX(${cardWidth + 40}px)`;
       setTimeout(() => {
         executeCollapseAndAction('archive');
       }, 180);
     } else if (isRtlTriggered) {
+      // Released past threshold: color fills completely and item is removed
+      if (bgDelete) {
+        bgDelete.style.transition = 'background-color 0.15s ease';
+        bgDelete.style.backgroundColor = '#DC2626';
+        const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+        if (ic) {
+          ic.style.transition = 'transform 0.15s ease, opacity 0.15s ease';
+          ic.style.transform = 'scale(1)';
+          ic.style.opacity = '1';
+        }
+      }
       contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
       contentCard.style.transform = `translateX(-${cardWidth + 40}px)`;
       setTimeout(() => {
         executeCollapseAndAction('delete');
       }, 180);
     } else {
+      // Released before threshold: card snaps back, color/icon smoothly animate back to 0
       contentCard.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
       contentCard.style.transform = '';
+
+      const activeBg = (dx > 0) ? bgArchive : bgDelete;
+      if (activeBg) {
+        activeBg.style.transition = 'background-color 0.25s ease, opacity 0.25s ease';
+        activeBg.style.backgroundColor = 'transparent';
+        const ic = activeBg.querySelector('.universal-swipe-icon-container');
+        if (ic) {
+          ic.style.transition = 'transform 0.25s ease, opacity 0.25s ease';
+          ic.style.transform = 'scale(0.5)';
+          ic.style.opacity = '0';
+        }
+      }
+
       setTimeout(() => {
-        if (bgArchive) bgArchive.style.display = 'none';
-        if (bgDelete) bgDelete.style.display = 'none';
+        if (bgArchive) {
+          bgArchive.style.display = 'none';
+          bgArchive.style.transition = '';
+          bgArchive.style.backgroundColor = '';
+          const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+          if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+        }
+        if (bgDelete) {
+          bgDelete.style.display = 'none';
+          bgDelete.style.transition = '';
+          bgDelete.style.backgroundColor = '';
+          const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+          if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+        }
       }, 250);
     }
   };
@@ -6232,8 +6436,20 @@ export function attachUniversalSwipeActions(wrapperEl, {
       wrapperEl.classList.remove('swiped-collapsed');
       contentCard.style.transition = 'transform 0.25s ease';
       contentCard.style.transform = '';
-      if (bgArchive) bgArchive.style.display = 'none';
-      if (bgDelete) bgDelete.style.display = 'none';
+      if (bgArchive) {
+        bgArchive.style.display = 'none';
+        bgArchive.style.backgroundColor = '';
+        bgArchive.style.transition = '';
+        const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+        if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+      }
+      if (bgDelete) {
+        bgDelete.style.display = 'none';
+        bgDelete.style.backgroundColor = '';
+        bgDelete.style.transition = '';
+        const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+        if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+      }
       if (parentNode && !parentNode.contains(wrapperEl)) {
         safeInsertBefore(parentNode, wrapperEl, nextSibling);
       }
@@ -6254,16 +6470,63 @@ export function attachUniversalSwipeActions(wrapperEl, {
     }
   };
 
+  // Touch event handlers
+  const onTouchStart = (e) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    startDrag(touch.clientX, touch.clientY, e);
+  };
+
+  const onTouchMove = (e) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    moveDrag(touch.clientX, touch.clientY, e);
+  };
+
+  const onTouchEnd = (e) => {
+    const touch = e.changedTouches ? e.changedTouches[0] : null;
+    endDrag(touch ? touch.clientX : startX, e);
+  };
+
+  // Pointer event handlers (desktop / mouse)
+  const onPointerDown = (e) => {
+    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    startDrag(e.clientX, e.clientY, e);
+  };
+
+  const onPointerMove = (e) => {
+    if (!isTracking) return;
+    if (e.pointerType === 'touch') return;
+    moveDrag(e.clientX, e.clientY, e);
+  };
+
+  const onPointerUp = (e) => {
+    if (!isTracking && !isSwiping) return;
+    if (e.pointerType === 'touch') return;
+    endDrag(e.clientX, e);
+  };
+
   wrapperEl.addEventListener('touchstart', onTouchStart, { passive: true });
   wrapperEl.addEventListener('touchmove', onTouchMove, { passive: false });
   wrapperEl.addEventListener('touchend', onTouchEnd, { passive: true });
   wrapperEl.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+  wrapperEl.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
 
   return () => {
     wrapperEl.removeEventListener('touchstart', onTouchStart);
     wrapperEl.removeEventListener('touchmove', onTouchMove);
     wrapperEl.removeEventListener('touchend', onTouchEnd);
     wrapperEl.removeEventListener('touchcancel', onTouchEnd);
+
+    wrapperEl.removeEventListener('pointerdown', onPointerDown);
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
   };
 }
 function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChange = null) {
@@ -6384,7 +6647,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
 
   function onTouchStart(e) {
     if (e.touches && e.touches.length > 1) return;
-    if (e.target && e.target.closest && e.target.closest('#category-filter-chips, input, textarea, select, .universal-swipe-wrapper, [data-swipe-card="true"], .notif-swipe-wrapper, .notification-card, .drag-reorder-handle')) {
+    if (e.target && e.target.closest && e.target.closest('#category-filter-chips, input, textarea, select, .drag-reorder-handle')) {
       return;
     }
 
@@ -6504,7 +6767,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   function onPointerDown(e) {
     if (e.pointerType === 'touch') return;
     if (e.button !== 0) return;
-    if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, #category-filter-chips, .interactive, .universal-swipe-wrapper, [data-swipe-card="true"], .notif-swipe-wrapper, .notification-card, .drag-reorder-handle')) {
+    if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, #category-filter-chips, .interactive, .drag-reorder-handle')) {
       return;
     }
 
@@ -10927,10 +11190,10 @@ export function renderLeaderboard() {
         <!-- Col 3: Middle Info Column -->
         <div class="flex-1 min-w-0 mr-3">
           <!-- Line 1: Member Name + YOU badge + Compact Icon-Only Badge Strip -->
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-semibold text-xs text-white truncate shrink-0 max-w-[145px]">${esc(member.displayName || member.name || 'Member')}</span>
+          <div class="flex items-center gap-1.5 min-w-0 w-full">
+            <span class="font-semibold text-xs text-white truncate shrink-0 max-w-[130px]">${esc(member.displayName || member.name || 'Member')}</span>
             ${isMe ? '<span class="you-badge shrink-0">YOU</span>' : ''}
-            <div class="badge-row-container badge-strip-compact flex items-center gap-1 flex-1 min-w-0 overflow-hidden" data-uid="${esc(member.uid)}"></div>
+            <div class="badge-row-container badge-strip-compact flex items-center gap-1 flex-1 min-w-0 overflow-hidden" style="flex: 1 1 auto; overflow: hidden;" data-uid="${esc(member.uid)}"></div>
           </div>
           <!-- Line 2: Subtle role label -->
           <div class="text-[10px] text-neutral-500 font-medium capitalize mt-0.5 truncate">
@@ -12347,14 +12610,12 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
     handle.dataset.dragBound = 'true';
 
     let draggingItem = null;
+    let placeholder = null;
     let pointerId = null;
     let initialIds = [];
     let startY = 0;
     let startX = 0;
-    let allItems = [];
-    let startIndex = -1;
-    let targetIndex = -1;
-    let slotHeight = 0;
+    let initialRect = null;
     let isHorizontal = false;
 
     const getOrderedIds = () => Array.from(containerEl.querySelectorAll(itemSelector))
@@ -12365,7 +12626,7 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       if (selectionState && selectionState.active) return;
       if (e.button !== undefined && e.button !== 0) return;
       const item = handle.closest(itemSelector);
-      if (!item) return;
+      if (!item || !containerEl.contains(item)) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -12376,14 +12637,8 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       startY = e.clientY;
       startX = e.clientX;
 
-      allItems = Array.from(containerEl.querySelectorAll(itemSelector));
-      startIndex = allItems.indexOf(draggingItem);
-      targetIndex = startIndex;
-
-      const itemRect = draggingItem.getBoundingClientRect();
-      const nextSib = allItems[startIndex + 1] || allItems[startIndex - 1];
-      const gap = nextSib ? Math.abs(nextSib.getBoundingClientRect().top - itemRect.top) - itemRect.height : 8;
-      slotHeight = Math.max(20, itemRect.height + Math.max(4, gap));
+      const allItems = Array.from(containerEl.querySelectorAll(itemSelector));
+      initialRect = draggingItem.getBoundingClientRect();
 
       // Check if layout is horizontal/flex-wrap
       isHorizontal = allItems.length > 1 && allItems.some((el, idx) => {
@@ -12391,10 +12646,31 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
         return Math.abs(el.getBoundingClientRect().top - allItems[0].getBoundingClientRect().top) < 10;
       });
 
-      draggingItem.classList.add('dragging-reorder-item');
-      allItems.forEach(el => {
-        if (el !== draggingItem) el.classList.add('drag-reorder-displaced');
-      });
+      // Dedicated empty placeholder matching exact dimensions
+      placeholder = document.createElement('div');
+      placeholder.className = 'drag-reorder-placeholder';
+      placeholder.style.width = initialRect.width + 'px';
+      placeholder.style.height = initialRect.height + 'px';
+      placeholder.style.minHeight = initialRect.height + 'px';
+      placeholder.style.margin = window.getComputedStyle(draggingItem).margin;
+
+      // Insert placeholder before draggingItem
+      safeInsertBefore(containerEl, placeholder, draggingItem);
+
+      // Lift grabbed item into independent elevated floating clone (fixed follower)
+      draggingItem.classList.add('dragging-reorder-item', 'dragging-reorder-floating');
+      draggingItem.style.position = 'fixed';
+      draggingItem.style.top = initialRect.top + 'px';
+      draggingItem.style.left = initialRect.left + 'px';
+      draggingItem.style.width = initialRect.width + 'px';
+      draggingItem.style.height = initialRect.height + 'px';
+      draggingItem.style.margin = '0';
+      draggingItem.style.boxSizing = 'border-box';
+      draggingItem.style.zIndex = '9999';
+      draggingItem.style.pointerEvents = 'none';
+      draggingItem.style.transform = 'scale(1.02)';
+      draggingItem.style.transition = 'none';
+      draggingItem.style.willChange = 'transform, top, left';
 
       try {
         if (handle.setPointerCapture && pointerId != null) {
@@ -12404,56 +12680,52 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
     };
 
     const onPointerMove = (e) => {
-      if (!draggingItem) return;
+      if (!draggingItem || !placeholder) return;
       e.preventDefault();
       e.stopPropagation();
 
       const deltaY = e.clientY - startY;
       const deltaX = e.clientX - startX;
 
-      if (!isHorizontal) {
-        draggingItem.style.transform = `scale(1.03) translateY(${deltaY}px)`;
+      // 1:1 hardware-accelerated tracking with scale 1.02
+      if (isHorizontal) {
+        draggingItem.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) scale(1.02)`;
+      } else {
+        draggingItem.style.transform = `translate3d(0, ${deltaY}px, 0) scale(1.02)`;
+      }
 
-        // Calculate target slot index
-        const rawOffset = Math.round(deltaY / slotHeight);
-        const newTarget = Math.max(0, Math.min(allItems.length - 1, startIndex + rawOffset));
+      // Check siblings in container to reposition placeholder
+      const siblings = Array.from(containerEl.querySelectorAll(itemSelector)).filter(el => el !== draggingItem && el !== placeholder);
+      const cursorY = e.clientY;
+      const cursorX = e.clientX;
 
-        if (newTarget !== targetIndex) {
-          targetIndex = newTarget;
-        }
-
-        // Apply smooth displacement to siblings ("parting the Red Sea")
-        allItems.forEach((sib, idx) => {
-          if (sib === draggingItem) return;
-
-          if (targetIndex > startIndex) {
-            if (idx > startIndex && idx <= targetIndex) {
-              sib.style.transform = `translateY(-${slotHeight}px)`;
+      for (let i = 0; i < siblings.length; i++) {
+        const sib = siblings[i];
+        const r = sib.getBoundingClientRect();
+        if (isHorizontal) {
+          const midX = r.left + r.width / 2;
+          const midY = r.top + r.height / 2;
+          const isOver = cursorX >= r.left && cursorX <= r.right && cursorY >= r.top && cursorY <= r.bottom;
+          if (isOver) {
+            if (cursorX < midX) {
+              safeInsertBefore(containerEl, placeholder, sib);
             } else {
-              sib.style.transform = '';
+              safeInsertBefore(containerEl, placeholder, sib.nextSibling);
             }
-          } else if (targetIndex < startIndex) {
-            if (idx >= targetIndex && idx < startIndex) {
-              sib.style.transform = `translateY(${slotHeight}px)`;
-            } else {
-              sib.style.transform = '';
+            break;
+          }
+        } else {
+          const midY = r.top + r.height / 2;
+          if (cursorY < midY) {
+            if (placeholder.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_PRECEDING) {
+              safeInsertBefore(containerEl, placeholder, sib);
+              break;
             }
           } else {
-            sib.style.transform = '';
-          }
-        });
-      } else {
-        // Horizontal / Grid fallback
-        draggingItem.style.transform = `scale(1.03) translate(${deltaX}px, ${deltaY}px)`;
-        const clientY = e.clientY;
-        const clientX = e.clientX;
-        for (let i = 0; i < allItems.length; i++) {
-          const sib = allItems[i];
-          if (sib === draggingItem) continue;
-          const rect = sib.getBoundingClientRect();
-          if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
-            targetIndex = i;
-            break;
+            if (placeholder.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_FOLLOWING) {
+              safeInsertBefore(containerEl, placeholder, sib.nextSibling);
+              break;
+            }
           }
         }
       }
@@ -12463,10 +12735,9 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       if (!draggingItem) return;
       e.stopPropagation();
       const item = draggingItem;
-      const currentTarget = targetIndex;
-      const currentStart = startIndex;
-      const currentItems = [...allItems];
+      const ph = placeholder;
       draggingItem = null;
+      placeholder = null;
 
       try {
         if (handle.releasePointerCapture && pointerId != null) {
@@ -12475,46 +12746,50 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       } catch (err) { /* ignore */ }
       pointerId = null;
 
-      if (!isHorizontal && currentTarget !== currentStart) {
-        // Animate dragged card into the open gap
-        const targetOffset = (currentTarget - currentStart) * slotHeight;
-        item.style.transition = 'transform 0.18s cubic-bezier(0.2, 0, 0, 1)';
-        item.style.transform = `scale(1) translateY(${targetOffset}px)`;
+      if (ph && containerEl.contains(ph)) {
+        // Animate floating card directly into the placeholder landing slot
+        const pRect = ph.getBoundingClientRect();
+        const currentRect = item.getBoundingClientRect();
+        const diffX = pRect.left - currentRect.left;
+        const diffY = pRect.top - currentRect.top;
 
-        await new Promise(res => setTimeout(res, 180));
+        item.style.transition = 'transform 0.16s cubic-bezier(0.2, 0, 0, 1)';
+        const curTransform = item.style.transform || '';
+        const match = curTransform.match(/translate3d\(([^,]+)px,\s*([^,]+)px/);
+        const curX = match ? parseFloat(match[1]) : 0;
+        const curY = match ? parseFloat(match[2]) : 0;
+        item.style.transform = `translate3d(${curX + diffX}px, ${curY + diffY}px, 0) scale(1)`;
+
+        await new Promise(res => setTimeout(res, 160));
+
+        // Snap cleanly into placeholder DOM position
+        safeInsertBefore(containerEl, item, ph);
+        safeRemoveChild(containerEl, ph);
       }
 
-      // Reset all transform offsets and classes
-      currentItems.forEach(el => {
-        el.style.transform = '';
-        el.style.transition = '';
-        el.classList.remove('drag-reorder-displaced');
-      });
-      item.classList.remove('dragging-reorder-item');
+      // Reset all inline styles and classes on item
+      item.classList.remove('dragging-reorder-item', 'dragging-reorder-floating');
+      item.style.position = '';
+      item.style.top = '';
+      item.style.left = '';
+      item.style.width = '';
+      item.style.height = '';
+      item.style.margin = '';
+      item.style.boxSizing = '';
+      item.style.zIndex = '';
+      item.style.pointerEvents = '';
       item.style.transform = '';
       item.style.transition = '';
-
-      // Commit DOM repositioning with crash-proof safe DOM guards
-      if (currentTarget !== currentStart && currentTarget >= 0 && currentTarget < currentItems.length) {
-        const targetEl = currentItems[currentTarget];
-        if (targetEl && targetEl !== item && containerEl.contains(targetEl) && containerEl.contains(item)) {
-          try {
-            if (currentTarget > currentStart) {
-              const refNode = targetEl.nextSibling;
-              safeInsertBefore(containerEl, item, refNode);
-            } else {
-              safeInsertBefore(containerEl, item, targetEl);
-            }
-          } catch (err) {
-            console.warn('Drag reorder DOM commit warning:', err);
-          }
-        }
-      }
+      item.style.willChange = '';
 
       const finalIds = getOrderedIds();
       const changed = finalIds.length === initialIds.length && finalIds.some((id, idx) => id !== initialIds[idx]);
       if (changed && typeof onOrderCommitted === 'function') {
-        await onOrderCommitted(finalIds);
+        try {
+          await onOrderCommitted(finalIds);
+        } catch (err) {
+          console.error('onOrderCommitted error:', err);
+        }
       }
     };
 
@@ -13256,7 +13531,7 @@ function openAdminTaskModal(taskId = null) {
       if (!wrap) return;
       const cat = getCategoryForTask({ categoryId: currentCategoryId });
       wrap.innerHTML = `
-        <div id="btn-pick-task-category" role="button" tabindex="0" class="admin-category-picker-row w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-between text-xs hover:bg-white/10 transition cursor-pointer select-none">
+        <div id="btn-pick-task-category" role="button" tabindex="0" class="admin-category-picker-row w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-between text-xs hover:bg-white/10 active:bg-white/15 active:scale-[0.98] transition cursor-pointer select-none">
           <div class="flex items-center gap-2 min-w-0">
             <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${cat.color || '#0A84FF'};"></span>
             <span class="shrink-0 text-neutral-300">${getCategorySvg(cat.iconKey, 'w-3.5 h-3.5')}</span>
@@ -13270,21 +13545,35 @@ function openAdminTaskModal(taskId = null) {
       const btn = wrap.querySelector('#btn-pick-task-category');
       if (btn) {
         btn.onclick = () => {
-          const items = Array.from(categoriesMap.values())
-            .filter(c => !c.archived)
-            .map(c => ({
-              id: c.id,
-              label: c.name || c.nameEn,
-              color: c.color,
-              icon: c.iconKey || c.icon || 'folder'
-            }));
+          const allCats = [];
+          const seenIds = new Set();
+          const candidates = [
+            ...(Array.isArray(state.categories) ? state.categories : []),
+            ...Array.from(categoriesMap.values())
+          ];
+          candidates.forEach(c => {
+            if (c && c.id && !c.archived && !seenIds.has(c.id)) {
+              seenIds.add(c.id);
+              allCats.push({
+                id: c.id,
+                label: c.name || c.nameEn || c.label || c.id,
+                color: c.color || '#0A84FF',
+                icon: c.iconKey || c.icon || 'folder',
+                iconKey: c.iconKey || c.icon || 'folder',
+                category: c
+              });
+            }
+          });
+
           openItemPicker({
             title: 'Select Category',
-            items: items.length > 0 ? items : [{ id: 'uncategorized', label: 'Uncategorized', color: '#8E8E93', icon: 'folder' }],
+            items: allCats.length > 0 ? allCats : [{ id: 'uncategorized', label: 'Uncategorized', color: '#8E8E93', icon: 'folder', iconKey: 'folder' }],
             selectedId: currentCategoryId,
             onSelect: (item) => {
-              currentCategoryId = item.id;
-              updateCategoryPickerUI();
+              if (item && item.id) {
+                currentCategoryId = item.id;
+                updateCategoryPickerUI();
+              }
             }
           });
         };
@@ -17286,8 +17575,6 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
 
 function openMemberControlModal(member) {
   let activeTab = 'profile';
-  let adjusterCategory = 'points'; // 'points' | 'financial'
-  let adjusterType = 'bonus'; // 'bonus' | 'penalty' | 'fine' | 'payment' | 'waive'
   let hasPendingChanges = false;
   let editedName = member.displayName || '';
   let selectedRole = member.role || (member.isAdmin ? 'admin' : 'member');
@@ -17323,9 +17610,6 @@ function openMemberControlModal(member) {
     <div id="member-ctrl-tab-bar" class="modal-tabs flex items-center gap-2 p-1.5 rounded-xl bg-white/5 border border-white/10 overflow-x-auto whitespace-nowrap scrollbar-none flex-nowrap" style="scrollbar-width: none; -ms-overflow-style: none;">
       <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap bg-[#0A84FF] text-white shadow-sm" data-tab="profile">
         Profile
-      </button>
-      <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="adjuster">
-        Adjust
       </button>
       <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="ledger">
         Ledger
@@ -17413,108 +17697,7 @@ function openMemberControlModal(member) {
       </div>
     </div>
 
-    <!-- TAB 2: Universal Adjuster (Points & Financials) -->
-    <div id="tab-sec-adjuster" class="member-tab-panel space-y-3 hidden">
-      <!-- Quick Metric Summary strip (.ios-card) -->
-      <div class="ios-card grid grid-cols-3 gap-2 text-center">
-        <div class="p-1">
-          <div class="text-[10px] text-neutral-400 uppercase font-mono">Points</div>
-          <div id="ctrl-summary-points" class="text-base font-bold text-amber-400 font-mono">${currentMember.points || 0}</div>
-        </div>
-        <div class="p-1 border-x border-white/10">
-          <div class="text-[10px] text-neutral-400 uppercase font-mono">Penalties</div>
-          <div id="ctrl-summary-penalties" class="text-base font-bold text-rose-400 font-mono">${currentMember.penalties || 0}</div>
-        </div>
-        <div class="p-1">
-          <div class="text-[10px] text-neutral-400 uppercase font-mono">Fines Due</div>
-          <div id="ctrl-summary-fines" class="text-base font-bold text-blue-400 font-mono">${finesBalance} EGP</div>
-        </div>
-      </div>
-
-      <!-- Adjuster Form (.ios-card) -->
-      <div class="ios-card space-y-3.5">
-        <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Adjustment Type</div>
-        
-        <!-- Category Toggle Segmented -->
-        <div id="ctrl-adj-cat-wrap"></div>
-
-        <!-- Action Pills: Points Group -->
-        <div id="adj-action-points-group" class="grid grid-cols-2 gap-2">
-          <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition bg-emerald-500/20 border-emerald-500/50 text-emerald-300" data-type="bonus">
-            + Add Bonus
-          </button>
-          <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="penalty">
-            - Deduct Penalty
-          </button>
-        </div>
-
-        <!-- Action Pills: Financial Group -->
-        <div id="adj-action-financial-group" class="space-y-2 hidden">
-          <div class="flex items-center justify-between px-1">
-            <span class="text-[11px] text-neutral-400">Current Balance:</span>
-            <span id="ctrl-adj-fines-preview" class="text-xs font-mono text-[#0A84FF] font-bold">${finesBalance} EGP</span>
-          </div>
-          <div class="grid grid-cols-3 gap-2">
-            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-rose-500/20 border-rose-500/50 text-rose-300" data-type="fine">
-              + Add Fine
-            </button>
-            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="payment">
-              - Record Pay
-            </button>
-            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="waive">
-              ~ Waive Fine
-            </button>
-          </div>
-        </div>
-
-        <!-- Amount & Preset Chips -->
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">
-            Amount (<span id="ctrl-adj-unit-label">Points</span>)
-          </label>
-          <input id="ctrl-adjust-amount" type="number" min="1" step="1" class="ios-input text-white font-mono text-sm w-full" placeholder="e.g. 50" required />
-          
-          <!-- Points Presets -->
-          <div id="adj-presets-points" class="grid grid-cols-4 gap-1.5 mt-2">
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="25">25</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="250">250</button>
-          </div>
-
-          <!-- Financial Presets -->
-          <div id="adj-presets-financial" class="grid grid-cols-4 gap-1.5 mt-2 hidden">
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="200">200</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="500">500</button>
-          </div>
-        </div>
-
-        <!-- Reason & Quick Chips -->
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">
-            Reason <span class="text-rose-400">*</span>
-          </label>
-          <textarea id="ctrl-adjust-reason" class="ios-input text-white text-xs leading-relaxed w-full" rows="2" placeholder="Required explanation for the transaction ledger..." required></textarea>
-          <div class="flex flex-wrap gap-1 mt-1.5">
-            ${['Meeting attendance', 'Late check-in', 'Special contribution', 'Manual adjustment'].map(chip => `
-              <button type="button" class="btn-quick-reason px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-neutral-300 transition" data-reason="${chip}">
-                ${chip}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-
-        <div class="pt-1">
-          <button type="button" id="btn-submit-adjust" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold transition flex items-center justify-center gap-2">
-            <span>Apply &amp; Record in Ledger</span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- TAB 3: Ledger -->
+    <!-- TAB 2: Ledger -->
     <div id="tab-sec-ledger" class="member-tab-panel space-y-3 hidden">
       <div class="ios-card space-y-3">
         <div class="flex items-center justify-between text-neutral-400 text-[11px] px-1">
@@ -17918,147 +18101,6 @@ function openMemberControlModal(member) {
         }
       });
     };
-  }
-
-  // Wire Adjuster Category Segmented (In-place switching)
-  const adjCatWrap = modalBody.querySelector('#ctrl-adj-cat-wrap');
-  if (adjCatWrap) {
-    adjCatWrap.appendChild(renderSegmented({
-      id: 'adj-cat-segmented',
-      options: [
-        { value: 'points', label: 'Points & Penalties' },
-        { value: 'financial', label: 'Financials (EGP)' }
-      ],
-      value: adjusterCategory,
-      onChange: (val) => {
-        adjusterCategory = val;
-        adjusterType = val === 'points' ? 'bonus' : 'fine';
-        
-        const pointsGroup = modalBody.querySelector('#adj-action-points-group');
-        const finGroup = modalBody.querySelector('#adj-action-financial-group');
-        const pointsPresets = modalBody.querySelector('#adj-presets-points');
-        const finPresets = modalBody.querySelector('#adj-presets-financial');
-        const unitLabel = modalBody.querySelector('#ctrl-adj-unit-label');
-
-        if (pointsGroup) pointsGroup.classList.toggle('hidden', val !== 'points');
-        if (finGroup) finGroup.classList.toggle('hidden', val !== 'financial');
-        if (pointsPresets) pointsPresets.classList.toggle('hidden', val !== 'points');
-        if (finPresets) finPresets.classList.toggle('hidden', val !== 'financial');
-        if (unitLabel) unitLabel.textContent = val === 'points' ? 'Points' : 'EGP';
-
-        updateAdjusterTypeButtons();
-      }
-    }));
-  }
-
-  function updateAdjusterTypeButtons() {
-    modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
-      const isSel = btn.dataset.type === adjusterType;
-      if (btn.dataset.type === 'bonus') {
-        btn.className = `btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${isSel ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'penalty') {
-        btn.className = `btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${isSel ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'fine') {
-        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'payment') {
-        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'waive') {
-        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      }
-    });
-  }
-
-  // Wire Adjuster Action Pills
-  modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
-    btn.onclick = () => {
-      adjusterType = btn.dataset.type;
-      updateAdjusterTypeButtons();
-    };
-  });
-
-  // Wire Adjuster Preset Chips
-  modalBody.querySelectorAll('.btn-adj-preset').forEach(btn => {
-    btn.onclick = () => {
-      const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
-      if (amtInput) amtInput.value = btn.dataset.amount;
-    };
-  });
-
-  // Wire Quick Reason Chips
-  modalBody.querySelectorAll('.btn-quick-reason').forEach(btn => {
-    btn.onclick = () => {
-      const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
-      if (reasonInput) reasonInput.value = btn.dataset.reason;
-    };
-  });
-
-  // Wire Adjuster Submit
-  const submitAdjustBtn = modalBody.querySelector('#btn-submit-adjust');
-  if (submitAdjustBtn) {
-    submitAdjustBtn.onclick = async () => {
-        const amtVal = Math.abs(Number(modalBody.querySelector('#ctrl-adjust-amount')?.value));
-        if (isNaN(amtVal) || amtVal <= 0) {
-          toast('Please enter a valid amount greater than 0', 'error');
-          return;
-        }
-
-        const reasonVal = String(modalBody.querySelector('#ctrl-adjust-reason')?.value || '').trim();
-        if (!reasonVal) {
-          toast('Adjustment reason is mandatory for the ledger', 'error');
-          return;
-        }
-
-        submitAdjustBtn.disabled = true;
-        submitAdjustBtn.textContent = 'Recording adjustment...';
-
-        try {
-          let bucket = 'points';
-          let direction = 'add';
-          if (adjusterCategory === 'points') {
-            bucket = adjusterType === 'bonus' ? 'points' : 'penalties';
-            direction = adjusterType === 'bonus' ? 'add' : 'add';
-          } else {
-            bucket = 'fines';
-            direction = adjusterType === 'fine' ? 'add' : 'deduct';
-          }
-
-          const result = await applyAccountAdjustment({
-            targetUid: currentMember.uid,
-            bucket,
-            direction,
-            amount: amtVal,
-            reason: reasonVal
-          });
-
-          // Update Summary metrics in place
-          const ptsEl = modalBody.querySelector('#ctrl-summary-points');
-          if (ptsEl && result.newPoints !== undefined) ptsEl.textContent = result.newPoints;
-          const penEl = modalBody.querySelector('#ctrl-summary-penalties');
-          if (penEl && result.newPenalties !== undefined) penEl.textContent = result.newPenalties;
-          const finEl = modalBody.querySelector('#ctrl-summary-fines');
-          if (finEl && result.newFinesDue !== undefined) finEl.textContent = `${result.newFinesDue} EGP`;
-
-          // Reset inputs
-          const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
-          if (amtInput) amtInput.value = '';
-          const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
-          if (reasonInput) reasonInput.value = '';
-
-          if (ledgerLoaded) {
-            loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
-          }
-
-          toast('Successfully applied adjustment', 'success');
-          if (typeof renderAdminMembers === 'function') renderAdminMembers();
-          if (typeof renderLeaderboard === 'function') renderLeaderboard();
-        } catch (err) {
-          console.error('Adjuster error:', err);
-          toast('Failed to record adjustment: ' + err.message, 'error');
-        } finally {
-          submitAdjustBtn.disabled = false;
-          submitAdjustBtn.textContent = 'Apply & Record in Ledger';
-        }
-      };
   }
 
   openModal({
@@ -20182,7 +20224,7 @@ export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = nul
     </div>
 
     ${displayContent ? `
-      <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs max-h-[50vh] overflow-y-auto">
+      <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs h-auto max-h-none overflow-visible">
         ${esc(displayContent)}
       </div>
     ` : `
@@ -20315,7 +20357,7 @@ export async function openAdminWhatsNewEditorModal() {
             </div>
             <div class="col-span-2">
               <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Headline</label>
-              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v2.2.9" value="${esc(draftTitle)}" />
+              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v2.2.10" value="${esc(draftTitle)}" />
             </div>
           </div>
 
