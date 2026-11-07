@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v2.2.6</title>
+    <title>COC Media Team v2.2.7</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
     <!-- PWA Configuration (GitHub Pages Relative Paths) -->
-    <link rel="manifest" href="./manifest.json?v=2.1.10" />
+    <link rel="manifest" href="./manifest.json?v=2.2.7" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -80,7 +80,7 @@
     </script>
 
     <!-- Apple iOS 17/18 Design System Stylesheet -->
-    <link rel="stylesheet" href="./styles.css?v=2.2.6" />
+    <link rel="stylesheet" href="./styles.css?v=2.2.7" />
 
     <!-- Confetti & Lucide CDN for Interactions & Icons -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
@@ -120,7 +120,7 @@
       </div>
       <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
         <span id="loader-app-name">COC Media Team</span>
-        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v2.2.5</span>
+        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v2.2.7</span>
       </div>
       <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
       <div class="w-7 h-7 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-spin"></div>
@@ -222,7 +222,7 @@
             <div id="brand-header-click" class="flex items-center gap-2 cursor-pointer">
               <img id="header-logo-img" src="./image_ad59c0.jpg" alt="Logo" class="w-8 h-8 rounded-full object-cover border border-white/20 shadow-sm" />
               <span id="header-app-title" class="font-bold text-sm tracking-tight text-white">COC Media</span>
-              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v2.2.6</span>
+              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v2.2.7</span>
             </div>
 
             <button type="button" id="btn-open-notifications" class="floating-glass-btn relative" aria-label="Notifications" title="Notifications">
@@ -471,6 +471,7 @@
                   <span id="profile-view-role" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30">Member</span>
                   <span id="profile-view-streak" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Active</span>
                 </div>
+                <div id="profile-view-badges" class="flex flex-wrap items-center gap-1.5 mt-1.5 empty:hidden"></div>
               </div>
 
               <button type="button" id="btn-open-edit-profile" class="p-2 rounded-xl bg-white/10 hover:bg-white/15 text-white" aria-label="Edit Profile">
@@ -478,6 +479,19 @@
                   <path d="M12 20h9"></path>
                   <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                 </svg>
+              </button>
+            </div>
+
+            <!-- Conditional Guest Login Button (Only shown when unauthenticated) -->
+            <div id="profile-guest-login-container" class="hidden pt-3 border-t border-white/10">
+              <button type="button" id="btn-profile-login" class="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0071E3] transition shadow-sm flex items-center justify-center gap-2 cursor-pointer">
+                <svg class="w-4 h-4 fill-white shrink-0" viewBox="0 0 24 24">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                </svg>
+                <span>Login with Google</span>
               </button>
             </div>
 
@@ -541,7 +555,7 @@
 
           <!-- Profile Footer -->
           <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
-            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge">v2.2.5</span></div>
+            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge">v2.2.7</span></div>
             <div class="text-[11px] text-neutral-500">Official Production Release</div>
           </div>
         </section>
@@ -750,7 +764,7 @@
               </div>
               <span class="text-xs font-semibold text-white">App Version</span>
             </div>
-            <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v2.2.6</span>
+            <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v2.2.7</span>
           </div>
         </div>
 
@@ -1229,19 +1243,26 @@
               <p class="ios-subhead text-neutral-400">Team carousel notices, push broadcasts, and configurations.</p>
             </div>
             <div class="flex items-center gap-2">
-              <button type="button" id="btn-admin-import-legacy-announcements" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition flex items-center gap-1">
-                <span>Import Old</span>
-              </button>
               <button type="button" id="btn-admin-add-broadcast" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition flex items-center gap-1 shadow-sm">
                 <span>+ New Broadcast</span>
               </button>
             </div>
           </div>
 
+          <!-- Filter Segment: Active vs Archive -->
+          <div class="flex items-center gap-2">
+            <button type="button" id="admin-broadcasts-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
+              Active Broadcasts
+            </button>
+            <button type="button" id="admin-broadcasts-filter-archived" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white">
+              Archive
+            </button>
+          </div>
+
           <!-- Broadcasts List -->
           <div class="space-y-2">
             <div class="flex items-center justify-between text-xs font-semibold text-neutral-400 px-1">
-              <span>Live &amp; Scheduled Broadcasts</span>
+              <span id="admin-broadcasts-section-label">Live &amp; Scheduled Broadcasts</span>
             </div>
             <div id="admin-broadcasts-list" class="space-y-2">
               <!-- Dynamic Broadcasts -->
@@ -1830,7 +1851,7 @@
     </script>
 
     <!-- CORE VANILLA JS APPLICATION MODULE -->
-    <script type="module" src="./app.js?v=2.2.6"></script>
+    <script type="module" src="./app.js?v=2.2.7"></script>
 
   
     <!-- ACCOUNT STATUS OVERLAY (Disabled / Blocked) -->

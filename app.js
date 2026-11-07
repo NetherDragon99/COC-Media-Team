@@ -40,7 +40,7 @@ export function updateDockHeight() {
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.6';
+export const APP_VERSION = '2.2.7';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -910,6 +910,7 @@ function normalizeSubmission(raw) {
 
 function normalizeNotification(raw) {
   if (!raw) return null;
+  const isArchived = Boolean(raw.isArchived || raw.archived);
   return {
     id: raw.id || '',
     title: raw.title || 'Notification',
@@ -920,6 +921,9 @@ function normalizeNotification(raw) {
     targetAction: raw.targetAction || null,
     targetUserId: raw.targetUserId || raw.uid || 'all',
     uid: raw.uid || '',
+    broadcastId: raw.broadcastId || '',
+    archived: isArchived,
+    isArchived,
     timestamp: raw.timestamp || raw.createdAt || null,
     createdAt: raw.createdAt || raw.timestamp || null,
     read: Boolean(raw.read),
@@ -947,7 +951,7 @@ export function normalizeBroadcast(raw) {
   const targetType = (raw.targetType === 'badge') ? 'badge' : 'all';
   const badgeIds = Array.isArray(raw.badgeIds) ? raw.badgeIds : [];
   const customFooter = typeof raw.customFooter === 'string' ? raw.customFooter.trim() : '';
-  const archived = Boolean(raw.archived);
+  const isArchived = Boolean(raw.isArchived || raw.archived);
 
   return {
     id: raw.id || '',
@@ -961,7 +965,8 @@ export function normalizeBroadcast(raw) {
     targetType,
     badgeIds,
     customFooter,
-    archived,
+    archived: isArchived,
+    isArchived,
     createdAt: raw.createdAt || null,
     updatedAt: raw.updatedAt || null
   };
@@ -4810,7 +4815,7 @@ export function getBulkActions(listType) {
   ) || (
     listType === 'sessions' && adminSessionsFilter === 'archived'
   ) || (
-    listType === 'broadcasts' && adminBroadcastsFilter === 'archived'
+    listType === 'broadcasts' && (adminBroadcastsFilter === 'archived' || state.adminBroadcastsFilter === 'archived')
   );
 
   const DANGER_CLS = 'h-9 px-3 rounded-xl text-xs font-semibold text-[#FF453A] bg-[#FF453A]/15 hover:bg-[#FF453A]/25 border border-[#FF453A]/25 transition';
@@ -5047,19 +5052,40 @@ export async function handleBulkArchive(isRestore = false) {
     let colName = 'tasks';
     if (type === 'categories') colName = 'categories';
     else if (type === 'sessions') colName = 'attendance_sessions';
-    else if (type === 'broadcasts') colName = 'notifications_broadcast';
+    else if (type === 'broadcasts') colName = 'broadcasts';
 
     for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
       const chunk = ids.slice(i, i + CHUNK_SIZE);
       const batch = writeBatch(db);
       chunk.forEach(id => {
         const ref = doc(db, colName, id);
-        batch.update(ref, { archived: newArchived, updatedAt: serverTimestamp() });
+        if (type === 'broadcasts') {
+          batch.update(ref, { isArchived: newArchived, archived: newArchived, updatedAt: serverTimestamp() });
+        } else {
+          batch.update(ref, { archived: newArchived, updatedAt: serverTimestamp() });
+        }
       });
       await batch.commit();
     }
 
-    // In-memory update immediately
+    if (type === 'broadcasts') {
+      for (const bId of ids) {
+        try {
+          const notifSnap = await getDocs(query(collection(db, 'notifications_broadcast'), where('broadcastId', '==', bId)));
+          if (!notifSnap.empty) {
+            const nBatch = writeBatch(db);
+            notifSnap.docs.forEach(d => {
+              nBatch.update(d.ref, { isArchived: newArchived, archived: newArchived });
+            });
+            await nBatch.commit();
+          }
+        } catch (nErr) {
+          console.warn('Sync broadcast notifications archive state:', nErr);
+        }
+      }
+    }
+
+    // In-memory update ONLY after DB successfully resolves
     if (type === 'tasks' || type === 'admin_tasks') {
       ids.forEach(id => {
         const t = state.tasks.find(x => x.id === id);
@@ -5083,10 +5109,15 @@ export async function handleBulkArchive(isRestore = false) {
     } else if (type === 'broadcasts') {
       ids.forEach(id => {
         const b = state.broadcasts.find(x => x.id === id);
-        if (b) b.archived = newArchived;
+        if (b) {
+          b.archived = newArchived;
+          b.isArchived = newArchived;
+        }
       });
       renderAdminBroadcasts();
+      renderHomeBroadcastBanner();
       renderBroadcastBanner();
+      mergeAndRenderNotifications();
     }
 
     toast(`${count} item(s) ${isRestore ? 'restored' : 'archived'} successfully`, 'success');
@@ -5474,7 +5505,7 @@ export async function handleBulkDelete() {
       let colName = 'tasks';
       if (type === 'categories') colName = 'categories';
       else if (type === 'sessions') colName = 'attendance_sessions';
-      else if (type === 'broadcasts') colName = 'notifications_broadcast';
+      else if (type === 'broadcasts') colName = 'broadcasts';
       else if (type === 'notifications' || type === 'notifications_admin') colName = 'notifications';
       else if (type === 'waivers') colName = 'waiver_requests';
       else if (type === 'badges') colName = 'badges';
@@ -5486,6 +5517,21 @@ export async function handleBulkDelete() {
           batch.delete(doc(db, colName, id));
         });
         await batch.commit();
+      }
+
+      if (type === 'broadcasts') {
+        for (const bId of ids) {
+          try {
+            const notifSnap = await getDocs(query(collection(db, 'notifications_broadcast'), where('broadcastId', '==', bId)));
+            if (!notifSnap.empty) {
+              const nBatch = writeBatch(db);
+              notifSnap.docs.forEach(d => nBatch.delete(d.ref));
+              await nBatch.commit();
+            }
+          } catch (nErr) {
+            console.warn('Delete broadcast notifications cleanup:', nErr);
+          }
+        }
       }
 
       if (type === 'tasks' || type === 'admin_tasks') {
@@ -5503,7 +5549,9 @@ export async function handleBulkDelete() {
       } else if (type === 'broadcasts') {
         state.broadcasts = state.broadcasts.filter(b => !selectionState.selectedIds.has(b.id));
         renderAdminBroadcasts();
+        renderHomeBroadcastBanner();
         renderBroadcastBanner();
+        mergeAndRenderNotifications();
       } else if (type === 'notifications' || type === 'notifications_admin') {
         state.notifications = state.notifications.filter(n => !selectionState.selectedIds.has(n.id));
         renderNotifications();
@@ -8132,7 +8180,15 @@ function mergeAndRenderNotifications() {
     });
   });
 
+  const archivedBroadcastIds = new Set(
+    (state.broadcasts || [])
+      .filter(b => b.isArchived === true || b.archived === true || b.status === 'archived')
+      .map(b => b.id)
+  );
+
   [...bAll, ...bBadge].forEach(n => {
+    if (n.isArchived === true || n.archived === true) return;
+    if (n.broadcastId && archivedBroadcastIds.has(n.broadcastId)) return;
     const isRead = Array.isArray(n.readBy) && n.readBy.includes(state.user?.uid);
     combinedMap.set(n.id, {
       ...n,
@@ -8433,6 +8489,7 @@ function setupBroadcastsListener() {
       state.broadcasts = snapshot.docs.map(d => normalizeBroadcast({ id: d.id, ...d.data() }));
       renderHomeBroadcastBanner();
       renderAdminBroadcasts();
+      mergeAndRenderNotifications();
     }, (err) => console.warn('Broadcasts listener:', err));
     listeners.add('broadcasts', unsubBroadcasts);
   } catch (e) {
@@ -11449,12 +11506,45 @@ function updateProfileUI() {
 
   const guestCard = document.getElementById('drawer-guest-card');
   const userCard = document.getElementById('drawer-profile-card');
+  const profileGuestLoginContainer = document.getElementById('profile-guest-login-container');
+  const profileLoginBtn = document.getElementById('btn-profile-login');
+  const editProfileBtn = document.getElementById('btn-open-edit-profile');
+  const profileBadgesEl = document.getElementById('profile-view-badges');
+
+  if (profileLoginBtn && !profileLoginBtn._hasLoginListener) {
+    profileLoginBtn._hasLoginListener = true;
+    profileLoginBtn.onclick = handleGoogleSignIn;
+  }
 
   if (state.user) {
+    if (profileGuestLoginContainer) {
+      profileGuestLoginContainer.classList.add('hidden');
+      profileGuestLoginContainer.style.display = 'none';
+    }
+    if (profileLoginBtn) {
+      profileLoginBtn.classList.add('hidden');
+    }
+    if (editProfileBtn) {
+      editProfileBtn.classList.remove('hidden');
+    }
+
     if (nameEl) nameEl.textContent = state.user.displayName;
     const emailToDisplay = state.userPrivate?.email || state.user.email || 'Verified Member';
     if (emailEl) emailEl.textContent = emailToDisplay;
     if (avatarEl && state.user.photoURL) avatarEl.src = state.user.photoURL;
+
+    if (profileBadgesEl) {
+      const userBadgeIds = Array.isArray(state.user.badgeIds) ? state.user.badgeIds : (
+        Array.isArray(state.user.badges) ? state.user.badges.map(b => typeof b === 'object' ? b?.id : b).filter(Boolean) : []
+      );
+      const badgeObjs = userBadgeIds.map(bid => badgesMap.get(bid) || (Array.isArray(state.user.badges) ? state.user.badges.find(x => (x?.id || x) === bid) : null)).filter(Boolean);
+      profileBadgesEl.innerHTML = badgeObjs.map(b => {
+        const bObj = typeof b === 'object' ? b : { id: b, label: b, color: '#0A84FF', icon: 'star' };
+        const color = bObj.color || '#0A84FF';
+        const label = bObj.label || bObj.name || bObj.id;
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1" style="background-color: ${color}25; color: ${color}; border: 1px solid ${color}40;">${getCategorySvg(bObj.iconKey || bObj.icon || 'star', 'w-2.5 h-2.5')}<span>${esc(label)}</span></span>`;
+      }).join('');
+    }
 
     const avatarCropBtn = document.getElementById('btn-profile-avatar-crop');
     if (avatarCropBtn && !avatarCropBtn._hasCropListener) {
@@ -11499,6 +11589,20 @@ function updateProfileUI() {
     renderProfileAttendance();
     renderProfileTransactions();
   } else {
+    if (profileGuestLoginContainer) {
+      profileGuestLoginContainer.classList.remove('hidden');
+      profileGuestLoginContainer.style.display = '';
+    }
+    if (profileLoginBtn) {
+      profileLoginBtn.classList.remove('hidden');
+    }
+    if (editProfileBtn) {
+      editProfileBtn.classList.add('hidden');
+    }
+    if (profileBadgesEl) {
+      profileBadgesEl.innerHTML = '';
+    }
+
     if (nameEl) nameEl.textContent = 'Guest User';
     if (emailEl) emailEl.textContent = 'Read-Only Mode';
     if (avatarEl) avatarEl.src = './image_ad59c0.jpg';
@@ -17411,7 +17515,7 @@ export function getActiveBroadcasts() {
 
   return (state.broadcasts || []).filter(b => {
     // 1. Exclude archived broadcasts
-    if (b.archived === true || b.status === 'archived') return false;
+    if (b.isArchived === true || b.archived === true || b.status === 'archived') return false;
 
     // 2. Ensure serverNow() is strictly within start/end limits
     const startMs = typeof b.startDateTime === 'number' ? b.startDateTime : (b.startDateTime?.toMillis ? b.startDateTime.toMillis() : new Date(b.startDateTime || 0).getTime());
@@ -17687,11 +17791,33 @@ function renderAdminBroadcasts() {
   const container = document.getElementById('admin-broadcasts-list');
   if (!container) return;
 
-  if (state.broadcasts.length === 0) {
+  const isArchivedView = state.adminBroadcastsFilter === 'archived' || adminBroadcastsFilter === 'archived';
+  const sectionLabelEl = document.getElementById('admin-broadcasts-section-label');
+  if (sectionLabelEl) {
+    sectionLabelEl.textContent = isArchivedView ? 'Archived Broadcasts' : 'Live & Scheduled Broadcasts';
+  }
+
+  const filterActiveBtn = document.getElementById('admin-broadcasts-filter-active');
+  const filterArchivedBtn = document.getElementById('admin-broadcasts-filter-archived');
+  if (filterActiveBtn && filterArchivedBtn) {
+    filterActiveBtn.className = !isArchivedView
+      ? 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white'
+      : 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
+    filterArchivedBtn.className = isArchivedView
+      ? 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white'
+      : 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
+  }
+
+  const filtered = (state.broadcasts || []).filter(b => {
+    const archived = Boolean(b.isArchived || b.archived);
+    return isArchivedView ? archived : !archived;
+  });
+
+  if (filtered.length === 0) {
     container.innerHTML = `
       <div class="glass-card p-6 text-center text-xs text-neutral-400 space-y-1">
-        <p class="font-semibold text-white">No broadcasts created</p>
-        <p class="text-[11px]">Create a new broadcast to display announcements on member home feeds.</p>
+        <p class="font-semibold text-white">No ${isArchivedView ? 'archived' : 'active'} broadcasts found</p>
+        <p class="text-[11px]">${isArchivedView ? 'Archived broadcasts will appear here where you can restore or permanently delete them.' : 'Create a new broadcast to display announcements on member home feeds.'}</p>
       </div>
     `;
     return;
@@ -17700,10 +17826,14 @@ function renderAdminBroadcasts() {
   const now = serverNow();
   const allBadges = getAllAvailableBadges();
 
-  container.innerHTML = state.broadcasts.map(b => {
+  container.innerHTML = filtered.map(b => {
+    const isArchivedItem = Boolean(b.isArchived || b.archived);
     let statusClass = 'bg-neutral-500/20 text-neutral-300 border-neutral-500/30';
     let statusLabel = 'Expired';
-    if (now >= b.startDateTime && now <= b.endDateTime) {
+    if (isArchivedItem) {
+      statusClass = 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+      statusLabel = 'Archived';
+    } else if (now >= b.startDateTime && now <= b.endDateTime) {
       statusClass = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
       statusLabel = 'Live Active';
     } else if (now < b.startDateTime) {
@@ -17728,6 +17858,26 @@ function renderAdminBroadcasts() {
         }).join(' ');
       }
     }
+
+    const actionsHtml = isArchivedItem ? `
+      <div class="flex items-center gap-1.5" data-no-row-tap="true">
+        <button type="button" class="btn-broadcast-restore px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
+          Restore
+        </button>
+        <button type="button" class="btn-broadcast-delete px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
+          Permanent Delete
+        </button>
+      </div>
+    ` : `
+      <div class="flex items-center gap-1.5" data-no-row-tap="true">
+        <button type="button" class="btn-broadcast-archive px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/10 hover:bg-white/15 text-neutral-200 border border-white/15 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
+          Archive
+        </button>
+        <button type="button" class="btn-broadcast-delete px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
+          Delete
+        </button>
+      </div>
+    `;
 
     return `
       <div class="glass-card bulk-select-card p-3.5 space-y-2 text-xs cursor-pointer select-none rounded-xl hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-broadcast-id="${esc(b.id)}" data-bulk-id="${esc(b.id)}">
@@ -17769,14 +17919,41 @@ function renderAdminBroadcasts() {
             </div>
           ` : ''}
 
-          <div class="text-[10px] text-neutral-400 font-mono flex items-center gap-1.5 pt-1 border-t border-white/5">
-            <span>Schedule:</span>
-            <span>${startFormatted} &rarr; ${endFormatted}</span>
+          <div class="text-[10px] text-neutral-400 font-mono flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-white/5">
+            <div class="flex items-center gap-1.5">
+              <span>Schedule:</span>
+              <span>${startFormatted} &rarr; ${endFormatted}</span>
+            </div>
+            ${actionsHtml}
           </div>
         </div>
       </div>
     `;
   }).join('');
+
+  container.querySelectorAll('.btn-broadcast-archive').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
+      if (b) handleArchiveBroadcast(b, true);
+    };
+  });
+
+  container.querySelectorAll('.btn-broadcast-restore').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
+      if (b) handleArchiveBroadcast(b, false);
+    };
+  });
+
+  container.querySelectorAll('.btn-broadcast-delete').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
+      if (b) handleDeleteBroadcast(b);
+    };
+  });
 
   container.querySelectorAll('.bulk-select-card').forEach(card => {
     attachRowGestures(card, {
@@ -17936,6 +18113,21 @@ function openAdminBroadcastModal(broadcast = null) {
         <input type="text" id="broadcastFooter" class="ios-input text-white text-xs" maxlength="80" placeholder="e.g. Bring your laptop and ID badge" value="${esc(broadcast?.customFooter || "")}" />
         <p class="text-[10px] text-neutral-400">Displayed at the bottom of the member detail card. Leave empty to omit the footer.</p>
       </div>
+
+      ${broadcast ? `
+        <!-- Card 5: Broadcast Actions (Archive / Restore / Delete) -->
+        <div class="ios-card space-y-2">
+          <div class="text-[11px] font-bold text-neutral-400 tracking-wider">BROADCAST ACTIONS</div>
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" id="btnModalArchiveBroadcast" class="py-2.5 px-3 rounded-xl text-xs font-semibold ${(broadcast.isArchived || broadcast.archived) ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30' : 'bg-white/10 hover:bg-white/15 text-white border border-white/15'} transition cursor-pointer">
+              ${(broadcast.isArchived || broadcast.archived) ? 'Restore Broadcast' : 'Archive Broadcast'}
+            </button>
+            <button type="button" id="btnModalDeleteBroadcast" class="py-2.5 px-3 rounded-xl text-xs font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer">
+              ${(broadcast.isArchived || broadcast.archived) ? 'Permanent Delete' : 'Delete Broadcast'}
+            </button>
+          </div>
+        </div>
+      ` : ''}
     `;
 
     wireForm();
@@ -18013,6 +18205,23 @@ function openAdminBroadcastModal(broadcast = null) {
             b.classList.toggle("active", parseInt(b.dataset.sec, 10) === val);
           });
         }
+      };
+    }
+
+    const modalArchiveBtn = modalBody.querySelector("#btnModalArchiveBroadcast");
+    if (modalArchiveBtn && broadcast) {
+      modalArchiveBtn.onclick = async () => {
+        const isCurrentlyArchived = Boolean(broadcast.isArchived || broadcast.archived);
+        closeAllModals();
+        await handleArchiveBroadcast(broadcast, !isCurrentlyArchived);
+      };
+    }
+
+    const modalDeleteBtn = modalBody.querySelector("#btnModalDeleteBroadcast");
+    if (modalDeleteBtn && broadcast) {
+      modalDeleteBtn.onclick = async () => {
+        closeAllModals();
+        await handleDeleteBroadcast(broadcast);
       };
     }
   }
@@ -18147,6 +18356,7 @@ function openAdminBroadcastModal(broadcast = null) {
           toast("Broadcast updated successfully", "success");
         } else {
           payload.archived = false;
+          payload.isArchived = false;
           payload.createdAt = serverTimestamp();
           const docRef = await addDoc(collection(db, "broadcasts"), payload);
 
@@ -18163,6 +18373,7 @@ function openAdminBroadcastModal(broadcast = null) {
                 broadcastId: docRef.id,
                 icon: selectedIcon,
                 archived: false,
+                isArchived: false,
                 readBy: [],
                 createdAt: serverTimestamp()
               });
@@ -18177,6 +18388,7 @@ function openAdminBroadcastModal(broadcast = null) {
               broadcastId: docRef.id,
               icon: selectedIcon,
               archived: false,
+              isArchived: false,
               readBy: [],
               createdAt: serverTimestamp()
             });
@@ -18207,30 +18419,110 @@ function openAdminBroadcastModal(broadcast = null) {
     }
   });
 }
-async function handleDeleteBroadcast(broadcast) {
+export async function handleArchiveBroadcast(broadcast, shouldArchive = true) {
+  if (!broadcast || !broadcast.id) return;
+  const actionLabel = shouldArchive ? 'Archive' : 'Restore';
+
+  try {
+    await updateDoc(doc(db, 'broadcasts', broadcast.id), {
+      isArchived: shouldArchive,
+      archived: shouldArchive,
+      updatedAt: serverTimestamp()
+    });
+
+    try {
+      const notifSnap = await getDocs(query(collection(db, 'notifications_broadcast'), where('broadcastId', '==', broadcast.id)));
+      if (!notifSnap.empty) {
+        const nBatch = writeBatch(db);
+        notifSnap.docs.forEach(d => {
+          nBatch.update(d.ref, { isArchived: shouldArchive, archived: shouldArchive });
+        });
+        await nBatch.commit();
+      }
+    } catch (nErr) {
+      console.warn('Sync broadcast notifications archive state:', nErr);
+    }
+
+    try {
+      const logBatch = writeBatch(db);
+      logAdminAction(logBatch, {
+        action: shouldArchive ? 'archive_broadcast' : 'restore_broadcast',
+        details: { id: broadcast.id, title: broadcast.title }
+      });
+      await logBatch.commit();
+    } catch (lErr) {
+      console.warn('Log broadcast archive action:', lErr);
+    }
+
+    // Update local state & re-render ONLY after DB resolves
+    const target = state.broadcasts.find(b => b.id === broadcast.id);
+    if (target) {
+      target.isArchived = shouldArchive;
+      target.archived = shouldArchive;
+    }
+    renderAdminBroadcasts();
+    renderHomeBroadcastBanner();
+    renderBroadcastBanner();
+    mergeAndRenderNotifications();
+
+    toast(shouldArchive ? `Broadcast "${broadcast.title}" archived` : `Broadcast "${broadcast.title}" restored`, 'success');
+  } catch (err) {
+    console.error(`Error ${actionLabel.toLowerCase()}ing broadcast:`, err);
+    toast(`Failed to ${actionLabel.toLowerCase()} broadcast: ` + (err.message || err), 'error');
+  }
+}
+
+export async function handleDeleteBroadcast(broadcast) {
+  if (!broadcast || !broadcast.id) return;
+  const isArchivedItem = Boolean(broadcast.isArchived || broadcast.archived);
   const confirm = await confirmSheet({
-    title: 'Delete Broadcast',
-    message: `Are you sure you want to delete "${broadcast.title}"? It will immediately stop displaying on member feeds.`,
-    confirmLabel: 'Delete Broadcast',
+    title: isArchivedItem ? 'Permanently Delete Broadcast?' : 'Delete Broadcast?',
+    message: `Are you sure you want to permanently delete "${broadcast.title}"? This removes it from the database and cannot be undone.`,
+    confirmLabel: isArchivedItem ? 'Permanent Delete' : 'Delete Broadcast',
     destructive: true
   });
 
   if (!confirm) return;
 
   try {
+    // 1. Await actual Firestore database deletion FIRST
     await deleteDoc(doc(db, 'broadcasts', broadcast.id));
 
-    const batch = writeBatch(db);
-    logAdminAction(batch, {
-      action: 'delete_broadcast',
-      details: { id: broadcast.id, title: broadcast.title }
-    });
-    await batch.commit();
+    // 2. Clean up matching broadcast notification documents
+    try {
+      const notifSnap = await getDocs(query(collection(db, 'notifications_broadcast'), where('broadcastId', '==', broadcast.id)));
+      if (!notifSnap.empty) {
+        const nBatch = writeBatch(db);
+        notifSnap.docs.forEach(d => nBatch.delete(d.ref));
+        await nBatch.commit();
+      }
+    } catch (nErr) {
+      console.warn('Cleanup broadcast notifications:', nErr);
+    }
 
-    toast('Broadcast deleted', 'info');
+    // 3. Log admin audit action
+    try {
+      const batch = writeBatch(db);
+      logAdminAction(batch, {
+        action: 'delete_broadcast',
+        details: { id: broadcast.id, title: broadcast.title }
+      });
+      await batch.commit();
+    } catch (lErr) {
+      console.warn('Log broadcast delete action:', lErr);
+    }
+
+    // 4. Only update local state, re-render, and show toast AFTER DB resolves
+    state.broadcasts = state.broadcasts.filter(b => b.id !== broadcast.id);
+    renderAdminBroadcasts();
+    renderHomeBroadcastBanner();
+    renderBroadcastBanner();
+    mergeAndRenderNotifications();
+
+    toast('Broadcast permanently deleted', 'success');
   } catch (err) {
     console.error('Error deleting broadcast:', err);
-    toast(err.message || 'Failed to delete broadcast', 'error');
+    toast('Failed to delete broadcast: ' + (err.message || 'Database error'), 'error');
   }
 }
 
@@ -18942,9 +19234,25 @@ function attachEventHandlers() {
     btnAdminAddBroadcast.onclick = () => openAdminBroadcastModal();
   }
 
-  const btnAdminImportAnnouncements = document.getElementById('btn-admin-import-legacy-announcements');
-  if (btnAdminImportAnnouncements) {
-    btnAdminImportAnnouncements.onclick = () => importLegacyAnnouncements();
+  const adminBroadcastFilterActive = document.getElementById('admin-broadcasts-filter-active');
+  const adminBroadcastFilterArchived = document.getElementById('admin-broadcasts-filter-archived');
+  if (adminBroadcastFilterActive && adminBroadcastFilterArchived) {
+    adminBroadcastFilterActive.onclick = () => {
+      if (selectionState.active) exitSelectionMode();
+      adminBroadcastsFilter = 'active';
+      state.adminBroadcastsFilter = 'active';
+      adminBroadcastFilterActive.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white';
+      adminBroadcastFilterArchived.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
+      renderAdminBroadcasts();
+    };
+    adminBroadcastFilterArchived.onclick = () => {
+      if (selectionState.active) exitSelectionMode();
+      adminBroadcastsFilter = 'archived';
+      state.adminBroadcastsFilter = 'archived';
+      adminBroadcastFilterArchived.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white';
+      adminBroadcastFilterActive.className = 'px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 text-neutral-300 hover:text-white';
+      renderAdminBroadcasts();
+    };
   }
 
   // Push Notifications Toggle (Task 7)

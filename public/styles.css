@@ -2987,14 +2987,33 @@ body:not(.selection-mode-active) #bulk-selection-bar {
 }
 
 /* ITEM 3: Profile Mini-Sheet Redesign & Unclipped Avatar */
-.modal-sheet.mini-profile-sheet {
+.modal-sheet.mini-profile-sheet,
+#shared-modal-root .modal-sheet.mini-profile-sheet {
   overflow: visible !important;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   max-height: 90vh !important;
 }
 
+.modal-sheet.mini-profile-sheet .modal-body,
+.modal-sheet.mini-profile-sheet #shared-modal-body,
+#shared-modal-root .modal-sheet.mini-profile-sheet #shared-modal-body {
+  overflow: visible !important;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  padding: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  max-height: none !important;
+}
+
+.mini-profile-root,
 .mini-profile-wrapper {
   position: relative;
   width: 100%;
@@ -3028,6 +3047,7 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   overflow: visible !important;
 }
 
+.sheet-avatar,
 .mini-profile-avatar-protruding {
   position: absolute;
   top: -44px;
@@ -3046,12 +3066,16 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   z-index: 50;
 }
 
+.sheet-scroll,
 .mini-profile-scroll-body {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding: 52px 16px 24px 16px;
+  border-radius: 28px 28px 0 0;
+  padding: 56px 16px 24px 16px;
 }
 
 /* ITEM 4: Dock Overlap Mitigation Across All Pager Pages */
