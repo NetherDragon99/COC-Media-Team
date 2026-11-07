@@ -2551,6 +2551,58 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
 export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank };
 
 /* ==========================================================================
+   SAFE DOM MANIPULATION UTILITIES (Crash-Proof DOM Guards)
+   ========================================================================== */
+
+export function safeInsertBefore(parent, newNode, referenceNode) {
+  if (!parent || !newNode) return null;
+  try {
+    if (referenceNode && referenceNode.parentNode === parent) {
+      return parent.insertBefore(newNode, referenceNode);
+    } else {
+      return parent.appendChild(newNode);
+    }
+  } catch (err) {
+    console.warn('safeInsertBefore fallback:', err);
+    try {
+      return parent.appendChild(newNode);
+    } catch (e) {
+      return null;
+    }
+  }
+}
+
+export function safeRemoveChild(parent, childNode) {
+  if (!parent || !childNode) return null;
+  try {
+    if (childNode.parentNode === parent) {
+      return parent.removeChild(childNode);
+    }
+  } catch (err) {
+    console.warn('safeRemoveChild fallback:', err);
+  }
+  return null;
+}
+
+export function safeReplaceChild(parent, newChild, oldChild) {
+  if (!parent || !newChild || !oldChild) return null;
+  try {
+    if (oldChild.parentNode === parent) {
+      return parent.replaceChild(newChild, oldChild);
+    } else {
+      return parent.appendChild(newChild);
+    }
+  } catch (err) {
+    console.warn('safeReplaceChild fallback:', err);
+    try {
+      return parent.appendChild(newChild);
+    } catch (e) {
+      return null;
+    }
+  }
+}
+
+/* ==========================================================================
    SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
    ========================================================================== */
 
@@ -6002,7 +6054,37 @@ export function attachUniversalSwipeActions(wrapperEl, {
   wrapperEl.classList.add('universal-swipe-wrapper');
   wrapperEl.setAttribute('data-swipe-card', 'true');
 
-  const contentCard = wrapperEl.querySelector('.bulk-card-content') || wrapperEl.querySelector('.universal-swipe-card-content') || wrapperEl.firstElementChild;
+  // CRITICAL FIX: The animated sliding card MUST be an immediate direct child of wrapperEl.
+  // Querying for .bulk-card-content matches descendants in nested structures (e.g. notifications),
+  // which causes parent.insertBefore(bg, contentCard) to fail fatally if contentCard is not a direct child.
+  let contentCard = null;
+  for (const child of wrapperEl.children) {
+    if (child.classList.contains('universal-swipe-card-content') ||
+        child.classList.contains('notification-card') ||
+        child.classList.contains('bulk-select-card') ||
+        child.classList.contains('bulk-card-content')) {
+      contentCard = child;
+      break;
+    }
+  }
+  if (!contentCard) {
+    const candidate = wrapperEl.querySelector('.universal-swipe-card-content') ||
+                      wrapperEl.querySelector('.notification-card') ||
+                      wrapperEl.querySelector('.bulk-card-content') ||
+                      wrapperEl.querySelector('.bulk-select-card');
+    if (candidate) {
+      let cur = candidate;
+      while (cur && cur.parentElement && cur.parentElement !== wrapperEl) {
+        cur = cur.parentElement;
+      }
+      if (cur && cur.parentElement === wrapperEl) {
+        contentCard = cur;
+      }
+    }
+  }
+  if (!contentCard) {
+    contentCard = wrapperEl.firstElementChild;
+  }
   if (!contentCard) return () => {};
   contentCard.classList.add('universal-swipe-card-content');
 
@@ -6017,7 +6099,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
         <span>${esc(archiveLabel)}</span>
       </div>
     `;
-    wrapperEl.insertBefore(bgArchive, contentCard);
+    safeInsertBefore(wrapperEl, bgArchive, contentCard);
   }
 
   let bgDelete = wrapperEl.querySelector('.universal-swipe-bg-delete');
@@ -6031,7 +6113,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
         <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
       </div>
     `;
-    wrapperEl.insertBefore(bgDelete, contentCard);
+    safeInsertBefore(wrapperEl, bgDelete, contentCard);
   }
 
   let startX = 0;
@@ -6153,11 +6235,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
       if (bgArchive) bgArchive.style.display = 'none';
       if (bgDelete) bgDelete.style.display = 'none';
       if (parentNode && !parentNode.contains(wrapperEl)) {
-        if (nextSibling) {
-          parentNode.insertBefore(wrapperEl, nextSibling);
-        } else {
-          parentNode.appendChild(wrapperEl);
-        }
+        safeInsertBefore(parentNode, wrapperEl, nextSibling);
       }
     };
 
@@ -12416,14 +12494,19 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       item.style.transform = '';
       item.style.transition = '';
 
-      // Commit DOM repositioning
+      // Commit DOM repositioning with crash-proof safe DOM guards
       if (currentTarget !== currentStart && currentTarget >= 0 && currentTarget < currentItems.length) {
         const targetEl = currentItems[currentTarget];
-        if (targetEl && targetEl !== item) {
-          if (currentTarget > currentStart) {
-            targetEl.after(item);
-          } else {
-            targetEl.before(item);
+        if (targetEl && targetEl !== item && containerEl.contains(targetEl) && containerEl.contains(item)) {
+          try {
+            if (currentTarget > currentStart) {
+              const refNode = targetEl.nextSibling;
+              safeInsertBefore(containerEl, item, refNode);
+            } else {
+              safeInsertBefore(containerEl, item, targetEl);
+            }
+          } catch (err) {
+            console.warn('Drag reorder DOM commit warning:', err);
           }
         }
       }
@@ -16988,7 +17071,7 @@ function exportSubmissionsCSV() {
   a.download = `coc_submissions_${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  safeRemoveChild(document.body, a);
   URL.revokeObjectURL(url);
   toast(`Exported ${list.length} records to CSV`, 'success');
 }
@@ -19863,24 +19946,6 @@ const WHATS_NEW_IDB_STORE = 'drafts';
 const WHATS_NEW_DRAFT_KEY = 'whats_new_draft';
 const WHATS_NEW_LS_KEY = 'coc_whats_new_draft_v1';
 
-const DEFAULT_WHATS_NEW_NOTES = {
-  version: APP_VERSION,
-  title: `What's New in v${APP_VERSION}`,
-  content: [
-    '• Google Sign-In in Profile: Fixed full-page refresh for seamless in-place authentication.',
-    '• Persistent Character Avatars: Deterministically auto-assigned preset avatars via UID hashing for accounts without photos.',
-    '• Profile Card Redesign: Eliminated vertical badge tower in favor of a clean two-tier Discord-style layout.',
-    '• Fluid Bottom Sheets: Expanded 48px grab handles and disabled CSS transitions during drag for 1:1 real-time tracking.',
-    '• Advanced Drag-and-Drop: Added elevation state and dynamic sibling slot displacement for buttery smooth reordering.',
-    '• Gesture Disambiguation: Isolated card swipe gestures to outer edges (35px) to prevent hijacking tab navigation.',
-    '• Universal Dual-Swipe & Undo: Deployed LTR Archive and RTL Delete swipes with reversible Snackbar safety net.',
-    '• Unified Ranking Engine: Standardized tie logic and enforced zero-point dashes (--) across Profile and Leaderboard.',
-    '• Leaderboard Styling: Removed isolated phantom separator border from the first item for visual consistency.',
-    '• Net Score Metric: Introduced computed "Score" tile (Points - Penalties) to Profile card and Mini-Profile sheet.',
-    '• Dynamic Badge Strip Overflow: Maximized horizontal badge rendering in lists, capped with a grey ... ellipsis pill.'
-  ].join('\n')
-};
-
 function openWhatsNewDraftDB() {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
@@ -19999,7 +20064,11 @@ let autoWhatsNewPresented = false;
 let autoWhatsNewCheckTimer = null;
 
 export function getWhatsNewFingerprint(data) {
-  if (!data) return `v${APP_VERSION}_default`;
+  if (!data) return null;
+  const content = (data.content || data.notes || data.body || '').trim();
+  const hasPublishedRecord = Boolean(data.publishId || data.publishedAtMs || data.publishedAt || content);
+  if (!hasPublishedRecord) return null;
+
   if (data.publishId) return String(data.publishId);
   if (data.publishedAtMs) return `v${data.version || APP_VERSION}_${data.publishedAtMs}`;
   if (data.updatedAt) {
@@ -20008,11 +20077,10 @@ export function getWhatsNewFingerprint(data) {
                typeof data.updatedAt.seconds === 'number' ? data.updatedAt.seconds * 1000 : null;
     if (ms) return `v${data.version || APP_VERSION}_${ms}`;
   }
-  if (data.version) {
-    const contentLen = (data.content || data.notes || '').length;
-    return `v${data.version}_len${contentLen}`;
+  if (data.version && content) {
+    return `v${data.version}_len${content.length}`;
   }
-  return `v${APP_VERSION}_default`;
+  return null;
 }
 
 export function getLastSeenChangelogId() {
@@ -20057,7 +20125,15 @@ export function checkAndShowAutoWhatsNew() {
       }
     }
 
+    // STRICT REQUIREMENT: Only auto-announce if an Admin actually published release notes in Firestore
+    const content = (liveData?.content || liveData?.notes || liveData?.body || '').trim();
+    if (!liveData || !content) {
+      return;
+    }
+
     const currentFingerprint = getWhatsNewFingerprint(liveData);
+    if (!currentFingerprint) return;
+
     const lastSeen = getLastSeenChangelogId();
 
     if (!lastSeen || lastSeen !== currentFingerprint) {
@@ -20084,10 +20160,10 @@ export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = nul
     }
   }
 
-  const currentFingerprint = fingerprint || getWhatsNewFingerprint(liveData);
+  const currentFingerprint = fingerprint || getWhatsNewFingerprint(liveData) || `v${APP_VERSION}`;
   const displayVersion = liveData?.version || APP_VERSION;
-  const displayTitle = liveData?.title || DEFAULT_WHATS_NEW_NOTES.title;
-  const displayContent = liveData?.content || liveData?.notes || liveData?.body || DEFAULT_WHATS_NEW_NOTES.content;
+  const displayTitle = (liveData?.title || '').trim() || `What's New in v${displayVersion}`;
+  const displayContent = (liveData?.content || liveData?.notes || liveData?.body || '').trim();
   const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin' || state.isAdminUnlocked);
 
   const bodyEl = document.createElement('div');
@@ -20105,9 +20181,19 @@ export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = nul
       </div>
     </div>
 
-    <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs max-h-[50vh] overflow-y-auto">
-      ${esc(displayContent)}
-    </div>
+    ${displayContent ? `
+      <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs max-h-[50vh] overflow-y-auto">
+        ${esc(displayContent)}
+      </div>
+    ` : `
+      <div class="ios-card p-6 text-center text-neutral-400 space-y-2 text-xs">
+        <div class="w-10 h-10 mx-auto rounded-full bg-white/5 flex items-center justify-center text-neutral-400 mb-1">
+          <svg class="w-5 h-5 stroke-current" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+        </div>
+        <p class="font-bold text-white text-sm">No Release Notes Published</p>
+        <p class="text-[11px] text-neutral-400">Release notes will appear here once an administrator publishes an update from the Admin Hub.</p>
+      </div>
+    `}
 
     <button type="button" id="btn-whats-new-got-it" class="w-full py-3 px-4 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0071E3] transition shadow-sm flex items-center justify-center gap-2 cursor-pointer mt-1">
       Got it, continue &rarr;
@@ -20163,11 +20249,11 @@ export async function openAdminWhatsNewEditorModal() {
   }
 
   let liveVersion = liveData?.version || APP_VERSION;
-  let liveTitle = liveData?.title || DEFAULT_WHATS_NEW_NOTES.title;
-  let liveContent = liveData?.content || liveData?.notes || DEFAULT_WHATS_NEW_NOTES.content;
+  let liveTitle = (liveData?.title || '').trim();
+  let liveContent = (liveData?.content || liveData?.notes || '').trim();
 
   const savedDraft = await loadWhatsNewLocalDraft();
-  let draftVersion = savedDraft?.version || APP_VERSION;
+  let draftVersion = savedDraft?.version || liveVersion || APP_VERSION;
   let draftTitle = savedDraft?.title ?? liveTitle;
   let draftContent = savedDraft?.content ?? '';
   let lastSavedAtMs = savedDraft?.updatedAtMs || null;
@@ -21513,4 +21599,7 @@ if (typeof window !== 'undefined') {
   window.getLastSeenChangelogId = getLastSeenChangelogId;
   window.setLastSeenChangelogId = setLastSeenChangelogId;
   window.checkAndShowAutoWhatsNew = checkAndShowAutoWhatsNew;
+  window.safeInsertBefore = safeInsertBefore;
+  window.safeRemoveChild = safeRemoveChild;
+  window.safeReplaceChild = safeReplaceChild;
 }

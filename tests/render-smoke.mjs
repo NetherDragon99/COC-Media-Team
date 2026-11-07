@@ -66,11 +66,33 @@ class MockElement {
   appendChild(el) {
     this.children.push(el);
     this.childNodes.push(el);
+    el.parentNode = this;
+    el.parentElement = this;
     return el;
   }
+  insertBefore(newChild, refChild) {
+    if (refChild && refChild.parentNode !== this) {
+      throw new Error("Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.");
+    }
+    const idx = refChild ? this.children.indexOf(refChild) : -1;
+    if (idx >= 0) {
+      this.children.splice(idx, 0, newChild);
+      this.childNodes.splice(idx, 0, newChild);
+    } else {
+      this.children.push(newChild);
+      this.childNodes.push(newChild);
+    }
+    newChild.parentNode = this;
+    newChild.parentElement = this;
+    return newChild;
+  }
   removeChild(el) {
+    if (el && el.parentNode && el.parentNode !== this) {
+      throw new Error("The node to be removed is not a child of this node.");
+    }
     this.children = this.children.filter(c => c !== el);
     this.childNodes = this.childNodes.filter(c => c !== el);
+    if (el) { el.parentNode = null; el.parentElement = null; }
     return el;
   }
   querySelector(sel) { return new MockElement('div'); }

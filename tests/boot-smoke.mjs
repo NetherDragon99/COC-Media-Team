@@ -44,11 +44,33 @@ class MockElement {
   appendChild(el) {
     this.children.push(el);
     this.childNodes.push(el);
+    el.parentNode = this;
+    el.parentElement = this;
     return el;
   }
+  insertBefore(newChild, refChild) {
+    if (refChild && refChild.parentNode !== this) {
+      throw new Error("Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.");
+    }
+    const idx = refChild ? this.children.indexOf(refChild) : -1;
+    if (idx >= 0) {
+      this.children.splice(idx, 0, newChild);
+      this.childNodes.splice(idx, 0, newChild);
+    } else {
+      this.children.push(newChild);
+      this.childNodes.push(newChild);
+    }
+    newChild.parentNode = this;
+    newChild.parentElement = this;
+    return newChild;
+  }
   removeChild(el) {
+    if (el && el.parentNode && el.parentNode !== this) {
+      throw new Error("The node to be removed is not a child of this node.");
+    }
     this.children = this.children.filter(c => c !== el);
     this.childNodes = this.childNodes.filter(c => c !== el);
+    if (el) { el.parentNode = null; el.parentElement = null; }
     return el;
   }
   querySelector(sel) { return new MockElement('div'); }
@@ -336,15 +358,21 @@ try {
     throw new Error(`Unexpected LAST_SEEN_CHANGELOG_KEY: ${key}`);
   }
 
-  // Test fingerprint generation across formats
-  const fp1 = getFp({ publishId: 'wn_v2.2.9_1730000000' });
+  // Test fingerprint generation: null/empty documents return null (NEVER hallucinate or auto-popup)
+  const fpNull = getFp(null);
+  if (fpNull !== null) throw new Error(`Fingerprint null should be null, got: ${fpNull}`);
+
+  const fpEmpty = getFp({});
+  if (fpEmpty !== null) throw new Error(`Fingerprint empty object should be null, got: ${fpEmpty}`);
+
+  const fp1 = getFp({ publishId: 'wn_v2.2.9_1730000000', content: 'Notes' });
   if (fp1 !== 'wn_v2.2.9_1730000000') throw new Error(`Fingerprint publishId failed: ${fp1}`);
 
-  const fp2 = getFp({ version: '2.2.9', publishedAtMs: 1730000000 });
+  const fp2 = getFp({ version: '2.2.9', publishedAtMs: 1730000000, content: 'Notes' });
   if (fp2 !== 'v2.2.9_1730000000') throw new Error(`Fingerprint publishedAtMs failed: ${fp2}`);
 
-  const fp3 = getFp(null);
-  if (!fp3.startsWith('v')) throw new Error(`Fingerprint null failed: ${fp3}`);
+  const fpContent = getFp({ version: '2.2.9', content: 'Exact admin notes' });
+  if (!fpContent || !fpContent.startsWith('v2.2.9_len')) throw new Error(`Fingerprint content failed: ${fpContent}`);
 
   // Test localStorage interaction
   sandbox.window.localStorage.removeItem(key);
@@ -359,7 +387,36 @@ try {
   }
   sandbox.window.checkAndShowAutoWhatsNew();
 
-  console.log('PASS: What\'s New Fingerprinting and Auto-Launch mechanics verified cleanly');
+  // Test safe DOM guards: safeInsertBefore, safeRemoveChild, safeReplaceChild
+  const p1 = new MockElement('div', 'p1');
+  const p2 = new MockElement('div', 'p2');
+  const child1 = new MockElement('div', 'c1');
+  const child2 = new MockElement('div', 'c2');
+  const newEl = new MockElement('div', 'new');
+  p1.appendChild(child1);
+  p2.appendChild(child2);
+
+  // Calling native p1.insertBefore(newEl, child2) would throw because child2 is child of p2
+  let nativeThrew = false;
+  try {
+    p1.insertBefore(newEl, child2);
+  } catch (e) {
+    nativeThrew = true;
+  }
+  if (!nativeThrew) throw new Error('Expected native insertBefore to throw on foreign child');
+
+  // safeInsertBefore MUST catch this gracefully and fallback to appendChild without crashing
+  sandbox.window.safeInsertBefore(p1, newEl, child2);
+  if (!p1.children.includes(newEl)) throw new Error('safeInsertBefore failed fallback append');
+
+  // safeRemoveChild MUST NOT throw on foreign child
+  sandbox.window.safeRemoveChild(p1, child2);
+
+  // safeReplaceChild MUST NOT throw on foreign child
+  const replaceEl = new MockElement('div', 'rep');
+  sandbox.window.safeReplaceChild(p1, replaceEl, child2);
+
+  console.log('PASS: What\'s New dynamic database logic & Crash-Proof DOM guards verified cleanly');
 } catch (err) {
   console.error('FAIL: Error in What\'s New smoke test:', err);
   process.exit(1);
