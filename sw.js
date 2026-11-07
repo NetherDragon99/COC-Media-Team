@@ -1,5 +1,4 @@
-// Service Worker for COC Media Team PWA (v2.2.10) - GitHub Pages Compatible
-const CACHE_NAME = 'coc-media-cache-v2.2.10';
+const CACHE_NAME = 'coc-media-cache-v3.0.0';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -15,9 +14,7 @@ const ASSETS_TO_PRECACHE = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_PRECACHE).catch((err) => {
-        console.warn('Pre-caching some assets failed (continuing safely):', err);
-      });
+      return cache.addAll(ASSETS_TO_PRECACHE).catch(() => {});
     }).then(() => self.skipWaiting())
   );
 });
@@ -47,7 +44,6 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // 1. NEVER intercept or cache auth, firestore, FCM, installation endpoints or messaging worker
   if (
     url.hostname.includes('firestore.googleapis.com') ||
     url.hostname.includes('identitytoolkit.googleapis.com') ||
@@ -59,7 +55,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. Cache-First Strategy for versioned Firebase CDN modules
   if (url.origin === 'https://www.gstatic.com' && url.pathname.includes('/firebasejs/10.8.1/')) {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {
@@ -78,8 +73,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Stale-While-Revalidate Strategy for images, icons, and fonts
-  const isImageOrFont = 
+  const isImageOrFont =
     url.pathname.match(/\.(png|jpg|jpeg|svg|gif|webp|woff|woff2|ttf|eot)$/i) ||
     event.request.destination === 'image' ||
     event.request.destination === 'font';
@@ -101,29 +95,30 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Network-First Strategy for HTML navigation requests and same-origin core code (.js, .css, .json, .html)
   const isNavigation = event.request.mode === 'navigate';
   const isSameOriginCode = url.origin === self.location.origin;
 
   if (isNavigation || isSameOriginCode) {
     event.respondWith(
-      fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          return caches.match(event.request).then((cached) => {
-            if (cached) return cached;
+      caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
+        const networkPromise = fetch(event.request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              const clone = networkResponse.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            }
+            return networkResponse;
+          })
+          .catch(() => {
+            if (cachedResponse) return cachedResponse;
             if (isNavigation) {
-              return caches.match('./index.html').then((indexFallback) => indexFallback || caches.match('./'));
+              return caches.match('./index.html', { ignoreSearch: true }).then((indexFallback) => indexFallback || caches.match('./'));
             }
             return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
           });
-        })
+
+        return cachedResponse || networkPromise;
+      })
     );
     return;
   }

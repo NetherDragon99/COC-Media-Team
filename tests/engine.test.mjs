@@ -4,14 +4,14 @@ import vm from 'node:vm';
 
 // 1. Read app.js and slice between the engine markers
 const appCode = fs.readFileSync('app.js', 'utf8');
-const startMarker = '// ==== ENGINE START';
-const endMarker = '// ==== ENGINE END';
+const startMarker = appCode.includes('const ENGINE_START_MARKER = 1;') ? 'const ENGINE_START_MARKER = 1;' : '// ==== ENGINE START';
+const endMarker = appCode.includes('const ENGINE_END_MARKER = 1;') ? 'const ENGINE_END_MARKER = 1;' : '// ==== ENGINE END';
 
 const startIndex = appCode.indexOf(startMarker);
 const endIndex = appCode.indexOf(endMarker);
 
-assert.ok(startIndex !== -1, 'app.js must contain // ==== ENGINE START');
-assert.ok(endIndex !== -1, 'app.js must contain // ==== ENGINE END');
+assert.ok(startIndex !== -1, 'app.js must contain ENGINE START marker');
+assert.ok(endIndex !== -1, 'app.js must contain ENGINE END marker');
 assert.ok(startIndex < endIndex, 'ENGINE START marker must precede ENGINE END marker');
 
 const engineCode = appCode.slice(startIndex + startMarker.length, endIndex);

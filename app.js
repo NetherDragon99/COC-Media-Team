@@ -1,4 +1,3 @@
-
 export function updateDockHeight() {
   const dock = document.getElementById('admin-dock') || document.getElementById('user-dock');
   const h = dock ? dock.offsetHeight : 76;
@@ -7,44 +6,8 @@ export function updateDockHeight() {
   }
 }
 
-/**
- * ============================================================================
- * COC Media Team - Production Web App (v2.2.0)
- * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
- * Designed & Developed by Steven Mario
- * ============================================================================
- * 
- * SETUP & ARCHITECTURE README:
- * 1. INITIAL ADMIN SETUP:
- *    The first administrator MUST be assigned manually in the Firebase Console:
- *    navigate to Firestore -> `users/{uid}` and set `role: "admin"`.
- *    There is strictly no in-app self-promotion to prevent unauthorized privilege escalation.
- * 
- * 2. DEPLOY RULES & INDEXES:
- *    Deploy security rules and database indexes via the Firebase CLI:
- *    `firebase deploy --only firestore:rules,firestore:indexes`
- * 
- * 3. FREE SPARK PLAN RESTRICTIONS:
- *    This project operates entirely on the free Firebase Spark plan. There are NO
- *    Cloud Functions, Blaze-only APIs, or server-side background runners used anywhere.
- *    All quota, streak, schedule, and attendance calculations occur client-side.
- * 
- * 4. FIREBASE AUTH & AUTHORIZED DOMAINS:
- *    Add your GitHub Pages custom domain or `username.github.io` in:
- *    Firebase Console -> Authentication -> Settings -> Authorized domains.
- *    `signInWithPopup` is our primary authentication strategy. In environments where
- *    popups are blocked or unsupported, the app seamlessly falls back to `signInWithRedirect`.
- *    (Note: redirect sign-in can fail in private tabs where third-party storage is blocked,
- *    so popup remains the primary mode).
- * ============================================================================
- */
+export const APP_VERSION = '3.0.0';
 
-// SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.10';
-
-/* ==========================================================================
-   GLOBAL PWA INSTALL PROMPT CAPTURE
-   ========================================================================== */
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
@@ -67,15 +30,12 @@ function isAppStandalone() {
   return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 }
 
-/* ==========================================================================
-   FIREBASE CDN MODULAR IMPORTS (v10.8.1)
-   ========================================================================== */
 import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
-import { 
-  getAuth, 
-  onAuthStateChanged, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
+import {
+  getAuth,
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
   signOut,
@@ -83,22 +43,22 @@ import {
   browserLocalPersistence,
   updateProfile
 } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js';
-import { 
+import {
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
-  getFirestore, 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  getDoc,
   getDocs,
   Timestamp,
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  onSnapshot, 
-  serverTimestamp, 
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  serverTimestamp,
   increment,
   getDocFromServer,
   getAggregateFromServer,
@@ -123,9 +83,6 @@ import {
   isSupported
 } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging.js';
 
-/* ==========================================================================
-   FIREBASE CONFIGURATION & INITIALIZATION
-   ========================================================================== */
 const firebaseConfig = {
   apiKey: "AIzaSyBgnWU2azejTgCr-zVtVPLQYYRMGNtfieQ",
   authDomain: "coc-media-team.firebaseapp.com",
@@ -143,7 +100,6 @@ try {
   googleProvider = new GoogleAuthProvider();
   googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-  // Initialize Firestore with robust multi-tab persistent cache
   try {
     db = initializeFirestore(app, {
       localCache: persistentLocalCache({
@@ -158,12 +114,8 @@ try {
   console.error("Firebase init failed:", e);
 }
 
-// Master password for emergency admin access
 const ADMIN_MASTER_PASSWORD = '$J@@s#COC1982';
 
-/* ==========================================================================
-   SHARED ADMIN HELPERS (Task 5)
-   ========================================================================== */
 export function createNotification(batch, { uid, title, message, body, type = 'system', icon = 'bell', targetAction = null, refId = null }) {
   const notifRef = doc(collection(db, 'notifications'));
   const payload = {
@@ -199,9 +151,6 @@ export function logAdminAction(batch, { action, targetUid = null, details = {} }
   return logRef;
 }
 
-/* ==========================================================================
-   FIRESTORE LISTENER MANAGER
-   ========================================================================== */
 export const listeners = {
   _map: new Map(),
   has(key) {
@@ -209,14 +158,14 @@ export const listeners = {
   },
   add(key, unsubscribe) {
     if (this._map.has(key)) {
-      try { this._map.get(key)(); } catch (e) { /* ignore */ }
+      try { this._map.get(key)(); } catch (e) {  }
     }
     this._map.set(key, unsubscribe);
   },
   clear(prefix = '') {
     for (const [key, unsub] of this._map.entries()) {
       if (!prefix || key.startsWith(prefix)) {
-        try { unsub(); } catch (e) { /* ignore */ }
+        try { unsub(); } catch (e) {  }
         this._map.delete(key);
       }
     }
@@ -272,21 +221,15 @@ export function updateTaskModalCategoryIfOpen() {
   }
 }
 
-/* ==========================================================================
-   SAFE INITIALIZER RUNNER (Boot error isolation)
-   ========================================================================== */
 export function safeInit(name, fn) {
   try {
     if (typeof fn === 'function') fn();
   } catch (err) {
     console.error(`[init:${name}]`, err);
-    // Non-fatal: do NOT let one secondary component crash the whole app / trigger error boundary
+
   }
 }
 
-/* ==========================================================================
-   SHARED TICKER SERVICE (Task 2 - Performance & Overheating)
-   ========================================================================== */
 export const ticker = {
   _subscribers: new Map(),
   _timer: null,
@@ -366,10 +309,6 @@ export const ticker = {
 };
 ticker.initVisibility();
 
-
-/* ==========================================================================
-   SERVER CLOCK & OFFSET SYNCHRONIZATION
-   ========================================================================== */
 let serverOffsetMs = 0;
 let lastForegroundSync = Date.now();
 
@@ -382,7 +321,7 @@ export async function initServerClock() {
   try {
     const uid = auth.currentUser.uid;
     const privRef = doc(db, 'users_private', uid);
-    // Write lastSeenAt to private doc to eliminate public push storms
+
     await setDoc(privRef, { lastSeenAt: serverTimestamp() }, { merge: true });
     const snap = await getDocFromServer(privRef);
     if (snap.exists()) {
@@ -394,7 +333,6 @@ export async function initServerClock() {
   }
 }
 
-// Resync clock when returning to foreground after 30+ minutes
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && navigator.onLine) {
     if (Date.now() - lastForegroundSync > 30 * 60 * 1000) {
@@ -404,12 +342,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-/* ==========================================================================
-   APPLICATION STATE
-   ========================================================================== */
 const state = {
-  user: null, // { uid, name, avatarUrl, role:"member", points:0, penalties:0, lastOpId:null }
-  userPrivate: null, // { email:"", fcmTokens:[] }
+  user: null,
+  userPrivate: null,
   currentFcmToken: null,
   isAdminUnlocked: false,
   tasks: [],
@@ -467,9 +402,6 @@ const state = {
   }
 };
 
-/* ==========================================================================
-   MODULE-LEVEL ADMIN FILTER & EDITING STATE (Hoisted module scope)
-   ========================================================================== */
 export let adminTasksFilter = 'active';
 export let adminCatsFilter = 'active';
 export let adminCategoriesFilter = 'active';
@@ -489,9 +421,6 @@ export const waiverDraftNotes = new Map();
 export let unsubscribeUserNotifications = null;
 export let userNotifications = [];
 
-/* ==========================================================================
-   CATEGORY ICONS & COLOR SWATCHES
-   ========================================================================== */
 export const IOS_SYSTEM_COLORS = [
   { name: 'System Blue', hex: '#0A84FF' },
   { name: 'Green', hex: '#30D158' },
@@ -530,26 +459,22 @@ export function pushCustomColorHistory(hex) {
   if (!hex || typeof hex !== 'string') return getCustomColorHistory();
   const normalized = hex.trim().toUpperCase();
   if (!/^#[0-9A-F]{6}$/.test(normalized)) return getCustomColorHistory();
-  // Don't duplicate system presets in custom history
+
   if (CATEGORY_COLORS.some(c => c.toUpperCase() === normalized)) {
     return getCustomColorHistory();
   }
   const current = getCustomColorHistory().filter(c => c.toUpperCase() !== normalized);
   current.unshift(normalized);
-  // Keep max 10 items; the 11th item pushes the oldest out
+
   const trimmed = current.slice(0, 10);
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(CUSTOM_COLOR_HISTORY_KEY, JSON.stringify(trimmed));
     }
-  } catch (e) { /* ignore storage quota errors */ }
+  } catch (e) {  }
   return trimmed;
 }
 
-/**
- * Shared Unified Advanced Color Picker (FIX 6):
- * Renders 14 Apple HIG preset dots + custom color input trigger + 10-item FIFO custom hex history queue.
- */
 export function renderAdvancedColorPicker({ selectedColor = '#0A84FF', onChange }) {
   let current = (selectedColor || '#0A84FF').toUpperCase();
   const root = document.createElement('div');
@@ -669,10 +594,6 @@ export function formatDateTime(ts, options = {}) {
   }).format(new Date(ms));
 }
 
-/* ==========================================================================
-   LEGACY COMPATIBILITY NORMALIZERS
-   ========================================================================== */
-// Assumption: legacy docs may lack fields; assign default values client-side
 function normalizeCategory(raw) {
   if (!raw) return null;
   return {
@@ -770,6 +691,334 @@ export function isTaskVisibleToUser(task, uid) {
 
 export const usersMap = new Map();
 export const usersPrivate = new Map();
+
+export const OFFLINE_CACHE_KEY = 'coc_offline_cache_v3';
+let _persistTimer = null;
+let _isHandlingPopState = false;
+
+export function isCurrentUserAdmin() {
+  const currentUser = state.user || (state.user?.uid ? usersMap.get(state.user.uid) : null) || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin === true || state.isAdminUnlocked === true) {
+    return true;
+  }
+  return false;
+}
+
+export function persistToLocalCache(immediate = false) {
+  const writeCache = () => {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const payload = {
+        ts: Date.now(),
+        version: APP_VERSION,
+        user: state.user || null,
+        userPrivate: state.userPrivate || null,
+        members: Array.isArray(state.members) ? state.members.slice(0, 300) : [],
+        tasks: Array.isArray(state.tasks) ? state.tasks.slice(0, 200) : [],
+        categories: Array.isArray(state.categories) ? state.categories : [],
+        badges: Array.isArray(state.badges) ? state.badges : [],
+        broadcasts: Array.isArray(state.broadcasts) ? state.broadcasts.slice(0, 30) : [],
+        attendanceSessions: Array.isArray(state.attendanceSessions) ? state.attendanceSessions.slice(0, 50) : [],
+        mySubmissions: Array.isArray(state.mySubmissions) ? state.mySubmissions.slice(0, 200) : [],
+        myAttendanceLogs: Array.isArray(state.myAttendanceLogs) ? state.myAttendanceLogs.slice(0, 100) : [],
+        notifications: Array.isArray(state.notifications) ? state.notifications.slice(0, 100) : [],
+        personalNotifications: Array.isArray(state.personalNotifications) ? state.personalNotifications.slice(0, 100) : [],
+        broadcastNotificationsAll: Array.isArray(state.broadcastNotificationsAll) ? state.broadcastNotificationsAll.slice(0, 50) : [],
+        broadcastNotificationsBadge: Array.isArray(state.broadcastNotificationsBadge) ? state.broadcastNotificationsBadge.slice(0, 50) : [],
+        settings: state.settings || {},
+        whatsNew: state.whatsNew || null
+      };
+      localStorage.setItem(OFFLINE_CACHE_KEY, JSON.stringify(payload));
+    } catch (e) {}
+  };
+  if (immediate) {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    writeCache();
+  } else {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(writeCache, 120);
+  }
+}
+
+export function hydrateFromLocalCache() {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    const raw = localStorage.getItem(OFFLINE_CACHE_KEY);
+    if (!raw) return false;
+    const cached = JSON.parse(raw);
+    if (!cached || typeof cached !== 'object') return false;
+
+    if (cached.settings && typeof cached.settings === 'object') {
+      state.settings = { ...state.settings, ...cached.settings };
+    }
+    if (cached.whatsNew) {
+      state.whatsNew = cached.whatsNew;
+    }
+    if (cached.user && typeof cached.user === 'object') {
+      state.user = normalizeUser(cached.user);
+      if (state.user.role === 'admin' || state.user.isAdmin === true) {
+        state.isAdminUnlocked = true;
+      }
+    }
+    if (cached.userPrivate && typeof cached.userPrivate === 'object') {
+      state.userPrivate = cached.userPrivate;
+      if (state.user?.uid) {
+        usersPrivate.set(state.user.uid, cached.userPrivate);
+      }
+    }
+    if (Array.isArray(cached.categories) && cached.categories.length > 0) {
+      categoriesMap.clear();
+      state.categories = cached.categories.map(c => normalizeCategory(c)).filter(Boolean);
+      state.categories.forEach(c => categoriesMap.set(c.id, c));
+    }
+    if (Array.isArray(cached.badges) && cached.badges.length > 0) {
+      badgesMap.clear();
+      state.badges = cached.badges;
+      state.badges.forEach(b => badgesMap.set(b.id, b));
+    }
+    if (Array.isArray(cached.members) && cached.members.length > 0) {
+      usersMap.clear();
+      state.members = cached.members.map(m => normalizeUser(m));
+      state.members.forEach(m => {
+        if (m.uid) usersMap.set(m.uid, m);
+      });
+    }
+    if (Array.isArray(cached.tasks) && cached.tasks.length > 0) {
+      state.tasks = cached.tasks.map(t => normalizeTask(t)).filter(Boolean);
+    }
+    if (Array.isArray(cached.broadcasts) && cached.broadcasts.length > 0) {
+      state.broadcasts = cached.broadcasts.map(b => normalizeBroadcast(b));
+    }
+    if (Array.isArray(cached.attendanceSessions) && cached.attendanceSessions.length > 0) {
+      state.attendanceSessions = cached.attendanceSessions.map(s => normalizeSession(s));
+    }
+    if (Array.isArray(cached.mySubmissions)) {
+      state.mySubmissions = cached.mySubmissions.map(s => normalizeSubmission(s));
+      if (!isCurrentUserAdmin()) {
+        state.submissions = state.mySubmissions;
+      }
+    }
+    if (Array.isArray(cached.myAttendanceLogs)) {
+      state.myAttendanceLogs = cached.myAttendanceLogs.map(l => normalizeAttendanceLog(l));
+      if (!isCurrentUserAdmin()) {
+        state.attendanceLogs = state.myAttendanceLogs;
+      }
+    }
+    if (Array.isArray(cached.personalNotifications)) {
+      state.personalNotifications = cached.personalNotifications.map(n => normalizeNotification(n));
+    }
+    if (Array.isArray(cached.broadcastNotificationsAll)) {
+      state.broadcastNotificationsAll = cached.broadcastNotificationsAll.map(n => normalizeNotification(n));
+    }
+    if (Array.isArray(cached.broadcastNotificationsBadge)) {
+      state.broadcastNotificationsBadge = cached.broadcastNotificationsBadge.map(n => normalizeNotification(n));
+    }
+    if (Array.isArray(cached.notifications)) {
+      state.notifications = cached.notifications;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export function renderHydratedCacheUI() {
+  try { applySettings(); } catch (e) {}
+  try { populateCategoryFilters(); } catch (e) {}
+  try { renderTasks(); } catch (e) {}
+  try { renderLeaderboard(); } catch (e) {}
+  try { renderAttendanceView(); } catch (e) {}
+  try { renderAttendanceLogs(); } catch (e) {}
+  try { renderHomeBroadcastBanner(); } catch (e) {}
+  try { updateNotificationBadges(); } catch (e) {}
+  try { renderNotifications(); } catch (e) {}
+  try { updateProfileUI(); } catch (e) {}
+  try { updateUserTodayAttendanceBadge(); } catch (e) {}
+  try { checkAdminRoleUI(); } catch (e) {}
+}
+
+export function slugifyModalTitle(rawTitle) {
+  const clean = String(rawTitle || 'sheet')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return 'modal-' + (clean || 'sheet');
+}
+
+export function getQueryParam(key) {
+  try {
+    const search = String(window?.location?.search || '').replace(/^\?/, '');
+    if (!search) return null;
+    for (const part of search.split('&')) {
+      const [k, v] = part.split('=');
+      if (decodeURIComponent(k || '') === key) {
+        return decodeURIComponent(v || '');
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+export function getActiveTabRouteId() {
+  if (typeof userPagerInstance !== 'undefined' && userPagerInstance && typeof userPagerInstance.getActive === 'function') {
+    const act = userPagerInstance.getActive();
+    if (act) return act;
+  }
+  const tabParam = getQueryParam('tab');
+  if (tabParam) return tabParam;
+  const hashVal = String(window?.location?.hash || '').replace(/^#/, '');
+  if (['home', 'tasks', 'notifications', 'attendance', 'profile'].includes(hashVal)) {
+    return hashVal;
+  }
+  return 'home';
+}
+
+export function pushModalHistoryState(modalSlug, customUrl = null) {
+  if (_isHandlingPopState || typeof history === 'undefined' || typeof window === 'undefined') return;
+  try {
+    const slug = String(modalSlug || 'modal-sheet').replace(/^#/, '');
+    const activeTab = getActiveTabRouteId();
+    const curState = history.state || {};
+    if (curState.cocModal === slug) return;
+    const targetUrl = customUrl || (window.location.pathname + window.location.search + '#' + slug);
+    history.pushState({ cocTab: activeTab, cocModal: slug }, '', targetUrl);
+  } catch (e) {}
+}
+
+export function syncTabHistoryState(tabId, replace = false) {
+  if (_isHandlingPopState || typeof history === 'undefined' || typeof window === 'undefined') return;
+  try {
+    const cleanTab = String(tabId || 'home').replace(/^#/, '');
+    const targetUrl = `${window.location.pathname}?tab=${cleanTab}#${cleanTab}`;
+    const stateObj = { cocTab: cleanTab, cocModal: null };
+    if (replace) {
+      history.replaceState(stateObj, '', targetUrl);
+    } else if (history.state?.cocTab !== cleanTab || history.state?.cocModal) {
+      history.pushState(stateObj, '', targetUrl);
+    }
+  } catch (e) {}
+}
+
+export function closeTopmostLayerOnBack() {
+  const cropperOverlay = document.getElementById('avatarCropperOverlay');
+  if (cropperOverlay && !cropperOverlay.classList.contains('hidden')) {
+    const cancelBtn = document.getElementById('btnCancelCropper');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') cancelBtn.onclick();
+    else cropperOverlay.classList.add('hidden');
+    return true;
+  }
+
+  const iconPickerOverlay = document.getElementById('unifiedIconPickerOverlay');
+  if (iconPickerOverlay && !iconPickerOverlay.classList.contains('is-hidden')) {
+    closeUnifiedIconPicker();
+    return true;
+  }
+
+  const subModalOverlay = document.getElementById('subModalOverlay');
+  if (subModalOverlay && !subModalOverlay.classList.contains('is-hidden')) {
+    closeSubModal();
+    return true;
+  }
+
+  const confirmRoot = document.getElementById('shared-confirm-root');
+  if (confirmRoot && confirmRoot.classList.contains('open')) {
+    const cancelBtn = document.getElementById('shared-confirm-cancel');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') {
+      cancelBtn.onclick();
+    } else {
+      confirmRoot.classList.remove('open');
+      document.body.style.overflow = '';
+    }
+    return true;
+  }
+
+  const customPrompt = document.getElementById('modal-custom-prompt');
+  if (customPrompt && customPrompt.classList.contains('open')) {
+    const cancelBtn = document.getElementById('btn-custom-prompt-cancel');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') cancelBtn.onclick();
+    else customPrompt.classList.remove('open');
+    return true;
+  }
+
+  const customAlert = document.getElementById('modal-custom-alert');
+  if (customAlert && customAlert.classList.contains('open')) {
+    const okBtn = document.getElementById('btn-custom-alert-ok');
+    if (okBtn && typeof okBtn.onclick === 'function') okBtn.onclick();
+    else customAlert.classList.remove('open');
+    return true;
+  }
+
+  const sharedModalRoot = document.getElementById('shared-modal-root');
+  if (sharedModalRoot && sharedModalRoot.classList.contains('open')) {
+    const cancelBtn = document.getElementById('shared-modal-cancel');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') {
+      cancelBtn.onclick();
+    } else {
+      closeModal();
+    }
+    return true;
+  }
+
+  const openBackdrops = Array.from(document.querySelectorAll('.modal-backdrop.open'));
+  if (openBackdrops.length > 0) {
+    const topBackdrop = openBackdrops[openBackdrops.length - 1];
+    topBackdrop.classList.remove('open');
+    if (document.querySelectorAll('.modal-backdrop.open, .ios-modal-overlay.open').length === 0) {
+      document.body.style.overflow = '';
+    }
+    return true;
+  }
+
+  const drawer = document.getElementById('side-drawer');
+  if (drawer && (drawer.classList.contains('is-open') || drawer.classList.contains('drawer-open'))) {
+    closeDrawer();
+    return true;
+  }
+
+  if (selectionState && selectionState.active) {
+    exitSelectionMode();
+    return true;
+  }
+
+  const adminOverlay = document.getElementById('modal-admin-dashboard');
+  if (adminOverlay && !adminOverlay.classList.contains('hidden')) {
+    closeAdminDashboard();
+    return true;
+  }
+
+  return false;
+}
+
+export function handleAppPopState(e) {
+  _isHandlingPopState = true;
+  try {
+    if (closeTopmostLayerOnBack()) {
+      return;
+    }
+
+    const queryTab = getQueryParam('tab');
+    const hashRaw = String(window?.location?.hash || '').replace(/^#/, '');
+    const stateTab = e?.state?.cocTab;
+    const targetTab = stateTab || queryTab || hashRaw || 'home';
+
+    if (targetTab === 'admin' || hashRaw.startsWith('admin-')) {
+      const adminSubPage = hashRaw.startsWith('admin-') ? hashRaw.replace('admin-', '') : 'overview';
+      if (isCurrentUserAdmin()) {
+        showAdminDashboard(adminSubPage);
+      } else {
+        openAdminPortal();
+      }
+      return;
+    }
+
+    const validTabs = ['home', 'tasks', 'notifications', 'attendance', 'profile'];
+    if (validTabs.includes(targetTab) && typeof userPagerInstance !== 'undefined' && userPagerInstance) {
+      userPagerInstance.goTo(targetTab);
+    }
+  } finally {
+    _isHandlingPopState = false;
+  }
+}
 
 export function normalizeUser(raw) {
   if (!raw) return null;
@@ -982,8 +1231,8 @@ export function normalizeBroadcast(raw) {
   };
 }
 
-// ==== ENGINE START
-// Editable application timezone constant
+const ENGINE_START_MARKER = 1;
+
 const APP_TIMEZONE = "Africa/Cairo";
 
 const ENGINE_WEEKDAYS = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -1009,12 +1258,12 @@ function getZonedParts(dateOrMs, timeZone = APP_TIMEZONE) {
   }
   return {
     year: parseInt(map.year, 10),
-    month: parseInt(map.month, 10), // 1..12
-    day: parseInt(map.day, 10), // 1..31
+    month: parseInt(map.month, 10),
+    day: parseInt(map.day, 10),
     hour: parseInt(map.hour === '24' ? '0' : map.hour, 10),
     minute: parseInt(map.minute, 10),
     second: parseInt(map.second, 10),
-    weekday: map.weekday // 'Sat'..'Fri'
+    weekday: map.weekday
   };
 }
 
@@ -1103,7 +1352,6 @@ function normalizeTaskTiers(task) {
   const onTimePoints = typeof task.points === 'number' ? task.points : (typeof task.tieredRewards?.onTimePoints === 'number' ? task.tieredRewards.onTimePoints : 5);
   const durationMinutes = (typeof task.durationMinutes === 'number' && task.durationMinutes > 0) ? task.durationMinutes : null;
 
-  // Early Bonus: switch; picker defines when window ends (untilMinutes > 0 and < durationMinutes)
   let earlyBonus = { enabled: false, untilMinutes: 0, points: onTimePoints };
   if (task.earlyBonus && typeof task.earlyBonus === 'object') {
     earlyBonus = {
@@ -1122,7 +1370,6 @@ function normalizeTaskTiers(task) {
     }
   }
 
-  // Grace Period: switch; picker defines cutoff (untilMinutes > durationMinutes). NO grace points!
   let grace = { enabled: false, untilMinutes: 0 };
   if (task.grace && typeof task.grace === 'object') {
     grace = {
@@ -1139,7 +1386,6 @@ function normalizeTaskTiers(task) {
     }
   }
 
-  // Missed Penalty: switch + missedPenalty: { enabled, points }
   let missedPenalty = { enabled: false, points: 0 };
   if (task.missedPenalty && typeof task.missedPenalty === 'object') {
     missedPenalty = {
@@ -1207,7 +1453,7 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof se
       update.monthPoints = delta;
     }
   } else {
-    // Negative delta (revoke / edit down / bulk delete of submission): use original submittedAt (atMs)
+
     if ((user.weekKey || user.weekBucket || '') === wk) {
       const curWk = Number(user.weekPoints) || 0;
       update.weekPoints = Math.max(0, curWk + delta);
@@ -1222,6 +1468,8 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof se
 }
 
 async function backfillWindowCounters() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   if (!state.user || (state.user.role !== 'admin' && !state.user.isAdmin)) return;
 
   const nowMs = serverNow();
@@ -1236,7 +1484,6 @@ async function backfillWindowCounters() {
       return;
     }
 
-    // Determine start of current month in UTC ms for Cairo (UTC+2)
     const parts = curMonthKey.split('-');
     const year = parseInt(parts[0], 10) || 2026;
     const month = (parseInt(parts[1], 10) || 1) - 1;
@@ -1313,13 +1560,11 @@ async function backfillWindowCounters() {
     }, { merge: true });
     await currentBatch.commit();
 
-    console.log(`[Window Backfill] Synced window counters for marker ${currentBackfillMarker}`);
     renderLeaderboard();
   } catch (err) {
     console.warn('[Window Backfill] Error:', err);
   }
 }
-
 
 function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!userObj) return 0;
@@ -1338,11 +1583,6 @@ function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serve
   return typeof userObj.points === 'number' ? userObj.points : 0;
 }
 
-/**
- * Single Unified Ranking Engine for Leaderboard & Profile (v2.2.9)
- * - Standardized competition ranking with tie awareness (tied members share identical rank).
- * - Members with <= 0 points have rank = null, strictly displayed as '--'.
- */
 function computeMemberRanks(membersList, period = 'all') {
   const nowMs = typeof serverNow === 'function' ? serverNow() : Date.now();
   const allMembers = Array.isArray(membersList) ? membersList : (usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state?.members || [])]);
@@ -1365,7 +1605,6 @@ function computeMemberRanks(membersList, period = 'all') {
       return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
     });
 
-  // Standard competition ranking (1, 2, 2, 4): equal points AND penalties share exact same rank
   ranked.forEach((m, idx) => {
     if (idx > 0 && m.periodPoints === ranked[idx - 1].periodPoints && m.penalties === ranked[idx - 1].penalties) {
       m.rank = ranked[idx - 1].rank;
@@ -1693,8 +1932,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
   const nowMs = parseDateTimeToMs(nowInput);
   const { onTimePoints, durationMinutes, earlyBonus, grace } = normalizeTaskTiers(task);
 
-
-
   function evaluateOccurrence(occurrenceKey, start) {
     const closesAt = isPermanent ? null : (durationMinutes ? start + durationMinutes * 60000 : (() => {
       const p = getZonedParts(start, APP_TIMEZONE);
@@ -1730,7 +1967,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
       };
     }
 
-    // Before deadline
     if (nowMs < closesAt) {
       const isEarly = earlyBonus.enabled && earlyBonus.untilMinutes > 0 && nowMs < (start + earlyBonus.untilMinutes * 60000);
       return {
@@ -1745,7 +1981,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
       };
     }
 
-    // Grace window
     if (graceEndsAt && nowMs < graceEndsAt) {
       return {
         state: 'grace',
@@ -1758,7 +1993,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
       };
     }
 
-    // Closed
     return {
       state: 'closed',
       pointsForNow: 0,
@@ -1774,7 +2008,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
     return evaluateOccurrence('once', startMs);
   }
 
-  // Recurring
   if (nowMs < startMs) {
     const occurrenceKey = formatZonedDateKey(startMs, APP_TIMEZONE);
     return evaluateOccurrence(occurrenceKey, startMs);
@@ -1836,8 +2069,6 @@ function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'fun
     };
   }
 
-  // Keep the most recent occurrence whose check-in window has opened;
-  // only advance to the next scheduled occurrence once its check-in window (o - earlyMs) opens.
   const pastOrOpen = occs.filter(o => (o - earlyMs) <= nowMs);
   if (pastOrOpen.length > 0) {
     const activeOcc = pastOrOpen[pastOrOpen.length - 1];
@@ -1959,7 +2190,6 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   if (!session) return { status: 'blocked', reason: 'no_session', message: 'No session provided' };
   const norm = normalizeSession(session);
 
-  // Support explicit absent status calculation
   if (nowInput === 'absent' || (typeof nowInput === 'object' && nowInput !== null && nowInput.status === 'absent')) {
     const ptsAbsence = calculateSystemPenalty(norm.pointsPenalty, 0, true);
     const fineAbsence = calculateSystemPenalty(norm.finePenalty, 0, true);
@@ -2037,7 +2267,7 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   } else if (finePenalty > 0) {
     feeStr = ` (-${finePenalty} EGP)`;
   } else if (pointsPenalty > 0) {
-    // If it was a legacy session without explicit pointsPenalty, legacy message format was EGP
+
     if (!session.pointsPenalty && !session.finePenalty) {
       feeStr = ` (-${pointsPenalty} EGP)`;
     } else {
@@ -2130,9 +2360,6 @@ if (typeof globalThis !== 'undefined') {
   if (typeof getUserProfile !== 'undefined') globalThis.getUserProfile = getUserProfile;
 }
 
-/**
- * Pure 1x cover-fit crop geometry calculation for live preview and canvas export.
- */
 function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, outSize, isLogo = false }) {
   const w = Math.max(1, Number(imgW) || 1);
   const h = Math.max(1, Number(imgH) || 1);
@@ -2216,10 +2443,6 @@ function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, out
   };
 }
 
-/**
- * Pure, DOM-free row gesture factory.
- * Manages pointer gestures, long press, selection toggle, and tap invocation.
- */
 function defaultVibrate(ms) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) {
     try { navigator.vibrate(ms); } catch (_) {}
@@ -2317,11 +2540,6 @@ function createRowGesture(gestureOptions = {}) {
   return { down, move, up, cancel, click };
 }
 
-/**
- * Pure roster reconciliation engine.
- * Computes shown occurrence, active assigned members, matching logs/waivers,
- * and exact member attendance statuses.
- */
 function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now()) } = {}) {
   const norm = normalizeSession(session) || session;
   const now = parseDateTimeToMs(nowMs);
@@ -2332,7 +2550,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
   const earlyMs = earlyCheckInMinutes * 60000;
   const lateMs = lateCutoffMinutes * 60000;
 
-  // 1. Members normalization & active filtering (non-disabled, non-blocked)
   let memberList = [];
   if (Array.isArray(members)) {
     memberList = members;
@@ -2343,7 +2560,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
   }
   const activeMembers = memberList.filter(m => m && !m.disabled && !m.blocked);
 
-  // 2. Assigned calculation (NEVER 0 when active members exist)
   let assigned = [];
   if (norm?.targetType === 'badge' && Array.isArray(norm.badgeIds) && norm.badgeIds.length > 0) {
     assigned = activeMembers.filter(m => {
@@ -2359,9 +2575,8 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     assigned = [...activeMembers];
   }
 
-  // 3. Resolve shown occurrence
   let shownOccurrence = null;
-  let occState = 'upcoming'; // upcoming | open | closed
+  let occState = 'upcoming';
 
   if (sched.type === 'once') {
     const opensAt = startMs - earlyMs;
@@ -2425,7 +2640,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     }
   }
 
-  // 4. Match logs and waivers for shown occurrence
   const occLogs = (Array.isArray(logs) ? logs : []).filter(l => {
     if (!l) return false;
     const matchSession = (l.sessionId === norm.id || !l.sessionId || !norm.id);
@@ -2471,7 +2685,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     }
   });
 
-  // 5. Evaluate rows and counts
   let presentCount = 0;
   let onTimeCount = 0;
   let lateCount = 0;
@@ -2546,13 +2759,9 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     globalThis.createRowGesture = createRowGesture;
     globalThis.buildRoster = buildRoster;
   }
-// ==== ENGINE END
+const ENGINE_END_MARKER = 1;
 
 export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank };
-
-/* ==========================================================================
-   SAFE DOM MANIPULATION UTILITIES (Crash-Proof DOM Guards)
-   ========================================================================== */
 
 export function safeInsertBefore(parent, newNode, referenceNode) {
   if (!parent || !newNode) return null;
@@ -2602,19 +2811,6 @@ export function safeReplaceChild(parent, newChild, oldChild) {
   }
 }
 
-/* ==========================================================================
-   SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
-   ========================================================================== */
-
-/**
- * Escapes HTML characters safely.
- */
-
-/* ==========================================================================
-   v2.1.0 SHARED iOS COMPONENTS (Task 1)
-   ========================================================================== */
-
-// Prototype getter/setter for .checked on <button role="switch">
 if (typeof HTMLButtonElement !== 'undefined' && !Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype, 'checked')) {
   Object.defineProperty(HTMLButtonElement.prototype, 'checked', {
     get() {
@@ -2634,7 +2830,6 @@ if (typeof HTMLButtonElement !== 'undefined' && !Object.getOwnPropertyDescriptor
   });
 }
 
-// Global delegated toggle for role="switch"
 if (typeof document !== 'undefined') {
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[role="switch"]');
@@ -2660,9 +2855,6 @@ if (typeof document !== 'undefined') {
   });
 }
 
-/**
- * Returns HTML string for an iOS Switch.
- */
 export function renderSwitchHTML({ id = '', checked = false, disabled = false, label = '', className = '' } = {}) {
   const isChecked = Boolean(checked);
   return `
@@ -2675,9 +2867,6 @@ export function renderSwitchHTML({ id = '', checked = false, disabled = false, l
   `.trim();
 }
 
-/**
- * DOM creator for iOS Switch.
- */
 export function renderSwitch({ checked = false, onChange = null, label = '', disabled = false, id = '', className = '' } = {}) {
   const wrapper = document.createElement('label');
   wrapper.className = `ios-switch-wrapper ${className}`.trim();
@@ -2730,9 +2919,6 @@ export function renderSwitch({ checked = false, onChange = null, label = '', dis
   return wrapper;
 }
 
-/**
- * Renders an iOS Segmented Control with sliding thumb.
- */
 export function renderSegmented({ options = [], value = '', onChange = null, className = '', id = '' } = {}) {
   const container = document.createElement('div');
   container.className = `ios-segmented ${className}`.trim();
@@ -2815,9 +3001,6 @@ export function renderSegmented({ options = [], value = '', onChange = null, cla
   return container;
 }
 
-/**
- * Renders an iOS Stepper with press-and-hold repeating.
- */
 export function renderStepper({ value = 0, min = 0, max = 9999, step = 1, unit = '', onChange = null, id = '', className = '' } = {}) {
   const container = document.createElement('div');
   container.className = `ios-stepper ${className}`.trim();
@@ -2901,16 +3084,11 @@ export function renderStepper({ value = 0, min = 0, max = 9999, step = 1, unit =
   return container;
 }
 
-/**
- * Open iOS Wheel Date/Time Picker bottom sheet.
- * Returns Promise<epochMs | minutesSinceMidnight | null>
- */
 export function openDateTimePicker({ title = 'Select Date & Time', valueMs = null, mode = 'datetime', minMs = null, maxMs = null } = {}) {
   return new Promise((resolve) => {
     const baseMs = valueMs ? parseDateTimeToMs(valueMs) : serverNow();
     const parts = msToZonedParts(baseMs, APP_TIMEZONE);
 
-    // Selected state
     let selYear = parts.year;
     let selMonth = parts.month;
     let selDay = parts.day;
@@ -2921,7 +3099,6 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
 
     let modalRef = null;
 
-    // Build wheel columns HTML
     let wheelsHtml = '';
 
     if (mode === 'datetime') {
@@ -2980,7 +3157,7 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
           </div>
         </div>
       `;
-    } else { // mode === 'time'
+    } else {
       wheelsHtml = `
         <div class="ios-wheel-container">
           <div class="ios-wheel-highlight"></div>
@@ -3029,7 +3206,6 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
       }
     });
 
-    // Wire wheel columns scroll and selection
     setTimeout(() => {
       const modalEl = document.getElementById('shared-modal');
       if (!modalEl) return;
@@ -3086,9 +3262,6 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
   });
 }
 
-/**
- * Format timestamp into display string for date/time field chip.
- */
 function formatDateTimeDisplay(val, mode = 'datetime') {
   if (val === null || val === undefined || val === '') return 'Select';
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -3111,9 +3284,6 @@ function formatDateTimeDisplay(val, mode = 'datetime') {
   return `${p.weekday}, ${monthNames[p.month - 1]} ${p.day} - ${hr12}:${minPad} ${ampm}`;
 }
 
-/**
- * Renders an inset-grouped row for selecting Date/Time via the wheel picker.
- */
 export function renderDateTimeField({ label = 'Date & Time', valueMs = null, mode = 'datetime', onChange = null, placeholder = 'Select', id = '', className = '' } = {}) {
   const container = document.createElement('div');
   container.className = `ios-datetime-field ${className}`.trim();
@@ -3166,10 +3336,6 @@ export function renderDateTimeField({ label = 'Date & Time', valueMs = null, mod
   return container;
 }
 
-/**
- * Opens an iOS Item Picker Half-Sheet modal with optional search and icons.
- * Returns Promise<selectedId | null>
- */
 export function openItemPicker({ title = 'Select Item', items = [], selectedId = null, searchable = false, emptyText = 'No items found', onSelect = null } = {}) {
   return new Promise((resolve) => {
     let curSel = selectedId;
@@ -3276,10 +3442,6 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
   });
 }
 
-/**
- * Pick image file, crop in interactive 280px sheet, compress to Base64 data URI.
- * Returns Promise<dataURI | null>
- */
 export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = false, maxChars = 32000, onDone, onCropped } = {}) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
@@ -3323,7 +3485,6 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
           });
         }
 
-        // Downscale source to max 1200px for mobile memory safety
         let srcW = bmp.width;
         let srcH = bmp.height;
         const maxDim = 1200;
@@ -3352,7 +3513,6 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
         let panX = undefined;
         let panY = undefined;
 
-        // Initial geometry computation for the 280x280 preview canvas (outSize = viewport)
         let geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize: viewport, isLogo });
         panX = geom.clampedX;
         panY = geom.clampedY;
@@ -3553,7 +3713,6 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
       }
     };
 
-    // Synchronous click within user gesture
     input.click();
   });
 }
@@ -3569,16 +3728,13 @@ export function esc(value) {
 }
 export const escapeHtml = esc;
 
-/**
- * Apple-style top floating glass pill toast.
- */
 export function toast(message, type = 'info') {
   const container = document.getElementById('toast-container');
   if (!container) return;
 
   const toastEl = document.createElement('div');
   toastEl.className = `toast toast-${type}`;
-  
+
   let iconSvg = '';
   if (type === 'success') {
     iconSvg = '<svg class="w-4 h-4 text-emerald-400 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>';
@@ -3608,9 +3764,6 @@ function dismissToast(el) {
   setTimeout(() => el.remove(), 300);
 }
 
-/**
- * iOS Action Sheet confirmation returning Promise<boolean>.
- */
 export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', confirmLabel, confirmText, destructive = false, isDestructive = false }) {
   const actualConfirmLabel = confirmLabel || confirmText || 'Confirm';
   const isDest = Boolean(destructive || isDestructive);
@@ -3629,6 +3782,7 @@ export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', con
 
   document.body.style.overflow = 'hidden';
   root.classList.add('open');
+  pushModalHistoryState('modal-confirm');
 
   return new Promise((resolve) => {
     let resolved = false;
@@ -3659,9 +3813,6 @@ export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', con
 }
 export const showCustomConfirm = (title, message) => confirmSheet({ title, message, confirmLabel: 'Confirm', destructive: true });
 
-/**
- * Reusable Bottom Sheet / Modal with validation, scroll lock, dirty check, and focus trap.
- */
 export const modalStack = [];
 
 function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel, cancelLabel, sheetClass = '', clearStack = false }) {
@@ -3680,7 +3831,6 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
     modalStack.length = 0;
   }
 
-  // Nested modal support: preserve parent modal state & DOM nodes cleanly
   if (root.classList.contains('open') && !clearStack) {
     const savedNodes = Array.from(bodyEl.childNodes);
     modalStack.push({
@@ -3699,7 +3849,6 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
     });
   }
 
-  // Reset interactive detent state & classes for the new sheet
   if (modalSheet) {
     modalSheet.className = 'modal-sheet';
     modalSheet.style.height = '';
@@ -3732,6 +3881,7 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   document.body.style.overflow = 'hidden';
   root.classList.add('open');
   root._currentOnClose = typeof onClose === 'function' ? onClose : null;
+  pushModalHistoryState(slugifyModalTitle(title));
 
   let isClosing = false;
   const onKeyDown = (e) => {
@@ -3763,7 +3913,6 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
     window.removeEventListener('keydown', onKeyDown);
     if (typeof onClose === 'function') onClose();
 
-    // If a parent modal is stacked, pop and restore its exact nodes, handlers, and input states
     if (modalStack.length > 0) {
       const prev = modalStack.pop();
       titleEl.textContent = prev.title || '';
@@ -3835,9 +3984,6 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   return { close, modalEl: root };
 }
 
-/* ==========================================================================
-   RELEASE v2.2.0: INTERACTIVE iOS SHEET DETENTS CONTROLLER
-   ========================================================================== */
 export function initSheetDragGestures() {
   let activeSheet = null;
   let startY = 0;
@@ -3851,7 +3997,6 @@ export function initSheetDragGestures() {
     const target = e.target;
     if (!target) return;
 
-    // Ignore interactive elements
     if (target.closest('button, input, textarea, select, a, .sub-modal-text-btn, .modal-close-btn, #shared-modal-cancel, #shared-modal-save, .member-picker-item, .chip-remove-btn')) {
       return;
     }
@@ -3859,7 +4004,6 @@ export function initSheetDragGestures() {
     const sheet = target.closest('.modal-sheet, .sub-modal-sheet');
     if (!sheet) return;
 
-    // Check hit on grabber / header vs content
     const grabber = target.closest('.sheet-grabber, .sheet-grabber-hitarea, .modal-grabber, .modal-header, .sub-modal-toolbar');
     const scrollEl = target.closest('.modal-body, .sheet-scroll, .icon-grid-scrollable') || sheet;
 
@@ -3901,7 +4045,6 @@ export function initSheetDragGestures() {
     if (!isDragging) return;
     if (e.cancelable) e.preventDefault();
 
-    // 1:1 Instantaneous GPU-accelerated tracking:
     if (deltaY > 0) {
       activeSheet.style.transform = `translateY(${deltaY}px)`;
     } else {
@@ -3922,7 +4065,7 @@ export function initSheetDragGestures() {
     const deltaY = currentY - startY;
     const nowTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const deltaTime = Math.max(1, nowTime - startTime);
-    const velocity = deltaY / deltaTime; // px/ms
+    const velocity = deltaY / deltaTime;
 
     const sheet = activeSheet;
     const wasDragging = isDragging;
@@ -3940,7 +4083,6 @@ export function initSheetDragGestures() {
 
     if (!wasDragging) return;
 
-    // Dismiss Resolution: downward drag past 110px or downward flick velocity > 0.45 px/ms
     const shouldDismiss = (deltaY > 110) || (velocity > 0.45 && deltaY > 30);
 
     if (shouldDismiss) {
@@ -3956,7 +4098,6 @@ export function initSheetDragGestures() {
       return;
     }
 
-    // Gracefully snap back to fully open position (never freeze mid-air)
     sheet.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
     sheet.style.transform = 'translateY(0)';
     setTimeout(() => {
@@ -3997,7 +4138,6 @@ export function initSheetDragGestures() {
     closeModal();
   }
 
-  // Pointer events with touch deduplication
   if (typeof window !== 'undefined' && 'PointerEvent' in window) {
     document.addEventListener('pointerdown', onStart, { passive: true });
     document.addEventListener('pointermove', onMove, { passive: false });
@@ -4011,11 +4151,6 @@ export function initSheetDragGestures() {
   }
 }
 
-/**
- * Deterministic Preset Avatar Generator (v2.2.9)
- * Picks an avatar from the 24 preset vector characters deterministically via UID hash.
- * Guaranteed to stay the exact same across every page reload and device.
- */
 export function getDeterministicPresetAvatar(uid) {
   const presets = typeof getPresetAvatars === 'function' ? getPresetAvatars() : [];
   if (!presets || presets.length === 0) return './image_ad59c0.jpg';
@@ -4029,9 +4164,6 @@ export function getDeterministicPresetAvatar(uid) {
   return presets[index]?.dataUrl || './image_ad59c0.jpg';
 }
 
-/**
- * Universal Avatar Renderer with Deterministic Persistent Fallback (v2.2.9)
- */
 export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   if (typeof sizeClass === 'number') {
     sizeClass = sizeClass === 48 ? 'w-12 h-12' : `w-[${sizeClass}px] h-[${sizeClass}px]`;
@@ -4049,10 +4181,6 @@ export function renderAvatar(user, sizeClass = 'w-10 h-10') {
     </div>
   `;
 }
-
-/* ==========================================================================
-   DYNAMIC SPACE-AWARE BADGE ROW & MINI-PROFILE OVERHANGING SHEET (Task 4)
-   ========================================================================== */
 
 export function normalizeBadgeItem(b) {
   if (!b) return null;
@@ -4091,10 +4219,6 @@ export function normalizeBadgeItem(b) {
   };
 }
 
-/**
- * Resolves a user's badges strictly preserving the exact order of IDs in their `badgeIds` array
- * (Index 0 is the primary featured badge).
- */
 export function resolveOrderedUserBadges(badgesInput, member = null) {
   const memberObj = (member && typeof member === 'object') ? member : (typeof member === 'string' ? usersMap.get(member) : null);
   const rawBadgeIds = Array.isArray(memberObj?.badgeIds) && memberObj.badgeIds.length > 0
@@ -4129,9 +4253,6 @@ export function resolveOrderedUserBadges(badgesInput, member = null) {
   return ordered.filter(Boolean);
 }
 
-/**
- * Expanded Mode (Discord-Style Pills): Horizontal wrapping pills with SVG icon + Badge Name.
- */
 export function renderExpandedBadgesHtml(badgesInput, member = null) {
   const ordered = resolveOrderedUserBadges(badgesInput, member);
   if (ordered.length === 0) return '';
@@ -4145,12 +4266,6 @@ export function renderExpandedBadgesHtml(badgesInput, member = null) {
 
 const badgeRowObservers = new WeakMap();
 
-/**
- * Compact Mode (Icon-Only Responsive Strip):
- * Used in cramped spaces like the Admin Members List and Leaderboard rows.
- * Renders ONLY micro 22px SVG icons with a soft background tint of the badge color (NO text),
- * strictly ordered by `badgeIds` (Index 0 first), hiding any overflow cleanly without breaking layout.
- */
 export function renderBadgeRow(container, badges, member) {
   if (!container) return;
   const normBadges = resolveOrderedUserBadges(badges, member);
@@ -4179,7 +4294,7 @@ export function renderBadgeRow(container, badges, member) {
       const maxFullFit = Math.floor((availableWidth + gap) / (iconSize + gap));
       if (maxFullFit < normBadges.length) {
         hasOverflow = true;
-        // Reserve 1 slot (iconSize + gap) for the 22px ellipsis pill
+
         visibleCount = Math.max(0, maxFullFit - 1);
       } else {
         visibleCount = normBadges.length;
@@ -4240,15 +4355,10 @@ export function renderBadgeRow(container, badges, member) {
   requestAnimationFrame(updateBadgesLayout);
 }
 
-/**
- * Opens read-only Mini-Profile Half-Sheet with overhanging avatar.
- * NEVER renders finesEGP to other members (only self or admin).
- */
 export function openMiniProfileSheet(uidOrMember) {
   const uid = typeof uidOrMember === 'string' ? uidOrMember : (uidOrMember?.uid || '');
   const userProf = getUserProfile(uid, uidOrMember?.displayName || uidOrMember?.name || 'Member', uidOrMember?.photoURL || uidOrMember?.avatarUrl || '');
 
-  // Resolve badges in exact badgeIds order (Index 0 is primary featured badge)
   const resolvedBadges = resolveOrderedUserBadges(userProf.badges, userProf);
 
   const wrapperEl = document.createElement('div');
@@ -4559,9 +4669,6 @@ export function openMemberPicker({ multi = false, includeAllOption = false, filt
   bindPickerEvents(modalInstance);
 }
 
-/**
- * Skeleton shimmer loading card generator.
- */
 export function renderSkeleton(type = 'card', count = 3) {
   let html = '';
   for (let i = 0; i < count; i++) {
@@ -4594,9 +4701,6 @@ export function renderSkeleton(type = 'card', count = 3) {
   return html;
 }
 
-/**
- * iOS-style empty state card helper.
- */
 export function renderEmptyState({ icon = 'clipboard-list', title = 'No items found', message = 'Check back later or adjust your filters.', actionLabel = '', onAction = null }) {
   return `
     <div class="glass-card p-10 text-center border border-dashed border-white/15 my-4">
@@ -4618,9 +4722,6 @@ export function renderEmptyState({ icon = 'clipboard-list', title = 'No items fo
   `;
 }
 
-/**
- * Offline status banner controller.
- */
 function initOfflineBanner() {
   const banner = document.getElementById('offline-banner');
   if (!banner) return;
@@ -4638,9 +4739,6 @@ function initOfflineBanner() {
   update();
 }
 
-/**
- * Global friendly English error boundary.
- */
 function initErrorBoundary() {
   const boundary = document.getElementById('global-error-boundary');
   const msgEl = document.getElementById('error-boundary-message');
@@ -4713,9 +4811,6 @@ function initErrorBoundary() {
   });
 }
 
-/**
- * Custom dialogs for backwards compatibility.
- */
 export function showCustomAlert(title, message, options = {}) {
   const modal = document.getElementById('modal-custom-alert');
   const titleEl = document.getElementById('custom-alert-title');
@@ -4743,6 +4838,7 @@ export function showCustomAlert(title, message, options = {}) {
 
   document.body.style.overflow = 'hidden';
   modal.classList.add('open');
+  pushModalHistoryState('modal-custom-alert');
 
   return new Promise((resolve) => {
     okBtn.onclick = () => {
@@ -4769,6 +4865,7 @@ export function showCustomPrompt(title, message, defaultValue = '') {
 
   document.body.style.overflow = 'hidden';
   modal.classList.add('open');
+  pushModalHistoryState('modal-custom-prompt');
   input.focus();
 
   return new Promise((resolve) => {
@@ -4787,12 +4884,9 @@ export function showCustomPrompt(title, message, defaultValue = '') {
   });
 }
 
-/* ==========================================================================
-   GLOBAL LONG-PRESS BULK SELECTION MODE CONTROLLER
-   ========================================================================== */
 export const selectionState = {
   active: false,
-  type: null, // 'tasks' | 'admin_tasks' | 'categories' | 'notifications' | 'members' | 'sessions' | 'submissions' | 'broadcasts'
+  type: null,
   selectedIds: new Set(),
   visibleIds: []
 };
@@ -5115,7 +5209,6 @@ export function updateSelectionUI() {
     selectAllBtn.onclick = toggleSelectAll;
   }
 
-
   const actionsContainer = document.getElementById('bulk-actions-container');
   if (actionsContainer) {
     const actions = getBulkActions(selectionState.type);
@@ -5230,7 +5323,6 @@ export async function handleBulkArchive(isRestore = false) {
       }
     }
 
-    // In-memory update ONLY after DB successfully resolves
     if (type === 'tasks' || type === 'admin_tasks') {
       ids.forEach(id => {
         const t = state.tasks.find(x => x.id === id);
@@ -5364,11 +5456,9 @@ export async function permanentlyDeleteMember(uid) {
   const CHUNK_SIZE = 450;
   const refsToDelete = [];
 
-  // 1. users and users_private
   refsToDelete.push(doc(db, 'users', uid));
   refsToDelete.push(doc(db, 'users_private', uid));
 
-  // 2. Submissions
   try {
     const q1 = query(collection(db, 'submissions'), where('uid', '==', uid));
     const snap1 = await getDocs(q1);
@@ -5384,7 +5474,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Submissions userId query:', err);
   }
 
-  // 3. Attendance logs
   try {
     const qAtt = query(collection(db, 'attendance_logs'), where('uid', '==', uid));
     const snapAtt = await getDocs(qAtt);
@@ -5393,7 +5482,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Attendance logs query:', err);
   }
 
-  // 4. Waiver requests
   try {
     const qWaiver = query(collection(db, 'waiver_requests'), where('uid', '==', uid));
     const snapWaiver = await getDocs(qWaiver);
@@ -5402,7 +5490,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Waiver requests query:', err);
   }
 
-  // 5. Notifications
   try {
     const qNotif = query(collection(db, 'notifications'), where('targetUid', '==', uid));
     const snapNotif = await getDocs(qNotif);
@@ -5418,7 +5505,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Notifications uid query:', err);
   }
 
-  // 6. Transactions
   try {
     const qTx = query(collection(db, 'transactions'), where('uid', '==', uid));
     const snapTx = await getDocs(qTx);
@@ -5427,7 +5513,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Transactions query:', err);
   }
 
-  // De-duplicate refs
   const uniqueRefsMap = new Map();
   refsToDelete.forEach(r => uniqueRefsMap.set(r.path, r));
   const uniqueRefs = Array.from(uniqueRefsMap.values());
@@ -5843,7 +5928,7 @@ export async function markSingleNotificationReadInFirestore(notifOrId, uid = sta
       await updateDoc(doc(db, 'notifications_broadcast', id), {
         readBy: readState ? arrayUnion(uid) : arrayRemove(uid)
       });
-    } catch (_) { /* ignore missing doc */ }
+    } catch (_) {  }
     return;
   }
 
@@ -5903,12 +5988,6 @@ export async function handleBulkMarkRead() {
   }
 }
 
-/* ==========================================================================
-   NAVIGATION: SWIPE PAGER + GLASS DOCK
-   ========================================================================== */
-/* ==========================================================================
-   TOUCH GESTURE DISAMBIGUATION (Card Swipes vs. Page Pager)
-   ========================================================================== */
 export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) {
   if (!cardEl) return () => {};
 
@@ -6012,12 +6091,6 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
   };
 }
 
-/* ==========================================================================
-   PAGE NAVIGATION PAGER CONTROLLER
-   ========================================================================== */
-/* ==========================================================================
-   GLOBAL RESCUE UNDO SNACKBAR (v2.2.9)
-   ========================================================================== */
 let activeSnackbarTimer = null;
 let activeSnackbarEl = null;
 
@@ -6080,9 +6153,6 @@ export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 40
   }, duration);
 }
 
-/* ==========================================================================
-   UNIVERSAL DUAL-DIRECTION SWIPES (v2.2.9)
-   ========================================================================== */
 export function attachUniversalSwipeActions(wrapperEl, {
   archiveLabel = 'Archive',
   archiveIcon = 'archive',
@@ -6097,11 +6167,9 @@ export function attachUniversalSwipeActions(wrapperEl, {
   wrapperEl.classList.add('universal-swipe-wrapper');
   wrapperEl.setAttribute('data-swipe-card', 'true');
 
-  // Remove any legacy static backgrounds if present
   const oldBg = wrapperEl.querySelector('.notif-swipe-bg');
   if (oldBg) oldBg.remove();
 
-  // Find the sliding content card (must be a direct child of wrapperEl)
   let contentCard = null;
   for (const child of wrapperEl.children) {
     if (child.classList.contains('universal-swipe-card-content') ||
@@ -6133,7 +6201,6 @@ export function attachUniversalSwipeActions(wrapperEl, {
   if (!contentCard) return () => {};
   contentCard.classList.add('universal-swipe-card-content');
 
-  // Progressive background containers
   let bgArchive = wrapperEl.querySelector('.universal-swipe-bg-archive');
   if (!bgArchive && onArchive) {
     bgArchive = document.createElement('div');
@@ -6185,7 +6252,6 @@ export function attachUniversalSwipeActions(wrapperEl, {
   const startDrag = (clientX, clientY, e) => {
     if (selectionState && selectionState.active) return false;
 
-    // Strict 20% Edge Hit Zone calculation using getBoundingClientRect()
     cardRect = (contentCard || wrapperEl).getBoundingClientRect();
     const cardWidth = cardRect.width;
     if (cardWidth <= 0) return false;
@@ -6199,9 +6265,6 @@ export function attachUniversalSwipeActions(wrapperEl, {
     const isLeftHit = isLeftEdge && canArchive;
     const isRightHit = isRightEdge && canDelete;
 
-    // STRICT RULE: If the initial touch falls anywhere in the middle 60% of the card,
-    // you MUST completely ignore the touch. Do not call preventDefault, do not stop propagation,
-    // and do not track the drag. Let the touch bubble up naturally so the user can swipe the page horizontally.
     if (!isLeftHit && !isRightHit) {
       isTracking = false;
       isSwiping = false;
@@ -6229,7 +6292,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
     const dy = clientY - startY;
 
     if (!isSwiping) {
-      // Disambiguate against vertical scrolling
+
       if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
         isTracking = false;
         return;
@@ -6275,9 +6338,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
       contentCard.style.transition = 'none';
 
       if (dx < 0 && canDelete) {
-        // Swipe Right-to-Left (Delete):
-        // Dynamically interpolate the background color moving towards a bright Crimson Red.
-        // Simultaneously, scale up and fade in a Trash Bin SVG icon tied to the drag percentage.
+
         if (bgArchive) bgArchive.style.display = 'none';
         if (bgDelete) {
           bgDelete.style.display = 'flex';
@@ -6300,9 +6361,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
           }
         }
       } else if (dx > 0 && canArchive) {
-        // Swipe Left-to-Right (Archive):
-        // Dynamically interpolate the background color towards a vivid Amber/Yellow.
-        // Simultaneously, scale up and fade in an Archive SVG icon.
+
         if (bgDelete) bgDelete.style.display = 'none';
         if (bgArchive) {
           bgArchive.style.display = 'flex';
@@ -6354,7 +6413,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
     const isRtlTriggered = canDelete && initialEdge === 'right' && dx < 0 && (Math.abs(dx) >= threshold || (Math.abs(dx) > 40 && velocity > 0.45));
 
     if (isLtrTriggered) {
-      // Released past threshold: color fills completely and item is removed
+
       if (bgArchive) {
         bgArchive.style.transition = 'background-color 0.15s ease';
         bgArchive.style.backgroundColor = '#F59E0B';
@@ -6371,7 +6430,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
         executeCollapseAndAction('archive');
       }, 180);
     } else if (isRtlTriggered) {
-      // Released past threshold: color fills completely and item is removed
+
       if (bgDelete) {
         bgDelete.style.transition = 'background-color 0.15s ease';
         bgDelete.style.backgroundColor = '#DC2626';
@@ -6388,7 +6447,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
         executeCollapseAndAction('delete');
       }, 180);
     } else {
-      // Released before threshold: card snaps back, color/icon smoothly animate back to 0
+
       contentCard.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
       contentCard.style.transform = '';
 
@@ -6470,7 +6529,6 @@ export function attachUniversalSwipeActions(wrapperEl, {
     }
   };
 
-  // Touch event handlers
   const onTouchStart = (e) => {
     if (e.touches.length !== 1) return;
     const touch = e.touches[0];
@@ -6488,7 +6546,6 @@ export function attachUniversalSwipeActions(wrapperEl, {
     endDrag(touch ? touch.clientX : startX, e);
   };
 
-  // Pointer event handlers (desktop / mouse)
   const onPointerDown = (e) => {
     if (e.pointerType === 'touch') return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -6537,9 +6594,11 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   const thumbEl = dockEl.querySelector('.dock-thumb');
   const dockItems = dockEl.querySelectorAll('.dock-item');
 
-  // Determine initial target page from hash or defaultPageId
+  const queryTab = getQueryParam('tab');
   const initialHash = window.location.hash;
-  const matchedIdx = pages.findIndex(p => p.hash === initialHash);
+  const matchedByQueryIdx = queryTab ? pages.findIndex(p => p.id === queryTab) : -1;
+  const matchedByHashIdx = pages.findIndex(p => p.hash === initialHash);
+  const matchedIdx = matchedByQueryIdx !== -1 ? matchedByQueryIdx : matchedByHashIdx;
   const defaultIdx = pages.findIndex(p => p.id === defaultPageId);
   const fallbackIdx = defaultIdx !== -1 ? defaultIdx : 0;
   let activeIndex = matchedIdx !== -1 ? matchedIdx : fallbackIdx;
@@ -6547,7 +6606,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   let programmaticTimeout = null;
   let scrollTimeout = null;
 
-  // Swipe gesture tracking state
   let isTracking = false;
   let startX = 0;
   let startY = 0;
@@ -6555,7 +6613,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   let currentY = 0;
   let startScrollLeft = 0;
   let startTime = 0;
-  let swipeDirection = null; // 'horizontal' | 'vertical' | null
+  let swipeDirection = null;
   let isPointerDragging = false;
 
   function updateDockThumb(index, immediate = false) {
@@ -6580,7 +6638,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
         thumbEl.style.transition = 'none';
         thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
         thumbEl.style.width = `${width}px`;
-        void thumbEl.offsetWidth; // Force layout reflow
+        void thumbEl.offsetWidth;
         thumbEl.style.transition = prevTransition;
       } else {
         thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
@@ -6593,9 +6651,19 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       });
     }
 
-    const currentHash = pages[index]?.hash;
-    if (currentHash && window.location.hash !== currentHash) {
-      history.replaceState(null, '', currentHash);
+    const currentPageObj = pages[index];
+    const currentHash = currentPageObj?.hash;
+    if (currentHash && !_isHandlingPopState) {
+      if (pagerEl.id === 'user-pager' && currentPageObj?.id) {
+        const nextUrl = `${window.location.pathname}?tab=${currentPageObj.id}${currentHash}`;
+        if (immediate) {
+          history.replaceState({ cocTab: currentPageObj.id, cocModal: null }, '', nextUrl);
+        } else if (window.location.hash !== currentHash || history.state?.cocTab !== currentPageObj.id) {
+          history.pushState({ cocTab: currentPageObj.id, cocModal: null }, '', nextUrl);
+        }
+      } else if (window.location.hash !== currentHash) {
+        history.replaceState({ ...(history.state || {}), cocAdminTab: currentPageObj?.id }, '', currentHash);
+      }
     }
     if (typeof onPageChange === 'function') {
       try { onPageChange(pages[index]?.id, index); } catch (e) { console.warn(e); }
@@ -6634,7 +6702,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     };
   });
 
-  // Touch Swipe Gesture Handlers
   function getTouchCoords(e) {
     if (e.touches && e.touches.length > 0) {
       return { x: e.touches[0].clientX, y: e.touches[0].clientY };
@@ -6763,7 +6830,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     swipeDirection = null;
   }
 
-  // Pointer / Mouse Drag Fallback for Desktop
   function onPointerDown(e) {
     if (e.pointerType === 'touch') return;
     if (e.button !== 0) return;
@@ -6859,7 +6925,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     swipeDirection = null;
   }
 
-  // Native scroll handler for trackpad gestures
   const onScroll = () => {
     if (isProgrammatic || isTracking || isPointerDragging) {
       if (isProgrammatic) {
@@ -6975,7 +7040,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   };
   window.addEventListener('resize', onResize);
 
-  // Position immediately on boot before first paint to prevent flash
   const initialTargetEl = pagerEl.children[activeIndex];
   if (initialTargetEl) {
     pagerEl.scrollTo({
@@ -7025,11 +7089,6 @@ export const PAGE_ORDER = [
   { id: 'attendance', label: 'Attendance', hash: '#attendance', sectionId: 'page-attendance' },
   { id: 'profile', label: 'Profile', hash: '#profile', sectionId: 'page-profile' }
 ];
-
-
-/* ==========================================================================
-   RELEASE v2.2.1: CENTRALIZED 3-BUCKET ADJUST HUB & ATOMIC ADJUSTMENT ENGINE
-   ========================================================================== */
 
 export async function applyAccountAdjustment(opts) {
   if (!opts || !opts.targetUid) {
@@ -7100,7 +7159,6 @@ export async function applyAccountAdjustment(opts) {
       t.update(userDocRef, userUpdates);
     }
 
-    // Write transaction ledger entry under user's transactions subcollection
     const txDocRef = doc(collection(db, 'users', targetUid, 'transactions'));
     const txData = {
       uid: targetUid,
@@ -7120,7 +7178,6 @@ export async function applyAccountAdjustment(opts) {
     };
     t.set(txDocRef, txData);
 
-    // Send notification to both top-level notifications collection and users/{uid}/notifications subcollection
     const notifDocRef = doc(collection(db, 'notifications'));
     const userNotifDocRef = doc(db, 'users', targetUid, 'notifications', notifDocRef.id);
     const notifUnit = bucket === 'fines' ? 'EGP' : 'pts';
@@ -7143,7 +7200,6 @@ export async function applyAccountAdjustment(opts) {
     t.set(userNotifDocRef, notifData);
   });
 
-  // Update local memory
   const localMem = usersMap.get(targetUid) || (state.members || []).find(m => m.uid === targetUid);
   if (localMem) {
     if (newPoints !== undefined) localMem.points = newPoints;
@@ -7171,7 +7227,6 @@ let currentHubSelectedMember = null;
 let currentHubBucket = 'points';
 let currentHubDirection = 'add';
 
-// Persistent state for Adjustments Hub across tab switches and keystrokes
 const adjustHubState = {
   selectedUids: new Set(),
   bucket: 'points',
@@ -7181,6 +7236,8 @@ const adjustHubState = {
 };
 
 export function renderAdminAdjustments() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const panel = document.getElementById('admin-panel-adjustments');
   if (!panel) return;
 
@@ -7315,7 +7372,6 @@ export function renderAdminAdjustments() {
     }
   }
 
-  // Bind bucket selection buttons
   if (bucketSegmented && !bucketSegmented._hasBound) {
     bucketSegmented._hasBound = true;
     bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
@@ -7326,7 +7382,6 @@ export function renderAdminAdjustments() {
     });
   }
 
-  // Bind direction selection buttons
   if (directionSegmented && !directionSegmented._hasBound) {
     directionSegmented._hasBound = true;
     directionSegmented.querySelectorAll('.hub-dir-btn').forEach(btn => {
@@ -7337,7 +7392,6 @@ export function renderAdminAdjustments() {
     });
   }
 
-  // Bind amount input (persistent state without form re-rendering)
   if (amountInput && !amountInput._hasBound) {
     amountInput._hasBound = true;
     amountInput.oninput = () => {
@@ -7346,7 +7400,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind reason input (persistent state without form re-rendering)
   if (reasonInput && !reasonInput._hasBound) {
     reasonInput._hasBound = true;
     reasonInput.oninput = () => {
@@ -7354,7 +7407,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind open member picker button
   if (openPickerBtn && !openPickerBtn._hasBound) {
     openPickerBtn._hasBound = true;
     openPickerBtn.onclick = () => {
@@ -7362,7 +7414,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind clear recipients button
   if (clearRecipientsBtn && !clearRecipientsBtn._hasBound) {
     clearRecipientsBtn._hasBound = true;
     clearRecipientsBtn.onclick = () => {
@@ -7371,7 +7422,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind submit adjustment button
   if (submitBtn && !submitBtn._hasBound) {
     submitBtn._hasBound = true;
     submitBtn.onclick = async () => {
@@ -7379,7 +7429,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Sync current form state
   if (amountInput) amountInput.value = adjustHubState.amount || '';
   if (reasonInput) reasonInput.value = adjustHubState.reason || '';
 
@@ -7388,10 +7437,6 @@ export function renderAdminAdjustments() {
   updateRecipientsUI();
 }
 
-/**
- * Dedicated popup member picker half-sheet for Adjustments Hub (FIX 5).
- * Edits a draft selection set and commits on 'Done'.
- */
 function openAdjustmentsMemberPickerSheet() {
   const activeMembers = (usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members])
     .filter(m => m && !m.disabled && !m.blocked);
@@ -7615,7 +7660,6 @@ export async function submitHubAdjustment() {
           invalidateEgpCache(targetUid);
         }
 
-        // Ledger audit record under user's transactions subcollection (matches firestore.rules & loadTransactionLedger)
         const ledgerRef = doc(collection(db, 'users', targetUid, 'transactions'));
         batch.set(ledgerRef, {
           uid: targetUid,
@@ -7636,7 +7680,6 @@ export async function submitHubAdjustment() {
           createdAtMs: now
         });
 
-        // Push notification in top-level notifications collection
         const notifRef = doc(collection(db, 'notifications'));
         const dirWord = direction === 'add' ? 'added' : 'deducted';
         const notifUnit = bucket === 'fines' ? 'EGP' : (bucket === 'penalties' ? 'penalties' : 'pts');
@@ -7675,7 +7718,6 @@ export async function submitHubAdjustment() {
 
     toast(`Successfully applied adjustment to ${targetUids.length} member${targetUids.length > 1 ? 's' : ''}`, 'success');
 
-    // Reset recipients, amount, reason while preserving bucket and direction (FIX 5)
     adjustHubState.selectedUids.clear();
     adjustHubState.amount = '';
     adjustHubState.reason = '';
@@ -7770,7 +7812,6 @@ export function openAvatarCropper(imageSrc, onDone) {
     container.onpointerup = endDrag;
     container.onpointercancel = endDrag;
 
-    // Pinch-to-zoom support
     container.ontouchstart = (e) => {
       if (e.touches.length === 2) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -7923,7 +7964,10 @@ function initNavigation() {
     });
   }
 
+  window.addEventListener('popstate', handleAppPopState);
+
   window.addEventListener('hashchange', () => {
+    if (_isHandlingPopState) return;
     const hash = window.location.hash;
     const userMatch = userPages.find(p => p.hash === hash);
     if (userMatch && userPagerInstance) {
@@ -7932,18 +7976,23 @@ function initNavigation() {
     }
     const adminMatch = adminPages.find(p => p.hash === hash);
     if (adminMatch) {
-      if (state.user?.isAdmin || state.isAdminUnlocked) {
+      if (isCurrentUserAdmin()) {
         showAdminDashboard(adminMatch.id);
       } else {
         openAdminPortal();
       }
     }
   });
+
+  const initTabParam = getQueryParam('tab');
+  if (initTabParam === 'admin') {
+    setTimeout(() => {
+      if (isCurrentUserAdmin()) showAdminDashboard('overview');
+      else openAdminPortal();
+    }, 50);
+  }
 }
 
-/* ==========================================================================
-   SIDE DRAWER CONTROLLER
-   ========================================================================== */
 export function updateDrawerPushUI() {
   const statusEl = document.getElementById('drawer-push-status');
   const switchContainer = document.getElementById('drawer-push-switch-container');
@@ -8055,6 +8104,7 @@ export function openDrawer() {
     drawer.classList.add('drawer-open', 'is-open');
     backdrop.classList.add('drawer-open', 'is-open');
     updateDrawerProfile();
+    pushModalHistoryState('modal-drawer');
   }
 }
 
@@ -8077,17 +8127,16 @@ export function toggleDrawer() {
   }
 }
 
-/* ==========================================================================
-   ADMIN DASHBOARD OVERLAY CONTROLLER
-   ========================================================================== */
 function openAdminPortal() {
-  if (state.user?.isAdmin || state.isAdminUnlocked) {
+  const currentUser = state.user || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
     showAdminDashboard();
   } else {
     const modal = document.getElementById('modal-admin-auth');
     if (modal) {
       document.body.style.overflow = 'hidden';
       modal.classList.add('open');
+      pushModalHistoryState('modal-admin-auth');
       const input = document.getElementById('input-admin-password');
       if (input) input.focus();
     }
@@ -8095,10 +8144,17 @@ function openAdminPortal() {
 }
 
 export function showAdminDashboard(targetPage = 'overview') {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) {
+    openAdminPortal();
+    return;
+  }
   const overlay = document.getElementById('modal-admin-dashboard');
   if (overlay) {
+    overlay.style.display = '';
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    pushModalHistoryState('admin-' + targetPage, `${window.location.pathname}?tab=admin#admin-${targetPage}`);
     const backBtn = document.getElementById('adminHubBackBtn') || document.getElementById('btn-exit-admin');
     if (backBtn) {
       backBtn.onclick = (e) => {
@@ -8106,15 +8162,22 @@ export function showAdminDashboard(targetPage = 'overview') {
         closeAdminDashboard();
       };
     }
+    initAdminPushConsole();
+    setupSubmissionsListeners();
+    setupAttendanceListeners();
+    setupUsersPrivateListener();
+    setupWaiverRequestsListener();
+    renderAdminCategories();
+    renderAdminTasks();
+    renderAdminSessions();
+    renderAdminBadges();
+    renderAdminMembers();
+    renderAdminSubmissions();
+    renderAdminBroadcasts();
+    updateAdminOverviewStats();
     if (adminPagerInstance) {
       adminPagerInstance.goTo(targetPage);
     }
-    // Re-attach admin-only listeners if authorized
-    if (state.user?.isAdmin || state.isAdminUnlocked) {
-      setupSubmissionsListeners();
-      setupAttendanceListeners();
-    }
-    updateAdminOverviewStats();
     if (targetPage === 'waivers') renderAdminWaivers();
     else if (targetPage === 'adjustments') renderAdminAdjustments();
   }
@@ -8125,11 +8188,14 @@ export function closeAdminDashboard() {
   const overlay = document.getElementById('modal-admin-dashboard');
   if (overlay) {
     overlay.classList.add('hidden');
+    overlay.style.display = 'none';
     document.body.style.overflow = '';
-    if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.currentPage) {
-      userPagerInstance.goTo(userPagerInstance.currentPage);
+    const activeTab = getActiveTabRouteId();
+    const returnTab = (activeTab && activeTab !== 'admin') ? activeTab : 'home';
+    syncTabHistoryState(returnTab, true);
+    if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.goTo) {
+      userPagerInstance.goTo(returnTab);
     }
-    // Clean up admin-only listeners on close to preserve bandwidth/reads
     listeners.clear('submissions');
     listeners.clear('attendance_logs');
     state.submissions = state.mySubmissions || [];
@@ -8140,13 +8206,14 @@ export function closeAdminDashboard() {
 let isFetchingOverviewStats = false;
 
 async function updateAdminOverviewStats() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tEl = document.getElementById('admin-overview-tasks');
   const mEl = document.getElementById('admin-overview-members');
   const sEl = document.getElementById('admin-overview-submissions');
   const pEl = document.getElementById('admin-overview-penalties');
   const sesEl = document.getElementById('admin-overview-sessions');
 
-  // Optimistic initial values from memory
   if (tEl && !tEl.textContent) tEl.textContent = state.tasks.filter(t => t.active).length;
   if (mEl && !mEl.textContent) mEl.textContent = state.members.length;
   if (sEl && !sEl.textContent) sEl.textContent = state.submissions.length;
@@ -8156,14 +8223,12 @@ async function updateAdminOverviewStats() {
   isFetchingOverviewStats = true;
 
   try {
-    // 1. Members count: getCountFromServer(users)
+
     const membersSnapPromise = getCountFromServer(collection(db, 'users')).catch(() => null);
 
-    // 2. Active tasks: getCountFromServer(query(tasks, where('active', '==', true)))
     const activeTasksQuery = query(collection(db, 'tasks'), where('active', '==', true));
     const activeTasksPromise = getCountFromServer(activeTasksQuery).catch(() => null);
 
-    // 3. Submissions today: APP_TIMEZONE day start
     const now = serverNow();
     const todayDateStr = new Intl.DateTimeFormat('en-CA', {
       timeZone: APP_TIMEZONE,
@@ -8181,7 +8246,6 @@ async function updateAdminOverviewStats() {
     );
     const todaySubsPromise = getCountFromServer(todaySubsQuery).catch(() => null);
 
-    // 4. Penalties issued: getAggregateFromServer(attendance_logs, sum('penalty'))
     const penaltiesPromise = getAggregateFromServer(collection(db, 'attendance_logs'), {
       totalPenalty: sum('penalty')
     }).catch(() => null);
@@ -8201,7 +8265,6 @@ async function updateAdminOverviewStats() {
       pEl.textContent = `${pen} EGP`;
     }
 
-    // 5. Render 7-day submissions bar chart
     renderSubmissionsTrendChart();
   } catch (err) {
     console.warn('Error fetching aggregate overview stats:', err);
@@ -8211,6 +8274,8 @@ async function updateAdminOverviewStats() {
 }
 
 async function renderSubmissionsTrendChart() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const chartContainer = document.getElementById('admin-overview-chart');
   const totalCountEl = document.getElementById('admin-chart-total-count');
   if (!chartContainer) return;
@@ -8251,7 +8316,7 @@ async function renderSubmissionsTrendChart() {
         const snap = await getCountFromServer(q);
         return snap.data().count;
       } catch (e) {
-        // Fallback to in-memory filter if network/index fails
+
         const sCount = state.submissions.filter(s => {
           if (!s.submittedAt) return false;
           const ts = s.submittedAt.seconds ? s.submittedAt.seconds * 1000 : new Date(s.submittedAt).getTime();
@@ -8309,9 +8374,6 @@ async function renderSubmissionsTrendChart() {
   `;
 }
 
-/* ==========================================================================
-   AUTH & USER DATA SPLIT CONTROLLER
-   ========================================================================== */
 let initialAuthResolved = false;
 
 async function setupAuthLifecycle() {
@@ -8321,14 +8383,12 @@ async function setupAuthLifecycle() {
     return;
   }
 
-  // Ensure browserLocalPersistence BEFORE any sign-in flow
   try {
     await setPersistence(auth, browserLocalPersistence);
   } catch (err) {
     console.warn('Local persistence setting failed:', err);
   }
 
-  // Cold-start fail-safe: dismiss splash after 500ms so cached UI is immediately usable
   setTimeout(() => {
     if (!initialAuthResolved) {
       initialAuthResolved = true;
@@ -8339,7 +8399,6 @@ async function setupAuthLifecycle() {
     }
   }, 500);
 
-  // Handle redirect result if user returned from signInWithRedirect
   try {
     const redirectResult = await getRedirectResult(auth);
     if (redirectResult?.user) {
@@ -8362,7 +8421,7 @@ async function setupAuthLifecycle() {
         if (userSnap.exists()) {
           state.user = normalizeUser({ uid: firebaseUser.uid, ...userSnap.data() });
         } else {
-          // New users ALWAYS initialize with role: "member", points: 0, penalties: 0
+
           const initialUser = {
             name: firebaseUser.displayName || 'Team Member',
             avatarUrl: firebaseUser.photoURL || '',
@@ -8377,7 +8436,6 @@ async function setupAuthLifecycle() {
           state.user = normalizeUser({ uid: firebaseUser.uid, ...initialUser });
         }
 
-        // Split data: Manage users_private collection
         const privSnap = await getDoc(privRef).catch(() => null);
         if (!privSnap || !privSnap.exists()) {
           const initialPrivate = {
@@ -8388,7 +8446,7 @@ async function setupAuthLifecycle() {
           state.userPrivate = initialPrivate;
         } else {
           state.userPrivate = privSnap.data();
-          // For existing users, copy email into users_private if missing
+
           if (!privSnap.data()?.email && firebaseUser.email) {
             await updateDoc(privRef, { email: firebaseUser.email }).catch(console.warn);
             state.userPrivate.email = firebaseUser.email;
@@ -8403,14 +8461,13 @@ async function setupAuthLifecycle() {
         });
       }
 
-      if (state.user?.isAdmin) {
+      if (state.user?.isAdmin || state.user?.role === 'admin') {
         state.isAdminUnlocked = true;
       }
+      persistToLocalCache(true);
 
-      // Initialize server clock sync on login
       initServerClock();
 
-      // Start authenticated Firestore listeners
       initFirestoreListeners();
       if (state.user?.isAdmin || state.user?.role === 'admin') {
         backfillWindowCounters();
@@ -8420,7 +8477,6 @@ async function setupAuthLifecycle() {
       state.userPrivate = null;
       state.isAdminUnlocked = false;
 
-      // Clear only private & personal auth-dependent listeners
       listeners.clear('users_private');
       listeners.clear('notifications_personal');
       listeners.clear('my_attendance_logs');
@@ -8433,7 +8489,6 @@ async function setupAuthLifecycle() {
       state.personalNotifications = [];
       state.broadcastNotificationsBadge = [];
 
-      // Ensure public member listener remains active for Guest/Visitor leaderboard
       if (!listeners.has('users')) {
         setupMembersListeners();
       }
@@ -8444,7 +8499,6 @@ async function setupAuthLifecycle() {
     updateUserTodayAttendanceBadge();
     checkAdminRoleUI();
 
-    // RENDER UI ONLY AFTER FIRST onAuthStateChanged RESOLVES (branded splash until then)
     if (!initialAuthResolved) {
       initialAuthResolved = true;
       dismissLoader();
@@ -8464,7 +8518,6 @@ async function handleGoogleSignIn(e) {
     return;
   }
 
-  // Ensure persistence before signing in
   try {
     await setPersistence(auth, browserLocalPersistence);
   } catch (e) {
@@ -8472,7 +8525,7 @@ async function handleGoogleSignIn(e) {
   }
 
   try {
-    // Primary mode: signInWithPopup
+
     await signInWithPopup(auth, googleProvider);
     toast('Signed in successfully!', 'success');
     closeAllModals();
@@ -8489,8 +8542,7 @@ async function handleGoogleSignIn(e) {
         }
       }
     } else if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
-      // User cancelled or closed the sign-in popup. Do NOT trigger a page redirect reload!
-      console.log('Google sign-in popup closed or cancelled by user.');
+
       return;
     } else if (err.code === 'auth/unauthorized-domain') {
       showDomainModal();
@@ -8507,6 +8559,7 @@ function showDomainModal() {
   if (modal) {
     document.body.style.overflow = 'hidden';
     modal.classList.add('open');
+    pushModalHistoryState('modal-unauthorized-domain');
   }
 }
 
@@ -8519,7 +8572,7 @@ async function handleSignOut() {
   });
 
   if (confirmed && auth) {
-    // Unsubscribe all active listeners before sign out to prevent permission errors
+
     listeners.clear();
     usersPrivate.clear();
     usersMap.clear();
@@ -8586,7 +8639,6 @@ function setupSubmissionsListeners() {
     return;
   }
 
-  // 1. User's own live submissions: where uid == me, ordered by submittedAt desc, limit 200
   try {
     const qUserSubs = query(
       collection(db, 'submissions'),
@@ -8596,9 +8648,10 @@ function setupSubmissionsListeners() {
     );
     const unsubMySubs = onSnapshot(qUserSubs, (snapshot) => {
       state.mySubmissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
-      if (!state.user?.isAdmin) {
+      if (!isCurrentUserAdmin()) {
         state.submissions = state.mySubmissions;
       }
+      persistToLocalCache();
       renderTasks();
       renderProfileSubmissions();
       updateHeroStats();
@@ -8606,8 +8659,8 @@ function setupSubmissionsListeners() {
     listeners.add('my_submissions', unsubMySubs);
   } catch (e) { console.warn('Error setting up user submissions listener:', e); }
 
-  // 2. Admin submissions listener (only if admin)
-  if (state.user?.isAdmin || state.isAdminUnlocked) {
+  const currentUser = state.user || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
     try {
       listeners.clear('submissions');
       const qAllSubs = query(
@@ -8642,7 +8695,6 @@ function setupAttendanceListeners() {
     return;
   }
 
-  // 1. Current user's attendance logs: where uid == me, ordered by checkedInAt desc, limit 50
   try {
     const qMyLogs = query(
       collection(db, 'attendance_logs'),
@@ -8652,9 +8704,10 @@ function setupAttendanceListeners() {
     );
     const unsubMyLogs = onSnapshot(qMyLogs, (snapshot) => {
       state.myAttendanceLogs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-      if (!state.user?.isAdmin && !state.isAdminUnlocked) {
+      if (!isCurrentUserAdmin()) {
         state.attendanceLogs = state.myAttendanceLogs;
       }
+      persistToLocalCache();
       renderAttendanceView();
       renderAttendanceLogs();
       renderProfileAttendance();
@@ -8665,8 +8718,8 @@ function setupAttendanceListeners() {
     listeners.add('my_attendance_logs', unsubMyLogs);
   } catch (e) { console.warn('Error setting up my attendance logs listener:', e); }
 
-  // 2. Admin attendance logs listener (only if admin)
-  if (state.user?.isAdmin || state.isAdminUnlocked) {
+  const currentUser = state.user || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
     try {
       const qAllLogs = query(
         collection(db, 'attendance_logs'),
@@ -8697,13 +8750,17 @@ function setupMembersListeners() {
       });
       state.members = Array.from(usersMap.values());
       state.hasMoreMembers = false;
+      persistToLocalCache();
       renderLeaderboard();
-      renderAdminMembers();
-      updateAdminOverviewStats();
-      updateAdminPushTargets();
       renderTasks();
       renderAttendanceView();
-      if (typeof renderAdminSubmissions === 'function') renderAdminSubmissions();
+      const currentUser = state.user || {};
+      if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
+        renderAdminMembers();
+        updateAdminOverviewStats();
+        updateAdminPushTargets();
+        if (typeof renderAdminSubmissions === 'function') renderAdminSubmissions();
+      }
       if (state.user) {
         const found = usersMap.get(state.user.uid);
         if (found) {
@@ -8725,14 +8782,7 @@ function setupMembersListeners() {
   } catch (e) { console.warn('Error setting up members listener:', e); }
 }
 
-/**
- * Initializes users_private real-time listeners (Task 5).
- * Regular members listen to their own users_private/{uid} document.
- * Admins listen to collection('users_private') limit(500) so email and finesEGP are always live.
- */
-
-
-const egpAggregateCache = new Map(); // uid -> { fineSum, timestamp }
+const egpAggregateCache = new Map();
 
 function invalidateEgpCache(uid) {
   if (uid) {
@@ -8774,9 +8824,9 @@ function setupUsersPrivateListener() {
 
   const uid = state.user.uid;
   const isAdmin = Boolean(
-    state.user.isAdmin || 
-    state.user.role === 'admin' || 
-    usersMap.get(uid)?.isAdmin || 
+    state.user.isAdmin ||
+    state.user.role === 'admin' ||
+    usersMap.get(uid)?.isAdmin ||
     usersMap.get(uid)?.role === 'admin'
   );
 
@@ -8841,11 +8891,6 @@ function setupUsersPrivateListener() {
   }
 }
 
-/**
- * Initializes waiver_requests real-time listeners (Task 6).
- * Regular members listen to their own waiver requests.
- * Admins listen to all waiver requests to approve/reject excuses.
- */
 function setupWaiverRequestsListener() {
   if (!db || !state.user?.uid) {
     listeners.clear('my_waiver_requests');
@@ -8856,17 +8901,16 @@ function setupWaiverRequestsListener() {
   }
 
   const isAdmin = Boolean(
-    state.user.isAdmin || 
-    state.user.role === 'admin' || 
+    state.user.isAdmin ||
+    state.user.role === 'admin' ||
     state.isAdminUnlocked ||
-    usersMap.get(state.user.uid)?.isAdmin || 
+    usersMap.get(state.user.uid)?.isAdmin ||
     usersMap.get(state.user.uid)?.role === 'admin'
   );
 
   listeners.clear('my_waiver_requests');
   listeners.clear('waiver_requests');
 
-  // 1. My waiver requests
   try {
     const qMy = query(
       collection(db, 'waiver_requests'),
@@ -8881,7 +8925,6 @@ function setupWaiverRequestsListener() {
     listeners.add('my_waiver_requests', unsubMy);
   } catch (e) { console.warn('Error setting up my waiver requests listener:', e); }
 
-  // 2. Admin all waiver requests
   if (isAdmin) {
     try {
       const qAll = query(
@@ -8953,14 +8996,11 @@ function mergeAndRenderNotifications() {
   });
 
   state.notifications = combined;
+  persistToLocalCache();
   updateNotificationBadges();
   renderNotifications();
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.0: REAL-TIME iOS BANNER NOTIFICATION TOAST
-   ========================================================================== */
 export function showNotificationToast(title, body) {
   const toastEl = document.getElementById('live-notification-toast');
   if (!toastEl) return;
@@ -9090,7 +9130,6 @@ function setupNotificationsListener() {
     return;
   }
 
-  // 0. Dedicated Real-Time Listener on users/{uid}/notifications
   try {
     listeners.clear('notifications_user_subcollection');
     if (unsubscribeUserNotifications) {
@@ -9123,7 +9162,6 @@ function setupNotificationsListener() {
     console.warn('User subcollection notifications listener error:', err);
   }
 
-  // 1. Personal Notifications
   try {
     listeners.clear('notifications_personal');
     const qPersonal = query(
@@ -9154,7 +9192,6 @@ function setupNotificationsListener() {
     console.warn('Personal notifications listener error:', e);
   }
 
-  // 2. Broadcast Notifications: targetType == "all"
   try {
     listeners.clear('notifications_broadcast_all');
     const qBroadcastAll = query(
@@ -9187,7 +9224,6 @@ function setupNotificationsListener() {
     console.warn('Broadcast all notifications listener error:', e);
   }
 
-  // 3. Broadcast Notifications: targetType == "badge"
   const userBadges = Array.isArray(state.user?.badgeIds) ? state.user.badgeIds.slice(0, 10) : [];
   if (userBadges.length > 0) {
     try {
@@ -9236,8 +9272,9 @@ function setupBroadcastsListener() {
     );
     const unsubBroadcasts = onSnapshot(qBroadcasts, (snapshot) => {
       state.broadcasts = snapshot.docs.map(d => normalizeBroadcast({ id: d.id, ...d.data() }));
+      persistToLocalCache();
       renderHomeBroadcastBanner();
-      renderAdminBroadcasts();
+      if (isCurrentUserAdmin()) renderAdminBroadcasts();
       mergeAndRenderNotifications();
     }, (err) => console.warn('Broadcasts listener:', err));
     listeners.add('broadcasts', unsubBroadcasts);
@@ -9246,9 +9283,6 @@ function setupBroadcastsListener() {
   }
 }
 
-/* ==========================================================================
-   FIREBASE CLOUD MESSAGING (CLIENT-SIDE PUSH PIPELINE)
-   ========================================================================== */
 const FCM_VAPID_KEY = 'BHAllHVmcFAqchvINO9TY95yyGoeYKQ9aDgD31hhYXpI3jkG4CPOVsxU7mi0OQzGUZcKYx3l_FTGvpWEMcEz4yY';
 const FCM_SW_SCOPE = './firebase-cloud-messaging-push-scope';
 let messaging = null;
@@ -9267,7 +9301,6 @@ async function initFCM() {
     isFCMSupported = true;
     messaging = getMessaging(app);
 
-    // Register dedicated SW for FCM with scope ./firebase-cloud-messaging-push-scope
     try {
       fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
         scope: FCM_SW_SCOPE
@@ -9276,7 +9309,6 @@ async function initFCM() {
       console.warn('Could not register FCM Service Worker:', swErr);
     }
 
-    // Foreground listener: in-app toast & refresh badge (no duplicate system notification)
     onMessage(messaging, (payload) => {
       const title = payload.notification?.title || payload.data?.title || 'Team Update';
       const body = payload.notification?.body || payload.data?.body || '';
@@ -9298,7 +9330,6 @@ function updatePushNotificationUI() {
   const btnLabelEl = document.getElementById('btn-toggle-push-label');
   const iosNoteEl = document.getElementById('push-ios-note');
 
-  // iOS check: iOS 16.4+ requires Web App added to Home Screen
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
   if (iosNoteEl) {
     if (isIOS) iosNoteEl.classList.remove('hidden');
@@ -9329,7 +9360,6 @@ function updatePushNotificationUI() {
     return;
   }
 
-  // Check if active user has an FCM token stored
   const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
 
   if (permission === 'granted' && hasToken) {
@@ -9440,14 +9470,12 @@ async function disablePushNotifications() {
   }
 }
 
-/* ==========================================================================
-   ADMIN PUSH SENDER CONSOLE
-   ========================================================================== */
 export function initAdminPushConsole() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const form = document.getElementById('form-admin-send-push');
   if (!form) return;
 
-  // Ensure hidden inputs exist
   let targetInput = document.getElementById('select-push-target');
   if (!targetInput) {
     targetInput = document.createElement('input');
@@ -9475,7 +9503,6 @@ export function initAdminPushConsole() {
     form.appendChild(itemIdInput);
   }
 
-  // 1. Audience Segmented Control
   const audienceContainer = document.getElementById('push-audience-segmented-container');
   const detailsContainer = document.getElementById('push-audience-details-container');
   if (audienceContainer && detailsContainer && !audienceContainer.dataset.initialized) {
@@ -9558,7 +9585,7 @@ export function initAdminPushConsole() {
         }
       }
     });
-    // Initial display
+
     detailsContainer.innerHTML = `
       <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 flex items-center gap-2">
         <div class="w-7 h-7 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
@@ -9569,7 +9596,6 @@ export function initAdminPushConsole() {
     `;
   }
 
-  // 2. Category Picker Button
   const catBtn = document.getElementById('btn-push-category-picker');
   const catInput = document.getElementById('input-push-type') || document.getElementById('select-push-type');
   const catLabel = document.getElementById('push-category-label');
@@ -9595,7 +9621,6 @@ export function initAdminPushConsole() {
     };
   }
 
-  // 3. Deep Link Action Picker Button
   const actionBtn = document.getElementById('btn-push-action-picker');
   const actionLabel = document.getElementById('push-action-label');
   const subPickerContainer = document.getElementById('push-sub-picker-container');
@@ -9669,7 +9694,6 @@ export function initAdminPushConsole() {
     }
   }
 
-  // Ensure icon preview is initialized
   const iconInput = document.getElementById('input-push-icon');
   const iconPreview = document.getElementById('push-icon-preview');
   const iconLabel = document.getElementById('push-icon-label');
@@ -9681,6 +9705,8 @@ export function initAdminPushConsole() {
 }
 
 export function updateAdminPushTargets() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const hiddenInput = document.getElementById('select-push-target');
   const currentVal = hiddenInput?.value || 'all';
   updatePushTargetPickerDisplay(currentVal);
@@ -9758,7 +9784,7 @@ async function handleAdminSendPush(e) {
   const targetAction = route ? { route, itemId } : null;
 
   try {
-    // 1. Write to push_queue for client FCM listeners
+
     addDoc(collection(db, 'push_queue'), {
       title,
       body,
@@ -9771,7 +9797,6 @@ async function handleAdminSendPush(e) {
       status: 'queued'
     }).catch(e => console.warn('push_queue write error:', e));
 
-    // 2. Hybrid Firestore Notification Delivery
     if (target === 'all') {
       await addDoc(collection(db, 'notifications_broadcast'), {
         title,
@@ -9802,7 +9827,7 @@ async function handleAdminSendPush(e) {
       });
       toast(`Notification broadcast to badge group "${badgeId}"!`, 'success');
     } else {
-      // Direct personal notification (write to both root notifications and users/{uid}/notifications)
+
       const directBatch = writeBatch(db);
       createNotification(directBatch, {
         uid: target,
@@ -9825,7 +9850,6 @@ async function handleAdminSendPush(e) {
     });
     await batchLog.commit();
 
-    // Reset inputs
     if (titleInput) titleInput.value = '';
     if (bodyInput) bodyInput.value = '';
     if (itemIdInput) itemIdInput.value = '';
@@ -9846,16 +9870,12 @@ async function handleAdminSendPush(e) {
   }
 }
 
-/* ==========================================================================
-   FIRESTORE REAL-TIME LISTENERS (MANAGED & LIMITED)
-   ========================================================================== */
 function initFirestoreListeners() {
   if (!db) {
     console.warn('Firestore database unavailable.');
     return;
   }
 
-  // 1. Categories (limit 100)
   try {
     const unsubCats = onSnapshot(query(collection(db, 'categories'), limit(100)), (snapshot) => {
       categoriesMap.clear();
@@ -9864,40 +9884,44 @@ function initFirestoreListeners() {
         .filter(Boolean)
         .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
       state.categories.forEach(c => categoriesMap.set(c.id, c));
+      persistToLocalCache();
       populateCategoryFilters();
-      renderAdminCategories();
+      if (isCurrentUserAdmin()) renderAdminCategories();
       renderTasks();
     }, (err) => console.warn('Categories listener:', err));
     listeners.add('categories', unsubCats);
   } catch (e) { console.warn(e); }
 
-  // 2. Tasks (limit 200)
   try {
     const unsubTasks = onSnapshot(query(collection(db, 'tasks'), limit(200)), (snapshot) => {
       state.tasks = snapshot.docs
         .map(d => normalizeTask({ id: d.id, ...d.data() }))
         .filter(Boolean)
         .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      persistToLocalCache();
       renderTasks();
-      renderAdminTasks();
       updateHeroStats();
-      updateAdminOverviewStats();
+      if (isCurrentUserAdmin()) {
+        renderAdminTasks();
+        updateAdminOverviewStats();
+      }
     }, (err) => console.warn('Tasks listener:', err));
     listeners.add('tasks', unsubTasks);
   } catch (e) { console.warn(e); }
 
-  // 3. Attendance Sessions
   try {
     const unsubSessions = onSnapshot(query(collection(db, 'attendance_sessions'), limit(50)), (snapshot) => {
       state.attendanceSessions = snapshot.docs.map(d => normalizeSession({ id: d.id, ...d.data() }));
+      persistToLocalCache();
       renderAttendanceView();
-      renderAdminSessions();
-      updateAdminOverviewStats();
+      if (isCurrentUserAdmin()) {
+        renderAdminSessions();
+        updateAdminOverviewStats();
+      }
     }, (err) => console.warn('Attendance sessions listener:', err));
     listeners.add('attendance_sessions', unsubSessions);
   } catch (e) { console.warn(e); }
 
-  // Badges Realtime Listener (FIX 3 & FIX 6)
   try {
     const unsubBadges = onSnapshot(collection(db, 'badges'), (snapshot) => {
       badgesMap.clear();
@@ -9917,42 +9941,38 @@ function initFirestoreListeners() {
       }).sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
       state.badges.forEach(b => badgesMap.set(b.id, b));
-
-      renderAdminBadges();
+      persistToLocalCache();
       renderLeaderboard();
       updateProfileUI();
-      if (typeof renderAdminMembers === 'function') renderAdminMembers();
+      if (isCurrentUserAdmin()) {
+        renderAdminBadges();
+        if (typeof renderAdminMembers === 'function') renderAdminMembers();
+      }
     }, (err) => console.warn('Badges listener:', err));
     listeners.add('badges', unsubBadges);
 
-    // One-time deterministic badges seed check (admin only)
     if (state.user && (state.user.isAdmin || state.user.role === 'admin')) {
       checkAndSeedBadgesOnce();
     }
   } catch (e) { console.warn(e); }
 
-  // 4. Attendance Logs (User live attendance & Admin oversight)
   setupAttendanceListeners();
 
-  // 5. Submissions (User live submissions & Admin oversight)
   setupSubmissionsListeners();
 
-  // 6. Registered Members & Private User Profiles
   setupMembersListeners();
   setupUsersPrivateListener();
   setupWaiverRequestsListener();
 
-  // 7. Notifications (User real-time sync)
   setupNotificationsListener();
 
-  // 8. Broadcasts (Live carousel & Banner)
   setupBroadcastsListener();
 
-  // 9. Settings (app_config & general)
   try {
     const unsubSettings = onSnapshot(doc(db, 'settings', 'app_config'), (docSnap) => {
       if (docSnap.exists()) {
         state.settings = { ...state.settings, ...docSnap.data() };
+        persistToLocalCache();
         applySettings();
       }
     }, (err) => console.warn('Settings listener:', err));
@@ -9985,14 +10005,10 @@ function initFirestoreListeners() {
   } catch (e) { console.warn(e); }
 }
 
-/* ==========================================================================
-   UI RENDERING: TASKS
-   ========================================================================== */
 function populateCategoryFilters() {
   const container = document.getElementById('category-filter-chips');
   if (!container) return;
 
-  // Count active tasks per category for current member view
   const activeTasks = (state.tasks || []).filter(t => !t.archived && t.active !== false && isTaskVisibleToUser(t, state.user?.uid));
   const activeCatIds = new Set();
   activeTasks.forEach(t => {
@@ -10000,7 +10016,6 @@ function populateCategoryFilters() {
     if (cId) activeCatIds.add(cId);
   });
 
-  // If selectedCategory is no longer active or was archived, fall back to 'all'
   if (state.selectedCategory !== 'all') {
     const cat = state.categories.find(c => c.id === state.selectedCategory);
     if (!cat || cat.archived || !activeCatIds.has(cat.id)) {
@@ -10015,7 +10030,6 @@ function populateCategoryFilters() {
     </button>
   `;
 
-  // Only render categories that have active tasks > 0, sorted by order
   const orderedCats = [...state.categories].sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
   orderedCats.filter(c => !c.archived && activeCatIds.has(c.id)).forEach(cat => {
     const isSelected = current === cat.id;
@@ -10131,7 +10145,6 @@ function renderTasks() {
     `;
   }).join('');
 
-  // Tapping ANY card opens the Task Details & Submission modal (or toggles selection if in selection mode)
   container.querySelectorAll('.task-card').forEach(card => {
     card.onclick = (e) => {
       if (selectionState.active && selectionState.type === 'tasks') {
@@ -10250,7 +10263,6 @@ function openTaskDetailsModal(taskId) {
           `;
         }
 
-        // Default: short text
         return `
           <div class="task-q-card space-y-1.5" data-q-id="${esc(q.id)}" data-q-type="short" data-is-required="${isReq}">
             <label class="block text-xs font-semibold text-neutral-200">
@@ -10264,7 +10276,6 @@ function openTaskDetailsModal(taskId) {
     </div>
   ` : '';
 
-  // Banner status with countdown
   let bannerHtml = '';
   if (isDone) {
     bannerHtml = '<div class="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium text-center flex items-center justify-center gap-2"><svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg> You have completed this occurrence.</div>';
@@ -10312,7 +10323,6 @@ function openTaskDetailsModal(taskId) {
     ${commentHtml}
   `;
 
-  // Wire MCQ Other toggle
   bodyEl.querySelectorAll('.task-q-card[data-q-type="mcq"]').forEach(card => {
     const radios = card.querySelectorAll('input[type="radio"]');
     const otherInp = card.querySelector('.mcq-other-input');
@@ -10511,9 +10521,6 @@ function openTaskCompetitionModal(taskId) {
   });
 }
 
-/* ==========================================================================
-   UI RENDERING: ATTENDANCE
-   ========================================================================== */
 let attendanceTickerInterval = null;
 
 function renderAttendanceView() {
@@ -10566,10 +10573,8 @@ function renderAttendanceView() {
     const calc = computeAttendance(session, nowMs);
     const occurrenceKey = calc.occurrenceKey;
 
-    // Has user checked in for this occurrence?
     const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
 
-    // Has user an approved waiver for this occurrence?
     const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
 
     const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
@@ -10638,7 +10643,6 @@ function renderAttendanceView() {
       `;
     }
 
-    // Not checked in yet
     const isBlocked = calc.status === 'blocked';
     const isLate = calc.status === 'late';
     const isOnTime = calc.status === 'on_time';
@@ -10682,7 +10686,7 @@ function renderAttendanceView() {
       `;
       btnText = `Check In Now (0 Penalty)`;
     } else {
-      // Late
+
       statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">Late Window</span>`;
       previewBox = `
         <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
@@ -10732,7 +10736,6 @@ function renderAttendanceView() {
     btn.onclick = () => handleAttendanceCheckIn(btn.dataset.sessionId);
   });
 
-  // Start 1-second live penalty preview counter
   attendanceTickerInterval = setInterval(() => {
     const curNow = serverNow();
     activeSessions.forEach(session => {
@@ -10793,7 +10796,6 @@ async function handleAttendanceCheckIn(sessionId) {
 
   const occurrenceKey = calc.occurrenceKey;
 
-  // Check if member already has an approved waiver for this occurrence
   const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
   if (approvedWaiver) {
     toast('You have an approved excuse for this session.', 'info');
@@ -10814,7 +10816,6 @@ async function handleAttendanceCheckIn(sessionId) {
 
   if (!confirmed) return;
 
-  // Exact deterministic log ID: sessionId_occurrenceKey_uid
   const logId = `${session.id}_${occurrenceKey}_${state.user.uid}`;
 
   try {
@@ -10839,7 +10840,6 @@ async function handleAttendanceCheckIn(sessionId) {
 
     batch.set(logRef, logPayload);
 
-    // Conditionally increment penalties ONLY if penaltyPointsEnabled is true and penaltyPts > 0
     if (session.penaltyPointsEnabled !== false && penaltyPts > 0) {
       const userRef = doc(db, 'users', state.user.uid);
       batch.update(userRef, {
@@ -10850,7 +10850,6 @@ async function handleAttendanceCheckIn(sessionId) {
 
     await batch.commit();
 
-    // Optimistic cache update
     const optLog = normalizeAttendanceLog({
       id: logId,
       ...logPayload,
@@ -11035,9 +11034,6 @@ function updateUserTodayAttendanceBadge() {
   }
 }
 
-/* ==========================================================================
-   UI RENDERING: LEADERBOARD
-   ========================================================================== */
 let leaderboardSegmentedInstance = null;
 
 function setupLeaderboardSegmented() {
@@ -11080,7 +11076,6 @@ export function renderLeaderboard() {
   const nowMs = serverNow();
   const period = state.leaderboardPeriod || 'all';
 
-  // Zero-Extra-Reads: compute directly via unified ranking engine
   const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
   const { rankedMembers, unrankedMembers, sorted } = computeMemberRanks(allMembers, period);
 
@@ -11088,7 +11083,7 @@ export function renderLeaderboard() {
 
   function renderStagePillar(member, defaultPlace, pillarClass) {
     if (!member) {
-      // Vacant Stage Pedestal
+
       return `
         <div class="podium-pillar podium-pillar-vacant ${pillarClass} flex flex-col items-center justify-end pb-3 text-center">
           <div class="text-[11px] font-mono font-bold text-neutral-500 mb-2">#${defaultPlace}</div>
@@ -11104,7 +11099,6 @@ export function renderLeaderboard() {
       `;
     }
 
-    // Dynamic rank styling based on actual tied rank
     const actualRank = member.rank;
     let rankColor = 'text-neutral-400';
     let tierClass = pillarClass;
@@ -11124,7 +11118,6 @@ export function renderLeaderboard() {
     const isFirst = defaultPlace === 1;
     const avatarSize = isFirst ? 'w-14 h-14' : 'w-11 h-11';
 
-    // Up to 3 micro badge icons below the score in exact badgeIds order
     const memberBadges = resolveOrderedUserBadges(member.badges, member).slice(0, 3);
     const badgesHtml = memberBadges.length > 0 ? `
       <div class="flex items-center justify-center gap-1 mt-1 overflow-hidden">
@@ -11149,7 +11142,6 @@ export function renderLeaderboard() {
     `;
   }
 
-  // Permanent 3-Pillar Podium Stage
   if (podiumEl) {
     const firstMember = rankedMembers[0] || null;
     const secondMember = rankedMembers[1] || null;
@@ -11173,7 +11165,6 @@ export function renderLeaderboard() {
     });
   }
 
-  // 4-Column "ALL MEMBERS" Roster: [Rank] [Avatar] [Middle Info Column] [Right Points Column]
   function memberRowHtml(member, rankDisplay, muted = false) {
     const isMe = state.user?.uid === member.uid;
     const isPodiumTop = member.rank && member.rank <= 3;
@@ -11183,10 +11174,10 @@ export function renderLeaderboard() {
       <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 px-3 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''} ${muted ? 'opacity-60' : ''}" data-member-uid="${esc(member.uid)}">
         <!-- Col 1: Rank -->
         <span class="w-7 text-center font-mono font-bold text-xs shrink-0 ${rankColorClass}">${rankDisplay}</span>
-        
+
         <!-- Col 2: Avatar -->
         <div class="shrink-0 mr-3">${renderAvatar(member, 'w-9 h-9')}</div>
-        
+
         <!-- Col 3: Middle Info Column -->
         <div class="flex-1 min-w-0 mr-3">
           <!-- Line 1: Member Name + YOU badge + Compact Icon-Only Badge Strip -->
@@ -11200,7 +11191,7 @@ export function renderLeaderboard() {
             ${esc(member.role || 'Member')}
           </div>
         </div>
-        
+
         <!-- Col 4: Right Points Column (Fixed width, tabular, right-aligned) -->
         <div class="w-20 shrink-0 text-right">
           <span class="font-bold font-mono text-xs tabular-nums ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} pts</span>
@@ -11244,9 +11235,6 @@ export function renderLeaderboard() {
   });
 }
 
-/* ==========================================================================
-   UI RENDERING: NOTIFICATIONS (Task 6)
-   ========================================================================== */
 function updateNotificationBadges() {
   const badge = document.getElementById('header-unread-badge');
   const dockBadge = document.getElementById('dock-unread-badge');
@@ -11282,17 +11270,8 @@ function updateNotificationBadges() {
   }
 }
 
-/* ==========================================================================
-   TASK 8: 50+ VECTOR SVG ICON LIBRARY (ZERO EMOJIS)
-   ========================================================================== */
-
-/* ==========================================================================
-   PRECISION 100 SVG ICON LIBRARY (v2.2.6) — LAZY-LOADED
-   5 Categories x 20 Distinct Minimalist SVG Icons
-   Media (1–20), Tasks (21–40), Rewards (41–60), People (61–80), System (81–100)
-   ========================================================================== */
 export const UNIFIED_ICON_KEYS = [
-  // Category 1: Media (1-20)
+
   "dslr-camera",
   "video-camcorder",
   "cinema-camera",
@@ -11313,7 +11292,7 @@ export const UNIFIED_ICON_KEYS = [
   "desktop-monitor",
   "audio-cable",
   "headphones",
-  // Category 2: Tasks (21-40)
+
   "checklist",
   "clipboard",
   "calendar",
@@ -11334,7 +11313,7 @@ export const UNIFIED_ICON_KEYS = [
   "rocket-ship",
   "wrench",
   "hammer",
-  // Category 3: Rewards (41-60)
+
   "trophy",
   "solid-star",
   "military-medal",
@@ -11355,7 +11334,7 @@ export const UNIFIED_ICON_KEYS = [
   "flag",
   "certificate",
   "open-hands",
-  // Category 4: People (61-80)
+
   "person-portrait",
   "two-people",
   "group-three",
@@ -11376,7 +11355,7 @@ export const UNIFIED_ICON_KEYS = [
   "person-standing",
   "person-sitting",
   "user-admin-gear",
-  // Category 5: System (81-100)
+
   "settings-gear",
   "padlock-closed",
   "padlock-open",
@@ -11400,7 +11379,7 @@ export const UNIFIED_ICON_KEYS = [
 ];
 
 export const ICON_ALIASES = {
-  // Legacy Media aliases
+
   "mic": "studio-mic",
   "camera": "dslr-camera",
   "video": "video-camcorder",
@@ -11426,7 +11405,7 @@ export const ICON_ALIASES = {
   "megaphone": "live-stream",
   "airplay": "projection-screen",
   "clapperboard": "clapboard",
-  // Legacy Tasks aliases
+
   "checkmark": "checkmark-circle",
   "check-circle": "checkmark-circle",
   "list": "checklist",
@@ -11445,7 +11424,7 @@ export const ICON_ALIASES = {
   "upload": "outbox-tray",
   "ribbon": "ribbon-award",
   "rocket": "rocket-ship",
-  // Legacy Rewards aliases
+
   "star": "solid-star",
   "medal": "military-medal",
   "crown": "royal-crown",
@@ -11466,7 +11445,7 @@ export const ICON_ALIASES = {
   "coins": "coin",
   "compass": "bullseye-target",
   "key": "certificate",
-  // Legacy People aliases
+
   "person": "person-portrait",
   "user": "person-portrait",
   "person-2": "two-people",
@@ -11490,7 +11469,7 @@ export const ICON_ALIASES = {
   "face-id": "smiling-face",
   "voice": "speaking-head",
   "walking": "person-walking",
-  // Legacy System aliases
+
   "gear": "settings-gear",
   "settings": "settings-gear",
   "sliders-horizontal": "control-sliders",
@@ -11529,214 +11508,205 @@ const SVG_WRAP_OPEN = '<svg class="{CLASS}" fill="none" stroke="currentColor" st
 const SVG_WRAP_CLOSE = '</svg>';
 
 const RAW_ICON_DEFS = [
-  // ======================== CATEGORY 1: MEDIA (1-20) ========================
-  // 1. DSLR Camera
+
   ['dslr-camera', 'media', 'DSLR Camera', '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'],
-  // 2. Video Camcorder
+
   ['video-camcorder', 'media', 'Video Camcorder', '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>'],
-  // 3. Cinema Camera (with film reels)
+
   ['cinema-camera', 'media', 'Cinema Camera', '<circle cx="7" cy="7" r="3"/><circle cx="15" cy="7" r="3"/><rect x="3" y="10" width="14" height="10" rx="2"/><polygon points="17 13 22 10 22 20 17 17 17 13"/>'],
-  // 4. Camera Lens
+
   ['camera-lens', 'media', 'Camera Lens', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/>'],
-  // 5. Tripod
+
   ['tripod', 'media', 'Tripod', '<rect x="8" y="3" width="8" height="4" rx="1"/><line x1="12" y1="7" x2="12" y2="21"/><line x1="12" y1="10" x2="5" y2="21"/><line x1="12" y1="10" x2="19" y2="21"/>'],
-  // 6. Studio Microphone
+
   ['studio-mic', 'media', 'Studio Microphone', '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>'],
-  // 7. Lavalier Mic
+
   ['lavalier-mic', 'media', 'Lavalier Mic', '<ellipse cx="12" cy="6" rx="3" ry="4"/><line x1="12" y1="10" x2="12" y2="16"/><path d="M9 13h6l2 3H7l2-3z"/><path d="M12 16v3a3 3 0 0 0 6 0v-2"/>'],
-  // 8. Audio Mixer (Sliders)
+
   ['audio-mixer', 'media', 'Audio Mixer', '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'],
-  // 9. Audio Waveform
+
   ['audio-waveform', 'media', 'Audio Waveform', '<line x1="2" y1="10" x2="2" y2="14"/><line x1="6" y1="6" x2="6" y2="18"/><line x1="10" y1="3" x2="10" y2="21"/><line x1="14" y1="8" x2="14" y2="16"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="10" x2="22" y2="14"/>'],
-  // 10. Projector
+
   ['projector', 'media', 'Projector', '<rect x="2" y="7" width="20" height="10" rx="2"/><circle cx="9" cy="12" r="2.5"/><line x1="15" y1="11" x2="18" y2="11"/><line x1="15" y1="14" x2="18" y2="14"/><line x1="5" y1="17" x2="4" y2="20"/><line x1="19" y1="17" x2="20" y2="20"/>'],
-  // 11. Projection Screen
+
   ['projection-screen', 'media', 'Projection Screen', '<line x1="2" y1="3" x2="22" y2="3"/><rect x="4" y="3" width="16" height="12" rx="1"/><line x1="12" y1="15" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/>'],
-  // 12. Clapboard
+
   ['clapboard', 'media', 'Clapboard', '<path d="M4 11h16v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8z"/><path d="M4 11V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5"/><line x1="8" y1="4" x2="10" y2="11"/><line x1="14" y1="4" x2="16" y2="11"/>'],
-  // 13. Play Button
+
   ['play-btn', 'media', 'Play Button', '<polygon points="6 4 20 12 6 20 6 4"/>'],
-  // 14. Pause Button
+
   ['pause-btn', 'media', 'Pause Button', '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'],
-  // 15. Record Button (circle)
+
   ['record-btn', 'media', 'Record Button', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>'],
-  // 16. Live Stream (Radio waves)
+
   ['live-stream', 'media', 'Live Stream', '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.48"/><path d="M7.76 16.24a6 6 0 0 1 0-8.48"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>'],
-  // 17. Film Reel
+
   ['film-reel', 'media', 'Film Reel', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="7" r="1"/><circle cx="12" cy="17" r="1"/><circle cx="7" cy="12" r="1"/><circle cx="17" cy="12" r="1"/><path d="M12 21h9"/>'],
-  // 18. Desktop Monitor
+
   ['desktop-monitor', 'media', 'Desktop Monitor', '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'],
-  // 19. Audio Cable (Jack)
+
   ['audio-cable', 'media', 'Audio Cable', '<line x1="12" y1="2" x2="12" y2="6"/><rect x="9" y="6" width="6" height="7" rx="1"/><path d="M10 13v3h4v-3"/><path d="M12 16v3a3 3 0 0 0 6 0v-4"/>'],
-  // 20. Headphones
+
   ['headphones', 'media', 'Headphones', '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>'],
 
-  // ======================== CATEGORY 2: TASKS (21-40) ========================
-  // 21. Checklist
   ['checklist', 'tasks', 'Checklist', '<polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 13 6 15 10 11"/><line x1="13" y1="13" x2="20" y2="13"/><polyline points="4 19 6 21 10 17"/><line x1="13" y1="19" x2="20" y2="19"/>'],
-  // 22. Clipboard
+
   ['clipboard', 'tasks', 'Clipboard', '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>'],
-  // 23. Calendar
+
   ['calendar', 'tasks', 'Calendar', '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'],
-  // 24. Wall Clock
+
   ['wall-clock', 'tasks', 'Wall Clock', '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'],
-  // 25. Stopwatch (Timer)
+
   ['stopwatch', 'tasks', 'Stopwatch', '<circle cx="12" cy="13" r="8"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="13" x2="15" y2="15"/><line x1="10" y1="2" x2="14" y2="2"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="18" y1="5" x2="20" y2="7"/>'],
-  // 26. Hourglass
+
   ['hourglass', 'tasks', 'Hourglass', '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>'],
-  // 27. Map Pin
+
   ['map-pin', 'tasks', 'Map Pin', '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'],
-  // 28. Folder
+
   ['folder', 'tasks', 'Folder', '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'],
-  // 29. Price Tag
+
   ['price-tag', 'tasks', 'Price Tag', '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>'],
-  // 30. Archive Box
+
   ['archive-box', 'tasks', 'Archive Box', '<polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>'],
-  // 31. Scissors
+
   ['scissors', 'tasks', 'Scissors', '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>'],
-  // 32. Paperclip
+
   ['paperclip', 'tasks', 'Paperclip', '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'],
-  // 33. Inbox Tray
+
   ['inbox-tray', 'tasks', 'Inbox Tray', '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'],
-  // 34. Outbox Tray
+
   ['outbox-tray', 'tasks', 'Outbox Tray', '<polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="14"/><path d="M20 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5"/>'],
-  // 35. Bar Chart
+
   ['bar-chart', 'tasks', 'Bar Chart', '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/>'],
-  // 36. Line Graph
+
   ['line-graph', 'tasks', 'Line Graph', '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>'],
-  // 37. Bullseye Target
+
   ['bullseye-target', 'tasks', 'Bullseye Target', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'],
-  // 38. Rocket Ship
+
   ['rocket-ship', 'tasks', 'Rocket Ship', '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'],
-  // 39. Wrench
+
   ['wrench', 'tasks', 'Wrench', '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'],
-  // 40. Hammer
+
   ['hammer', 'tasks', 'Hammer', '<path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0a2.12 2.12 0 0 1 0-3L12 9"/><path d="m17.64 4.36 2-2a2 2 0 0 1 2.83 0l1.17 1.17a2 2 0 0 1 0 2.83l-2 2"/><path d="m14 8 4 4"/>'],
 
-  // ======================== CATEGORY 3: REWARDS (41-60) ========================
-  // 41. Trophy
   ['trophy', 'rewards', 'Trophy', '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1 .45-1 1v1h12v-1c0-.55-.45-1-1-1h-2c-.55 0-1-.45-1-1v-2.34"/><path d="M18 4H6v7a6 6 0 0 0 12 0V4z"/>'],
-  // 42. Solid Star
+
   ['solid-star', 'rewards', 'Solid Star', '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'],
-  // 43. Military Medal
+
   ['military-medal', 'rewards', 'Military Medal', '<polygon points="7 2 17 2 15 9 9 9 7 2"/><circle cx="12" cy="15" r="5"/><line x1="12" y1="13" x2="12" y2="17"/>'],
-  // 44. Royal Crown
+
   ['royal-crown', 'rewards', 'Royal Crown', '<path d="M2 5l3 12h14l3-12-6 6-4-7-4 7-6-6zm3 15h14"/>'],
-  // 45. Gemstone
+
   ['gemstone', 'rewards', 'Gemstone', '<path d="M6 3h12l4 6-10 12L2 9z"/><path d="M11 3 8 9l4 12 4-12-3-6"/><path d="M2 9h20"/>'],
-  // 46. Diamond
+
   ['diamond', 'rewards', 'Diamond', '<polygon points="12 2 21 12 12 22 3 12 12 2"/>'],
-  // 47. Security Shield
+
   ['security-shield', 'rewards', 'Security Shield', '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'],
-  // 48. Ribbon Award
+
   ['ribbon-award', 'rewards', 'Ribbon Award', '<circle cx="12" cy="8" r="6"/><polyline points="8.21 13.89 7 22 12 19 17 22 15.79 13.88"/>'],
-  // 49. Wrapped Gift
+
   ['wrapped-gift', 'rewards', 'Wrapped Gift', '<polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>'],
-  // 50. Sparkles (Magic)
+
   ['sparkles', 'rewards', 'Sparkles', '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 16l.9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16z"/><path d="M5 2l.7 1.6L7.3 4.3 5.7 5 5 6.6 4.3 5 2.7 4.3 4.3 3.6 5 2z"/>'],
-  // 51. Fire (Flame)
+
   ['fire-flame', 'rewards', 'Fire Flame', '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>'],
-  // 52. Lightning Bolt
+
   ['lightning-bolt', 'rewards', 'Lightning Bolt', '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'],
-  // 53. Heart
+
   ['heart', 'rewards', 'Heart', '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>'],
-  // 54. Thumbs Up
+
   ['thumbs-up', 'rewards', 'Thumbs Up', '<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>'],
-  // 55. Sheriff (Police Badge)
+
   ['sheriff-badge', 'rewards', 'Sheriff Badge', '<polygon points="12 3 14.8 7.5 20 8.5 16.5 12.5 17.5 18 12 15.5 6.5 18 7.5 12.5 4 8.5 9.2 7.5 12 3"/><circle cx="12" cy="11" r="2"/>'],
-  // 56. Coin
+
   ['coin', 'rewards', 'Coin', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="6"/><line x1="12" y1="9" x2="12" y2="15"/>'],
-  // 57. Checkmark Circle
+
   ['checkmark-circle', 'rewards', 'Checkmark Circle', '<circle cx="12" cy="12" r="10"/><polyline points="8.5 12.5 11 15 16 9.5"/>'],
-  // 58. Flag
+
   ['flag', 'rewards', 'Flag', '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'],
-  // 59. Certificate (Diploma)
+
   ['certificate', 'rewards', 'Certificate', '<rect x="3" y="4" width="18" height="14" rx="2"/><line x1="7" y1="8" x2="17" y2="8"/><line x1="7" y1="12" x2="12" y2="12"/><circle cx="16" cy="15" r="2.5"/><polyline points="15 17.5 14.5 21 16 20 17.5 21 17 17.5"/>'],
-  // 60. Open Hands (Giving)
+
   ['open-hands', 'rewards', 'Open Hands', '<path d="M3 14c1.5 0 3 1 4.5 2.5L10 19h8a2 2 0 0 0 2-2c0-1.1-.9-2-2-2h-5"/><path d="M10 15l2.5-2.5a2 2 0 0 0-2.8-2.8L6 13H2"/><circle cx="15" cy="7" r="3"/>'],
 
-  // ======================== CATEGORY 4: PEOPLE (61-80) ========================
-  // 61. Single Person Portrait
   ['person-portrait', 'people', 'Single Person Portrait', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'],
-  // 62. Two People
+
   ['two-people', 'people', 'Two People', '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'],
-  // 63. Group of Three
+
   ['group-three', 'people', 'Group of Three', '<circle cx="12" cy="7" r="3.5"/><path d="M7 21v-2a5 5 0 0 1 10 0v2"/><circle cx="5" cy="9" r="2.5"/><path d="M1.5 21v-1.5a3.5 3.5 0 0 1 3.5-3.5"/><circle cx="19" cy="9" r="2.5"/><path d="M22.5 21v-1.5a3.5 3.5 0 0 0-3.5-3.5"/>'],
-  // 64. ID Badge (with Lanyard)
+
   ['id-badge', 'people', 'ID Badge', '<path d="M10 2l2 3 2-3"/><rect x="4" y="5" width="16" height="16" rx="2"/><circle cx="12" cy="11" r="2.5"/><path d="M8 18a4 4 0 0 1 8 0"/>'],
-  // 65. Hand Waving (Human hand with open palm, spread fingers, and motion lines)
+
   ['hand-waving', 'people', 'Hand Waving', '<path d="M18 11V6a2 2 0 0 0-4 0v4"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V5.5a2 2 0 0 0-4 0v8.5"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/><path d="M2.5 6.5a5 5 0 0 1 2-3.5"/><path d="M20.5 3a5 5 0 0 1 2 3.5"/>'],
-  // 66. Handshake
+
   ['handshake', 'people', 'Handshake', '<path d="M2 11l5-5 4 4 4-4 7 5"/><path d="M7 16l3 3a2 2 0 0 0 2.8 0l5.2-5.2a2 2 0 0 0 0-2.8L15 8l-4 4-2-2-5 5z"/><line x1="9" y1="18" x2="11" y2="16"/><line x1="12" y1="19" x2="14" y2="17"/>'],
-  // 67. Raised Hand (asking question)
+
   ['raised-hand', 'people', 'Raised Hand', '<path d="M18 11V5a1.5 1.5 0 0 0-3 0v5"/><path d="M15 10V3.5a1.5 1.5 0 0 0-3 0V10"/><path d="M12 10V4.5a1.5 1.5 0 0 0-3 0V12"/><path d="M9 12H7.5a1.5 1.5 0 0 0 0 3H9"/><path d="M9 12v4a6 6 0 0 0 12 0v-5a1.5 1.5 0 0 0-3 0"/>'],
-  // 68. Message Bubble
+
   ['message-bubble', 'people', 'Message Bubble', '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'],
-  // 69. Mail Envelope
+
   ['mail-envelope', 'people', 'Mail Envelope', '<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/>'],
-  // 70. Phone Receiver
+
   ['phone-receiver', 'people', 'Phone Receiver', '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>'],
-  // 71. Double Chat Bubbles
+
   ['double-chat', 'people', 'Double Chat Bubbles', '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>'],
-  // 72. Team Network Graph
+
   ['team-network', 'people', 'Team Network Graph', '<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><line x1="10.5" y1="7" x2="6.5" y2="17"/><line x1="13.5" y1="7" x2="17.5" y2="17"/><line x1="7.5" y1="19" x2="16.5" y2="19"/>'],
-  // 73. Eye (Audience/Views)
+
   ['eye-views', 'people', 'Eye Views', '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'],
-  // 74. Smiling Face
+
   ['smiling-face', 'people', 'Smiling Face', '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>'],
-  // 75. Voice (Speaking head)
+
   ['speaking-head', 'people', 'Speaking Head', '<path d="M9 18v3H5v-4a6 6 0 1 1 9-5.2L15.5 14H13v4H9z"/><path d="M18 10a3 3 0 0 1 0 4"/><path d="M20.5 8a6 6 0 0 1 0 8"/>'],
-  // 76. Person Running
+
   ['person-running', 'people', 'Person Running', '<circle cx="15" cy="4" r="2"/><path d="M10.5 9.5L7 12l2 3.5"/><path d="M13.5 9.5l3 3 3-1"/><path d="M8 15.5L4 19"/><path d="M10.5 9.5l3 4.5-2 7"/><path d="M13.5 14l4.5 2 1 5"/>'],
-  // 77. Person Walking
+
   ['person-walking', 'people', 'Person Walking', '<circle cx="13" cy="4" r="2"/><path d="m14.5 9-3 4-2.5-1.5-3 5"/><path d="m10 14.5 1.5 5.5 3.5-1"/><path d="m9 9 2-2 3.5 1 2.5 3"/>'],
-  // 78. Person Standing
+
   ['person-standing', 'people', 'Person Standing', '<circle cx="12" cy="4" r="2"/><line x1="12" y1="6" x2="12" y2="14"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="12" y1="14" x2="9" y2="21"/><line x1="12" y1="14" x2="15" y2="21"/>'],
-  // 79. Person Sitting
+
   ['person-sitting', 'people', 'Person Sitting', '<circle cx="11" cy="4" r="2"/><path d="M11 6v6h5l2 6"/><path d="M7 9v6h5"/><line x1="7" y1="15" x2="7" y2="20"/>'],
-  // 80. User Profile with Gear (Admin)
+
   ['user-admin-gear', 'people', 'User Admin Gear', '<path d="M14 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7.5" cy="7" r="4"/><circle cx="18" cy="16" r="2.5"/><line x1="18" y1="12" x2="18" y2="13.5"/><line x1="18" y1="18.5" x2="18" y2="20"/><line x1="14" y1="16" x2="15.5" y2="16"/><line x1="20.5" y1="16" x2="22" y2="16"/>'],
 
-  // ======================== CATEGORY 5: SYSTEM (81-100) ========================
-  // 81. Settings Gear
   ['settings-gear', 'system', 'Settings Gear', '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'],
-  // 82. Closed Padlock
+
   ['padlock-closed', 'system', 'Closed Padlock', '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'],
-  // 83. Open Padlock
+
   ['padlock-open', 'system', 'Open Padlock', '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'],
-  // 84. Notification Bell
+
   ['notification-bell', 'system', 'Notification Bell', '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'],
-  // 85. Globe (Web)
+
   ['globe-web', 'system', 'Globe Web', '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'],
-  // 86. WiFi Signal
+
   ['wifi-signal', 'system', 'WiFi Signal', '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>'],
-  // 87. Cloud Sync
+
   ['cloud-sync', 'system', 'Cloud Sync', '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><polyline points="10 13 12 11 14 13"/><line x1="12" y1="11" x2="12" y2="17"/>'],
-  // 88. Microchip (Processor)
+
   ['microchip', 'system', 'Microchip Processor', '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>'],
-  // 89. Terminal (Console Prompt)
+
   ['terminal-prompt', 'system', 'Terminal Prompt', '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'],
-  // 90. Stacked Layers
+
   ['stacked-layers', 'system', 'Stacked Layers', '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'],
-  // 91. Database Server
+
   ['database-server', 'system', 'Database Server', '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>'],
-  // 92. Control Sliders
+
   ['control-sliders', 'system', 'Control Sliders', '<line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/>'],
-  // 93. Home House
+
   ['home-house', 'system', 'Home House', '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>'],
-  // 94. Magnifying Glass
+
   ['magnifying-glass', 'system', 'Magnifying Glass', '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'],
-  // 95. Hamburger Menu
+
   ['hamburger-menu', 'system', 'Hamburger Menu', '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>'],
-  // 96. Trash Can
+
   ['trash-can', 'system', 'Trash Can', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>'],
-  // 97. Edit Pencil
+
   ['edit-pencil', 'system', 'Edit Pencil', '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>'],
-  // 98. Share Nodes
+
   ['share-nodes', 'system', 'Share Nodes', '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>'],
-  // 99. Chain Link
+
   ['chain-link', 'system', 'Chain Link', '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'],
-  // 100. Exit (Logout Door)
+
   ['exit-door', 'system', 'Exit Door', '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>']
 ];
 
@@ -11933,7 +11903,6 @@ export function closeUnifiedIconPicker() {
 
 export const openIconPicker = openUnifiedIconPicker;
 
-
 function getSquircleColorClass(type) {
   if (type === 'reward' || type === 'bonus' || type === 'points' || type === 'attendance_approved') return 'notification-squircle-green';
   if (type === 'penalty' || type === 'fine' || type === 'revocation' || type === 'attendance_missed') return 'notification-squircle-red';
@@ -12090,7 +12059,7 @@ export function renderNotifications() {
 }
 
 export function openNotificationDetailModal(notif) {
-  // Mark as read in Firestore silently & immediately
+
   if (!notif.read && state.user) {
     notif.read = true;
     updateNotificationBadges();
@@ -12245,9 +12214,6 @@ async function markAllNotificationsRead() {
   }
 }
 
-/* ==========================================================================
-   UI RENDERING: PROFILE
-   ========================================================================== */
 function updateProfileUI() {
   const nameEl = document.getElementById('profile-view-name');
   const emailEl = document.getElementById('profile-view-email');
@@ -12459,7 +12425,6 @@ function updateActivityRings() {
   const Pen = Math.max(0, Number(state.user?.penalties || 0));
   const netPoints = P - Pen;
 
-  // Attendance Commitment Percentage (Z%)
   const logs = state.myAttendanceLogs || [];
   let attendancePct = 100;
   if (logs.length > 0) {
@@ -12467,28 +12432,27 @@ function updateActivityRings() {
     attendancePct = Math.min(100, Math.max(0, Math.round((onTimeCount / logs.length) * 100)));
   }
 
-  // Relative Rings Proportions (Yellow Points: 251.32, Red Penalties: 125.66)
   let ptsOffset = 251.32;
   let penOffset = 125.66;
   let ptsOpacity = 1;
   let penOpacity = 1;
 
   if (P === 0 && Pen === 0) {
-    // Both 100% closed, dimmed
+
     ptsOffset = 0;
     penOffset = 0;
     ptsOpacity = 0.35;
     penOpacity = 0.35;
   } else if (P > 0 && Pen === 0) {
-    // Points 100% closed, Penalties tiny dot
+
     ptsOffset = 0;
     penOffset = 125.66 * (1 - 0.008);
   } else if (P === 0 && Pen > 0) {
-    // Penalties 100% closed, Points tiny dot
+
     penOffset = 0;
     ptsOffset = 251.32 * (1 - 0.008);
   } else {
-    // Both > 0: proportional to sum
+
     const total = P + Pen;
     const ptsRatio = P / total;
     const penRatio = Pen / total;
@@ -12505,7 +12469,6 @@ function updateActivityRings() {
     ringPen.style.opacity = penOpacity;
   }
 
-  // Middle Ring: Attendance Commitment (188.49)
   const quotasProgress = attendancePct / 100;
   const quotasOffset = 188.49 * (1 - quotasProgress);
   if (ringQuotas) {
@@ -12526,7 +12489,6 @@ function renderHomeDueTasks() {
   const now = serverNow();
   const activeTasks = state.tasks.filter(t => t.active && !t.archived && isTaskVisibleToUser(t, state.user?.uid));
 
-  // Filter tasks that are open/due today
   const dueTasks = activeTasks.filter(task => {
     try {
       const windowInfo = getTaskWindow(task, now);
@@ -12536,7 +12498,6 @@ function renderHomeDueTasks() {
     }
   });
 
-  // Filter out tasks the user has already submitted for this occurrence
   const pendingDue = dueTasks.filter(task => {
     if (!state.user) return true;
     const occ = getOccurrenceFor(task, now);
@@ -12599,9 +12560,6 @@ function renderHomeDueTasks() {
   });
 }
 
-/* ==========================================================================
-   GLOBAL DRAG-AND-DROP REORDERING HELPER & MEMBER BADGE REORDERING (v2.2.8)
-   ========================================================================== */
 export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrderCommitted) {
   if (!containerEl) return;
   const handles = containerEl.querySelectorAll('.drag-reorder-handle');
@@ -12640,13 +12598,11 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       const allItems = Array.from(containerEl.querySelectorAll(itemSelector));
       initialRect = draggingItem.getBoundingClientRect();
 
-      // Check if layout is horizontal/flex-wrap
       isHorizontal = allItems.length > 1 && allItems.some((el, idx) => {
         if (idx === 0) return false;
         return Math.abs(el.getBoundingClientRect().top - allItems[0].getBoundingClientRect().top) < 10;
       });
 
-      // Dedicated empty placeholder matching exact dimensions
       placeholder = document.createElement('div');
       placeholder.className = 'drag-reorder-placeholder';
       placeholder.style.width = initialRect.width + 'px';
@@ -12654,10 +12610,8 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       placeholder.style.minHeight = initialRect.height + 'px';
       placeholder.style.margin = window.getComputedStyle(draggingItem).margin;
 
-      // Insert placeholder before draggingItem
       safeInsertBefore(containerEl, placeholder, draggingItem);
 
-      // Lift grabbed item into independent elevated floating clone (fixed follower)
       draggingItem.classList.add('dragging-reorder-item', 'dragging-reorder-floating');
       draggingItem.style.position = 'fixed';
       draggingItem.style.top = initialRect.top + 'px';
@@ -12676,7 +12630,7 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
         if (handle.setPointerCapture && pointerId != null) {
           handle.setPointerCapture(pointerId);
         }
-      } catch (err) { /* ignore */ }
+      } catch (err) {  }
     };
 
     const onPointerMove = (e) => {
@@ -12687,14 +12641,12 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       const deltaY = e.clientY - startY;
       const deltaX = e.clientX - startX;
 
-      // 1:1 hardware-accelerated tracking with scale 1.02
       if (isHorizontal) {
         draggingItem.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) scale(1.02)`;
       } else {
         draggingItem.style.transform = `translate3d(0, ${deltaY}px, 0) scale(1.02)`;
       }
 
-      // Check siblings in container to reposition placeholder
       const siblings = Array.from(containerEl.querySelectorAll(itemSelector)).filter(el => el !== draggingItem && el !== placeholder);
       const cursorY = e.clientY;
       const cursorX = e.clientX;
@@ -12743,11 +12695,11 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
         if (handle.releasePointerCapture && pointerId != null) {
           handle.releasePointerCapture(pointerId);
         }
-      } catch (err) { /* ignore */ }
+      } catch (err) {  }
       pointerId = null;
 
       if (ph && containerEl.contains(ph)) {
-        // Animate floating card directly into the placeholder landing slot
+
         const pRect = ph.getBoundingClientRect();
         const currentRect = item.getBoundingClientRect();
         const diffX = pRect.left - currentRect.left;
@@ -12762,12 +12714,10 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
 
         await new Promise(res => setTimeout(res, 160));
 
-        // Snap cleanly into placeholder DOM position
         safeInsertBefore(containerEl, item, ph);
         safeRemoveChild(containerEl, ph);
       }
 
-      // Reset all inline styles and classes on item
       item.classList.remove('dragging-reorder-item', 'dragging-reorder-floating');
       item.style.position = '';
       item.style.top = '';
@@ -12903,9 +12853,6 @@ export function openMemberBadgeReorderSheet() {
   });
 }
 
-/* ==========================================================================
-   ADMIN CONTROLLER & OPERATIONS
-   ========================================================================== */
 function openCategoryModal(categoryId = null) {
   state.editingCategoryId = categoryId;
   const existingCat = categoryId ? state.categories.find(c => c.id === categoryId) : null;
@@ -13056,6 +13003,8 @@ function openCategoryModal(categoryId = null) {
 }
 
 function renderAdminCategories() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const list = document.getElementById('admin-categories-list');
   if (!list) return;
 
@@ -13125,6 +13074,8 @@ function renderAdminCategories() {
 }
 
 export function renderAdminTasks() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tbody = document.getElementById('admin-tasks-tbody');
   if (!tbody) return;
 
@@ -13288,7 +13239,6 @@ function openAdminTaskModal(taskId = null) {
   let enableDefaultTextField = task ? Boolean(task.enableDefaultTextField) : false;
   let currentIsPermanent = task ? Boolean(task.isPermanent) : false;
 
-  // Normalized tiers & schedule
   const normTiers = normalizeTaskTiers(task || {});
   let sched = normalizeScheduleObject(task?.schedule || task || { type: 'once', startDateTime: Date.now() });
   let schedType = sched.type || 'once';
@@ -13313,29 +13263,24 @@ function openAdminTaskModal(taskId = null) {
     return zonedDateToMs(y, mo, d, h || 0, mi || 0, 0, APP_TIMEZONE);
   };
 
-  // Deadline state (absolute date + time, relative to the first occurrence start)
   const currentDurationMinutes = normTiers.durationMinutes || 1440;
   let deadlineDateStr = toDateStr(schedStartMs + currentDurationMinutes * 60000);
   let deadlineTimeStr = toTimeStr(schedStartMs + currentDurationMinutes * 60000);
 
-  // Tier 1: Early Bonus
   let earlyBonusEnabled = Boolean(normTiers.earlyBonus.enabled);
   let earlyBonusPoints = normTiers.earlyBonus.points || 15;
   const earlyMins = normTiers.earlyBonus.untilMinutes > 0 ? normTiers.earlyBonus.untilMinutes : Math.max(1, Math.round(currentDurationMinutes / 2));
   let earlyBonusDateStr = toDateStr(schedStartMs + earlyMins * 60000);
   let earlyBonusTimeStr = toTimeStr(schedStartMs + earlyMins * 60000);
 
-  // Tier 2: Grace Period (NO grace points)
   let graceEnabled = Boolean(normTiers.grace.enabled);
   const graceMins = normTiers.grace.untilMinutes > 0 ? normTiers.grace.untilMinutes : currentDurationMinutes + 1440;
   let graceDateStr = toDateStr(schedStartMs + graceMins * 60000);
   let graceTimeStr = toTimeStr(schedStartMs + graceMins * 60000);
 
-  // Tier 3: Missed Penalty
   let missedPenaltyEnabled = Boolean(normTiers.missedPenalty.enabled);
   let missedPenaltyPoints = normTiers.missedPenalty.points || 5;
 
-  // Recurrence schedule sets
   let weeklyDays = new Set(Array.isArray(sched.days) ? sched.days : ['Sat', 'Sun']);
   let monthlyDates = new Set(Array.isArray(sched.dates) ? sched.dates.map(Number).filter(n => n >= 1 && n <= 31) : [1]);
   let monthlyLastDay = sched.lastDay === true;
@@ -13343,7 +13288,6 @@ function openAdminTaskModal(taskId = null) {
   let monthlyWeeks = new Set(Array.isArray(sched.weeks) ? sched.weeks : ['1st']);
   let monthlyWeekdays = new Set(Array.isArray(sched.weekdays) ? sched.weekdays : ['Sat']);
 
-  // Questions with type ('short' | 'long' | 'mcq'), options, allowOther
   let currentQuestions = (Array.isArray(task?.questions) ? task.questions : []).map(q => ({
     id: q.id || ('q_' + Math.random().toString(36).slice(2, 7)),
     questionText: q.questionText || '',
@@ -13513,7 +13457,6 @@ function openAdminTaskModal(taskId = null) {
       </div>
     `;
 
-    // Wire inputs with defensive null guards
     const titleInp = bodyEl.querySelector('#adm-task-title');
     if (titleInp) titleInp.oninput = e => { currentTitle = e.target.value; };
     const descInp = bodyEl.querySelector('#adm-task-desc');
@@ -13525,7 +13468,6 @@ function openAdminTaskModal(taskId = null) {
     const linkInp = bodyEl.querySelector('#adm-task-link');
     if (linkInp) linkInp.oninput = e => { currentLink = e.target.value; };
 
-    // Live Interactive Category Picker Row
     function updateCategoryPickerUI() {
       const wrap = bodyEl.querySelector('#adm-task-category-picker-wrap');
       if (!wrap) return;
@@ -13581,7 +13523,6 @@ function openAdminTaskModal(taskId = null) {
     }
     updateCategoryPickerUI();
 
-    // Mount Unified Advanced Color Picker for Task (FIX 6)
     const taskColorMount = bodyEl.querySelector('#adm-task-color-picker-mount');
     if (taskColorMount) {
       taskColorMount.appendChild(renderAdvancedColorPicker({
@@ -13592,7 +13533,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Default Text Field Switch (FIX 4: OFF by default)
     const mountDefaultTextSw = bodyEl.querySelector('#mount-switch-default-text-field');
     if (mountDefaultTextSw) {
       mountDefaultTextSw.appendChild(renderSwitch({
@@ -13604,7 +13544,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Stacked Radio Group for Points Claim Policy (FIX 3: Only Open to All & Admin-Assigned + Exclude Members)
     function applyClaimPolicyVisibility() {
       const card = bodyEl.querySelector('#adm-recurrence-card');
       if (card) card.classList.remove('hidden');
@@ -13706,7 +13645,6 @@ function openAdminTaskModal(taskId = null) {
     updateClaimPolicyUI();
     applyClaimPolicyVisibility();
 
-    // Mount renderDateTimeField for Task Deadline, Early Bonus, Grace Period
     const mountDl = bodyEl.querySelector('#mount-adm-deadline-field');
     if (mountDl) {
       const currentDlMs = dtToMs(deadlineDateStr, deadlineTimeStr);
@@ -13752,7 +13690,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Schedule Type Segmented control (updates only the sub-form, never the whole modal)
     const mountTaskSchedType = bodyEl.querySelector('#adm-task-sched-type-wrap');
     if (mountTaskSchedType) {
       mountTaskSchedType.innerHTML = '';
@@ -13772,7 +13709,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Permanent Switch
     const mountPerm = bodyEl.querySelector('#mount-switch-permanent');
     if (mountPerm) {
       mountPerm.appendChild(renderSwitch({
@@ -13786,7 +13722,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Early Switch
     const mountEarly = bodyEl.querySelector('#mount-switch-early');
     if (mountEarly) {
       mountEarly.appendChild(renderSwitch({
@@ -13801,7 +13736,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Grace Switch
     const mountGrace = bodyEl.querySelector('#mount-switch-grace');
     if (mountGrace) {
       mountGrace.appendChild(renderSwitch({
@@ -13816,7 +13750,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Missed Penalty Switch
     const mountMissed = bodyEl.querySelector('#mount-switch-missed');
     if (mountMissed) {
       mountMissed.appendChild(renderSwitch({
@@ -13830,7 +13763,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Native date / time inputs
     const bindField = (sel, setter) => {
       const el = bodyEl.querySelector(sel);
       if (el) {
@@ -13881,7 +13813,6 @@ function openAdminTaskModal(taskId = null) {
     el.className = msg ? HINT_CLASS : 'hidden';
   }
 
-  // Inline validation hints only (no developer-facing text)
   function updateAllWords() {
     const startMs = dtToMs(selectedDateStr, selectedTimeStr);
     const dlMs = dtToMs(deadlineDateStr, deadlineTimeStr);
@@ -13953,7 +13884,7 @@ function openAdminTaskModal(taskId = null) {
       });
       wireStartFields();
     } else {
-      // Monthly: day-of-month grid (1-31) + Last Day of Month
+
       const dayCls = (on) => `btn-mday h-9 rounded-lg text-xs font-semibold font-mono transition ${on ? 'bg-[#0A84FF] text-white' : 'bg-white/[0.08] text-neutral-300'}`;
       const lastCls = (on) => `w-full h-10 rounded-lg text-xs font-semibold transition ${on ? 'bg-[#0A84FF] text-white' : 'bg-white/[0.08] text-neutral-300'}`;
       subContainer.innerHTML = `
@@ -14000,7 +13931,6 @@ function openAdminTaskModal(taskId = null) {
       qCard.className = 'p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-3 text-xs';
       qCard.dataset.idx = idx;
 
-      // Card Header: Reorder buttons, Prompt Input, Delete
       const headerRow = document.createElement('div');
       headerRow.className = 'flex items-start gap-2';
 
@@ -14053,7 +13983,6 @@ function openAdminTaskModal(taskId = null) {
       headerRow.appendChild(delBtn);
       qCard.appendChild(headerRow);
 
-      // Row 2: Type selector (full width)
       const typeRow = document.createElement('div');
       typeRow.className = 'pt-1 border-t border-white/5';
       typeRow.appendChild(renderSegmented({
@@ -14076,7 +14005,6 @@ function openAdminTaskModal(taskId = null) {
       }));
       qCard.appendChild(typeRow);
 
-      // Row 3: Required label (left) + iOS switch (right), never clipped
       const reqRow = document.createElement('div');
       reqRow.className = 'flex items-center';
       reqRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
@@ -14088,7 +14016,6 @@ function openAdminTaskModal(taskId = null) {
       }));
       qCard.appendChild(reqRow);
 
-      // MCQ Options Builder (if type === 'mcq')
       if (q.type === 'mcq') {
         const mcqBox = document.createElement('div');
         mcqBox.className = 'p-2.5 rounded-xl bg-black/20 border border-white/5 space-y-2 pt-2';
@@ -14181,10 +14108,8 @@ function openAdminTaskModal(taskId = null) {
         APP_TIMEZONE
       );
 
-      // Milestones never repeat: force a one-time schedule
       const effectiveSchedType = currentClaimPolicy === 'milestone' ? 'once' : schedType;
 
-      // Validate & compute durationMinutes (deadline date/time relative to start)
       let finalDurationMinutes = null;
       if (!currentIsPermanent) {
         const deadlineMs = dtToMs(deadlineDateStr, deadlineTimeStr);
@@ -14195,7 +14120,6 @@ function openAdminTaskModal(taskId = null) {
         }
       }
 
-      // Early Bonus validation
       let finalEarlyBonus = { enabled: false, untilMinutes: 0, points: Number(currentPoints) || 5 };
       if (!currentIsPermanent && earlyBonusEnabled) {
         const ebMs = dtToMs(earlyBonusDateStr, earlyBonusTimeStr);
@@ -14211,7 +14135,6 @@ function openAdminTaskModal(taskId = null) {
         };
       }
 
-      // Grace Period validation (NO grace points)
       let finalGrace = { enabled: false, untilMinutes: 0 };
       if (!currentIsPermanent && graceEnabled) {
         const grMs = dtToMs(graceDateStr, graceTimeStr);
@@ -14223,7 +14146,6 @@ function openAdminTaskModal(taskId = null) {
         finalGrace = { enabled: true, untilMinutes: grUntilMinutes };
       }
 
-      // Missed Penalty
       let finalMissedPenalty = { enabled: false, points: 0 };
       if (!currentIsPermanent && missedPenaltyEnabled) {
         finalMissedPenalty = {
@@ -14351,6 +14273,8 @@ function setupAdminSessionsSegmented() {
 }
 
 function renderAdminSessions() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const list = document.getElementById('admin-sessions-list');
   if (!list) return;
 
@@ -14496,7 +14420,6 @@ function openAdminSessionModal(sessionId = null) {
   let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
   let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
 
-  // Window boundaries
   let earlyCheckInMinutes = session ? session.earlyCheckInMinutes : 30;
   let lateCutoffMinutes = session ? session.lateCutoffMinutes : 120;
 
@@ -14509,12 +14432,10 @@ function openAdminSessionModal(sessionId = null) {
   let opensTimeStr = `${pad2(Math.floor(openMins / 60))}:${pad2(openMins % 60)}`;
   let closesTimeStr = `${pad2(Math.floor(closeMins / 60))}:${pad2(closeMins % 60)}`;
 
-  // 3-Way Attendee Assignment State: 'all' | 'badge' | 'custom'
   let targetType = session?.targetType || (Array.isArray(session?.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session?.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
   let selectedBadgeIds = new Set(Array.isArray(session?.badgeIds) ? session.badgeIds : []);
   let assignedUids = new Set(Array.isArray(session?.assignedUids) ? session.assignedUids : []);
 
-  // SYSTEM 1: Points Deductions
   let pointsPenalty = {
     enabled: session ? session.pointsPenalty.enabled : true,
     mode: session ? session.pointsPenalty.mode : 'stepped',
@@ -14527,7 +14448,6 @@ function openAdminSessionModal(sessionId = null) {
     absence: session ? session.pointsPenalty.absence : 20
   };
 
-  // SYSTEM 2: Financial Fines (EGP)
   let finePenalty = {
     enabled: session ? session.finePenalty.enabled : false,
     mode: session ? session.finePenalty.mode : 'stepped',
@@ -14545,8 +14465,6 @@ function openAdminSessionModal(sessionId = null) {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
 
-  // Build the entire DOM once without innerHTML destruction on toggle
-  // 1. Title
   const titleBox = document.createElement('div');
   titleBox.innerHTML = `
     <label class="block text-xs font-semibold text-neutral-200 mb-1">Session Title *</label>
@@ -14556,7 +14474,6 @@ function openAdminSessionModal(sessionId = null) {
   titleInp.oninput = (e) => { currentTitle = e.target.value; };
   bodyEl.appendChild(titleBox);
 
-  // 2. Recurrence & Schedule Type
   const schedBox = document.createElement('div');
   schedBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
   schedBox.innerHTML = `
@@ -14630,7 +14547,6 @@ function openAdminSessionModal(sessionId = null) {
   }
   bodyEl.appendChild(schedBox);
 
-  // 3. Clean Native Date & Time Pickers (Stripped of "(Africa/Cairo)" and "308m")
   const timeCard = document.createElement('div');
   timeCard.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-2.5';
   timeCard.innerHTML = `
@@ -14669,7 +14585,6 @@ function openAdminSessionModal(sessionId = null) {
   if (inpCloses) inpCloses.onchange = (e) => { closesTimeStr = e.target.value; };
   bodyEl.appendChild(timeCard);
 
-  // 4. 3-Way Attendee Assignment Selector (All Members | By Badge | Specific Members)
   const assignBox = document.createElement('div');
   assignBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
   assignBox.innerHTML = `
@@ -14767,7 +14682,6 @@ function openAdminSessionModal(sessionId = null) {
   }
   bodyEl.appendChild(assignBox);
 
-  // 5. Penalty Systems (Points & Fines) with attendance-grid-2 and zero-scroll-jump
   function renderPenaltySystemSection(sysKey, title, subtitle, unitLabel, sysObj) {
     const card = document.createElement('div');
     card.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
@@ -14797,7 +14711,6 @@ function openAdminSessionModal(sessionId = null) {
     }));
     card.appendChild(header);
 
-    // Mode: Fixed vs Stepped
     const modeWrap = document.createElement('div');
     modeWrap.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-semibold">Calculation Mode</label>`;
 
@@ -14818,7 +14731,6 @@ function openAdminSessionModal(sessionId = null) {
     steppedContainer.className = 'space-y-3';
     steppedContainer.style.display = (sysObj.mode === 'stepped') ? 'block' : 'none';
 
-    // Step Unit (Minutes vs Seconds)
     const unitRow = document.createElement('div');
     unitRow.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Unit</label>`;
     unitRow.appendChild(renderSegmented({
@@ -14834,7 +14746,6 @@ function openAdminSessionModal(sessionId = null) {
     }));
     steppedContainer.appendChild(unitRow);
 
-    // Stepped Rate: Strict 2-column grid (.attendance-grid-2)
     const stepRow = document.createElement('div');
     stepRow.className = 'attendance-grid-2 pt-1';
     stepRow.innerHTML = `
@@ -14885,7 +14796,6 @@ function openAdminSessionModal(sessionId = null) {
     matrixBox.appendChild(fixedDiv);
     matrixBox.appendChild(steppedContainer);
 
-    // Min & Max Bounds (in attendance-grid-2)
     const boundsGrid = document.createElement('div');
     boundsGrid.className = 'attendance-grid-2 pt-1';
     boundsGrid.innerHTML = `
@@ -14904,7 +14814,6 @@ function openAdminSessionModal(sessionId = null) {
     if (inpMax) inpMax.oninput = (e) => { sysObj.max = Math.max(0, Number(e.target.value) || 0); };
     matrixBox.appendChild(boundsGrid);
 
-    // Unexcused Absence
     const absenceBox = document.createElement('div');
     absenceBox.className = 'pt-2 border-t border-white/5';
     absenceBox.innerHTML = `
@@ -14947,7 +14856,6 @@ function openAdminSessionModal(sessionId = null) {
         return false;
       }
 
-      // Calculate clean relative offsets in JS
       const [sHour, sMin] = selectedTimeStr.split(':').map(Number);
       const [oHour, oMin] = opensTimeStr.split(':').map(Number);
       const [cHour, cMin] = closesTimeStr.split(':').map(Number);
@@ -15013,7 +14921,6 @@ function openAdminSessionModal(sessionId = null) {
         },
         active: Boolean(active),
 
-        // Legacy compatibility fields
         penaltyPointsEnabled: Boolean(pointsPenalty.enabled),
         penaltyFinesEnabled: Boolean(finePenalty.enabled),
         penaltyUnit: pointsPenalty.stepUnit || 'minutes',
@@ -15054,12 +14961,10 @@ function openAdminSessionModal(sessionId = null) {
   });
 }
 
-// =========================================================================
-// SECTION 3: ADMIN "BADGES" MANAGEMENT DASHBOARD
-// =========================================================================
-
-export 
+export
 async function checkAndSeedBadgesOnce() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   if (!state.user || (state.user.role !== 'admin' && !state.user.isAdmin)) return;
   try {
     const genDoc = await getDoc(doc(db, 'settings', 'general'));
@@ -15085,6 +14990,8 @@ async function checkAndSeedBadgesOnce() {
 }
 
 function renderAdminBadges() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-badges-list');
   if (!container) return;
 
@@ -15339,7 +15246,6 @@ function openBadgeModal(badge = null) {
   });
 }
 
-
 function formatMinutesDuration(totalMinutes) {
   const mins = Math.max(0, Math.round(Number(totalMinutes) || 0));
   const h = Math.floor(mins / 60);
@@ -15510,7 +15416,6 @@ function openAdminLogEditModal(log, session) {
   });
 }
 
-
 async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart) {
   const rawSession = (typeof sessionOrId === 'string'
     ? state.attendanceSessions.find(s => s.id === sessionOrId)
@@ -15542,7 +15447,6 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
     return filtered.length > 0 ? filtered : allActiveMembers;
   };
 
-  // 2. Resolve initial occurrence
   const nowMs = serverNow();
   const isOnceSession = (session.schedule?.type || session.type || 'once') === 'once';
   let occ = null;
@@ -15654,7 +15558,6 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
       }
     });
 
-    // Ensure any member with a valid check-in log for this occurrence is included even if not in assignedMembers
     occLogs.forEach(log => {
       if (!log.uid || handledUids.has(log.uid)) return;
       handledUids.add(log.uid);
@@ -16117,6 +16020,8 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
 }
 
 function renderAdminAttendanceLogs() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tbody = document.getElementById('admin-attendance-logs-tbody');
   const countEl = document.getElementById('admin-attendance-log-count');
   if (!tbody) return;
@@ -16169,10 +16074,6 @@ function renderAdminAttendanceLogs() {
   });
 }
 
-/* ==========================================================================
-   ADMIN CONTROLS: SUBMISSIONS INSPECTOR, MEMBER CONTROL, REPAIR TOTALS (Task 5)
-   ========================================================================== */
-
 function getFilteredAdminSubmissions() {
   const queryText = (state.adminSubmissionsSearch || '').toLowerCase().trim();
   const taskFilter = state.adminSubmissionsTaskFilter || 'all';
@@ -16193,8 +16094,9 @@ function getFilteredAdminSubmissions() {
   });
 }
 
-
 async function renderAdminMissedTasks() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-missed-tasks-container');
   const listEl = document.getElementById('admin-missed-tasks-list');
   const countBadge = document.getElementById('admin-missed-tasks-count-badge');
@@ -16213,11 +16115,10 @@ async function renderAdminMissedTasks() {
     const graceMs = (task.tieredRewards?.enabled ? (Number(task.tieredRewards.graceMinutes) || 120) : 0) * 60000;
     const deadlineWithGrace = win.closesAt + graceMs;
 
-    if (nowMs <= deadlineWithGrace) continue; // Not closed yet
+    if (nowMs <= deadlineWithGrace) continue;
 
     const occurrenceKey = win.occurrenceKey || 'once';
 
-    // Target members
     let targets = [];
     if (Array.isArray(task.assignedUids) && task.assignedUids.length > 0) {
       targets = task.assignedUids.map(uid => usersMap.get(uid)).filter(Boolean);
@@ -16304,8 +16205,7 @@ async function renderAdminMissedTasks() {
 
         for (const member of targetItem.missedMembers) {
           const lockDocId = `${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`;
-          
-          // Verify with Firestore getDoc for cross-tab idempotency
+
           const lockDocRef = doc(db, 'missed_penalties', lockDocId);
           const lockSnap = await getDoc(lockDocRef);
           if (lockSnap.exists()) {
@@ -16382,13 +16282,14 @@ async function renderAdminMissedTasks() {
 }
 
 function renderAdminSubmissions() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   renderAdminMissedTasks();
   const list = document.getElementById('admin-submissions-list');
   const taskSelect = document.getElementById('select-admin-filter-task');
   const loadMoreBtn = document.getElementById('btn-load-more-submissions');
   if (!list) return;
 
-  // Populate task filter dropdown if not focused
   if (taskSelect && document.activeElement !== taskSelect) {
     const currentVal = state.adminSubmissionsTaskFilter || 'all';
     const taskOptions = [`<option value="all">All Tasks</option>`];
@@ -16398,7 +16299,6 @@ function renderAdminSubmissions() {
     taskSelect.innerHTML = taskOptions.join('');
   }
 
-  // Update load more button visibility
   if (loadMoreBtn) {
     if (state.hasMoreSubmissions) {
       loadMoreBtn.classList.remove('hidden');
@@ -16423,7 +16323,6 @@ function renderAdminSubmissions() {
     const task = state.tasks.find(t => t.id === s.taskId);
     const dateFormatted = formatDateTime(s.submittedAt);
 
-    // Build question/answer elements
     let qaHtml = '';
     if (task && Array.isArray(task.questions) && task.questions.length > 0) {
       qaHtml = (Array.isArray(s.answers) && s.answers.length > 0)
@@ -16520,11 +16419,6 @@ function renderAdminSubmissions() {
   });
 }
 
-// ============================================================================
-// TASK 6: ATTENDANCE ASSIGNMENTS, IDEMPOTENT ABSENCE & WAIVER REQUESTS
-// ============================================================================
-
-
 export function generateFutureOccurrences(sessionTemplate, count = 52) {
   if (!sessionTemplate) return [];
   const schedule = sessionTemplate.schedule || sessionTemplate;
@@ -16575,7 +16469,6 @@ export function generateFutureOccurrences(sessionTemplate, count = 52) {
     const weekdayShort = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: APP_TIMEZONE }).toLowerCase();
     const weekdayLong = d.toLocaleDateString('en-US', { weekday: 'long', timeZone: APP_TIMEZONE }).toLowerCase();
 
-    // Normalized search variations string (e.g., "2026-11-08 11/8 11-8 8/11 8-11 8 nov november sunday sun...")
     const searchTerms = `${dateStr} ${monthNum}/${dayNum} ${monthNum}-${dayNum} ${dayNum}/${monthNum} ${dayNum}-${monthNum} ${dayNum} ${monthShort} ${monthLong} ${weekdayShort} ${weekdayLong} ${formattedDate} ${formattedTime}`.toLowerCase();
 
     return {
@@ -16598,7 +16491,6 @@ export function openRequestWaiverModal() {
     return;
   }
 
-  // STEP 1: Find UNIQUE service templates the user is rostered for
   const assignedSessions = (state.attendanceSessions || []).filter(session => {
     if (session.active === false || session.archived) return false;
     const targetType = session.targetType || (Array.isArray(session.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
@@ -16634,7 +16526,7 @@ export function openRequestWaiverModal() {
     bodyEl.innerHTML = '';
 
     if (currentStep === 1) {
-      // STEP 1: Unique Service Templates Selection
+
       const headerBox = document.createElement('div');
       headerBox.className = 'space-y-1 mb-2';
       headerBox.innerHTML = `
@@ -16687,7 +16579,7 @@ export function openRequestWaiverModal() {
         bodyEl.appendChild(listDiv);
       }
     } else {
-      // STEP 2: Pick Specific Date Occurrence & Fill Excuse Details
+
       const topRow = document.createElement('div');
       topRow.className = 'flex items-center justify-between pb-2 border-b border-white/10';
       topRow.innerHTML = `
@@ -16880,13 +16772,14 @@ function formatWaiverTargetDate(w) {
 }
 
 function renderAdminWaivers() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-waivers-list');
   const countEl = document.getElementById('admin-waiver-count');
   const labelEl = document.getElementById('admin-waivers-filter-label');
   const segMount = document.getElementById('admin-waivers-segmented-mount');
   if (!container) return;
 
-  // Prevent re-rendering and tearing down DOM while admin is actively typing in a note field
   if (document.activeElement && container.contains(document.activeElement)) {
     return;
   }
@@ -16895,7 +16788,6 @@ function renderAdminWaivers() {
   const all = state.waiverRequests || [];
   updateWaiversBadge(all.filter(w => w.status === 'pending').length);
 
-  // Segmented control: mounted once, then only its value is synced
   if (segMount && !segMount.firstChild) {
     segMount.appendChild(renderSegmented({
       id: 'admin-waivers-segmented',
@@ -17017,7 +16909,6 @@ function renderAdminWaivers() {
         updatedAt: serverTimestamp()
       });
 
-      // System Impact on attendance log
       if (waiver.sessionId && waiver.occurrenceKey && waiver.uid) {
         const logId = `${waiver.sessionId}_${waiver.occurrenceKey}_${waiver.uid}`;
         const logRef = doc(db, 'attendance_logs', logId);
@@ -17052,7 +16943,7 @@ function renderAdminWaivers() {
             resolvedBy: state.user.uid
           }, { merge: true });
         } else {
-          // Reverting from approved to rejected or pending: remove excused status
+
           batch.set(logRef, {
             status: 'unexcused',
             excused: false,
@@ -17061,7 +16952,6 @@ function renderAdminWaivers() {
         }
       }
 
-      // In-app notification for the member
       const statusLabel = newStatus === 'approved' ? 'Approved' : (newStatus === 'rejected' ? 'Rejected' : 'Moved to Pending');
       const serviceName = waiver.serviceName || waiver.sessionTitle || 'Service';
       const baseBody = `Your attendance excuse for ${serviceName} on ${targetDate} was ${statusLabel}.`;
@@ -17135,7 +17025,6 @@ function renderAdminWaivers() {
     btn.onclick = () => resolveWaiver(btn.dataset.id, 'pending', btn.closest('[data-waiver-id]'));
   });
 
-  // Attach stopPropagation and draft persistence on note inputs
   container.querySelectorAll('.input-waiver-note').forEach(inp => {
     inp.oninput = (e) => {
       waiverDraftNotes.set(inp.dataset.id, e.target.value);
@@ -17381,6 +17270,8 @@ function getFilteredAdminMembers() {
 }
 
 function renderAdminMembers() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tbody = document.getElementById('admin-members-tbody');
   const loadMoreBtn = document.getElementById('btn-load-more-members');
   if (!tbody) return;
@@ -17806,7 +17697,6 @@ function openMemberControlModal(member) {
     </div>
   `;
 
-  // Wire Tab Switching: Strictly CSS class toggle (Zero innerHTML re-render)
   modalBody.querySelectorAll('.member-tab-btn').forEach(btn => {
     btn.onclick = () => {
       activeTab = btn.dataset.tab;
@@ -17829,7 +17719,6 @@ function openMemberControlModal(member) {
     };
   });
 
-  // Wire Refresh Ledger
   const refreshLedgerBtn = modalBody.querySelector('#btn-refresh-ctrl-ledger');
   if (refreshLedgerBtn) {
     refreshLedgerBtn.onclick = () => {
@@ -17837,7 +17726,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Avatar Tap-to-Crop
   const avatarCropBtn = modalBody.querySelector('#btn-crop-member-avatar');
   if (avatarCropBtn) {
     avatarCropBtn.onclick = () => {
@@ -17867,7 +17755,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Display Name Input
   const nameInp = modalBody.querySelector('#ctrl-member-name');
   if (nameInp) {
     nameInp.oninput = (e) => {
@@ -17878,7 +17765,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Role Segmented Selector
   const roleWrap = modalBody.querySelector('#ctrl-role-seg-wrap');
   if (roleWrap) {
     roleWrap.appendChild(renderSegmented({
@@ -17912,7 +17798,6 @@ function openMemberControlModal(member) {
     }));
   }
 
-  // Mount Member Disable Switch
   const mountDisableSw = modalBody.querySelector('#mount-switch-member-disable');
   if (mountDisableSw) {
     mountDisableSw.appendChild(renderSwitch({
@@ -17938,7 +17823,6 @@ function openMemberControlModal(member) {
     }));
   }
 
-  // Mount Member Permanent Delete Button
   const delPermanentlyBtn = modalBody.querySelector('#btn-delete-member-permanently');
   if (delPermanentlyBtn) {
     delPermanentlyBtn.onclick = async () => {
@@ -17963,7 +17847,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Member Notification Center Quick Button (FIX 3)
   const openMemberNotifsBtn = modalBody.querySelector('#btn-ctrl-open-member-notifs');
   if (openMemberNotifsBtn) {
     openMemberNotifsBtn.onclick = () => {
@@ -17971,7 +17854,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Badges Management (FIX 5: Zero-Latency Draft State + FIX 7: Admin Drag-and-Drop Priority Reordering + FIX 9: Discord-Style Pills)
   const initialOrderedBadges = resolveOrderedUserBadges(currentMember.badges, currentMember);
   const initialBadgeIds = initialOrderedBadges.map(b => String(b.id));
   let draftBadgeIds = [...initialBadgeIds];
@@ -18209,7 +18091,7 @@ async function handleRepairTotals() {
   });
 
   try {
-    // 1. Fetch all members with pagination
+
     let allUsers = [];
     let lastDoc = null;
     while (true) {
@@ -18228,13 +18110,11 @@ async function handleRepairTotals() {
     const nowMs = serverNow();
     const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
 
-    // 2. Audit each member with submissions + bonus transactions + attendance logs
     for (const u of allUsers) {
       let realPoints = 0;
       let realMonthPoints = 0;
       let realWeekPoints = 0;
 
-      // 2.1 Verified Task Submissions
       const subSnap = await getDocs(query(collection(db, 'submissions'), where('uid', '==', u.uid))).catch(() => ({ docs: [] }));
       subSnap.docs.forEach(d => {
         const s = d.data();
@@ -18245,7 +18125,6 @@ async function handleRepairTotals() {
         if (weekKeyOf(sTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += pts;
       });
 
-      // 2.2 Points & Deduction Transactions
       const txSnap = await getDocs(query(collection(db, 'users', u.uid, 'transactions'))).catch(() => ({ docs: [] }));
       let txDeductions = 0;
       txSnap.docs.forEach(d => {
@@ -18261,7 +18140,6 @@ async function handleRepairTotals() {
         }
       });
 
-      // 2.3 Attendance Penalties
       const attAgg = await getAggregateFromServer(query(collection(db, 'attendance_logs'), where('uid', '==', u.uid)), {
         totalPenalty: sum('penalty')
       }).catch(() => ({ data: () => ({ totalPenalty: 0 }) }));
@@ -18272,11 +18150,11 @@ async function handleRepairTotals() {
       const curMonthPoints = (u.monthKey === curMonthKey || u.monthBucket === curMonthKey) ? (u.monthPoints || 0) : 0;
       const curWeekPoints = (u.weekKey === curWeekKey || u.weekBucket === curWeekKey) ? (u.weekPoints || 0) : 0;
 
-      const needsRepair = curPoints !== realPoints || 
-                          curPenalties !== realPenalties || 
-                          u.monthKey !== curMonthKey || 
-                          u.monthPoints !== realMonthPoints || 
-                          u.weekKey !== curWeekKey || 
+      const needsRepair = curPoints !== realPoints ||
+                          curPenalties !== realPenalties ||
+                          u.monthKey !== curMonthKey ||
+                          u.monthPoints !== realMonthPoints ||
+                          u.weekKey !== curWeekKey ||
                           u.weekPoints !== realWeekPoints;
 
       if (needsRepair) {
@@ -18314,7 +18192,6 @@ async function handleRepairTotals() {
       return;
     }
 
-    // Display mismatches preview
     bodyEl.innerHTML = `
       <div class="text-left space-y-4">
         <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
@@ -18460,10 +18337,6 @@ async function handleRepairTotals() {
   }
 }
 
-/* ==========================================================================
-   UI RENDERING: BROADCAST CAROUSEL & ADMIN BROADCASTS (Task 6)
-   ========================================================================== */
-
 let broadcastTimer = null;
 let currentBroadcastIndex = 0;
 let isBroadcastModalOpen = false;
@@ -18491,16 +18364,14 @@ export function getActiveBroadcasts() {
   ]);
 
   return (state.broadcasts || []).filter(b => {
-    // 1. Exclude archived broadcasts
+
     if (b.isArchived === true || b.archived === true || b.status === 'archived') return false;
 
-    // 2. Ensure serverNow() is strictly within start/end limits
     const startMs = typeof b.startDateTime === 'number' ? b.startDateTime : (b.startDateTime?.toMillis ? b.startDateTime.toMillis() : new Date(b.startDateTime || 0).getTime());
     const endMs = typeof b.endDateTime === 'number' ? b.endDateTime : (b.endDateTime?.toMillis ? b.endDateTime.toMillis() : new Date(b.endDateTime || 0).getTime());
     if (startMs && now < startMs) return false;
     if (endMs && now > endMs) return false;
 
-    // 3. Strictly match audience: badgeIds or 'all'
     const targetType = b.targetType || 'all';
     if (targetType === 'all') return true;
 
@@ -18528,7 +18399,6 @@ function ensureBroadcastTicker() {
     const active = getActiveBroadcasts();
     const fillEl = document.getElementById('broadcast-progress-fill') || document.querySelector('.broadcast-progress-fill');
 
-    // If active <= 1: do not rotate, reset width to 0%
     if (active.length <= 1) {
       broadcastProgressMs = 0;
       lastBroadcastTickMs = Date.now();
@@ -18536,7 +18406,6 @@ function ensureBroadcastTicker() {
       return;
     }
 
-    // Pause on modal open, touch/hold, hover, or document.hidden
     if (isBroadcastModalOpen || isBannerHeldOrHovered || (typeof document !== 'undefined' && document.hidden)) {
       lastBroadcastTickMs = Date.now();
       return;
@@ -18555,7 +18424,7 @@ function ensureBroadcastTicker() {
     broadcastProgressMs += delta;
 
     if (broadcastProgressMs >= durationMs) {
-      // 100% reached: advance immediately to next broadcast, reset width to 0%, repeat
+
       broadcastProgressMs = 0;
       if (fillEl) {
         fillEl.style.transition = 'none';
@@ -18583,7 +18452,6 @@ export function renderHomeBroadcastBanner() {
 
   const active = getActiveBroadcasts();
 
-  // If activeBroadcasts.length === 0: hide banner
   if (active.length === 0) {
     banner.classList.add('hidden');
     if (fillEl) fillEl.style.width = '0%';
@@ -18605,12 +18473,10 @@ export function renderHomeBroadcastBanner() {
     iconEl.innerHTML = getIconSvg(current.icon || 'megaphone', 'w-4 h-4 text-[#0A84FF]');
   }
 
-  // Tapping banner opens Broadcast Detail modal
   banner.onclick = () => {
     openBroadcastDetailModal(current.id);
   };
 
-  // Wire pause listeners on touch/hold and mouse hover
   if (!banner.dataset.touchWired) {
     banner.dataset.touchWired = 'true';
     banner.addEventListener('touchstart', () => { isBannerHeldOrHovered = true; }, { passive: true });
@@ -18620,7 +18486,6 @@ export function renderHomeBroadcastBanner() {
     banner.addEventListener('mouseleave', () => { isBannerHeldOrHovered = false; lastBroadcastTickMs = Date.now(); });
   }
 
-  // If active.length === 1: hide track, do not run rotation
   if (active.length === 1) {
     if (trackEl) trackEl.classList.add('hidden');
     if (fillEl) fillEl.style.width = '0%';
@@ -18757,7 +18622,6 @@ function openBroadcastDetailModal(initialBroadcastOrId) {
   });
 }
 
-// 30-second re-evaluation interval for active broadcasts
 if (!broadcastEvalInterval) {
   broadcastEvalInterval = setInterval(() => {
     renderHomeBroadcastBanner();
@@ -18765,6 +18629,8 @@ if (!broadcastEvalInterval) {
 }
 
 function renderAdminBroadcasts() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-broadcasts-list');
   if (!container) return;
 
@@ -18980,7 +18846,7 @@ function openAdminBroadcastModal(broadcast = null) {
       <!-- Card 1: Announcement Identity -->
       <div class="ios-card space-y-3">
         <div class="text-[11px] font-bold text-neutral-400 tracking-wider">ANNOUNCEMENT IDENTITY</div>
-        
+
         <!-- Broadcast Icon Row -->
         <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/5 border border-white/10">
           <div class="flex items-center gap-3 min-w-0">
@@ -19019,7 +18885,7 @@ function openAdminBroadcastModal(broadcast = null) {
       <!-- Card 2: Audience & Rotation -->
       <div class="ios-card space-y-3">
         <div class="text-[11px] font-bold text-neutral-400 tracking-wider">AUDIENCE &amp; ROTATION</div>
-        
+
         <!-- Target Audience -->
         <div>
           <label class="block text-neutral-300 font-semibold mb-1.5">Target Audience</label>
@@ -19084,7 +18950,7 @@ function openAdminBroadcastModal(broadcast = null) {
   }
 
   function wireForm() {
-    // 1. Icon Change Button & Unified Color Picker (FIX 6)
+
     const broadcastColorMount = modalBody.querySelector("#broadcast-color-picker-mount");
     if (broadcastColorMount) {
       broadcastColorMount.appendChild(renderAdvancedColorPicker({
@@ -19114,7 +18980,6 @@ function openAdminBroadcastModal(broadcast = null) {
       };
     }
 
-    // 2. Audience Segmented Buttons
     const segButtons = modalBody.querySelectorAll(".btn-seg-audience");
     const badgesSection = modalBody.querySelector("#broadcastBadgesContainer");
     segButtons.forEach(btn => {
@@ -19133,7 +18998,6 @@ function openAdminBroadcastModal(broadcast = null) {
 
     renderBadgePills();
 
-    // 3. Rotation Duration Presets & Input
     const presetBtns = modalBody.querySelectorAll("#broadcastDurationPresets .duration-pill");
     const durationInput = modalBody.querySelector("#broadcastDurationInput");
 
@@ -19293,7 +19157,6 @@ function openAdminBroadcastModal(broadcast = null) {
           payload.createdAt = serverTimestamp();
           const docRef = await addDoc(collection(db, "broadcasts"), payload);
 
-          // Write matching notifications_broadcast doc(s)
           if (targetType === "badge") {
             for (const bId of selectedBadgeIds) {
               await addDoc(collection(db, "notifications_broadcast"), {
@@ -19387,7 +19250,6 @@ export async function handleArchiveBroadcast(broadcast, shouldArchive = true) {
       console.warn('Log broadcast archive action:', lErr);
     }
 
-    // Update local state & re-render ONLY after DB resolves
     const target = state.broadcasts.find(b => b.id === broadcast.id);
     if (target) {
       target.isArchived = shouldArchive;
@@ -19418,10 +19280,9 @@ export async function handleDeleteBroadcast(broadcast) {
   if (!confirm) return;
 
   try {
-    // 1. Await actual Firestore database deletion FIRST
+
     await deleteDoc(doc(db, 'broadcasts', broadcast.id));
 
-    // 2. Clean up matching broadcast notification documents
     try {
       const notifSnap = await getDocs(query(collection(db, 'notifications_broadcast'), where('broadcastId', '==', broadcast.id)));
       if (!notifSnap.empty) {
@@ -19433,7 +19294,6 @@ export async function handleDeleteBroadcast(broadcast) {
       console.warn('Cleanup broadcast notifications:', nErr);
     }
 
-    // 3. Log admin audit action
     try {
       const batch = writeBatch(db);
       logAdminAction(batch, {
@@ -19445,7 +19305,6 @@ export async function handleDeleteBroadcast(broadcast) {
       console.warn('Log broadcast delete action:', lErr);
     }
 
-    // 4. Only update local state, re-render, and show toast AFTER DB resolves
     state.broadcasts = state.broadcasts.filter(b => b.id !== broadcast.id);
     renderAdminBroadcasts();
     renderHomeBroadcastBanner();
@@ -19462,7 +19321,7 @@ export async function handleDeleteBroadcast(broadcast) {
 async function importLegacyAnnouncements() {
   let importedCount = 0;
   try {
-    // 1. Check settings/app_config.announcementEn
+
     if (state.settings?.announcementEn) {
       const existing = state.broadcasts.find(b => b.title === state.settings.announcementEn);
       if (!existing) {
@@ -19481,7 +19340,6 @@ async function importLegacyAnnouncements() {
       }
     }
 
-    // 2. Check legacy 'announcements' collection if one exists
     try {
       const snap = await getDocs(collection(db, 'announcements'));
       for (const d of snap.docs) {
@@ -19504,7 +19362,7 @@ async function importLegacyAnnouncements() {
         }
       }
     } catch (collErr) {
-      // Announcements collection might not exist; safe to continue
+
     }
 
     if (importedCount > 0) {
@@ -19547,7 +19405,6 @@ function applySettings() {
     announcementBar.classList.add('hidden');
   }
 
-  // Sync Admin Hub settings fields with current state
   const appNameInput = document.getElementById('input-settings-appname');
   if (appNameInput && state.settings.appName) appNameInput.value = state.settings.appName;
   const logoUrlInput = document.getElementById('input-settings-logourl');
@@ -19564,9 +19421,6 @@ function applySettings() {
   if (defaultPeriodInput && state.settings.defaultLeaderboardPeriod) defaultPeriodInput.value = state.settings.defaultLeaderboardPeriod;
 }
 
-/* ==========================================================================
-   EVENT HANDLERS & INITIALIZATION
-   ========================================================================== */
 export function updateLiveAppLogo(logoUrl) {
   if (!logoUrl) return;
   state.settings.logoUrl = logoUrl;
@@ -19604,9 +19458,6 @@ export async function handleChangeAppLogo() {
   }
 }
 
-/* ==========================================================================
-   FIX 3: ADMIN HUB — MEMBER NOTIFICATION CENTER (HISTORY AUDIT & CUSTOM PUSH)
-   ========================================================================== */
 export async function openAdminMemberNotificationCenter(initialUid = null) {
   const getAllMembersList = () => {
     const list = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
@@ -19980,9 +19831,6 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
   });
 }
 
-/* ==========================================================================
-   FIX 8: "WHAT'S NEW" CHANGELOG & PERSISTENT DRAFT EDITOR (IndexedDB + localStorage)
-   ========================================================================== */
 const WHATS_NEW_IDB_NAME = 'coc_media_drafts_db';
 const WHATS_NEW_IDB_STORE = 'drafts';
 const WHATS_NEW_DRAFT_KEY = 'whats_new_draft';
@@ -20029,7 +19877,7 @@ export async function loadWhatsNewLocalDraft() {
         return fromIdb;
       }
     }
-  } catch (e) { /* fallback to localStorage */ }
+  } catch (e) {  }
 
   try {
     const raw = localStorage.getItem(WHATS_NEW_LS_KEY);
@@ -20037,7 +19885,7 @@ export async function loadWhatsNewLocalDraft() {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') return parsed;
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {  }
 
   return null;
 }
@@ -20052,7 +19900,7 @@ export async function saveWhatsNewLocalDraft(draftObj) {
 
   try {
     localStorage.setItem(WHATS_NEW_LS_KEY, JSON.stringify(payload));
-  } catch (e) { /* ignore */ }
+  } catch (e) {  }
 
   try {
     const idb = await openWhatsNewDraftDB();
@@ -20069,7 +19917,7 @@ export async function saveWhatsNewLocalDraft(draftObj) {
         }
       });
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {  }
 
   return payload;
 }
@@ -20077,7 +19925,7 @@ export async function saveWhatsNewLocalDraft(draftObj) {
 export async function clearWhatsNewLocalDraft() {
   try {
     localStorage.removeItem(WHATS_NEW_LS_KEY);
-  } catch (e) { /* ignore */ }
+  } catch (e) {  }
 
   try {
     const idb = await openWhatsNewDraftDB();
@@ -20094,12 +19942,9 @@ export async function clearWhatsNewLocalDraft() {
         }
       });
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {  }
 }
 
-/* ==========================================================================
-   WHAT'S NEW READ STATE & AUTOMATIC FIRST-LAUNCH ANNOUNCEMENT
-   ========================================================================== */
 export const LAST_SEEN_CHANGELOG_KEY = 'coc_last_seen_changelog_id';
 
 let autoWhatsNewPresented = false;
@@ -20138,7 +19983,7 @@ export function setLastSeenChangelogId(fingerprint) {
     if (fingerprint) {
       localStorage.setItem(LAST_SEEN_CHANGELOG_KEY, String(fingerprint));
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {  }
 }
 
 export function checkAndShowAutoWhatsNew() {
@@ -20149,7 +19994,6 @@ export function checkAndShowAutoWhatsNew() {
   autoWhatsNewCheckTimer = setTimeout(async () => {
     if (autoWhatsNewPresented) return;
 
-    // Avoid conflicting if another modal or domain alert is already open
     if (document.querySelector('.ios-modal-overlay.open, .modal-backdrop.open') || document.getElementById('modal-unauthorized-domain')?.classList.contains('open')) {
       return;
     }
@@ -20167,7 +20011,6 @@ export function checkAndShowAutoWhatsNew() {
       }
     }
 
-    // STRICT REQUIREMENT: Only auto-announce if an Admin actually published release notes in Firestore
     const content = (liveData?.content || liveData?.notes || liveData?.body || '').trim();
     if (!liveData || !content) {
       return;
@@ -20277,7 +20120,7 @@ export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = nul
 }
 
 export async function openAdminWhatsNewEditorModal() {
-  let activeTab = 'draft'; // 'live' | 'draft'
+  let activeTab = 'draft';
   let liveData = state.whatsNew || null;
 
   if (db) {
@@ -20287,7 +20130,7 @@ export async function openAdminWhatsNewEditorModal() {
         liveData = snap.data();
         state.whatsNew = liveData;
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {  }
   }
 
   let liveVersion = liveData?.version || APP_VERSION;
@@ -20357,7 +20200,7 @@ export async function openAdminWhatsNewEditorModal() {
             </div>
             <div class="col-span-2">
               <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Headline</label>
-              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v2.2.10" value="${esc(draftTitle)}" />
+              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v3.0.0" value="${esc(draftTitle)}" />
             </div>
           </div>
 
@@ -20394,7 +20237,6 @@ export async function openAdminWhatsNewEditorModal() {
       }));
     }
 
-    // Wire Live inputs
     const liveVerInp = bodyEl.querySelector('#wn-live-version');
     const liveTitleInp = bodyEl.querySelector('#wn-live-title');
     const liveContentInp = bodyEl.querySelector('#wn-live-content');
@@ -20438,7 +20280,6 @@ export async function openAdminWhatsNewEditorModal() {
       };
     }
 
-    // Wire Draft Auto-Save inputs
     const draftVerInp = bodyEl.querySelector('#wn-draft-version');
     const draftTitleInp = bodyEl.querySelector('#wn-draft-title');
     const draftContentInp = bodyEl.querySelector('#wn-draft-content');
@@ -20546,7 +20387,7 @@ export async function openAdminWhatsNewEditorModal() {
 }
 
 function attachEventHandlers() {
-  // Navigation & Drawer
+
   const menuBtn = document.getElementById('btn-open-drawer');
   if (menuBtn) menuBtn.onclick = openDrawer;
 
@@ -20556,7 +20397,6 @@ function attachEventHandlers() {
   const backdrop = document.getElementById('side-drawer-backdrop');
   if (backdrop) backdrop.onclick = closeDrawer;
 
-  // What's New Changelog Triggers (FIX 8)
   const drawerRowAbout = document.getElementById('drawer-row-about');
   if (drawerRowAbout) {
     drawerRowAbout.onclick = () => {
@@ -20573,7 +20413,6 @@ function attachEventHandlers() {
     btnAdminWhatsNew.onclick = () => openAdminWhatsNewEditorModal();
   }
 
-  // Admin Member Notification Center Triggers (FIX 3)
   const btnAdminMemberNotifCenter = document.getElementById('btn-admin-member-notif-center');
   if (btnAdminMemberNotifCenter) {
     btnAdminMemberNotifCenter.onclick = () => openAdminMemberNotificationCenter();
@@ -20590,7 +20429,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Overlay Buttons
   const adminBtn = document.getElementById('drawer-btn-admin');
   if (adminBtn) {
     adminBtn.onclick = () => {
@@ -20602,7 +20440,6 @@ function attachEventHandlers() {
   const closeAdminBtn = document.getElementById('btn-close-admin-dashboard');
   if (closeAdminBtn) closeAdminBtn.onclick = closeAdminDashboard;
 
-  // Floating Bulk Selection Action Bar Handlers
   exitSelectionMode();
   const selectAllBtn = document.getElementById('btn-bulk-select-all');
   if (selectAllBtn) selectAllBtn.onclick = toggleSelectAll;
@@ -20616,7 +20453,6 @@ function attachEventHandlers() {
   const doneBulkBtn = document.getElementById('btn-bulk-done');
   if (doneBulkBtn) doneBulkBtn.onclick = exitSelectionMode;
 
-  // Master Admin Auth Form
   const adminAuthForm = document.getElementById('form-admin-auth');
   if (adminAuthForm) {
     adminAuthForm.onsubmit = (e) => {
@@ -20635,10 +20471,9 @@ function attachEventHandlers() {
     };
   }
 
-  // PWA Install Button Handler
   const pwaBtn = document.getElementById('drawer-btn-pwa');
   if (pwaBtn) {
-    // Hide Install button if already in standalone mode
+
     if (isAppStandalone()) {
       pwaBtn.classList.add('hidden');
     }
@@ -20653,7 +20488,7 @@ function attachEventHandlers() {
         }
         deferredPrompt = null;
       } else {
-        // iOS Safari or browsers without beforeinstallprompt
+
         openModal({
           title: 'Install App (iOS & Android)',
           body: `
@@ -20681,7 +20516,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Profile Auth Buttons (Only Place for Sign In / Sign Out)
   const googleSignInBtn = document.getElementById('drawer-btn-google-signin');
   if (googleSignInBtn) googleSignInBtn.onclick = handleGoogleSignIn;
 
@@ -20711,7 +20545,6 @@ function attachEventHandlers() {
   const signOutBtn = document.getElementById('drawer-btn-signout');
   if (signOutBtn) signOutBtn.onclick = handleSignOut;
 
-  // Search and Status Filters
   const searchInput = document.getElementById('input-search-tasks');
   if (searchInput) {
     searchInput.oninput = (e) => {
@@ -20728,11 +20561,9 @@ function attachEventHandlers() {
     };
   }
 
-  // Mark all notifications read
   const markReadBtn = document.getElementById('btn-mark-all-read');
   if (markReadBtn) markReadBtn.onclick = markAllNotificationsRead;
 
-  // Close announcement banner
   const closeAnnounceBtn = document.getElementById('btn-close-announcement');
   if (closeAnnounceBtn) {
     closeAnnounceBtn.onclick = () => {
@@ -20741,12 +20572,10 @@ function attachEventHandlers() {
     };
   }
 
-  // Generic modal close buttons
   document.querySelectorAll('.modal-close-btn').forEach(btn => {
     btn.onclick = () => closeAllModals();
   });
 
-  // Task Submission Form
   const submitForm = document.getElementById('form-submit-task');
   if (submitForm) {
     submitForm.onsubmit = async (e) => {
@@ -20823,7 +20652,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Tasks & Categories Management
   const addTaskBtn = document.getElementById('btn-admin-add-task');
   if (addTaskBtn) {
     addTaskBtn.onclick = () => openAdminTaskModal();
@@ -20874,13 +20702,11 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Session Buttons & Segmented Filters
   const btnAdminAddSession = document.getElementById('btn-admin-add-session');
   if (btnAdminAddSession) {
     btnAdminAddSession.onclick = () => openAdminSessionModal();
   }
 
-  // Admin Badges Add Button (Section 3)
   const btnAdminAddBadge = document.getElementById('btn-admin-add-badge');
   if (btnAdminAddBadge) {
     btnAdminAddBadge.onclick = () => openBadgeModal();
@@ -20924,10 +20750,9 @@ function attachEventHandlers() {
     }
   }
 
-  // Waiver Buttons Wiring
   const btnOpenWaiver = document.getElementById('btn-open-waiver-modal');
   if (btnOpenWaiver) btnOpenWaiver.onclick = () => openRequestWaiverModal();
-  // Side Menu Refresh Button Wiring
+
   const sideMenuRefreshBtn = document.getElementById('sideMenuRefreshBtn');
   if (sideMenuRefreshBtn) {
     sideMenuRefreshBtn.onclick = () => handleManualDataRefresh();
@@ -20939,7 +20764,6 @@ function attachEventHandlers() {
     openRequestWaiverModal();
   };
 
-  // Admin Submissions Controls
   const inputSearchSubs = document.getElementById('input-admin-search-submissions');
   if (inputSearchSubs) {
     inputSearchSubs.oninput = (e) => {
@@ -20969,7 +20793,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Members Controls
   const inputSearchMembers = document.getElementById('input-admin-search-members');
   if (inputSearchMembers) {
     inputSearchMembers.oninput = (e) => {
@@ -20994,7 +20817,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Push Sender Icon Picker (Task 8)
   const pushIconPickerBtn = document.getElementById('btn-push-icon-picker');
   const pushIconInput = document.getElementById('input-push-icon');
   const pushIconPreview = document.getElementById('push-icon-preview');
@@ -21012,7 +20834,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Hub App Logo Upload & Reset (Task 3)
   const btnChangeLogo = document.getElementById('btn-change-logo');
   if (btnChangeLogo) btnChangeLogo.onclick = handleChangeAppLogo;
   const btnChangeLogoAction = document.getElementById('btn-change-logo-action');
@@ -21039,7 +20860,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Clear All Notifications from DB (Task 8 Purge)
   const purgeNotifsBtn = document.getElementById('btn-admin-purge-notifications');
   if (purgeNotifsBtn) {
     purgeNotifsBtn.onclick = async () => {
@@ -21057,7 +20877,6 @@ function attachEventHandlers() {
       try {
         let totalDeleted = 0;
 
-        // 1. Delete notifications in chunks of 450
         const personalSnap = await getDocs(collection(db, 'notifications'));
         const personalDocs = personalSnap.docs;
         for (let i = 0; i < personalDocs.length; i += 450) {
@@ -21068,7 +20887,6 @@ function attachEventHandlers() {
           totalDeleted += chunk.length;
         }
 
-        // 2. Delete notifications_broadcast in chunks of 450
         const broadcastSnap = await getDocs(collection(db, 'notifications_broadcast'));
         const broadcastDocs = broadcastSnap.docs;
         for (let i = 0; i < broadcastDocs.length; i += 450) {
@@ -21097,7 +20915,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Reset Local Cache Button (Task 8)
   const resetCacheBtn = document.getElementById('btn-admin-reset-cache');
   if (resetCacheBtn) {
     resetCacheBtn.onclick = async () => {
@@ -21126,13 +20943,11 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Repair Totals Button
   const btnRepairTotals = document.getElementById('btn-admin-repair-totals');
   if (btnRepairTotals) {
     btnRepairTotals.onclick = handleRepairTotals;
   }
 
-  // Admin Broadcasts Controls (Task 6)
   const btnAdminAddBroadcast = document.getElementById('btn-admin-add-broadcast');
   if (btnAdminAddBroadcast) {
     btnAdminAddBroadcast.onclick = () => openAdminBroadcastModal();
@@ -21159,19 +20974,16 @@ function attachEventHandlers() {
     };
   }
 
-  // Push Notifications Toggle (Task 7)
   const btnTogglePush = document.getElementById('btn-toggle-push');
   if (btnTogglePush) {
     btnTogglePush.onclick = handleTogglePushNotifications;
   }
 
-  // Admin Push Sender Console (Task 7)
   const formAdminSendPush = document.getElementById('form-admin-send-push');
   if (formAdminSendPush) {
     formAdminSendPush.onsubmit = handleAdminSendPush;
   }
 
-  // Universal iOS Member Picker for Push Target
   const pushPickerBtn = document.getElementById('picker-push-target-btn');
   if (pushPickerBtn) {
     pushPickerBtn.onclick = () => {
@@ -21189,7 +21001,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Leaderboard Period Switching (All / Month / Week)
   document.querySelectorAll('.leader-period-btn').forEach(btn => {
     btn.onclick = () => {
       state.leaderboardPeriod = btn.dataset.period || 'all';
@@ -21199,7 +21010,6 @@ function attachEventHandlers() {
     };
   });
 
-  // Admin Settings Form
   const settingsForm = document.getElementById('form-admin-settings');
   if (settingsForm) {
     settingsForm.onsubmit = async (e) => {
@@ -21231,7 +21041,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Edit Profile Form (v2.2.1 Apple HIG)
   const editProfileBtn = document.getElementById('btn-open-edit-profile');
   if (editProfileBtn) {
     editProfileBtn.onclick = () => {
@@ -21249,7 +21058,10 @@ function attachEventHandlers() {
       initEditProfileModal();
 
       document.body.style.overflow = 'hidden';
-      if (modal) modal.classList.add('open');
+      if (modal) {
+        modal.classList.add('open');
+        pushModalHistoryState('modal-edit-profile');
+      }
     };
   }
 
@@ -21318,7 +21130,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Live Digital Clock in Cairo Time
   startLiveClock();
 }
 
@@ -21350,7 +21161,6 @@ function dismissLoader() {
   }
 }
 
-// Automated Zero-Touch Service Worker & Update Architecture (Task 5 / v2.1.2)
 if ('serviceWorker' in navigator) {
   let appSwRegistration = null;
 
@@ -21358,26 +21168,22 @@ if ('serviceWorker' in navigator) {
     try {
       appSwRegistration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
 
-      // Trigger reg.update() on initial load
       if (appSwRegistration && typeof appSwRegistration.update === 'function') {
         appSwRegistration.update().catch(() => {});
       }
 
-      // Trigger reg.update() on visibilitychange (when visible)
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && appSwRegistration && typeof appSwRegistration.update === 'function') {
           appSwRegistration.update().catch(() => {});
         }
       });
 
-      // Trigger reg.update() periodically every 10 mins
       setInterval(() => {
         if (appSwRegistration && typeof appSwRegistration.update === 'function') {
           appSwRegistration.update().catch(() => {});
         }
       }, 10 * 60 * 1000);
 
-      // When a new service worker is installed, tell it to skipWaiting immediately
       appSwRegistration.addEventListener('updatefound', () => {
         const newWorker = appSwRegistration.installing;
         if (newWorker) {
@@ -21399,7 +21205,6 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', registerAppServiceWorker);
   }
 
-  // On controllerchange, guard with sessionStorage and reload page smoothly once
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!sessionStorage.getItem('sw_controller_reloaded')) {
       sessionStorage.setItem('sw_controller_reloaded', 'true');
@@ -21407,15 +21212,11 @@ if ('serviceWorker' in navigator) {
     }
   });
 
-  // Clear controller reload guard after successful boot
   setTimeout(() => {
     try { sessionStorage.removeItem('sw_controller_reloaded'); } catch (e) {}
   }, 5000);
 }
 
-/* ==========================================================================
-   RELEASE v2.2.0: MANUAL DATA REFRESH & PUBLIC LEADERBOARD SYNC
-   ========================================================================== */
 export async function fetchPublicLeaderboard() {
   if (!db) return;
   try {
@@ -21444,10 +21245,8 @@ export async function handleManualDataRefresh() {
   try {
     const syncOps = [];
 
-    // 1. Public Member Roster & Leaderboard
     syncOps.push(fetchPublicLeaderboard());
 
-    // 2. Current User Profile, Points, Quotas & Activity Rings
     if (state.user?.uid) {
       syncOps.push(
         getDoc(doc(db, 'users', state.user.uid)).then(snap => {
@@ -21460,7 +21259,6 @@ export async function handleManualDataRefresh() {
       );
     }
 
-    // 3. Active Tasks & User Submissions
     syncOps.push(
       getDocs(query(collection(db, 'tasks'), limit(200))).then(snap => {
         state.tasks = snap.docs.map(d => normalizeTask({ id: d.id, ...d.data() }));
@@ -21479,7 +21277,6 @@ export async function handleManualDataRefresh() {
       );
     }
 
-    // 4. Live Attendance Sessions & Member Check-in Status
     syncOps.push(
       getDocs(query(collection(db, 'attendance_sessions'), limit(50))).then(snap => {
         state.attendanceSessions = snap.docs.map(d => normalizeSession({ id: d.id, ...d.data() }));
@@ -21496,7 +21293,6 @@ export async function handleManualDataRefresh() {
       );
     }
 
-    // 5. Active Broadcast Banners
     syncOps.push(
       getDocs(query(collection(db, 'broadcasts'), limit(50))).then(snap => {
         state.broadcasts = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(b => b.archived !== true);
@@ -21505,7 +21301,6 @@ export async function handleManualDataRefresh() {
       }).catch(e => console.warn('Broadcasts sync:', e))
     );
 
-    // 6. User Notifications & Unread Counts (plus Admin Waivers if Admin)
     if (state.user?.uid) {
       syncOps.push(
         getDocs(query(collection(db, 'notifications'), where('uid', '==', state.user.uid), limit(100))).then(snap => {
@@ -21547,15 +21342,20 @@ export async function handleManualDataRefresh() {
   }
 }
 
-// BOOTSTRAP WORKSPACE
 window.addEventListener('DOMContentLoaded', () => {
   initErrorBoundary();
   safeInit('offlineBanner', initOfflineBanner);
+  const hadCachedState = hydrateFromLocalCache();
   initNavigation();
   safeInit('sheetGestures', initSheetDragGestures);
-  safeInit('adminPushConsole', initAdminPushConsole);
+  if (isCurrentUserAdmin()) {
+    safeInit('adminPushConsole', initAdminPushConsole);
+  }
   attachEventHandlers();
-  // Cold-start cache: immediately attach listeners so local cache renders instantly before auth/network completes
+  if (hadCachedState || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+    renderHydratedCacheUI();
+    dismissLoader();
+  }
   initFirestoreListeners();
   setupAuthLifecycle();
   safeInit('applySettings', applySettings);
@@ -21568,7 +21368,6 @@ window.addEventListener('DOMContentLoaded', () => {
   }, 400);
 });
 
-// Window compatibility exports
 if (typeof window !== 'undefined') {
   window.safeInit = safeInit;
   window.initAdminPushConsole = initAdminPushConsole;

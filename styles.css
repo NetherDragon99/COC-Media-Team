@@ -1,10 +1,5 @@
-/* ===================================================================
-   COC Media Team - Apple Design System (iOS 17/18) Stylesheet
-   Static PWA for GitHub Pages - Vanilla CSS & Tokens
-   =================================================================== */
-
 :root {
-  /* iOS System Colors */
+
   --ios-blue: #007AFF;
   --ios-green: #34C759;
   --ios-indigo: #5856D6;
@@ -15,7 +10,6 @@
   --ios-teal: #5AC8FA;
   --ios-yellow: #FFCC00;
 
-  /* Light Theme Tokens */
   --surface-1: #000000;
   --surface-2: #1C1C1E;
   --surface-3: #2C2C2E;
@@ -52,7 +46,7 @@
   --radius-lg: 16px;
   --radius-xl: 22px;
   --radius-full: 9999px;
-  
+
   --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --font-mono: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
 }
@@ -103,7 +97,6 @@
   }
 }
 
-/* CSS Reset & Touch Standards */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -127,7 +120,6 @@ html, body {
   color-scheme: dark light;
 }
 
-/* Typography Scale (SF Pro / iOS Guidelines) */
 .ios-large-title {
   font-size: 34px;
   line-height: 41px;
@@ -198,7 +190,6 @@ html, body {
   font-weight: 400;
 }
 
-/* Mobile-First Centered Shell */
 .app-shell {
   max-width: 480px;
   width: 100%;
@@ -216,7 +207,6 @@ html, body {
   box-shadow: 0 0 50px rgba(0, 0, 0, 0.4);
 }
 
-/* Zero horizontal overflow verification */
 @media (max-width: 320px) {
   .app-shell {
     width: 100%;
@@ -224,7 +214,6 @@ html, body {
   }
 }
 
-/* 44px Minimum Touch Target Rule */
 button, input, select, textarea, .tap-target {
   min-height: 44px;
   min-width: 44px;
@@ -247,7 +236,6 @@ button:active {
   transform: scale(0.97);
 }
 
-/* Translucent Glass Primitives */
 .glass-surface {
   background: var(--bg-glass);
   backdrop-filter: saturate(180%) blur(20px);
@@ -277,7 +265,6 @@ button:active {
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2);
 }
 
-/* Inset Grouped Lists (iOS 17/18 Spec) */
 .inset-group {
   background: var(--bg-grouped-secondary);
   border-radius: 14px;
@@ -313,7 +300,6 @@ button:active {
   background-color: var(--fill-tertiary);
 }
 
-/* Swipe Pager & Floating Glass Dock */
 .pager-container {
   display: flex;
   flex-direction: row;
@@ -354,7 +340,6 @@ button:active {
   display: none;
 }
 
-/* Floating Glass Segmented-Pill Dock */
 .glass-dock {
   position: fixed;
   bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
@@ -426,7 +411,6 @@ button:active {
   stroke-width: 1.75;
 }
 
-/* Admin Dashboard 7-Item Segmented Dock */
 #admin-dock {
   display: flex;
   align-items: center;
@@ -462,9 +446,6 @@ button:active {
   max-width: 72px;
 }
 
-/* ==========================================================================
-   UNIVERSAL iOS PICKER ROW STYLES
-   ========================================================================== */
 .ios-picker-row {
   cursor: pointer;
   user-select: none;
@@ -476,12 +457,6 @@ button:active {
   transform: scale(0.99);
 }
 
-/* ==========================================================================
-   GLOBAL BULK SELECTION MODE STYLES
-   ========================================================================== */
-/* floating-bulk-bar handled in Section 3 */
-
-/* Bulk Selection Card Layout & Shift */
 .bulk-select-card {
   position: relative;
   overflow: hidden;
@@ -517,7 +492,6 @@ button:active {
   fill: none;
 }
 
-/* When selection mode is active on body */
 body.selection-mode-active .bulk-select-card {
   cursor: pointer;
 }
@@ -546,7 +520,6 @@ body.selection-mode-active .bulk-select-card.selected {
   background-color: rgba(10, 132, 255, 0.08) !important;
 }
 
-/* Floating Glass Buttons (Home Screen) */
 .floating-glass-btn {
   width: 44px;
   height: 44px;
@@ -564,7 +537,6 @@ body.selection-mode-active .bulk-select-card.selected {
   position: relative;
 }
 
-/* Side Drawer Transitions */
 #side-drawer-backdrop {
   opacity: 0;
   pointer-events: none;
@@ -613,7 +585,6 @@ body.selection-mode-active .bulk-select-card.selected {
   transform: translateX(0);
 }
 
-/* Full-Screen Admin Dashboard Overlay */
 .admin-overlay,
 #adminOverlay,
 #modal-admin-dashboard {
@@ -650,7 +621,6 @@ body.selection-mode-active .bulk-select-card.selected {
   cursor: pointer;
 }
 
-/* Shared UI Infrastructure: Modal & Bottom Sheet */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -778,7 +748,7 @@ body.selection-mode-active .bulk-select-card.selected {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-/* Action Sheet (confirmSheet) */
+
 .action-sheet-wrapper {
   width: 100%;
   max-width: 450px;
@@ -856,7 +826,6 @@ body.selection-mode-active .bulk-select-card.selected {
   border: 0.5px solid var(--border-glass);
 }
 
-/* Floating Glass Toast System */
 .toast-container {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 12px);
@@ -924,7 +893,6 @@ body.selection-mode-active .bulk-select-card.selected {
   transform: translateY(-16px) scale(0.95) !important;
 }
 
-/* Offline Banner */
 .offline-banner {
   background: var(--ios-orange);
   color: #000000;
@@ -941,7 +909,6 @@ body.selection-mode-active .bulk-select-card.selected {
   gap: 6px;
 }
 
-/* Shimmer Loading Skeleton */
 .skeleton-shimmer {
   background: linear-gradient(
     90deg,
@@ -959,7 +926,6 @@ body.selection-mode-active .bulk-select-card.selected {
   100% { background-position: 200% 0; }
 }
 
-/* Global Error Boundary */
 .error-boundary {
   position: fixed;
   inset: 0;
@@ -974,7 +940,6 @@ body.selection-mode-active .bulk-select-card.selected {
   text-align: center;
 }
 
-/* Notifications Card & Broadcast Carousel (Task 6) */
 .notification-card {
   height: 76px;
   min-height: 76px;
@@ -1034,7 +999,6 @@ body.selection-mode-active .bulk-select-card.selected {
   background: var(--ios-blue);
 }
 
-/* Utilities */
 .hidden { display: none !important; }
 .truncate {
   overflow: hidden;
@@ -1042,7 +1006,6 @@ body.selection-mode-active .bulk-select-card.selected {
   white-space: nowrap;
 }
 
-/* Accessibility: Focus-Visible Rings */
 :focus-visible {
   outline: 2px solid var(--ios-blue, #0A84FF);
   outline-offset: 2px;
@@ -1057,7 +1020,6 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
-/* Apple Activity-Style Summary Rings */
 .summary-ring-bg {
   opacity: 0.15;
 }
@@ -1069,7 +1031,6 @@ textarea:focus-visible {
   stroke-linecap: round;
 }
 
-/* Admin Overview Bar Chart */
 .chart-bar-rect {
   transition: height 0.6s cubic-bezier(0.16, 1, 0.3, 1), y 0.6s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -1078,7 +1039,6 @@ textarea:focus-visible {
   opacity: 0.85;
 }
 
-/* Respect Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
     animation-duration: 0.001s !important;
@@ -1086,10 +1046,6 @@ textarea:focus-visible {
     transition-duration: 0.001s !important;
   }
 }
-
-/* ==========================================================================
-   TASK 4: BADGE SYSTEM & MINI-PROFILE OVERHANGING SHEET
-   ========================================================================== */
 
 .badge-row-container {
   display: inline-flex;
@@ -1149,10 +1105,6 @@ textarea:focus-visible {
   max-height: none !important;
 }
 
-/* ==========================================================================
-   TASK 5: MEMBER CARD STACK & INSET GROUPED MODAL
-   ========================================================================== */
-
 .member-card-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; }
 .member-identity-col { display:flex; align-items:center; gap:12px; min-width:0; flex:1; }
 .member-right-actions { display:flex; align-items:center; gap:12px; flex-shrink:0; }
@@ -1175,10 +1127,6 @@ textarea:focus-visible {
   color: var(--text-tertiary, #8E8E93);
   padding: 8px 14px 4px 14px;
 }
-
-/* ==========================================================================
-   TASK 6: ATTENDANCE ASSIGNMENTS, IDEMPOTENT ABSENCE & WAIVER BADGES
-   ========================================================================== */
 
 .badge-unprocessed {
   background: rgba(255, 159, 10, 0.15);
@@ -1216,10 +1164,6 @@ textarea:focus-visible {
   border: 1px solid rgba(255, 69, 58, 0.3);
 }
 
-/* ==========================================================================
-   TASK 7: TASK FILTER BAR & LEADERBOARD SEGMENTED CONTROL
-   ========================================================================== */
-
 #category-filter-chips,
 .task-filter-bar {
   display: flex !important;
@@ -1248,10 +1192,6 @@ textarea:focus-visible {
   font-weight: 600 !important;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3) !important;
 }
-
-/* ==========================================================================
-   TASK 8: NOTIFICATION SQUIRCLES, UNIFIED BROADCASTS & ICON PICKER
-   ========================================================================== */
 
 .notification-squircle {
   width: 40px;
@@ -1288,7 +1228,6 @@ textarea:focus-visible {
   border: 1px solid rgba(255, 159, 10, 0.25);
 }
 
-/* Unified Broadcast Notice Card */
 .broadcast-unified-card {
   border-radius: 18px;
   overflow: hidden;
@@ -1318,7 +1257,6 @@ textarea:focus-visible {
   color: #8E8E93;
 }
 
-/* Home Broadcast Single Unified Bottom-Edge Progress Bar (Task 4) */
 .broadcast-progress-track {
   position: absolute;
   bottom: 0;
@@ -1339,7 +1277,6 @@ textarea:focus-visible {
   transition: width 0.1s linear;
 }
 
-/* Icon Picker Grid */
 .icon-picker-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -1369,12 +1306,6 @@ textarea:focus-visible {
   color: #0A84FF;
 }
 
-
-/* ==========================================================================
-   v2.1.0 SHARED iOS COMPONENTS (Task 1)
-   ========================================================================== */
-
-/* iOS Switch */
 .ios-switch-wrapper {
   display: inline-flex;
   align-items: center;
@@ -1445,7 +1376,6 @@ textarea:focus-visible {
   pointer-events: none;
 }
 
-/* iOS Segmented Control */
 .ios-segmented {
   position: relative;
   display: inline-flex;
@@ -1506,7 +1436,6 @@ textarea:focus-visible {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
-/* iOS Stepper */
 .ios-stepper {
   display: inline-flex;
   align-items: center;
@@ -1556,7 +1485,6 @@ textarea:focus-visible {
   line-height: 40px;
 }
 
-/* iOS Wheel Date/Time Picker */
 .ios-wheel-container {
   position: relative;
   display: flex;
@@ -1667,7 +1595,6 @@ textarea:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-/* iOS Image Cropper Viewport & Scrim */
 .ios-cropper-viewport {
   width: 280px;
   height: 280px;
@@ -1699,10 +1626,6 @@ textarea:focus-visible {
   border: 2px solid rgba(255, 255, 255, 0.4);
 }
 
-
-/* ==========================================================================
-   TASK 2: ADMIN HEADER, LEFT DRAWER, PERFORMANCE & OVERHEATING
-   ========================================================================== */
 .admin-glass-header {
   position: relative;
   width: 100%;
@@ -1769,7 +1692,6 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
-/* Drawer rows and styling */
 .drawer-profile-card {
   display: flex;
   align-items: center;
@@ -1794,7 +1716,6 @@ textarea:focus-visible {
   transition: background 0.15s ease;
 }
 
-/* Thermal & Overheating Optimization: Content Visibility for Lists */
 .task-card,
 .submission-card,
 .log-card,
@@ -1805,7 +1726,6 @@ textarea:focus-visible {
   contain-intrinsic-size: 0 84px;
 }
 
-/* Pause infinite animations when hidden */
 [hidden] .skeleton-shimmer,
 .hidden .skeleton-shimmer {
   animation-play-state: paused !important;
@@ -1820,10 +1740,6 @@ textarea:focus-visible {
   }
 }
 
-
-/* ==========================================================================
-   TASK 3: LIVE NOTIFICATION BANNER (iOS Glass Toast)
-   ========================================================================== */
 .notification-banner-container {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 12px);
@@ -1867,7 +1783,6 @@ textarea:focus-visible {
   transition: transform 0.35s cubic-bezier(0.4, 0, 1, 1), opacity 0.3s ease;
 }
 
-/* Utilities for horizontal scrolling tab bars */
 .scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -1876,11 +1791,9 @@ textarea:focus-visible {
   display: none;
 }
 
-/* Cropper and shared modal stacking above all static modal backdrops & admin overlay */
 #shared-modal-root { z-index: 2600 !important; }
 .cropper-modal-sheet, #shared-modal-root.has-cropper { z-index: 2700 !important; }
 
-/* Stepper Control and iOS Stepper Touch Target Fix (Task 2 / Section 2) */
 .stepper-control, .ios-stepper {
   display: inline-flex;
   gap: 12px;
@@ -1915,9 +1828,6 @@ textarea:focus-visible {
   border-radius: 8px;
 }
 
-/* ==========================================================================
-   RELEASE v2.1.5 STYLES
-   ========================================================================== */
 .sub-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1964,8 +1874,6 @@ textarea:focus-visible {
   transform: translateY(-10px);
 }
 
-
-/* iOS Inset-Grouped Card (iOS HIG) */
 .ios-card {
   border-radius: 14px;
   background: #1C1C1E;
@@ -1974,7 +1882,6 @@ textarea:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* iOS Active Press Effect */
 button:active,
 .btn:active,
 .ios-card:active,
@@ -1983,7 +1890,6 @@ button:active,
   transform: scale(0.99);
 }
 
-/* Modal Tabs Horizontal Overflow Fix */
 .modal-tabs,
 #member-ctrl-tab-bar {
   overflow-x: auto;
@@ -1997,8 +1903,6 @@ button:active,
   display: none;
 }
 
-
-/* Apple HIG Modal Sheet Header Buttons */
 .modal-header button {
   background: transparent !important;
   border: none !important;
@@ -2020,8 +1924,6 @@ button:active,
   font-weight: 600;
 }
 
-
-/* 14 iOS System Color Swatches */
 .color-swatch {
   width: 32px;
   height: 32px;
@@ -2044,10 +1946,6 @@ button:active,
   outline: none !important;
 }
 
-
-/* ==========================================================================
-   Global iOS Form Controls Reset (v2.1.9) - single source of truth for inputs
-   ========================================================================== */
 input[type="text"],
 input[type="number"],
 input[type="email"],
@@ -2111,7 +2009,6 @@ select:focus,
   outline: none !important;
 }
 
-/* Waivers admin badge + inbox helpers (v2.1.9) */
 .dock-badge-red {
   position: absolute;
   top: -4px;
@@ -2128,10 +2025,6 @@ select:focus,
   text-align: center;
 }
 
-
-/* ==========================================================================
-   v2.1.10 Additions: .you-badge, Unified Icon Picker & Modal Utilities
-   ========================================================================== */
 .you-badge {
   display: inline-flex;
   align-items: center;
@@ -2247,9 +2140,6 @@ select:focus,
   font-weight: 600;
 }
 
-/* ==========================================================================
-   RELEASE v2.2.0: iOS BANNER TOAST, ADMIN NOTE CALLOUT, SPINNER & BROADCAST HIG
-   ========================================================================== */
 @keyframes iosSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -2350,12 +2240,6 @@ select:focus,
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.1: SEARCH LENS FIX, SETTINGS PALETTE, COMPACT CARDS & CROPPING
-   ========================================================================== */
-
-/* 1. Search Lens Icon Fix & Universal Search Padding */
 .ios-search-wrapper,
 .search-box,
 .search-input-wrap {
@@ -2388,7 +2272,6 @@ input[type="search"],
   padding-left: 42px !important;
 }
 
-/* 2. Side Menu Apple HIG Curated Icon Palette */
 .drawer-icon-push {
   background: rgba(255, 55, 95, 0.18) !important;
   color: #FF375F !important;
@@ -2425,7 +2308,6 @@ input[type="search"],
   border: 1px solid rgba(255, 69, 58, 0.25) !important;
 }
 
-/* 3. Uniform Compact Notification Cards in Updates Tab */
 .notification-card {
   height: 76px !important;
   min-height: 72px !important;
@@ -2446,7 +2328,6 @@ input[type="search"],
   background: rgba(10, 132, 255, 0.06);
 }
 
-/* 4. Permanent Apple 3-Pillar Podium Stage */
 .podium-stage-container {
   display: grid;
   grid-template-columns: 1fr 1.12fr 1fr;
@@ -2500,7 +2381,6 @@ input[type="search"],
   transform: none !important;
 }
 
-/* 5. Avatar Cropper Modal & Controls */
 #avatarCropperOverlay {
   position: fixed;
   inset: 0;
@@ -2579,12 +2459,6 @@ input[type="search"],
   transform: scale(1.1);
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.2: APPLE HIG & INTERACTIVE CONTROLS EXPANSION
-   ========================================================================== */
-
-/* Section 1: Icon Picker Full-Height Flex & 25% Card Reduction */
 .icon-picker-sheet {
   display: flex !important;
   flex-direction: column !important;
@@ -2687,7 +2561,6 @@ input[type="search"],
   max-width: 100% !important;
 }
 
-/* Section 2: Universal Freeform Fluid Sheet Resizing Inner Bodies */
 .modal-body,
 .sheet-body,
 .sub-modal-body,
@@ -2698,7 +2571,6 @@ input[type="search"],
   -webkit-overflow-scrolling: touch;
 }
 
-/* Section 3: Floating Bulk Bar 2-Tier Layout & Segmented Control */
 .floating-bulk-bar.hidden,
 #bulk-selection-bar.hidden,
 body:not(.selection-mode-active) #bulk-selection-bar {
@@ -2758,7 +2630,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   transition: all 0.15s ease;
 }
 
-/* Member row disabled & stat pill wrapping (Task 2) */
 .admin-member-row.member-disabled {
   opacity: 0.55;
 }
@@ -2773,7 +2644,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   flex-shrink: 0;
 }
 
-/* Section 4: Adjustments Hub Interactive Apple HIG Buttons */
 .hub-bucket-btn {
   border: 1px solid transparent;
   transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
@@ -2841,7 +2711,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   border-color: rgba(255, 255, 255, 0.3) !important;
 }
 
-/* Adjustments Hub Member Roster Row */
 .hub-roster-item {
   display: flex;
   align-items: center;
@@ -2863,7 +2732,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   border-color: rgba(10, 132, 255, 0.45) !important;
 }
 
-/* Section 5: Leaderboard Badge Horizontal Single Line with Overflow */
 .leaderboard-member-row .badge-row-container {
   display: flex !important;
   flex-wrap: nowrap !important;
@@ -2885,7 +2753,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   border-radius: 999px !important;
 }
 
-/* Section 6: 24 Character Avatars & Edit Profile Header Fix */
 .edit-profile-avatar-section {
   padding-top: 16px !important;
   margin-top: 4px !important;
@@ -2926,16 +2793,10 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   transform: scale(1.1) !important;
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.3 (TASK 1): FREEFORM SHEETS, CROPPER 1X, MINI-PROFILE & ADJUSTMENTS
-   ========================================================================== */
-
 :root {
   --dock-height: 76px;
 }
 
-/* ITEM 1: Inner Sheet Layout & No Header Clipping */
 .modal-sheet, .sub-modal-sheet {
   display: flex !important;
   flex-direction: column !important;
@@ -2986,7 +2847,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   border-radius: 9999px;
 }
 
-/* ITEM 2: Image Cropper Viewport & Masks */
 .ios-cropper-viewport {
   position: relative;
   width: 280px;
@@ -3020,7 +2880,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   z-index: 10;
 }
 
-/* ITEM 3: Profile Mini-Sheet Redesign & Unclipped Avatar */
 .modal-sheet.mini-profile-sheet,
 #shared-modal-root .modal-sheet.mini-profile-sheet {
   overflow: visible !important;
@@ -3112,7 +2971,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   padding: 56px 16px 24px 16px;
 }
 
-/* ITEM 4: Dock Overlap Mitigation Across All Pager Pages */
 .pager-page,
 .admin-overlay .pager-page,
 #admin-pager .pager-page,
@@ -3130,7 +2988,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   box-sizing: border-box !important;
 }
 
-/* Clean Authentic Apple HIG Segmented Controls (No Neon Glows) */
 .hub-bucket-btn {
   border: 1px solid transparent;
   transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
@@ -3159,7 +3016,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
 }
 
-/* ITEM 5: Search Input 44px Padding & Centered Magnifier */
 input[type="search"],
 .ios-search-wrapper input,
 .search-box input,
@@ -3186,7 +3042,6 @@ input[type="search"],
   z-index: 10 !important;
 }
 
-/* Category Cards & Empty State Cards: Standard 16px Inset Rounded Corners */
 .category-card,
 .admin-category-card,
 [data-cat-id],
@@ -3198,9 +3053,6 @@ input[type="search"],
   overflow: hidden !important;
 }
 
-/* ==========================================================================
-   RELEASE v2.2.6: PRIMARY ACTION BUTTON & UNIFIED ADVANCED COLOR PICKER
-   ========================================================================== */
 .ios-btn-primary,
 #btnHubSubmitAdjustment {
   display: flex !important;
@@ -3239,7 +3091,6 @@ input[type="search"],
   box-shadow: none !important;
 }
 
-/* Unified Advanced Color Picker (Preset Dots + Custom Color Trigger + 10-Item History Queue) */
 .unified-color-picker {
   display: flex;
   flex-direction: column;
@@ -3312,11 +3163,6 @@ input[type="search"],
   min-width: 0 !important;
 }
 
-/* ==========================================================================
-   RELEASE v2.2.8: SWIPE-TO-DELETE, DRAG REORDERING & UNIFIED BADGE UI SYSTEM
-   ========================================================================== */
-
-/* Fix 2: iOS-Style Swipe-to-Delete for Personal Notifications */
 .notif-swipe-wrapper {
   position: relative;
   overflow: hidden;
@@ -3370,7 +3216,6 @@ input[type="search"],
   transition: none !important;
 }
 
-/* Fix 6 & Fix 7: Drag-and-Drop Reordering Handle & Active Card States */
 .drag-reorder-handle {
   display: inline-flex;
   align-items: center;
@@ -3419,7 +3264,6 @@ input[type="search"],
   transition: all 0.18s cubic-bezier(0.2, 0, 0, 1) !important;
 }
 
-/* Fix 9: Unified Badge UI System (Discord-Style Expanded Pills vs Compact Icon-Only Strip) */
 .badge-pills-expanded-wrap {
   display: flex;
   flex-wrap: wrap;
@@ -3477,17 +3321,11 @@ input[type="search"],
   flex-shrink: 0 !important;
 }
 
-/* ==========================================================================
-   RELEASE v2.2.9: ADVANCED GESTURES, DUAL SWIPE & LEADERBOARD REFINEMENTS
-   ========================================================================== */
-
-/* Fix 5: Lift State & Sibling Slot Displacement for Drag-and-Drop Reordering */
 .drag-reorder-displaced {
   transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1) !important;
   will-change: transform;
 }
 
-/* Fix 9: Leaderboard List: Eliminate isolated phantom border on first item */
 #leaderboard-list {
   border-top: none !important;
 }
@@ -3501,7 +3339,6 @@ input[type="search"],
   border-bottom: none !important;
 }
 
-/* Fix 11: Compact Badge Strip Overflow Ellipsis Pill */
 .badge-overflow-pill {
   display: inline-flex !important;
   align-items: center !important;
@@ -3519,7 +3356,6 @@ input[type="search"],
   padding: 0 !important;
 }
 
-/* Fix 7: Universal Dual-Direction Swipe Action Mechanics */
 .universal-swipe-wrapper {
   position: relative;
   overflow: hidden;
@@ -3598,7 +3434,6 @@ input[type="search"],
   transition: none !important;
 }
 
-/* Fix 7: Undo Snackbar (Floating Pill with Progress Indicator) */
 .undo-snackbar-container {
   position: fixed;
   bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
@@ -3665,6 +3500,3 @@ input[type="search"],
   transform-origin: left;
   transition: transform linear;
 }
-
-
-
