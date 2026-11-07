@@ -324,5 +324,46 @@ try {
   process.exit(1);
 }
 
+// 8. Test Step E: What's New Fingerprinting & Automatic Launch Pop-up Logic
+console.log('\n[Simulating What\'s New Auto-Presentation & Fingerprint Storage]');
+try {
+  const getFp = sandbox.window.getWhatsNewFingerprint;
+  const getLastSeen = sandbox.window.getLastSeenChangelogId;
+  const setLastSeen = sandbox.window.setLastSeenChangelogId;
+  const key = sandbox.window.LAST_SEEN_CHANGELOG_KEY;
+
+  if (key !== 'coc_last_seen_changelog_id') {
+    throw new Error(`Unexpected LAST_SEEN_CHANGELOG_KEY: ${key}`);
+  }
+
+  // Test fingerprint generation across formats
+  const fp1 = getFp({ publishId: 'wn_v2.2.9_1730000000' });
+  if (fp1 !== 'wn_v2.2.9_1730000000') throw new Error(`Fingerprint publishId failed: ${fp1}`);
+
+  const fp2 = getFp({ version: '2.2.9', publishedAtMs: 1730000000 });
+  if (fp2 !== 'v2.2.9_1730000000') throw new Error(`Fingerprint publishedAtMs failed: ${fp2}`);
+
+  const fp3 = getFp(null);
+  if (!fp3.startsWith('v')) throw new Error(`Fingerprint null failed: ${fp3}`);
+
+  // Test localStorage interaction
+  sandbox.window.localStorage.removeItem(key);
+  if (getLastSeen() !== null) throw new Error(`getLastSeen should be null initially`);
+
+  setLastSeen('wn_test_fp_123');
+  if (getLastSeen() !== 'wn_test_fp_123') throw new Error(`setLastSeen/getLastSeen mismatch`);
+
+  // Test auto-popup function presence and safe execution
+  if (typeof sandbox.window.checkAndShowAutoWhatsNew !== 'function') {
+    throw new Error('checkAndShowAutoWhatsNew is not a function');
+  }
+  sandbox.window.checkAndShowAutoWhatsNew();
+
+  console.log('PASS: What\'s New Fingerprinting and Auto-Launch mechanics verified cleanly');
+} catch (err) {
+  console.error('FAIL: Error in What\'s New smoke test:', err);
+  process.exit(1);
+}
+
 console.log('\nALL BOOT SMOKE TESTS PASSED (exit code 0).\n');
 process.exit(0);

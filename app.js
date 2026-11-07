@@ -3662,6 +3662,7 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
 
   document.body.style.overflow = 'hidden';
   root.classList.add('open');
+  root._currentOnClose = typeof onClose === 'function' ? onClose : null;
 
   let isClosing = false;
   const onKeyDown = (e) => {
@@ -3689,6 +3690,7 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   const close = () => {
     if (isClosing) return;
     isClosing = true;
+    root._currentOnClose = null;
     window.removeEventListener('keydown', onKeyDown);
     if (typeof onClose === 'function') onClose();
 
@@ -7990,6 +7992,9 @@ async function setupAuthLifecycle() {
     if (!initialAuthResolved) {
       initialAuthResolved = true;
       dismissLoader();
+      if (typeof checkAndShowAutoWhatsNew === 'function') {
+        checkAndShowAutoWhatsNew();
+      }
     }
   }, 500);
 
@@ -8102,6 +8107,9 @@ async function setupAuthLifecycle() {
     if (!initialAuthResolved) {
       initialAuthResolved = true;
       dismissLoader();
+      if (typeof checkAndShowAutoWhatsNew === 'function') {
+        checkAndShowAutoWhatsNew();
+      }
     }
   });
 }
@@ -8205,6 +8213,12 @@ function checkAdminRoleUI() {
 }
 
 function closeAllModals() {
+  const root = document.getElementById('shared-modal-root');
+  if (root && typeof root._currentOnClose === 'function') {
+    const fn = root._currentOnClose;
+    root._currentOnClose = null;
+    try { fn(); } catch (e) { console.warn(e); }
+  }
   if (typeof modalStack !== 'undefined') modalStack.length = 0;
   document.querySelectorAll('.modal-backdrop').forEach(m => {
     m.classList.remove('open');
@@ -9621,6 +9635,9 @@ function initFirestoreListeners() {
     const unsubWhatsNew = onSnapshot(doc(db, 'settings', 'whats_new'), (docSnap) => {
       if (docSnap.exists()) {
         state.whatsNew = docSnap.data();
+        if (initialAuthResolved && typeof checkAndShowAutoWhatsNew === 'function') {
+          checkAndShowAutoWhatsNew();
+        }
       }
     }, (err) => console.warn('Whats new listener:', err));
     listeners.add('settings_whats_new', unsubWhatsNew);
@@ -19973,9 +19990,89 @@ export async function clearWhatsNewLocalDraft() {
   } catch (e) { /* ignore */ }
 }
 
-export async function openWhatsNewSheet() {
+/* ==========================================================================
+   WHAT'S NEW READ STATE & AUTOMATIC FIRST-LAUNCH ANNOUNCEMENT
+   ========================================================================== */
+export const LAST_SEEN_CHANGELOG_KEY = 'coc_last_seen_changelog_id';
+
+let autoWhatsNewPresented = false;
+let autoWhatsNewCheckTimer = null;
+
+export function getWhatsNewFingerprint(data) {
+  if (!data) return `v${APP_VERSION}_default`;
+  if (data.publishId) return String(data.publishId);
+  if (data.publishedAtMs) return `v${data.version || APP_VERSION}_${data.publishedAtMs}`;
+  if (data.updatedAt) {
+    const ms = typeof data.updatedAt.toMillis === 'function' ? data.updatedAt.toMillis() :
+               typeof data.updatedAt.toDate === 'function' ? data.updatedAt.toDate().getTime() :
+               typeof data.updatedAt.seconds === 'number' ? data.updatedAt.seconds * 1000 : null;
+    if (ms) return `v${data.version || APP_VERSION}_${ms}`;
+  }
+  if (data.version) {
+    const contentLen = (data.content || data.notes || '').length;
+    return `v${data.version}_len${contentLen}`;
+  }
+  return `v${APP_VERSION}_default`;
+}
+
+export function getLastSeenChangelogId() {
+  try {
+    return localStorage.getItem(LAST_SEEN_CHANGELOG_KEY) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function setLastSeenChangelogId(fingerprint) {
+  try {
+    if (fingerprint) {
+      localStorage.setItem(LAST_SEEN_CHANGELOG_KEY, String(fingerprint));
+    }
+  } catch (e) { /* ignore */ }
+}
+
+export function checkAndShowAutoWhatsNew() {
+  if (autoWhatsNewPresented) return;
+  if (!initialAuthResolved) return;
+
+  if (autoWhatsNewCheckTimer) clearTimeout(autoWhatsNewCheckTimer);
+  autoWhatsNewCheckTimer = setTimeout(async () => {
+    if (autoWhatsNewPresented) return;
+
+    // Avoid conflicting if another modal or domain alert is already open
+    if (document.querySelector('.ios-modal-overlay.open, .modal-backdrop.open') || document.getElementById('modal-unauthorized-domain')?.classList.contains('open')) {
+      return;
+    }
+
+    let liveData = state.whatsNew;
+    if (!liveData && db) {
+      try {
+        const snap = await getDoc(doc(db, 'settings', 'whats_new'));
+        if (snap.exists()) {
+          liveData = snap.data();
+          state.whatsNew = liveData;
+        }
+      } catch (e) {
+        console.warn('Auto whats-new fetch error:', e);
+      }
+    }
+
+    const currentFingerprint = getWhatsNewFingerprint(liveData);
+    const lastSeen = getLastSeenChangelogId();
+
+    if (!lastSeen || lastSeen !== currentFingerprint) {
+      autoWhatsNewPresented = true;
+      openWhatsNewSheet({
+        isAutoPopup: true,
+        fingerprint: currentFingerprint
+      });
+    }
+  }, 750);
+}
+
+export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = null } = {}) {
   let liveData = state.whatsNew || null;
-  if (db) {
+  if (db && !liveData) {
     try {
       const snap = await getDoc(doc(db, 'settings', 'whats_new'));
       if (snap.exists()) {
@@ -19987,6 +20084,7 @@ export async function openWhatsNewSheet() {
     }
   }
 
+  const currentFingerprint = fingerprint || getWhatsNewFingerprint(liveData);
   const displayVersion = liveData?.version || APP_VERSION;
   const displayTitle = liveData?.title || DEFAULT_WHATS_NEW_NOTES.title;
   const displayContent = liveData?.content || liveData?.notes || liveData?.body || DEFAULT_WHATS_NEW_NOTES.content;
@@ -20007,9 +20105,13 @@ export async function openWhatsNewSheet() {
       </div>
     </div>
 
-    <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs">
+    <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs max-h-[50vh] overflow-y-auto">
       ${esc(displayContent)}
     </div>
+
+    <button type="button" id="btn-whats-new-got-it" class="w-full py-3 px-4 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0071E3] transition shadow-sm flex items-center justify-center gap-2 cursor-pointer mt-1">
+      Got it, continue &rarr;
+    </button>
 
     ${isAdmin ? `
       <button type="button" id="btn-whats-new-open-admin-editor" class="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[#0A84FF] font-bold text-xs transition">
@@ -20018,9 +20120,18 @@ export async function openWhatsNewSheet() {
     ` : ''}
   `;
 
+  const gotItBtn = bodyEl.querySelector('#btn-whats-new-got-it');
+  if (gotItBtn) {
+    gotItBtn.onclick = () => {
+      setLastSeenChangelogId(currentFingerprint);
+      closeModal();
+    };
+  }
+
   const editBtn = bodyEl.querySelector('#btn-whats-new-open-admin-editor');
   if (editBtn) {
     editBtn.onclick = () => {
+      setLastSeenChangelogId(currentFingerprint);
       closeModal();
       openAdminWhatsNewEditorModal();
     };
@@ -20030,7 +20141,10 @@ export async function openWhatsNewSheet() {
     title: "What's New",
     body: bodyEl,
     saveLabel: null,
-    cancelLabel: 'Done'
+    cancelLabel: 'Done',
+    onClose: () => {
+      setLastSeenChangelogId(currentFingerprint);
+    }
   });
 }
 
@@ -20170,16 +20284,22 @@ export async function openAdminWhatsNewEditorModal() {
         saveLiveBtn.disabled = true;
         saveLiveBtn.textContent = 'Saving to Live...';
         try {
+          const cleanVer = (liveVersion.trim() || APP_VERSION).replace(/[^a-zA-Z0-9._-]/g, '');
+          const publishId = `wn_${cleanVer}_${Date.now()}`;
           const payload = {
             version: liveVersion.trim() || APP_VERSION,
             title: liveTitle.trim() || `What's New in v${APP_VERSION}`,
             content: liveContent.trim(),
             notes: liveContent.trim(),
+            publishId,
+            publishedAt: serverTimestamp(),
+            publishedAtMs: Date.now(),
             updatedAt: serverTimestamp(),
             updatedBy: state.user?.uid || 'admin'
           };
           await setDoc(doc(db, 'settings', 'whats_new'), payload, { merge: true });
           state.whatsNew = payload;
+          setLastSeenChangelogId(publishId);
           toast('Live release notes updated!', 'success');
         } catch (err) {
           toast('Failed to save live notes: ' + (err.message || err), 'error');
@@ -20250,16 +20370,22 @@ export async function openAdminWhatsNewEditorModal() {
         publishDraftBtn.disabled = true;
         publishDraftBtn.textContent = 'Publishing...';
         try {
+          const cleanVer = (draftVersion.trim() || APP_VERSION).replace(/[^a-zA-Z0-9._-]/g, '');
+          const publishId = `wn_${cleanVer}_${Date.now()}`;
           const payload = {
             version: draftVersion.trim() || APP_VERSION,
             title: draftTitle.trim() || `What's New in v${APP_VERSION}`,
             content: draftContent.trim(),
             notes: draftContent.trim(),
+            publishId,
+            publishedAt: serverTimestamp(),
+            publishedAtMs: Date.now(),
             updatedAt: serverTimestamp(),
             updatedBy: state.user?.uid || 'admin'
           };
           await setDoc(doc(db, 'settings', 'whats_new'), payload, { merge: true });
           state.whatsNew = payload;
+          setLastSeenChangelogId(publishId);
           liveVersion = payload.version;
           liveTitle = payload.title;
           liveContent = payload.content;
@@ -21382,4 +21508,9 @@ if (typeof window !== 'undefined') {
   window.getUserRank = getUserRank;
   window.showUndoSnackbar = showUndoSnackbar;
   window.attachUniversalSwipeActions = attachUniversalSwipeActions;
+  window.LAST_SEEN_CHANGELOG_KEY = LAST_SEEN_CHANGELOG_KEY;
+  window.getWhatsNewFingerprint = getWhatsNewFingerprint;
+  window.getLastSeenChangelogId = getLastSeenChangelogId;
+  window.setLastSeenChangelogId = setLastSeenChangelogId;
+  window.checkAndShowAutoWhatsNew = checkAndShowAutoWhatsNew;
 }
