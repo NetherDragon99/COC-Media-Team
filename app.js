@@ -40,7 +40,7 @@ export function updateDockHeight() {
  */
 
 // SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.8';
+export const APP_VERSION = '2.2.9';
 
 /* ==========================================================================
    GLOBAL PWA INSTALL PROMPT CAPTURE
@@ -809,12 +809,14 @@ export function normalizeUser(raw) {
 export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = '') {
   if (uid && usersMap.has(uid)) {
     const u = usersMap.get(uid);
+    const rawAvatar = u.avatarUrl || u.photoURL || fallbackAvatar;
+    const resolvedAvatar = (rawAvatar && rawAvatar !== './image_ad59c0.jpg') ? rawAvatar : getDeterministicPresetAvatar(u.uid);
     return {
       uid: u.uid,
       name: u.name || u.displayName || fallbackName,
       displayName: u.displayName || u.name || fallbackName,
-      avatarUrl: u.avatarUrl || u.photoURL || fallbackAvatar,
-      photoURL: u.photoURL || u.avatarUrl || fallbackAvatar,
+      avatarUrl: resolvedAvatar,
+      photoURL: resolvedAvatar,
       role: u.role || 'member',
       isAdmin: Boolean(u.isAdmin),
       points: u.points || 0,
@@ -827,12 +829,13 @@ export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = ''
       badgeIds: u.badgeIds || []
     };
   }
+  const resolvedAvatar = (fallbackAvatar && fallbackAvatar !== './image_ad59c0.jpg') ? fallbackAvatar : getDeterministicPresetAvatar(uid);
   return {
     uid: uid || '',
     name: fallbackName,
     displayName: fallbackName,
-    avatarUrl: fallbackAvatar,
-    photoURL: fallbackAvatar,
+    avatarUrl: resolvedAvatar,
+    photoURL: resolvedAvatar,
     role: 'member',
     isAdmin: false,
     points: 0,
@@ -1333,6 +1336,72 @@ function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serve
     return (userObj.weekKey === curWeekKey || userObj.weekBucket === curWeekKey) ? (userObj.weekPoints || 0) : 0;
   }
   return typeof userObj.points === 'number' ? userObj.points : 0;
+}
+
+/**
+ * Single Unified Ranking Engine for Leaderboard & Profile (v2.2.9)
+ * - Standardized competition ranking with tie awareness (tied members share identical rank).
+ * - Members with <= 0 points have rank = null, strictly displayed as '--'.
+ */
+function computeMemberRanks(membersList, period = 'all') {
+  const nowMs = typeof serverNow === 'function' ? serverNow() : Date.now();
+  const allMembers = Array.isArray(membersList) ? membersList : (usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state?.members || [])]);
+  const activeMembers = allMembers.filter(m => !m.disabled);
+
+  const mapped = activeMembers.map(m => {
+    const prof = typeof getUserProfile === 'function' ? getUserProfile(m.uid, m.displayName, m.photoURL) : {};
+    const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
+    const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
+    return { ...m, ...prof, periodPoints, penalties, points: periodPoints };
+  });
+
+  const ranked = mapped
+    .filter(m => Number(m.periodPoints || 0) > 0)
+    .sort((a, b) => {
+      const diff = Number(b.periodPoints || 0) - Number(a.periodPoints || 0);
+      if (diff !== 0) return diff;
+      const penDiff = (a.penalties || 0) - (b.penalties || 0);
+      if (penDiff !== 0) return penDiff;
+      return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
+    });
+
+  // Standard competition ranking (1, 2, 2, 4): equal points AND penalties share exact same rank
+  ranked.forEach((m, idx) => {
+    if (idx > 0 && m.periodPoints === ranked[idx - 1].periodPoints && m.penalties === ranked[idx - 1].penalties) {
+      m.rank = ranked[idx - 1].rank;
+    } else {
+      m.rank = idx + 1;
+    }
+  });
+
+  const unranked = mapped
+    .filter(m => Number(m.periodPoints || 0) <= 0)
+    .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+
+  unranked.forEach(m => {
+    m.rank = null;
+  });
+
+  const ranksByUid = new Map();
+  ranked.forEach(m => ranksByUid.set(m.uid, m.rank));
+  unranked.forEach(m => ranksByUid.set(m.uid, null));
+
+  return {
+    ranked,
+    unranked,
+    all: [...ranked, ...unranked],
+    ranksByUid,
+    rankedMembers: ranked,
+    unrankedMembers: unranked,
+    sorted: [...ranked, ...unranked]
+  };
+}
+
+function getUserRank(uid, period = 'all') {
+  if (!uid) return null;
+  const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state?.members || [])];
+  const { ranksByUid } = computeMemberRanks(allMembers, period);
+  return ranksByUid.get(uid) ?? null;
 }
 
 function daysInMonth(year, month) {
@@ -2479,7 +2548,7 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
   }
 // ==== ENGINE END
 
-export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned };
+export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank };
 
 /* ==========================================================================
    SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
@@ -3701,7 +3770,6 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
 export function initSheetDragGestures() {
   let activeSheet = null;
   let startY = 0;
-  let startHeight = 0;
   let startTime = 0;
   let viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
   let isDragging = false;
@@ -3726,8 +3794,7 @@ export function initSheetDragGestures() {
 
     startY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
     startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    startHeight = sheet.getBoundingClientRect().height;
-    viewportH = window.innerHeight;
+    viewportH = window.innerHeight || 800;
     activeSheet = sheet;
     activeScrollEl = scrollEl;
 
@@ -3735,8 +3802,8 @@ export function initSheetDragGestures() {
       isDragging = true;
       potentialContentDrag = false;
       sheet.classList.add('is-dragging');
+      sheet.style.transition = 'none';
     } else if (scrollEl && scrollEl.scrollTop <= 0) {
-      // At the top of content, eligible for pull-down dismiss
       potentialContentDrag = true;
       isDragging = false;
     }
@@ -3749,10 +3816,11 @@ export function initSheetDragGestures() {
     const deltaY = currentY - startY;
 
     if (!isDragging && potentialContentDrag) {
-      if (deltaY > 10 && (!activeScrollEl || activeScrollEl.scrollTop <= 0)) {
+      if (deltaY > 8 && (!activeScrollEl || activeScrollEl.scrollTop <= 0)) {
         isDragging = true;
         potentialContentDrag = false;
         activeSheet.classList.add('is-dragging');
+        activeSheet.style.transition = 'none';
       } else if (deltaY < -5) {
         potentialContentDrag = false;
         return;
@@ -3760,25 +3828,18 @@ export function initSheetDragGestures() {
     }
 
     if (!isDragging) return;
+    if (e.cancelable) e.preventDefault();
 
-    const minH = 0.25 * viewportH;
-    const maxH = 0.95 * viewportH;
-    const targetHeight = startHeight - deltaY;
-
-    if (targetHeight >= minH) {
-      const clampedHeight = Math.min(maxH, targetHeight);
-      activeSheet.style.height = `${clampedHeight}px`;
-      activeSheet.style.maxHeight = `${clampedHeight}px`;
-      activeSheet.style.transform = 'translateY(0)';
+    // 1:1 Instantaneous GPU-accelerated tracking:
+    if (deltaY > 0) {
+      activeSheet.style.transform = `translateY(${deltaY}px)`;
     } else {
-      activeSheet.style.height = `${minH}px`;
-      activeSheet.style.maxHeight = `${minH}px`;
-      activeSheet.style.transform = `translateY(${minH - targetHeight}px)`;
+      activeSheet.style.transform = `translateY(${deltaY * 0.25}px)`;
     }
 
     const backdrop = activeSheet.closest('.modal-backdrop, .sub-modal-overlay');
     if (backdrop) {
-      const progress = Math.max(0.2, Math.min(1, targetHeight / (0.75 * viewportH)));
+      const progress = Math.max(0.1, Math.min(1, 1 - (Math.max(0, deltaY) / (0.75 * viewportH))));
       backdrop.style.opacity = progress.toFixed(2);
     }
   };
@@ -3808,31 +3869,24 @@ export function initSheetDragGestures() {
 
     if (!wasDragging) return;
 
-    const finalHeight = startHeight - deltaY;
-    const finalRatio = finalHeight / viewportH;
-
-    // Dismiss Resolution: If released below 25% viewport height OR high downward velocity (>0.8 px/ms)
-    const shouldDismiss = (finalRatio < 0.25) || (velocity > 0.8 && deltaY > 30);
+    // Dismiss Resolution: downward drag past 110px or downward flick velocity > 0.45 px/ms
+    const shouldDismiss = (deltaY > 110) || (velocity > 0.45 && deltaY > 30);
 
     if (shouldDismiss) {
-      sheet.style.transition = 'transform 0.24s cubic-bezier(0.32, 0.72, 0, 1)';
+      sheet.style.transition = 'transform 0.22s cubic-bezier(0.32, 0.72, 0, 1)';
       sheet.style.transform = 'translateY(100%)';
       setTimeout(() => {
         sheet.style.transform = '';
+        sheet.style.transition = '';
         sheet.style.height = '';
         sheet.style.maxHeight = '';
         dismissModalSheet(sheet);
-      }, 240);
+      }, 220);
       return;
     }
 
-    // Freeform Fluid Height Retention:
-    // Sheet stays at exact released height clamped between 25vh and 95vh
-    const clampedParkedHeight = Math.min(0.95 * viewportH, Math.max(0.25 * viewportH, finalHeight));
-    sheet.classList.remove('sheet-detent-large');
-    sheet.style.transition = 'height 0.18s ease, max-height 0.18s ease';
-    sheet.style.height = `${clampedParkedHeight}px`;
-    sheet.style.maxHeight = `${clampedParkedHeight}px`;
+    // Gracefully snap back to fully open position (never freeze mid-air)
+    sheet.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
     sheet.style.transform = 'translateY(0)';
     setTimeout(() => {
       sheet.style.transition = '';
@@ -3872,20 +3926,40 @@ export function initSheetDragGestures() {
     closeModal();
   }
 
-  // Pointer events (with touch fallbacks)
-  document.addEventListener('pointerdown', onStart, { passive: true });
-  document.addEventListener('pointermove', onMove, { passive: true });
-  document.addEventListener('pointerup', onEnd, { passive: true });
-  document.addEventListener('pointercancel', onEnd, { passive: true });
-
-  document.addEventListener('touchstart', onStart, { passive: true });
-  document.addEventListener('touchmove', onMove, { passive: true });
-  document.addEventListener('touchend', onEnd, { passive: true });
-  document.addEventListener('touchcancel', onEnd, { passive: true });
+  // Pointer events with touch deduplication
+  if (typeof window !== 'undefined' && 'PointerEvent' in window) {
+    document.addEventListener('pointerdown', onStart, { passive: true });
+    document.addEventListener('pointermove', onMove, { passive: false });
+    document.addEventListener('pointerup', onEnd, { passive: true });
+    document.addEventListener('pointercancel', onEnd, { passive: true });
+  } else {
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd, { passive: true });
+    document.addEventListener('touchcancel', onEnd, { passive: true });
+  }
 }
 
 /**
- * Deterministic avatar renderer with color hashed from uid and fallback initials.
+ * Deterministic Preset Avatar Generator (v2.2.9)
+ * Picks an avatar from the 24 preset vector characters deterministically via UID hash.
+ * Guaranteed to stay the exact same across every page reload and device.
+ */
+export function getDeterministicPresetAvatar(uid) {
+  const presets = typeof getPresetAvatars === 'function' ? getPresetAvatars() : [];
+  if (!presets || presets.length === 0) return './image_ad59c0.jpg';
+  const str = String(uid || 'guest');
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % presets.length;
+  return presets[index]?.dataUrl || './image_ad59c0.jpg';
+}
+
+/**
+ * Universal Avatar Renderer with Deterministic Persistent Fallback (v2.2.9)
  */
 export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   if (typeof sizeClass === 'number') {
@@ -3894,37 +3968,13 @@ export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   const name = user?.name || user?.displayName || user?.userName || 'Team Member';
   const uid = user?.uid || user?.userId || 'guest';
   const photo = user?.avatarUrl || user?.photoURL || user?.userAvatar || '';
-  const isSafe = /^data:image\/(webp|jpeg|png);base64,/i.test(photo) || /^https?:\/\//i.test(photo);
-
-  const initials = name
-    .split(' ')
-    .filter(Boolean)
-    .slice(0, 2)
-    .map(p => p[0].toUpperCase())
-    .join('') || 'U';
-
-  const palette = ['#007AFF', '#34C759', '#FF9500', '#FF2D55', '#AF52DE', '#5856D6', '#00C7BE', '#32ADE6'];
-  let hash = 0;
-  for (let i = 0; i < uid.length; i++) {
-    hash = (hash << 5) - hash + uid.charCodeAt(i);
-    hash |= 0;
-  }
-  const color = palette[Math.abs(hash) % palette.length];
-
-  if (isSafe && photo) {
-    return `
-      <div class="${sizeClass} rounded-full overflow-hidden border border-white/20 flex-shrink-0 bg-white/5 relative">
-        <img src="${esc(photo)}" alt="${esc(name)}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
-        <div style="display:none; background-color:${color};" class="w-full h-full items-center justify-center font-bold text-white text-xs">
-          ${esc(initials)}
-        </div>
-      </div>
-    `;
-  }
+  const isSafe = /^data:image\/(webp|jpeg|png|svg\+xml);base64,/i.test(photo) || /^data:image\/svg\+xml/i.test(photo) || /^https?:\/\//i.test(photo);
+  const fallbackPreset = getDeterministicPresetAvatar(uid);
+  const effectivePhoto = (isSafe && photo && photo !== './image_ad59c0.jpg') ? photo : fallbackPreset;
 
   return `
-    <div class="${sizeClass} rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center font-bold text-white text-xs border border-white/20 shadow-sm" style="background-color: ${color};">
-      ${esc(initials)}
+    <div class="${sizeClass} rounded-full overflow-hidden border border-white/20 flex-shrink-0 bg-white/5 relative">
+      <img src="${esc(effectivePhoto)}" alt="${esc(name)}" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='${esc(fallbackPreset)}';" />
     </div>
   `;
 }
@@ -4052,9 +4102,17 @@ export function renderBadgeRow(container, badges, member) {
     const gap = 4;
 
     let visibleCount = normBadges.length;
+    let hasOverflow = false;
+
     if (availableWidth > 0) {
-      visibleCount = Math.max(0, Math.floor((availableWidth + gap) / (iconSize + gap)));
-      visibleCount = Math.min(normBadges.length, visibleCount);
+      const maxFullFit = Math.floor((availableWidth + gap) / (iconSize + gap));
+      if (maxFullFit < normBadges.length) {
+        hasOverflow = true;
+        // Reserve 1 slot (iconSize + gap) for the 22px ellipsis pill
+        visibleCount = Math.max(0, Math.floor((availableWidth - iconSize) / (iconSize + gap)));
+      } else {
+        visibleCount = normBadges.length;
+      }
     }
 
     const htmlParts = [];
@@ -4067,7 +4125,28 @@ export function renderBadgeRow(container, badges, member) {
       `);
     }
 
+    if (hasOverflow) {
+      const remainingCount = normBadges.length - visibleCount;
+      const remainingLabels = normBadges.slice(visibleCount).map(b => b.label).join(', ');
+      htmlParts.push(`
+        <span class="badge-overflow-pill shrink-0 flex items-center justify-center cursor-pointer" data-no-row-tap="true" data-member-uid="${esc(member?.uid || '')}" title="${remainingCount} more badges: ${esc(remainingLabels)}" style="width:22px; height:22px; min-width:22px;">...</span>
+      `);
+    }
+
     container.innerHTML = htmlParts.join('');
+
+    if (hasOverflow) {
+      const pill = container.querySelector('.badge-overflow-pill');
+      if (pill) {
+        pill.onclick = (e) => {
+          e.stopPropagation();
+          const targetUid = member?.uid || pill.dataset.memberUid;
+          if (targetUid && typeof openMiniProfileSheet === 'function') {
+            openMiniProfileSheet(targetUid);
+          }
+        };
+      }
+    }
   };
 
   let ro = badgeRowObservers.get(container);
@@ -4122,15 +4201,19 @@ export function openMiniProfileSheet(uidOrMember) {
           </div>
         </div>
 
-        <!-- Exactly 2-column grid: POINTS and PENALTIES -->
-        <div class="grid grid-cols-2 gap-3 pt-1">
-          <div class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+        <!-- 3-column grid: POINTS, PENALTIES, and SCORE -->
+        <div class="grid grid-cols-3 gap-2 pt-1">
+          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
             <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Points</span>
-            <span class="text-2xl font-bold text-white tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.points || 0}</span>
+            <span class="text-xl font-bold text-white tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.points || 0}</span>
           </div>
-          <div class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
             <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Penalties</span>
-            <span class="text-2xl font-bold text-rose-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.penalties || 0}</span>
+            <span class="text-xl font-bold text-rose-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.penalties || 0}</span>
+          </div>
+          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+            <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Score</span>
+            <span class="text-xl font-bold text-emerald-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${Math.max(0, (userProf.points || 0) - (userProf.penalties || 0))}</span>
           </div>
         </div>
 
@@ -5835,6 +5918,274 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
 /* ==========================================================================
    PAGE NAVIGATION PAGER CONTROLLER
    ========================================================================== */
+/* ==========================================================================
+   GLOBAL RESCUE UNDO SNACKBAR (v2.2.9)
+   ========================================================================== */
+let activeSnackbarTimer = null;
+let activeSnackbarEl = null;
+
+export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 4000) {
+  if (activeSnackbarEl) {
+    if (activeSnackbarTimer) clearTimeout(activeSnackbarTimer);
+    activeSnackbarEl.classList.remove('show');
+    const oldExpire = activeSnackbarEl._onExpire;
+    if (typeof oldExpire === 'function') oldExpire();
+    activeSnackbarEl.remove();
+    activeSnackbarEl = null;
+  }
+
+  const container = document.createElement('div');
+  container.className = 'undo-snackbar-container';
+  container.innerHTML = `
+    <span>${esc(message)}</span>
+    <button type="button" class="undo-btn">UNDO</button>
+    <div class="undo-snackbar-progress">
+      <div class="undo-snackbar-progress-bar"></div>
+    </div>
+  `;
+
+  document.body.appendChild(container);
+  activeSnackbarEl = container;
+  container._onExpire = onExpire;
+
+  requestAnimationFrame(() => {
+    container.classList.add('show');
+    const bar = container.querySelector('.undo-snackbar-progress-bar');
+    if (bar) {
+      bar.style.transition = `transform ${duration}ms linear`;
+      requestAnimationFrame(() => {
+        bar.style.transform = 'scaleX(0)';
+      });
+    }
+  });
+
+  let undone = false;
+  const undoBtn = container.querySelector('.undo-btn');
+  if (undoBtn) {
+    undoBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (undone) return;
+      undone = true;
+      if (activeSnackbarTimer) clearTimeout(activeSnackbarTimer);
+      container.classList.remove('show');
+      setTimeout(() => container.remove(), 250);
+      activeSnackbarEl = null;
+      if (typeof onUndo === 'function') onUndo();
+    };
+  }
+
+  activeSnackbarTimer = setTimeout(() => {
+    if (undone) return;
+    container.classList.remove('show');
+    setTimeout(() => container.remove(), 250);
+    activeSnackbarEl = null;
+    if (typeof onExpire === 'function') onExpire();
+  }, duration);
+}
+
+/* ==========================================================================
+   UNIVERSAL DUAL-DIRECTION SWIPES (v2.2.9)
+   ========================================================================== */
+export function attachUniversalSwipeActions(wrapperEl, {
+  archiveLabel = 'Archive',
+  archiveIcon = 'archive',
+  onArchive = null,
+  deleteLabel = 'Delete',
+  deleteIcon = 'trash',
+  onDelete = null,
+  entityName = 'Item'
+} = {}) {
+  if (!wrapperEl) return () => {};
+
+  wrapperEl.classList.add('universal-swipe-wrapper');
+  wrapperEl.setAttribute('data-swipe-card', 'true');
+
+  const contentCard = wrapperEl.querySelector('.bulk-card-content') || wrapperEl.querySelector('.universal-swipe-card-content') || wrapperEl.firstElementChild;
+  if (!contentCard) return () => {};
+  contentCard.classList.add('universal-swipe-card-content');
+
+  let bgArchive = wrapperEl.querySelector('.universal-swipe-bg-archive');
+  if (!bgArchive && onArchive) {
+    bgArchive = document.createElement('div');
+    bgArchive.className = 'universal-swipe-bg universal-swipe-bg-archive';
+    bgArchive.style.display = 'none';
+    bgArchive.innerHTML = `
+      <div class="flex items-center gap-2">
+        <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+        <span>${esc(archiveLabel)}</span>
+      </div>
+    `;
+    wrapperEl.insertBefore(bgArchive, contentCard);
+  }
+
+  let bgDelete = wrapperEl.querySelector('.universal-swipe-bg-delete');
+  if (!bgDelete && onDelete) {
+    bgDelete = document.createElement('div');
+    bgDelete.className = 'universal-swipe-bg universal-swipe-bg-delete';
+    bgDelete.style.display = 'none';
+    bgDelete.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span>${esc(deleteLabel)}</span>
+        <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+      </div>
+    `;
+    wrapperEl.insertBefore(bgDelete, contentCard);
+  }
+
+  let startX = 0;
+  let startY = 0;
+  let startTime = 0;
+  let isSwiping = false;
+
+  const pagerEl = wrapperEl.closest('.pager-container') || document.getElementById('user-pager');
+
+  const onTouchStart = (e) => {
+    if (selectionState && selectionState.active) return;
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    startX = touch.clientX;
+    startY = touch.clientY;
+    startTime = Date.now();
+    isSwiping = false;
+
+    // Disambiguation: ignore if touch initiates within 24px of screen edges
+    if (startX < 24 || startX > window.innerWidth - 24) return;
+  };
+
+  const onTouchMove = (e) => {
+    if (e.touches.length !== 1) return;
+    if (startX < 24 || startX > window.innerWidth - 24) return;
+
+    const touch = e.touches[0];
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+
+    if (!isSwiping) {
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        if (dx > 0 && !onArchive) return;
+        if (dx < 0 && !onDelete) return;
+
+        isSwiping = true;
+        if (pagerEl) {
+          pagerEl.style.overflowX = 'hidden';
+          pagerEl.style.touchAction = 'pan-y';
+        }
+      }
+    }
+
+    if (isSwiping) {
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+
+      const cardWidth = wrapperEl.offsetWidth || 300;
+      let clampedDx = dx;
+      if (dx > 0) {
+        clampedDx = dx > cardWidth * 0.5 ? cardWidth * 0.5 + (dx - cardWidth * 0.5) * 0.25 : dx;
+        if (bgArchive) bgArchive.style.display = 'flex';
+        if (bgDelete) bgDelete.style.display = 'none';
+      } else {
+        clampedDx = dx < -cardWidth * 0.5 ? -cardWidth * 0.5 + (dx + cardWidth * 0.5) * 0.25 : dx;
+        if (bgArchive) bgArchive.style.display = 'none';
+        if (bgDelete) bgDelete.style.display = 'flex';
+      }
+
+      contentCard.style.transform = `translateX(${clampedDx}px)`;
+      contentCard.style.transition = 'none';
+    }
+  };
+
+  const onTouchEnd = (e) => {
+    if (!isSwiping) return;
+
+    const touch = e.changedTouches[0];
+    const dx = touch ? touch.clientX - startX : 0;
+    const dt = Math.max(1, Date.now() - startTime);
+    const velocity = Math.abs(dx) / dt;
+    const cardWidth = wrapperEl.offsetWidth || 300;
+    const threshold = cardWidth * 0.38;
+
+    isSwiping = false;
+    if (pagerEl) {
+      pagerEl.style.overflowX = '';
+      pagerEl.style.touchAction = '';
+    }
+
+    const isLtrTriggered = onArchive && dx > 0 && (dx >= threshold || velocity > 0.45);
+    const isRtlTriggered = onDelete && dx < 0 && (Math.abs(dx) >= threshold || velocity > 0.45);
+
+    if (isLtrTriggered) {
+      contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = `translateX(${cardWidth + 40}px)`;
+      setTimeout(() => {
+        executeCollapseAndAction('archive');
+      }, 180);
+    } else if (isRtlTriggered) {
+      contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = `translateX(-${cardWidth + 40}px)`;
+      setTimeout(() => {
+        executeCollapseAndAction('delete');
+      }, 180);
+    } else {
+      contentCard.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = '';
+      setTimeout(() => {
+        if (bgArchive) bgArchive.style.display = 'none';
+        if (bgDelete) bgDelete.style.display = 'none';
+      }, 250);
+    }
+  };
+
+  const executeCollapseAndAction = (actionType) => {
+    const parentNode = wrapperEl.parentNode;
+    const nextSibling = wrapperEl.nextSibling;
+
+    wrapperEl.classList.add('swiped-collapsed');
+
+    let isRestored = false;
+    const restoreDOM = () => {
+      if (isRestored) return;
+      isRestored = true;
+      wrapperEl.classList.remove('swiped-collapsed');
+      contentCard.style.transition = 'transform 0.25s ease';
+      contentCard.style.transform = '';
+      if (bgArchive) bgArchive.style.display = 'none';
+      if (bgDelete) bgDelete.style.display = 'none';
+      if (parentNode && !parentNode.contains(wrapperEl)) {
+        if (nextSibling) {
+          parentNode.insertBefore(wrapperEl, nextSibling);
+        } else {
+          parentNode.appendChild(wrapperEl);
+        }
+      }
+    };
+
+    if (actionType === 'archive' && typeof onArchive === 'function') {
+      showUndoSnackbar(`${entityName} ${archiveLabel.toLowerCase()}d`, () => {
+        restoreDOM();
+      }, () => {
+        onArchive(wrapperEl);
+      });
+    } else if (actionType === 'delete' && typeof onDelete === 'function') {
+      showUndoSnackbar(`${entityName} deleted`, () => {
+        restoreDOM();
+      }, () => {
+        onDelete(wrapperEl);
+      });
+    }
+  };
+
+  wrapperEl.addEventListener('touchstart', onTouchStart, { passive: true });
+  wrapperEl.addEventListener('touchmove', onTouchMove, { passive: false });
+  wrapperEl.addEventListener('touchend', onTouchEnd, { passive: true });
+  wrapperEl.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+  return () => {
+    wrapperEl.removeEventListener('touchstart', onTouchStart);
+    wrapperEl.removeEventListener('touchmove', onTouchMove);
+    wrapperEl.removeEventListener('touchend', onTouchEnd);
+    wrapperEl.removeEventListener('touchcancel', onTouchEnd);
+  };
+}
 function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChange = null) {
   if (!pagerEl || !dockEl || !Array.isArray(pages) || pages.length === 0) {
     return { goTo: () => {}, getActive: () => '', destroy: () => {} };
@@ -5953,7 +6304,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
 
   function onTouchStart(e) {
     if (e.touches && e.touches.length > 1) return;
-    if (e.target && e.target.closest && e.target.closest('#category-filter-chips, input, textarea, select')) {
+    if (e.target && e.target.closest && e.target.closest('#category-filter-chips, input, textarea, select, .universal-swipe-wrapper, [data-swipe-card="true"], .notif-swipe-wrapper, .notification-card, .drag-reorder-handle')) {
       return;
     }
 
@@ -6073,7 +6424,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   function onPointerDown(e) {
     if (e.pointerType === 'touch') return;
     if (e.button !== 0) return;
-    if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, #category-filter-chips, .interactive')) {
+    if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, #category-filter-chips, .interactive, .universal-swipe-wrapper, [data-swipe-card="true"], .notif-swipe-wrapper, .notification-card, .drag-reorder-handle')) {
       return;
     }
 
@@ -7755,7 +8106,10 @@ async function setupAuthLifecycle() {
   });
 }
 
-async function handleGoogleSignIn() {
+async function handleGoogleSignIn(e) {
+  if (e && typeof e.preventDefault === 'function') e.preventDefault();
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+
   if (!auth || !googleProvider) {
     toast('Authentication unavailable', 'error');
     return;
@@ -7774,8 +8128,8 @@ async function handleGoogleSignIn() {
     toast('Signed in successfully!', 'success');
     closeAllModals();
   } catch (err) {
-    console.warn('Popup sign in failed, attempting redirect fallback:', err);
-    if (err.code === 'auth/popup-blocked' || err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+    console.warn('Popup sign in status:', err);
+    if (err.code === 'auth/popup-blocked') {
       try {
         await signInWithRedirect(auth, googleProvider);
       } catch (redirectErr) {
@@ -7785,6 +8139,10 @@ async function handleGoogleSignIn() {
           toast(redirectErr.message || 'Sign in failed', 'error');
         }
       }
+    } else if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+      // User cancelled or closed the sign-in popup. Do NOT trigger a page redirect reload!
+      console.log('Google sign-in popup closed or cancelled by user.');
+      return;
     } else if (err.code === 'auth/unauthorized-domain') {
       showDomainModal();
     } else {
@@ -10364,39 +10722,9 @@ export function renderLeaderboard() {
   const nowMs = serverNow();
   const period = state.leaderboardPeriod || 'all';
 
-  // Zero-Extra-Reads: compute directly from usersMap in memory
+  // Zero-Extra-Reads: compute directly via unified ranking engine
   const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
-  const activeMembers = allMembers.filter(m => !m.disabled);
-
-  const sorted = (activeMembers || []).map(m => {
-    const prof = getUserProfile(m.uid, m.displayName, m.photoURL);
-    const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
-    const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
-    return { ...m, ...prof, periodPoints, penalties, points: periodPoints };
-  });
-
-  const rankedMembers = sorted
-    .filter(m => Number(m.periodPoints || 0) > 0)
-    .sort((a, b) => {
-      const diff = Number(b.periodPoints || 0) - Number(a.periodPoints || 0);
-      if (diff !== 0) return diff;
-      const penDiff = (a.penalties || 0) - (b.penalties || 0);
-      if (penDiff !== 0) return penDiff;
-      return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
-    });
-
-  // Calculate tie-aware ranks: members with equal periodPoints share the exact same rank
-  rankedMembers.forEach((m, idx) => {
-    if (idx > 0 && m.periodPoints === rankedMembers[idx - 1].periodPoints) {
-      m.rank = rankedMembers[idx - 1].rank;
-    } else {
-      m.rank = idx + 1;
-    }
-  });
-
-  const unrankedMembers = sorted
-    .filter(m => Number(m.periodPoints || 0) <= 0)
-    .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  const { rankedMembers, unrankedMembers, sorted } = computeMemberRanks(allMembers, period);
 
   if (countEl) countEl.textContent = `${sorted.length} Members`;
 
@@ -10531,7 +10859,7 @@ export function renderLeaderboard() {
     if (rankedMembers.length > 0) {
       listHtml += `<div class="pt-3 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">Other Members</div>`;
     }
-    listHtml += unrankedMembers.map(m => memberRowHtml(m, '–', true)).join('');
+    listHtml += unrankedMembers.map(m => memberRowHtml(m, '--', true)).join('');
   }
 
   listEl.innerHTML = listHtml;
@@ -11353,148 +11681,12 @@ export function renderNotifications() {
     `;
   }).join('');
 
-  const executeSwipeDelete = async (wrapperEl, notifId) => {
-    if (!wrapperEl || wrapperEl.dataset.deleting === 'true') return;
-    wrapperEl.dataset.deleting = 'true';
-    const cardEl = wrapperEl.querySelector('.notification-card');
-    if (cardEl) {
-      cardEl.style.transition = 'transform 0.22s cubic-bezier(0.32, 0.72, 0, 1)';
-      cardEl.style.transform = 'translateX(-105%)';
-    }
-    wrapperEl.style.maxHeight = `${wrapperEl.offsetHeight || 72}px`;
-    requestAnimationFrame(() => {
-      wrapperEl.classList.add('collapsing');
-    });
-    setTimeout(async () => {
-      await deleteSingleNotificationFromFirestore(notifId, state.user?.uid);
-      updateNotificationBadges();
-      renderNotifications();
-    }, 220);
-  };
-
   container.querySelectorAll('.notif-swipe-wrapper').forEach(wrapper => {
     const card = wrapper.querySelector('.notification-card');
-    const bgBtn = wrapper.querySelector('.notif-swipe-bg');
     const notifId = wrapper.dataset.notifId;
     if (!card || !notifId) return;
 
-    let startX = 0;
-    let startY = 0;
-    let currentX = 0;
-    let isSwiping = false;
-    let isScrolling = false;
-    let suppressNextClick = false;
-
-    const onStart = (clientX, clientY) => {
-      if (selectionState.active) return;
-      startX = clientX;
-      startY = clientY;
-      currentX = wrapper.classList.contains('is-open') ? -84 : 0;
-      isSwiping = false;
-      isScrolling = false;
-    };
-
-    const onMove = (clientX, clientY, e) => {
-      if (selectionState.active || isScrolling) return;
-      const dx = clientX - startX;
-      const dy = clientY - startY;
-
-      if (!isSwiping) {
-        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 8) {
-          isScrolling = true;
-          return;
-        }
-        if (Math.abs(dx) > 10 && dx < 0) {
-          isSwiping = true;
-          wrapper.classList.add('is-swiping');
-        } else if (wrapper.classList.contains('is-open') && Math.abs(dx) > 8) {
-          isSwiping = true;
-          wrapper.classList.add('is-swiping');
-        }
-      }
-
-      if (isSwiping) {
-        if (e && e.cancelable) e.preventDefault();
-        if (e && e.stopPropagation) e.stopPropagation();
-        const baseOffset = wrapper.classList.contains('is-open') ? -84 : 0;
-        const nextX = Math.min(0, Math.max(-wrapper.offsetWidth, baseOffset + dx));
-        currentX = nextX;
-        card.style.transform = `translateX(${nextX}px)`;
-      }
-    };
-
-    const onEnd = () => {
-      if (!isSwiping) return;
-      isSwiping = false;
-      suppressNextClick = true;
-      setTimeout(() => { suppressNextClick = false; }, 260);
-      wrapper.classList.remove('is-swiping');
-
-      const width = wrapper.offsetWidth || 320;
-      if (currentX < -Math.min(115, width * 0.42)) {
-        executeSwipeDelete(wrapper, notifId);
-      } else if (currentX < -42) {
-        wrapper.classList.add('is-open');
-        card.style.transform = 'translateX(-84px)';
-      } else {
-        wrapper.classList.remove('is-open');
-        card.style.transform = 'translateX(0px)';
-      }
-    };
-
-    card.addEventListener('touchstart', (e) => {
-      if (e.touches.length !== 1) return;
-      onStart(e.touches[0].clientX, e.touches[0].clientY);
-    }, { passive: true });
-
-    card.addEventListener('touchmove', (e) => {
-      if (e.touches.length !== 1) return;
-      onMove(e.touches[0].clientX, e.touches[0].clientY, e);
-    }, { passive: false });
-
-    card.addEventListener('touchend', onEnd);
-    card.addEventListener('touchcancel', onEnd);
-
-    let pointerDown = false;
-    card.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'touch' || e.button !== 0) return;
-      pointerDown = true;
-      onStart(e.clientX, e.clientY);
-    });
-    card.addEventListener('pointermove', (e) => {
-      if (!pointerDown || e.pointerType === 'touch') return;
-      onMove(e.clientX, e.clientY, e);
-    });
-    card.addEventListener('pointerup', (e) => {
-      if (!pointerDown || e.pointerType === 'touch') return;
-      pointerDown = false;
-      onEnd();
-    });
-    card.addEventListener('pointercancel', () => {
-      if (!pointerDown) return;
-      pointerDown = false;
-      onEnd();
-    });
-
-    if (bgBtn) {
-      bgBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        executeSwipeDelete(wrapper, notifId);
-      };
-    }
-
     card.onclick = (e) => {
-      if (suppressNextClick) {
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      if (wrapper.classList.contains('is-open')) {
-        wrapper.classList.remove('is-open');
-        card.style.transform = 'translateX(0px)';
-        return;
-      }
       if (selectionState.active && selectionState.type === 'notifications') {
         e.preventDefault();
         e.stopPropagation();
@@ -11507,6 +11699,34 @@ export function renderNotifications() {
 
     attachLongPress(card, () => {
       enterSelectionMode('notifications', card.dataset.bulkId);
+    });
+
+    const notifObj = state.notifications.find(x => x.id === notifId);
+    attachUniversalSwipeActions(wrapper, {
+      archiveLabel: 'Mark Read',
+      onArchive: async () => {
+        try {
+          if (notifObj) notifObj.read = true;
+          updateNotificationBadges();
+          renderNotifications();
+          await markSingleNotificationReadInFirestore(notifId, state.user?.uid, true);
+        } catch (err) {
+          console.warn('Mark read warning:', err);
+        }
+      },
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteSingleNotificationFromFirestore(notifId, state.user?.uid);
+          state.notifications = (state.notifications || []).filter(x => x.id !== notifId);
+          updateNotificationBadges();
+          renderNotifications();
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete notification', 'error');
+        }
+      },
+      entityName: 'Notification'
     });
   });
 }
@@ -11709,7 +11929,7 @@ function updateProfileUI() {
     if (nameEl) nameEl.textContent = state.user.displayName;
     const emailToDisplay = state.userPrivate?.email || state.user.email || 'Verified Member';
     if (emailEl) emailEl.textContent = emailToDisplay;
-    if (avatarEl && state.user.photoURL) avatarEl.src = state.user.photoURL;
+    if (avatarEl) avatarEl.src = state.user.photoURL || state.user.avatarUrl || getDeterministicPresetAvatar(state.user.uid);
 
     const resolvedMyBadges = resolveOrderedUserBadges(state.user.badges, state.user);
     if (profileBadgesEl) {
@@ -11760,9 +11980,12 @@ function updateProfileUI() {
     if (compEl) compEl.textContent = completedCount;
     if (penEl) penEl.textContent = `${state.user.penalties || 0} pts`;
 
-    const sorted = [...state.members].sort((a, b) => (b.points || 0) - (a.points || 0));
-    const myRank = sorted.findIndex(m => m.uid === state.user.uid);
-    if (rankEl) rankEl.textContent = myRank !== -1 ? `#${myRank + 1}` : '--';
+    const scoreEl = document.getElementById('profile-stat-score');
+    const netScore = Math.max(0, (state.user.points || 0) - (state.user.penalties || 0));
+    if (scoreEl) scoreEl.textContent = netScore;
+
+    const myRank = getUserRank(state.user.uid, 'all');
+    if (rankEl) rankEl.textContent = (myRank != null && Number(state.user.points || 0) > 0) ? `#${myRank}` : '--';
 
     renderSettingsDrawer();
 
@@ -11793,6 +12016,8 @@ function updateProfileUI() {
     if (ptsEl) ptsEl.textContent = '0';
     if (compEl) compEl.textContent = '0';
     if (penEl) penEl.textContent = '0';
+    const scoreEl = document.getElementById('profile-stat-score');
+    if (scoreEl) scoreEl.textContent = '0';
     if (rankEl) rankEl.textContent = '--';
 
     if (guestCard) guestCard.classList.remove('hidden');
@@ -12029,13 +12254,20 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
     let draggingItem = null;
     let pointerId = null;
     let initialIds = [];
+    let startY = 0;
+    let startX = 0;
+    let allItems = [];
+    let startIndex = -1;
+    let targetIndex = -1;
+    let slotHeight = 0;
+    let isHorizontal = false;
 
     const getOrderedIds = () => Array.from(containerEl.querySelectorAll(itemSelector))
       .map(el => el.getAttribute(idAttr))
       .filter(Boolean);
 
     const onPointerDown = (e) => {
-      if (selectionState.active) return;
+      if (selectionState && selectionState.active) return;
       if (e.button !== undefined && e.button !== 0) return;
       const item = handle.closest(itemSelector);
       if (!item) return;
@@ -12046,7 +12278,29 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       draggingItem = item;
       pointerId = e.pointerId;
       initialIds = getOrderedIds();
+      startY = e.clientY;
+      startX = e.clientX;
+
+      allItems = Array.from(containerEl.querySelectorAll(itemSelector));
+      startIndex = allItems.indexOf(draggingItem);
+      targetIndex = startIndex;
+
+      const itemRect = draggingItem.getBoundingClientRect();
+      const nextSib = allItems[startIndex + 1] || allItems[startIndex - 1];
+      const gap = nextSib ? Math.abs(nextSib.getBoundingClientRect().top - itemRect.top) - itemRect.height : 8;
+      slotHeight = Math.max(20, itemRect.height + Math.max(4, gap));
+
+      // Check if layout is horizontal/flex-wrap
+      isHorizontal = allItems.length > 1 && allItems.some((el, idx) => {
+        if (idx === 0) return false;
+        return Math.abs(el.getBoundingClientRect().top - allItems[0].getBoundingClientRect().top) < 10;
+      });
+
       draggingItem.classList.add('dragging-reorder-item');
+      allItems.forEach(el => {
+        if (el !== draggingItem) el.classList.add('drag-reorder-displaced');
+      });
+
       try {
         if (handle.setPointerCapture && pointerId != null) {
           handle.setPointerCapture(pointerId);
@@ -12059,30 +12313,52 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       e.preventDefault();
       e.stopPropagation();
 
-      const clientY = e.clientY;
-      const clientX = e.clientX;
-      const siblings = Array.from(containerEl.querySelectorAll(itemSelector)).filter(el => el !== draggingItem);
+      const deltaY = e.clientY - startY;
+      const deltaX = e.clientX - startX;
 
-      for (const sib of siblings) {
-        const rect = sib.getBoundingClientRect();
-        const isHorizontal = rect.width < containerEl.clientWidth * 0.65 && siblings.some(s => Math.abs(s.getBoundingClientRect().top - rect.top) < 12);
-        if (isHorizontal) {
-          const midX = rect.left + rect.width / 2;
-          if (clientY >= rect.top - 12 && clientY <= rect.bottom + 12) {
-            if (clientX < midX) {
-              containerEl.insertBefore(draggingItem, sib);
-              break;
-            } else if (clientX > midX) {
-              containerEl.insertBefore(draggingItem, sib.nextSibling);
+      if (!isHorizontal) {
+        draggingItem.style.transform = `scale(1.03) translateY(${deltaY}px)`;
+
+        // Calculate target slot index
+        const rawOffset = Math.round(deltaY / slotHeight);
+        const newTarget = Math.max(0, Math.min(allItems.length - 1, startIndex + rawOffset));
+
+        if (newTarget !== targetIndex) {
+          targetIndex = newTarget;
+        }
+
+        // Apply smooth displacement to siblings ("parting the Red Sea")
+        allItems.forEach((sib, idx) => {
+          if (sib === draggingItem) return;
+
+          if (targetIndex > startIndex) {
+            if (idx > startIndex && idx <= targetIndex) {
+              sib.style.transform = `translateY(-${slotHeight}px)`;
+            } else {
+              sib.style.transform = '';
             }
+          } else if (targetIndex < startIndex) {
+            if (idx >= targetIndex && idx < startIndex) {
+              sib.style.transform = `translateY(${slotHeight}px)`;
+            } else {
+              sib.style.transform = '';
+            }
+          } else {
+            sib.style.transform = '';
           }
-        } else {
-          const midY = rect.top + rect.height / 2;
-          if (clientY < midY && rect.bottom > clientY) {
-            containerEl.insertBefore(draggingItem, sib);
+        });
+      } else {
+        // Horizontal / Grid fallback
+        draggingItem.style.transform = `scale(1.03) translate(${deltaX}px, ${deltaY}px)`;
+        const clientY = e.clientY;
+        const clientX = e.clientX;
+        for (let i = 0; i < allItems.length; i++) {
+          const sib = allItems[i];
+          if (sib === draggingItem) continue;
+          const rect = sib.getBoundingClientRect();
+          if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+            targetIndex = i;
             break;
-          } else if (clientY >= midY && rect.top < clientY) {
-            containerEl.insertBefore(draggingItem, sib.nextSibling);
           }
         }
       }
@@ -12092,14 +12368,48 @@ export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrder
       if (!draggingItem) return;
       e.stopPropagation();
       const item = draggingItem;
+      const currentTarget = targetIndex;
+      const currentStart = startIndex;
+      const currentItems = [...allItems];
       draggingItem = null;
-      item.classList.remove('dragging-reorder-item');
+
       try {
         if (handle.releasePointerCapture && pointerId != null) {
           handle.releasePointerCapture(pointerId);
         }
       } catch (err) { /* ignore */ }
       pointerId = null;
+
+      if (!isHorizontal && currentTarget !== currentStart) {
+        // Animate dragged card into the open gap
+        const targetOffset = (currentTarget - currentStart) * slotHeight;
+        item.style.transition = 'transform 0.18s cubic-bezier(0.2, 0, 0, 1)';
+        item.style.transform = `scale(1) translateY(${targetOffset}px)`;
+
+        await new Promise(res => setTimeout(res, 180));
+      }
+
+      // Reset all transform offsets and classes
+      currentItems.forEach(el => {
+        el.style.transform = '';
+        el.style.transition = '';
+        el.classList.remove('drag-reorder-displaced');
+      });
+      item.classList.remove('dragging-reorder-item');
+      item.style.transform = '';
+      item.style.transition = '';
+
+      // Commit DOM repositioning
+      if (currentTarget !== currentStart && currentTarget >= 0 && currentTarget < currentItems.length) {
+        const targetEl = currentItems[currentTarget];
+        if (targetEl && targetEl !== item) {
+          if (currentTarget > currentStart) {
+            targetEl.after(item);
+          } else {
+            targetEl.before(item);
+          }
+        }
+      }
 
       const finalIds = getOrderedIds();
       const changed = finalIds.length === initialIds.length && finalIds.some((id, idx) => id !== initialIds[idx]);
@@ -12487,6 +12797,39 @@ export function renderAdminTasks() {
       bulkType: 'admin_tasks',
       bulkId: row.dataset.bulkId,
       onSingleTap: () => openAdminTaskModal(row.dataset.taskId)
+    });
+
+    const taskId = row.dataset.taskId;
+    const task = (state.tasks || []).find(t => t.id === taskId);
+    attachUniversalSwipeActions(row, {
+      archiveLabel: task?.archived ? 'Unarchive' : 'Archive',
+      onArchive: async () => {
+        try {
+          const nextArchived = !task?.archived;
+          await updateDoc(doc(db, 'tasks', taskId), { archived: nextArchived, updatedAt: serverTimestamp() });
+          if (task) task.archived = nextArchived;
+          renderAdminTasks();
+          renderTasks();
+          toast(nextArchived ? 'Task archived' : 'Task unarchived', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to update task archive status', 'error');
+        }
+      },
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteDoc(doc(db, 'tasks', taskId));
+          state.tasks = (state.tasks || []).filter(t => t.id !== taskId);
+          renderAdminTasks();
+          renderTasks();
+          toast('Task deleted', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete task', 'error');
+        }
+      },
+      entityName: 'Task'
     });
   });
 
@@ -14416,6 +14759,25 @@ function renderAdminBadges() {
         const badge = allBadges.find(b => b.id === card.dataset.badgeId);
         if (badge) openBadgeModal(badge);
       }
+    });
+
+    const badgeId = card.dataset.badgeId;
+    attachUniversalSwipeActions(card, {
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteDoc(doc(db, 'badges', badgeId));
+          state.badges = (state.badges || []).filter(b => b.id !== badgeId);
+          badgesMap.delete(badgeId);
+          renderAdminBadges();
+          renderLeaderboard();
+          toast('Badge deleted', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete badge', 'error');
+        }
+      },
+      entityName: 'Badge'
     });
   });
 
@@ -16400,6 +16762,19 @@ function renderAdminWaivers() {
       bulkType: 'waivers',
       bulkId: card.dataset.bulkId
     });
+
+    const waiverId = card.dataset.waiverId || card.dataset.bulkId;
+    attachUniversalSwipeActions(card, {
+      archiveLabel: 'Approve',
+      onArchive: async () => {
+        await resolveWaiver(waiverId, 'approved', card);
+      },
+      deleteLabel: 'Reject',
+      onDelete: async () => {
+        await resolveWaiver(waiverId, 'rejected', card);
+      },
+      entityName: 'Excuse'
+    });
   });
 }
 
@@ -18379,6 +18754,39 @@ function renderAdminBroadcasts() {
         if (b) openAdminBroadcastModal(b);
       }
     });
+
+    const bId = card.dataset.broadcastId;
+    const b = (state.broadcasts || []).find(x => x.id === bId);
+    attachUniversalSwipeActions(card, {
+      archiveLabel: (b?.isArchived || b?.archived) ? 'Unarchive' : 'Archive',
+      onArchive: async () => {
+        try {
+          const nextArchived = !(b?.isArchived || b?.archived);
+          await updateDoc(doc(db, 'broadcasts', bId), { isArchived: nextArchived, archived: nextArchived, updatedAt: serverTimestamp() });
+          if (b) { b.isArchived = nextArchived; b.archived = nextArchived; }
+          renderAdminBroadcasts();
+          renderHomeBroadcastBanner();
+          toast(nextArchived ? 'Broadcast archived' : 'Broadcast unarchived', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to update broadcast archive status', 'error');
+        }
+      },
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteDoc(doc(db, 'broadcasts', bId));
+          state.broadcasts = (state.broadcasts || []).filter(x => x.id !== bId);
+          renderAdminBroadcasts();
+          renderHomeBroadcastBanner();
+          toast('Broadcast deleted', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete broadcast', 'error');
+        }
+      },
+      entityName: 'Broadcast'
+    });
   });
 }
 
@@ -19442,12 +19850,17 @@ const DEFAULT_WHATS_NEW_NOTES = {
   version: APP_VERSION,
   title: `What's New in v${APP_VERSION}`,
   content: [
-    '• Unified Discord-style horizontal badge pills & compact 22px icon strips across lists and leaderboards.',
-    '• Personal notification swipe-to-delete & bulk Delete action pill in Updates.',
-    '• Member & Admin drag-and-drop badge priority reordering (Index 0 is your Primary Badge).',
-    '• Global Admin drag-and-drop reordering for Categories, Badges, and Tasks.',
-    '• New Admin Member Notification Center to audit member notification history and send custom one-off alerts.',
-    '• Zero-latency Draft state for Member Control badge assignments.'
+    '• Google Sign-In in Profile: Fixed full-page refresh for seamless in-place authentication.',
+    '• Persistent Character Avatars: Deterministically auto-assigned preset avatars via UID hashing for accounts without photos.',
+    '• Profile Card Redesign: Eliminated vertical badge tower in favor of a clean two-tier Discord-style layout.',
+    '• Fluid Bottom Sheets: Expanded 48px grab handles and disabled CSS transitions during drag for 1:1 real-time tracking.',
+    '• Advanced Drag-and-Drop: Added elevation state and dynamic sibling slot displacement for buttery smooth reordering.',
+    '• Gesture Disambiguation: Isolated card swipe gestures to outer edges (35px) to prevent hijacking tab navigation.',
+    '• Universal Dual-Swipe & Undo: Deployed LTR Archive and RTL Delete swipes with reversible Snackbar safety net.',
+    '• Unified Ranking Engine: Standardized tie logic and enforced zero-point dashes (--) across Profile and Leaderboard.',
+    '• Leaderboard Styling: Removed isolated phantom separator border from the first item for visual consistency.',
+    '• Net Score Metric: Introduced computed "Score" tile (Points - Penalties) to Profile card and Mini-Profile sheet.',
+    '• Dynamic Badge Strip Overflow: Maximized horizontal badge rendering in lists, capped with a grey ... ellipsis pill.'
   ].join('\n')
 };
 
@@ -19702,7 +20115,7 @@ export async function openAdminWhatsNewEditorModal() {
             </div>
             <div class="col-span-2">
               <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Headline</label>
-              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v2.2.8" value="${esc(draftTitle)}" />
+              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v2.2.9" value="${esc(draftTitle)}" />
             </div>
           </div>
 
@@ -20020,6 +20433,9 @@ function attachEventHandlers() {
 
   const authGoogleModalBtn = document.getElementById('btn-auth-google');
   if (authGoogleModalBtn) authGoogleModalBtn.onclick = handleGoogleSignIn;
+
+  const profileLoginBtn = document.getElementById('btn-profile-login');
+  if (profileLoginBtn) profileLoginBtn.onclick = handleGoogleSignIn;
 
   const fallbackGuestBtn = document.getElementById('btn-fallback-guest');
   if (fallbackGuestBtn) {
@@ -20961,4 +21377,9 @@ if (typeof window !== 'undefined') {
   window.openAdminWhatsNewEditorModal = openAdminWhatsNewEditorModal;
   window.openMemberBadgeReorderSheet = openMemberBadgeReorderSheet;
   window.attachDragReorderList = attachDragReorderList;
+  window.getDeterministicPresetAvatar = getDeterministicPresetAvatar;
+  window.computeMemberRanks = computeMemberRanks;
+  window.getUserRank = getUserRank;
+  window.showUndoSnackbar = showUndoSnackbar;
+  window.attachUniversalSwipeActions = attachUniversalSwipeActions;
 }
