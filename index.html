@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v3.0.2</title>
+    <title>COC Media Team v3.1.0</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
-        <link rel="manifest" href="./manifest.json?v=3.0.2" />
+        <link rel="manifest" href="./manifest.json?v=3.1.0" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -76,7 +76,7 @@
       }
     </script>
 
-        <link rel="stylesheet" href="./styles.css?v=3.0.2" />
+        <link rel="stylesheet" href="./styles.css?v=3.1.0" />
 
         <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
     <script defer src="https://unpkg.com/lucide@latest"></script>
@@ -369,7 +369,7 @@
           <div class="flex items-center justify-between">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Attendance</h1>
-              <p class="ios-subhead text-neutral-400">Smart check-in with late deduction matrix.</p>
+              <p class="ios-subhead text-neutral-400">Smart check-in with tiered early bonuses &amp; late matrix.</p>
             </div>
             <button type="button" id="btn-open-waiver-modal" class="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition">
               <svg class="w-4 h-4 text-amber-400 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
@@ -380,32 +380,55 @@
             </button>
           </div>
 
-          <!-- Single Smart Check-In Hero -->
-          <div id="smart-checkin-hero-container"></div>
-
-          <!-- Admin Sessions List (Hidden for regular users) -->
-          <div id="attendance-sessions-wrap" class="space-y-3 hidden">
-            <h2 class="ios-headline text-white flex items-center gap-2">
-              <svg class="w-4 h-4 text-emerald-400 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                <line x1="16" y1="2" x2="16" y2="6"></line>
-                <line x1="8" y1="2" x2="8" y2="6"></line>
-                <line x1="3" y1="10" x2="21" y2="10"></line>
-              </svg>
-              <span>All Sessions (Admin View)</span>
-            </h2>
-
-            <div id="attendance-sessions-container" class="space-y-3">
+          <!-- Segmented Switcher: Active Check-In vs Session History -->
+          <div id="mount-user-attendance-segmented" class="w-full">
+            <div class="ios-segmented-control grid grid-cols-2 gap-1 p-1 rounded-xl bg-white/[0.06] border border-white/10">
+              <button type="button" id="btn-att-tab-active" data-att-tab="active" class="att-view-tab-btn py-2 px-3 rounded-lg text-xs font-bold transition bg-[#0A84FF] text-white shadow-sm">
+                Active Check-In
+              </button>
+              <button type="button" id="btn-att-tab-history" data-att-tab="history" class="att-view-tab-btn py-2 px-3 rounded-lg text-xs font-bold transition text-neutral-400 hover:text-white">
+                Session History
+              </button>
             </div>
           </div>
 
-                    <div class="inset-group">
-            <div class="p-3 border-b border-white/10 flex items-center justify-between">
-              <span class="text-xs font-bold text-white uppercase tracking-wider">Today's Check-in Log</span>
-              <span class="text-xs text-neutral-400 font-mono" id="attendance-log-count">0 Check-ins</span>
+          <div id="attendance-active-section" class="space-y-5">
+            <!-- Single Smart Check-In Hero -->
+            <div id="smart-checkin-hero-container"></div>
+
+            <!-- Admin Sessions List (Hidden for regular users) -->
+            <div id="attendance-sessions-wrap" class="space-y-3 hidden">
+              <h2 class="ios-headline text-white flex items-center gap-2">
+                <svg class="w-4 h-4 text-emerald-400 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="16" y1="2" x2="16" y2="6"></line>
+                  <line x1="8" y1="2" x2="8" y2="6"></line>
+                  <line x1="3" y1="10" x2="21" y2="10"></line>
+                </svg>
+                <span>All Sessions (Admin View)</span>
+              </h2>
+
+              <div id="attendance-sessions-container" class="space-y-3">
+              </div>
             </div>
-            <div id="attendance-logs-feed" class="divide-y divide-white/5">
-                          </div>
+
+            <div class="inset-group">
+              <div class="p-3 border-b border-white/10 flex items-center justify-between">
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Today's Check-in Log</span>
+                <span class="text-xs text-neutral-400 font-mono" id="attendance-log-count">0 Check-ins</span>
+              </div>
+              <div id="attendance-logs-feed" class="divide-y divide-white/5">
+              </div>
+            </div>
+          </div>
+
+          <!-- Session History Section -->
+          <div id="attendance-history-section" class="space-y-3 hidden">
+            <div class="flex items-center justify-between px-1">
+              <span class="text-xs font-bold text-white uppercase tracking-wider">Past &amp; Closed Sessions</span>
+              <span id="attendance-history-count" class="text-xs text-neutral-400 font-mono">0 Sessions</span>
+            </div>
+            <div id="attendance-history-container" class="space-y-3"></div>
           </div>
         </section>
 
@@ -522,7 +545,7 @@
           </div>
 
                     <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
-            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.0.2</span></div>
+            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.1.0</span></div>
             <div class="text-[11px] text-neutral-500">Official Production Release</div>
           </div>
         </section>
@@ -736,7 +759,7 @@
               </div>
             </div>
             <div class="flex items-center gap-1.5">
-              <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.0.2</span>
+              <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.1.0</span>
               <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <polyline points="9 18 15 12 9 6"></polyline>
               </svg>
@@ -1228,8 +1251,8 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                        <div class="lg:col-span-5 space-y-3">
+          <div class="notif-manager-grid grid grid-cols-1 lg:grid-cols-12 gap-4">
+                        <div class="notif-recipients-panel lg:col-span-5 space-y-3 w-full">
               <div class="glass-card p-3 space-y-2.5">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-bold text-neutral-300 uppercase tracking-wider">Recipients</span>
@@ -1257,12 +1280,12 @@
                 </div>
 
                 <div class="text-[11px] font-semibold text-neutral-400 pt-1 px-1">Team Roster</div>
-                <div id="admin-notif-members-list" class="space-y-1.5 max-h-[380px] overflow-y-auto pr-1 apple-list-container">
+                <div id="admin-notif-members-list" class="notif-recipients-roster space-y-1.5 max-h-[240px] lg:max-h-[380px] overflow-y-auto pr-1 apple-list-container">
                                   </div>
               </div>
             </div>
 
-                        <div class="lg:col-span-7 space-y-4">
+                        <div class="notif-compose-panel lg:col-span-7 space-y-4 w-full">
               <div class="glass-card p-4 space-y-3.5">
                 <div class="flex items-center justify-between pb-2 border-b border-white/10">
                   <div class="flex items-center gap-2">
@@ -1277,30 +1300,30 @@
                   <span id="admin-notif-target-badge" class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30">Broadcast</span>
                 </div>
 
-                <form id="form-admin-notifications-page" class="space-y-3 text-xs">
+                <form id="form-admin-notifications-page" class="space-y-3.5 text-xs">
                   <div>
-                    <label class="block text-neutral-300 mb-1 font-semibold">Notification Title *</label>
-                    <input id="input-admin-notif-title" type="text" placeholder="e.g. Schedule Change, Urgent Request..." class="w-full glass-input" required />
+                    <label class="block text-neutral-300 mb-1.5 font-semibold">Notification Title *</label>
+                    <input id="input-admin-notif-title" type="text" placeholder="e.g. Schedule Change, Urgent Request..." class="w-full glass-input py-2.5 px-3" required />
                   </div>
 
                   <div>
-                    <label class="block text-neutral-300 mb-1 font-semibold">Message Body *</label>
-                    <textarea id="input-admin-notif-body" rows="3" placeholder="Enter message details for the member..." class="w-full glass-input" required></textarea>
+                    <label class="block text-neutral-300 mb-1.5 font-semibold">Message Body *</label>
+                    <textarea id="input-admin-notif-body" rows="3" placeholder="Enter message details for the member..." class="w-full glass-input py-2.5 px-3" required></textarea>
                   </div>
 
-                  <div class="grid grid-cols-2 gap-2">
-                    <div>
-                      <label class="block text-neutral-300 mb-1 font-semibold">Category / Priority</label>
-                      <select id="select-admin-notif-category" class="w-full glass-input bg-neutral-900 text-white">
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="min-w-0">
+                      <label class="block text-neutral-300 mb-1.5 font-semibold">Category / Priority</label>
+                      <select id="select-admin-notif-category" class="w-full glass-input bg-neutral-900 text-white py-2.5 px-3 truncate">
                         <option value="system">Notice / Announcement</option>
                         <option value="task">Task Assignment</option>
                         <option value="alert">Urgent Alert</option>
                         <option value="points">Points &amp; Badges</option>
                       </select>
                     </div>
-                    <div>
-                      <label class="block text-neutral-300 mb-1 font-semibold">Icon</label>
-                      <select id="select-admin-notif-icon" class="w-full glass-input bg-neutral-900 text-white">
+                    <div class="min-w-0">
+                      <label class="block text-neutral-300 mb-1.5 font-semibold">Icon</label>
+                      <select id="select-admin-notif-icon" class="w-full glass-input bg-neutral-900 text-white py-2.5 px-3 truncate">
                         <option value="bell">Notification Bell</option>
                         <option value="star">Star / Award</option>
                         <option value="alert-circle">Alert / Warning</option>
@@ -1800,7 +1823,7 @@
       }
     </script>
 
-        <script type="module" src="./app.js?v=3.0.2"></script>
+        <script type="module" src="./app.js?v=3.1.0"></script>
 
   
         <div id="account-status-overlay" class="fixed inset-0 z-[9999] bg-[#000000] flex items-center justify-center p-6 hidden">

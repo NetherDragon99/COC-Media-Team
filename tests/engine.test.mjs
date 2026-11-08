@@ -1600,6 +1600,59 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.ok(appCode.includes('function renderSmartCheckInHero'), 'app.js must contain renderSmartCheckInHero');
   assert.ok(appCode.includes('persistToLocalCache(true)'), 'app.js must immediately persist to local cache');
   assert.ok(appCode.includes('undo-snackbar-secs'), 'app.js must render undo-snackbar-secs countdown');
+
+  // ==========================================
+  // TEST 16: v3.1.0 TIERED EARLY BONUS MATRIX & DETAILED METRICS
+  // ==========================================
+  const tieredStartMs = zonedDateToMs(2026, 6, 15, 10, 0, 0, 'Africa/Cairo');
+  const tieredSession = normalizeSession({
+    id: 'sess_tiered',
+    title: 'Tiered Bonus Session',
+    earlyCheckInMinutes: 60,
+    lateCutoffMinutes: 60,
+    earlyBonusTiers: [
+      { fromMinsBefore: 60, toMinsBefore: 30, bonusPoints: 10, bonusEgp: 20 },
+      { fromMinsBefore: 29, toMinsBefore: 10, bonusPoints: 5, bonusEgp: 10 }
+    ],
+    pointsPenalty: { enabled: true, mode: 'stepped', stepUnit: 'minutes', stepSize: 5, perStep: 1, min: 2, max: 30, absence: 20 },
+    finePenalty: { enabled: true, mode: 'stepped', stepUnit: 'minutes', stepSize: 5, perStep: 3, min: 6, max: 60, absence: 50 },
+    schedule: { type: 'once', startDateTime: tieredStartMs }
+  });
+
+  // 45m early -> matches 60m-30m tier (+10 pts, +20 EGP)
+  const calc45mEarly = computeAttendance(tieredSession, tieredStartMs - 45 * 60000);
+  assert.strictEqual(calc45mEarly.isEarly, true);
+  assert.strictEqual(calc45mEarly.earlyMinutes, 45);
+  assert.strictEqual(calc45mEarly.earlyBonusPoints, 10);
+  assert.strictEqual(calc45mEarly.earlyBonusEGP, 20);
+  assert.strictEqual(calc45mEarly.pointsDelta, 10);
+  assert.strictEqual(calc45mEarly.egpDelta, 20);
+  assert.ok(calc45mEarly.appliedTierLabel.includes('60m–30m'));
+
+  // 20m early -> matches 29m-10m tier (+5 pts, +10 EGP)
+  const calc20mEarly = computeAttendance(tieredSession, tieredStartMs - 20 * 60000);
+  assert.strictEqual(calc20mEarly.isEarly, true);
+  assert.strictEqual(calc20mEarly.earlyMinutes, 20);
+  assert.strictEqual(calc20mEarly.earlyBonusPoints, 5);
+  assert.strictEqual(calc20mEarly.earlyBonusEGP, 10);
+  assert.strictEqual(calc20mEarly.pointsDelta, 5);
+  assert.strictEqual(calc20mEarly.egpDelta, 10);
+
+  // 5m early -> outside tier brackets -> 0 bonus, On Time
+  const calc5mEarly = computeAttendance(tieredSession, tieredStartMs - 5 * 60000);
+  assert.strictEqual(calc5mEarly.status, 'on_time');
+  assert.strictEqual(calc5mEarly.earlyMinutes, 5);
+  assert.strictEqual(calc5mEarly.earlyBonusPoints, 0);
+  assert.strictEqual(calc5mEarly.earlyBonusEGP, 0);
+  assert.strictEqual(calc5mEarly.pointsDelta, 0);
+
+  // 14m 34s late -> lateMinutes=14, lateSeconds=34, negative pointsDelta & egpDelta
+  const calcLateDetailed = computeAttendance(tieredSession, tieredStartMs + (14 * 60 + 34) * 1000);
+  assert.strictEqual(calcLateDetailed.status, 'late');
+  assert.strictEqual(calcLateDetailed.lateMinutes, 14);
+  assert.strictEqual(calcLateDetailed.lateSeconds, 34);
+  assert.ok(calcLateDetailed.pointsDelta < 0, 'Late check-in must produce negative pointsDelta');
+  assert.ok(calcLateDetailed.egpDelta < 0, 'Late check-in must produce negative egpDelta');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');

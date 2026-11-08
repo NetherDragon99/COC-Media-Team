@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.0.2';
+export const APP_VERSION = '3.1.0';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -704,6 +704,62 @@ export function isCurrentUserAdmin() {
   return false;
 }
 
+export const GAS_BACKEND_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbxtwz2RIT49t1REl-o69IU8TLkqGUiOaDgOyIW8GFTY1_oZUII-1IyBb3DTSpfmtgEp/exec';
+
+export async function callGasBackend(payload = {}) {
+  const webhookUrl = state.settings?.backendWebhookUrl || GAS_BACKEND_WEBHOOK_URL;
+  if (!webhookUrl || typeof fetch !== 'function') return { status: 'skipped' };
+
+  const bodyStr = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...payload
+  });
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: bodyStr
+    });
+    if (res && res.ok) {
+      const data = await res.json().catch(() => ({ status: 'success' }));
+      return data;
+    }
+  } catch (corsErr) {
+    try {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8'
+        },
+        body: bodyStr
+      });
+      return { status: 'sent_opaque' };
+    } catch (innerErr) {
+      console.warn('[GAS Backend] Request failed:', innerErr);
+      throw innerErr;
+    }
+  }
+  return { status: 'sent' };
+}
+
+export async function dispatchBackendSessionMutation(action, sessionId = null, extraPayload = {}) {
+  try {
+    callGasBackend({
+      action: action || 'SESSION_UPDATED',
+      sessionId: sessionId || null,
+      ...extraPayload
+    }).catch(err => {
+      console.warn('[Watchdog Dispatch] Async notification failed:', err);
+    });
+  } catch (e) {
+    console.warn('[Watchdog Dispatch] Error constructing payload:', e);
+  }
+}
+
 export function persistToLocalCache(immediate = false) {
   const writeCache = () => {
     try {
@@ -1145,6 +1201,31 @@ function normalizeWaiverRequest(raw) {
 function normalizeAttendanceLog(raw) {
   if (!raw) return null;
   const uid = raw.uid || raw.userId || '';
+  const penalty = typeof raw.penalty === 'number'
+    ? raw.penalty
+    : (typeof raw.penaltyApplied === 'number' ? raw.penaltyApplied : (typeof raw.pointsPenalty === 'number' ? raw.pointsPenalty : 0));
+  const fineEGP = typeof raw.fineEGP === 'number'
+    ? raw.fineEGP
+    : (typeof raw.finePenalty === 'number' ? raw.finePenalty : 0);
+  const earlyBonusPoints = typeof raw.earlyBonusPoints === 'number'
+    ? raw.earlyBonusPoints
+    : (typeof raw.pointsEarned === 'number' ? raw.pointsEarned : 0);
+  const earlyBonusEGP = typeof raw.earlyBonusEGP === 'number' ? raw.earlyBonusEGP : 0;
+  const delaySeconds = typeof raw.delaySeconds === 'number'
+    ? raw.delaySeconds
+    : ((typeof raw.lateMinutes === 'number' ? raw.lateMinutes * 60 : 0) + (typeof raw.lateSeconds === 'number' ? raw.lateSeconds : 0));
+  const lateMinutes = typeof raw.lateMinutes === 'number' ? raw.lateMinutes : Math.floor(delaySeconds / 60);
+  const lateSeconds = typeof raw.lateSeconds === 'number' ? raw.lateSeconds : (delaySeconds % 60);
+  const earlyMinutes = typeof raw.earlyMinutes === 'number' ? raw.earlyMinutes : 0;
+  const isEarly = raw.status === 'early' || Boolean(raw.isEarly) || earlyMinutes > 0 || earlyBonusPoints > 0 || earlyBonusEGP > 0;
+  const status = raw.status || (raw.isLate ? 'late' : (isEarly ? 'early' : 'on_time'));
+  const pointsDelta = typeof raw.pointsDelta === 'number'
+    ? raw.pointsDelta
+    : (earlyBonusPoints > 0 ? earlyBonusPoints : (penalty > 0 ? -penalty : 0));
+  const egpDelta = typeof raw.egpDelta === 'number'
+    ? raw.egpDelta
+    : (earlyBonusEGP > 0 ? earlyBonusEGP : (fineEGP > 0 ? -fineEGP : 0));
+
   return {
     id: raw.id || '',
     sessionId: raw.sessionId || '',
@@ -1156,16 +1237,28 @@ function normalizeAttendanceLog(raw) {
     userAvatar: raw.userAvatar || raw.avatarUrl || raw.photoURL || '',
     occurrenceKey: raw.occurrenceKey || 'once',
     occurrenceStart: raw.occurrenceStart || null,
-    checkedInAt: raw.checkedInAt || raw.timestamp || raw.createdAt || null,
-    timestamp: raw.checkedInAt || raw.timestamp || raw.createdAt || null,
-    status: raw.status || (raw.isLate ? 'late' : 'on_time'),
-    isLate: raw.status === 'late' || Boolean(raw.isLate),
-    delaySeconds: typeof raw.delaySeconds === 'number' ? raw.delaySeconds : 0,
-    penalty: typeof raw.penalty === 'number' ? raw.penalty : (typeof raw.penaltyApplied === 'number' ? raw.penaltyApplied : 0),
-    penaltyApplied: typeof raw.penalty === 'number' ? raw.penalty : (typeof raw.penaltyApplied === 'number' ? raw.penaltyApplied : 0),
-    fineEGP: typeof raw.fineEGP === 'number' ? raw.fineEGP : 0,
+    checkedInAt: raw.checkedInAt || raw.checkInTime || raw.timestamp || raw.createdAt || null,
+    checkInTimestamp: raw.checkInTimestamp || null,
+    timestamp: raw.checkedInAt || raw.checkInTime || raw.timestamp || raw.createdAt || null,
+    status,
+    isLate: status === 'late' || Boolean(raw.isLate),
+    isEarly,
+    earlyMinutes,
+    lateMinutes,
+    lateSeconds,
+    delaySeconds,
+    penalty,
+    penaltyApplied: penalty,
+    fineEGP,
+    earlyBonusPoints,
+    earlyBonusEGP,
+    pointsDelta,
+    egpDelta,
+    appliedTierLabel: raw.appliedTierLabel || '',
     penaltyUnit: raw.penaltyUnit || 'minutes',
-    pointsEarned: typeof raw.pointsEarned === 'number' ? raw.pointsEarned : 0
+    pointsEarned: earlyBonusPoints,
+    excused: Boolean(raw.excused || status === 'excused'),
+    adminNote: raw.adminNote || ''
   };
 }
 
@@ -2175,6 +2268,16 @@ function normalizeSession(s) {
   const assignedUids = Array.isArray(s.assignedUids) ? s.assignedUids : assignedMembers;
   const earlyBonusPoints = Math.max(0, Number(s.earlyBonusPoints) || Number(s.earlyCheckInBonusPoints) || 0);
   const earlyBonusEGP = Math.max(0, Number(s.earlyBonusEGP) || Number(s.earlyCheckInBonusEGP) || 0);
+  const earlyBonusTiers = Array.isArray(s.earlyBonusTiers)
+    ? s.earlyBonusTiers
+        .filter(t => t && typeof t === 'object')
+        .map(t => ({
+          fromMinsBefore: Math.max(0, Number(t.fromMinsBefore) || 0),
+          toMinsBefore: Math.max(0, Number(t.toMinsBefore) || 0),
+          bonusPoints: Math.max(0, Number(t.bonusPoints) || 0),
+          bonusEgp: Math.max(0, Number(t.bonusEgp ?? t.bonusEGP) || 0)
+        }))
+    : [];
 
   return {
     ...s,
@@ -2188,6 +2291,7 @@ function normalizeSession(s) {
     assignedUids,
     earlyBonusPoints,
     earlyBonusEGP,
+    earlyBonusTiers,
     active: s.active !== false && s.status !== 'closed' && s.status !== 'archived',
     archived: Boolean(s.archived || s.status === 'archived'),
     status: s.status || (s.archived ? 'archived' : (s.active === false ? 'inactive' : 'active')),
@@ -2304,8 +2408,40 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
 
   if (nowMs <= S) {
     const isEarly = nowMs < S;
-    const earlyBonusPoints = isEarly ? (norm.earlyBonusPoints || 0) : 0;
-    const earlyBonusEGP = isEarly ? (norm.earlyBonusEGP || 0) : 0;
+    const earlySeconds = isEarly ? Math.max(0, Math.floor((S - nowMs) / 1000)) : 0;
+    const earlyMinutes = isEarly ? Math.ceil((S - nowMs) / 60000) : 0;
+    let earlyBonusPoints = 0;
+    let earlyBonusEGP = 0;
+    let appliedTierLabel = isEarly ? 'Early' : 'On Time';
+
+    if (isEarly) {
+      const tiers = Array.isArray(norm.earlyBonusTiers) ? norm.earlyBonusTiers : [];
+      if (tiers.length > 0) {
+        let bestReward = -1;
+        for (const t of tiers) {
+          const upper = Math.max(Number(t.fromMinsBefore) || 0, Number(t.toMinsBefore) || 0);
+          const lower = Math.min(Number(t.fromMinsBefore) || 0, Number(t.toMinsBefore) || 0);
+          if (earlyMinutes <= upper && earlyMinutes >= lower) {
+            const pts = Math.max(0, Number(t.bonusPoints) || 0);
+            const egp = Math.max(0, Number(t.bonusEgp ?? t.bonusEGP) || 0);
+            const score = pts + egp;
+            if (score > bestReward) {
+              bestReward = score;
+              earlyBonusPoints = pts;
+              earlyBonusEGP = egp;
+              appliedTierLabel = `${upper}m–${lower}m Early Tier`;
+            }
+          }
+        }
+      } else {
+        earlyBonusPoints = norm.earlyBonusPoints || 0;
+        earlyBonusEGP = norm.earlyBonusEGP || 0;
+        if (earlyBonusPoints > 0 || earlyBonusEGP > 0) {
+          appliedTierLabel = 'Early Arrival Bonus';
+        }
+      }
+    }
+
     let message = 'On time (0 EGP penalty)';
     if (isEarly && (earlyBonusPoints > 0 || earlyBonusEGP > 0)) {
       const parts = [];
@@ -2317,8 +2453,15 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
     return {
       status: 'on_time',
       isEarly,
+      earlyMinutes,
+      earlySeconds,
+      lateMinutes: 0,
+      lateSeconds: 0,
       earlyBonusPoints,
       earlyBonusEGP,
+      pointsDelta: earlyBonusPoints,
+      egpDelta: earlyBonusEGP,
+      appliedTierLabel,
       penalty: 0,
       pointsPenalty: 0,
       finePenalty: 0,
@@ -2355,8 +2498,15 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   return {
     status: 'late',
     isEarly: false,
+    earlyMinutes: 0,
+    earlySeconds: 0,
+    lateMinutes: m,
+    lateSeconds: s,
     earlyBonusPoints: 0,
     earlyBonusEGP: 0,
+    pointsDelta: -pointsPenalty,
+    egpDelta: -finePenalty,
+    appliedTierLabel: `Late by ${m}m ${s}s`,
     penalty: pointsPenalty,
     pointsPenalty,
     finePenalty,
@@ -5502,6 +5652,7 @@ export async function handleBulkArchive(isRestore = false) {
       });
       renderAdminSessions();
       renderAttendanceView();
+      dispatchBackendSessionMutation('SESSION_UPDATED');
     } else if (type === 'broadcasts') {
       ids.forEach(id => {
         const b = state.broadcasts.find(x => x.id === id);
@@ -8292,10 +8443,16 @@ export function updateDrawerPushUI() {
   const switchContainer = document.getElementById('drawer-push-switch-container');
   if (!switchContainer) return;
 
-  const supported = ('Notification' in window) && Boolean(isFCMSupported);
+  const supported = ('Notification' in window) && ('serviceWorker' in navigator);
   const permission = supported ? Notification.permission : 'unsupported';
-  const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
-  const isPushActive = supported && permission === 'granted' && hasToken;
+  const hasTokenOrFlag = Boolean(
+    state.user?.pushEnabled ||
+    state.userPrivate?.pushEnabled ||
+    state.currentFcmToken ||
+    (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0) ||
+    (state.user?.fcmTokens && state.user.fcmTokens.length > 0)
+  );
+  const isPushActive = supported && permission === 'granted' && hasTokenOrFlag;
 
   if (statusEl) {
     if (!supported) statusEl.textContent = 'Not Supported';
@@ -9692,7 +9849,13 @@ function updatePushNotificationUI() {
     return;
   }
 
-  const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
+  const hasToken = Boolean(
+    state.user?.pushEnabled ||
+    state.userPrivate?.pushEnabled ||
+    state.currentFcmToken ||
+    (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0) ||
+    (state.user?.fcmTokens && state.user.fcmTokens.length > 0)
+  );
 
   if (permission === 'granted' && hasToken) {
     badgeEl.textContent = 'On';
@@ -9717,7 +9880,12 @@ async function handleTogglePushNotifications() {
     return;
   }
 
-  const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
+  const hasToken = Boolean(
+    state.user?.pushEnabled ||
+    state.userPrivate?.pushEnabled ||
+    state.currentFcmToken ||
+    (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0)
+  );
   if (Notification.permission === 'granted' && hasToken) {
     await disablePushNotifications();
   } else {
@@ -9730,75 +9898,134 @@ async function enablePushNotifications() {
   try {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
-      toast('Notification permission was ' + permission, 'warning');
+      toast('Notification permission was ' + permission + '. Please allow notifications in your browser settings.', 'warning');
       updatePushNotificationUI();
+      updateDrawerPushUI();
       return;
     }
 
-    if (!messaging || !fcmRegistration) {
-      fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
-        scope: FCM_SW_SCOPE
-      });
-      messaging = getMessaging(app);
-    }
+    let token = null;
+    try {
+      if (!messaging || !fcmRegistration) {
+        fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
+          scope: FCM_SW_SCOPE
+        });
+        messaging = getMessaging(app);
+      }
 
-    const token = await getToken(messaging, {
-      vapidKey: FCM_VAPID_KEY,
-      serviceWorkerRegistration: fcmRegistration
-    });
+      token = await getToken(messaging, {
+        vapidKey: FCM_VAPID_KEY,
+        serviceWorkerRegistration: fcmRegistration
+      });
+    } catch (fcmErr) {
+      console.warn('FCM token retrieval warning:', fcmErr);
+    }
 
     if (token) {
       state.currentFcmToken = token;
-      const privRef = doc(db, 'users_private', state.user.uid);
-      await setDoc(privRef, {
-        email: state.userPrivate?.email || state.user?.email || '',
-        fcmTokens: arrayUnion(token)
-      }, { merge: true });
-
-      if (!state.userPrivate) state.userPrivate = {};
-      if (!state.userPrivate.fcmTokens) state.userPrivate.fcmTokens = [];
-      if (!state.userPrivate.fcmTokens.includes(token)) {
-        state.userPrivate.fcmTokens.push(token);
-      }
-
-      toast('Push notifications enabled!', 'success');
-    } else {
-      toast('Could not retrieve push token', 'warning');
     }
+
+    state.user.pushEnabled = true;
+    if (!state.userPrivate) state.userPrivate = {};
+    state.userPrivate.pushEnabled = true;
+    if (!state.userPrivate.fcmTokens) state.userPrivate.fcmTokens = [];
+    if (token && !state.userPrivate.fcmTokens.includes(token)) {
+      state.userPrivate.fcmTokens.push(token);
+    }
+
+    const privPayload = {
+      email: state.userPrivate?.email || state.user?.email || '',
+      pushEnabled: true,
+      updatedAt: serverTimestamp()
+    };
+    if (token) privPayload.fcmTokens = arrayUnion(token);
+
+    await setDoc(doc(db, 'users_private', state.user.uid), privPayload, { merge: true }).catch(e => console.warn('users_private push update:', e));
+
+    const pubPayload = {
+      pushEnabled: true,
+      updatedAt: serverTimestamp()
+    };
+    if (token) pubPayload.fcmTokens = arrayUnion(token);
+    await setDoc(doc(db, 'users', state.user.uid), pubPayload, { merge: true }).catch(e => console.warn('users push update:', e));
+
+    callGasBackend({
+      action: 'REGISTER_PUSH_TOKEN',
+      uid: state.user.uid,
+      pushEnabled: true,
+      token: token || ''
+    }).catch(() => {});
+
+    try {
+      const swReg = (await navigator.serviceWorker.getRegistration('./sw.js')) || (await navigator.serviceWorker.ready) || fcmRegistration;
+      if (swReg && typeof swReg.showNotification === 'function') {
+        await swReg.showNotification('Push Notifications Active 🔔', {
+          body: 'You will now receive live CoC Media alerts directly from Chrome.',
+          icon: './pwa-192x192.png',
+          badge: './pwa-192x192.png',
+          data: { url: './index.html#home' }
+        });
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Push Notifications Active 🔔', {
+          body: 'You will now receive live CoC Media alerts directly from Chrome.',
+          icon: './pwa-192x192.png'
+        });
+      }
+    } catch (notifErr) {
+      console.warn('Immediate confirmation notification warning:', notifErr);
+    }
+
+    toast('Push notifications enabled!', 'success');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   } catch (err) {
     console.error('enablePushNotifications error:', err);
     toast('Failed to enable push: ' + (err.message || err), 'error');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   }
 }
 
 async function disablePushNotifications() {
   if (!state.user) return;
   try {
-    const tokenToRemove = state.currentFcmToken || state.userPrivate?.fcmTokens?.[0];
+    const tokenToRemove = state.currentFcmToken || state.userPrivate?.fcmTokens?.[0] || state.user?.fcmTokens?.[0];
+    const privUpdate = { pushEnabled: false, updatedAt: serverTimestamp() };
+    const pubUpdate = { pushEnabled: false, updatedAt: serverTimestamp() };
     if (tokenToRemove) {
-      const privRef = doc(db, 'users_private', state.user.uid);
-      await updateDoc(privRef, {
-        fcmTokens: arrayRemove(tokenToRemove)
-      }).catch(() => {});
+      privUpdate.fcmTokens = arrayRemove(tokenToRemove);
+      pubUpdate.fcmTokens = arrayRemove(tokenToRemove);
     }
+
+    await setDoc(doc(db, 'users_private', state.user.uid), privUpdate, { merge: true }).catch(() => {});
+    await setDoc(doc(db, 'users', state.user.uid), pubUpdate, { merge: true }).catch(() => {});
 
     if (messaging) {
       await deleteToken(messaging).catch(() => {});
     }
 
     state.currentFcmToken = null;
-    if (state.userPrivate?.fcmTokens) {
+    if (state.user) state.user.pushEnabled = false;
+    if (state.userPrivate) {
+      state.userPrivate.pushEnabled = false;
       state.userPrivate.fcmTokens = [];
     }
 
+    callGasBackend({
+      action: 'REGISTER_PUSH_TOKEN',
+      uid: state.user.uid,
+      pushEnabled: false,
+      removeToken: tokenToRemove || ''
+    }).catch(() => {});
+
     toast('Push notifications disabled', 'info');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   } catch (err) {
     console.error('disablePushNotifications error:', err);
     toast('Failed to disable push: ' + (err.message || err), 'error');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   }
 }
 
@@ -10854,6 +11081,68 @@ function openTaskCompetitionModal(taskId) {
 }
 
 let attendanceTickerInterval = null;
+let userAttendanceActiveTab = 'active';
+
+export function formatCheckInExactTime(ts, includeDate = true) {
+  const ms = parseDateTimeToMs(ts);
+  if (!ms) return '—';
+  try {
+    const opts = includeDate
+      ? { timeZone: APP_TIMEZONE, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }
+      : { timeZone: APP_TIMEZONE, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+    return new Intl.DateTimeFormat('en-US', opts).format(new Date(ms));
+  } catch (e) {
+    return formatDateTime(ms);
+  }
+}
+
+export function renderCheckInMetricsPills(log) {
+  if (!log) return '';
+  const status = log.status || 'on_time';
+  const isAbsent = status === 'absent';
+  const isExcused = status === 'excused' || log.excused === true;
+  const isEarly = status === 'early' || log.isEarly || (Number(log.earlyMinutes) > 0 && status !== 'late' && !isAbsent);
+  const isLate = status === 'late' || (!isAbsent && !isEarly && (Number(log.delaySeconds) > 0 || Number(log.lateMinutes) > 0 || Number(log.penalty) > 0));
+
+  let timingPill = '';
+  if (isAbsent) {
+    timingPill = `<span class="checkin-timing-pill pill-absent">Absent</span>`;
+  } else if (isExcused) {
+    timingPill = `<span class="checkin-timing-pill bg-blue-500/20 text-blue-300 border border-blue-500/30">Excused</span>`;
+  } else if (isEarly && Number(log.earlyMinutes) > 0) {
+    timingPill = `<span class="checkin-timing-pill pill-early">Early by ${Number(log.earlyMinutes)}m</span>`;
+  } else if (isLate) {
+    const lMins = Number(log.lateMinutes) || Math.floor((Number(log.delaySeconds) || 0) / 60);
+    const lSecs = (log.lateSeconds !== undefined && log.lateSeconds !== null) ? Number(log.lateSeconds) : ((Number(log.delaySeconds) || 0) % 60);
+    timingPill = `<span class="checkin-timing-pill pill-late">Late by ${lMins}m ${lSecs}s</span>`;
+  } else {
+    timingPill = `<span class="checkin-timing-pill pill-ontime">On Time</span>`;
+  }
+
+  const ptsDelta = (log.pointsDelta !== undefined && log.pointsDelta !== null && log.pointsDelta !== 0)
+    ? Number(log.pointsDelta)
+    : (Number(log.earlyBonusPoints) > 0 ? Number(log.earlyBonusPoints) : (Number(log.penalty) > 0 ? -Number(log.penalty) : 0));
+  const egpDelta = (log.egpDelta !== undefined && log.egpDelta !== null && log.egpDelta !== 0)
+    ? Number(log.egpDelta)
+    : (Number(log.earlyBonusEGP) > 0 ? Number(log.earlyBonusEGP) : (Number(log.fineEGP) > 0 ? -Number(log.fineEGP) : 0));
+
+  let impactPill = '';
+  if (ptsDelta > 0 || egpDelta > 0) {
+    const parts = [];
+    if (ptsDelta > 0) parts.push(`+${ptsDelta} pts`);
+    if (egpDelta > 0) parts.push(`+${egpDelta} EGP`);
+    impactPill = `<span class="checkin-impact-pill impact-positive">${parts.join(' | ')}</span>`;
+  } else if (ptsDelta < 0 || egpDelta < 0) {
+    const parts = [];
+    if (ptsDelta < 0) parts.push(`${ptsDelta} pts`);
+    if (egpDelta < 0) parts.push(`${egpDelta} EGP`);
+    impactPill = `<span class="checkin-impact-pill impact-negative">${parts.join(' | ')}</span>`;
+  } else {
+    impactPill = `<span class="checkin-impact-pill impact-neutral">0 pts</span>`;
+  }
+
+  return `<div class="flex flex-wrap items-center justify-end gap-1">${timingPill}${impactPill}</div>`;
+}
 
 function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
   if (!heroContainer) return;
@@ -10893,37 +11182,50 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
     openUnchecked.sort((a, b) => Math.abs(a.calc.occurrenceStart - nowMs) - Math.abs(b.calc.occurrenceStart - nowMs));
     const target = openUnchecked[0];
     const isLate = target.calc.status === 'late';
-    const isEarlyWithBonus = target.calc.isEarly && target.calc.earlyBonusPoints > 0;
+    const isEarlyWithBonus = target.calc.isEarly && (target.calc.earlyBonusPoints > 0 || target.calc.earlyBonusEGP > 0);
+
+    const bonusParts = [];
+    if (target.calc.earlyBonusPoints > 0) bonusParts.push(`+${target.calc.earlyBonusPoints} pts`);
+    if (target.calc.earlyBonusEGP > 0) bonusParts.push(`+${target.calc.earlyBonusEGP} EGP`);
+    const bonusRewardText = bonusParts.join(' | ');
+
+    const penParts = [];
+    if (target.calc.pointsDelta < 0) penParts.push(`${target.calc.pointsDelta} pts`);
+    if (target.calc.egpDelta < 0) penParts.push(`${target.calc.egpDelta} EGP`);
+    if (penParts.length === 0 && target.calc.penalty > 0) {
+      penParts.push(`-${target.calc.penalty} ${target.session.penaltyFinesEnabled ? 'EGP' : 'pts'}`);
+    }
+    const latePenaltyText = penParts.join(' | ');
 
     let badgeHtml = '';
     if (isEarlyWithBonus) {
       badgeHtml = `
         <div class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono shadow-sm">
           <svg class="w-3.5 h-3.5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-          <span>+${target.calc.earlyBonusPoints} Pts Early Bonus</span>
+          <span>Early Bonus (${bonusRewardText})${target.calc.appliedTierLabel ? ` &bull; ${esc(target.calc.appliedTierLabel)}` : ''}</span>
         </div>
       `;
     } else if (!isLate) {
       badgeHtml = `
         <div class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono">
           <svg class="w-3.5 h-3.5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
-          <span>On Time &bull; 0 Penalty</span>
+          <span>On Time${target.calc.earlyMinutes > 0 ? ` (Early by ${target.calc.earlyMinutes}m)` : ''} &bull; 0 Penalty</span>
         </div>
       `;
     } else {
       badgeHtml = `
         <div class="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono animate-pulse">
           <svg class="w-3.5 h-3.5 text-rose-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-          <span>Late Penalty: -${target.calc.penalty} ${target.session.penaltyFinesEnabled ? 'EGP' : 'pts'}</span>
+          <span>Late by ${target.calc.lateMinutes || 0}m ${target.calc.lateSeconds || 0}s (${latePenaltyText})</span>
         </div>
       `;
     }
 
     let btnText = 'Check In Now';
     if (isEarlyWithBonus) {
-      btnText = `Check In Early (+${target.calc.earlyBonusPoints} Pts)`;
+      btnText = `Check In Early (${bonusRewardText})`;
     } else if (isLate) {
-      btnText = `Check In Late (-${target.calc.penalty} ${target.session.penaltyFinesEnabled ? 'EGP' : 'pts'})`;
+      btnText = `Check In Late (${latePenaltyText})`;
     }
 
     heroContainer.innerHTML = `
@@ -10968,8 +11270,6 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
   if (completedSession) {
     const isWaiver = Boolean(completedSession.approvedWaiver);
     const log = completedSession.userLog;
-    const isLate = log?.status === 'late' || (log?.penalty > 0);
-    const isEarly = log?.status === 'early' || log?.isEarly;
 
     heroContainer.innerHTML = `
       <div class="smart-checkin-hero-card border-emerald-500/20 bg-emerald-500/[0.04] space-y-3">
@@ -10978,11 +11278,13 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
           <span class="text-xs uppercase font-bold tracking-wider text-emerald-400 font-mono">${isWaiver ? 'Excuse Approved' : 'Checked In'}</span>
         </div>
         <h2 class="ios-title text-white text-xl font-bold truncate">${esc(completedSession.session.title)}</h2>
-        <p class="text-xs text-neutral-300">
+        <div class="text-xs text-neutral-300 space-y-1.5">
           ${isWaiver
-            ? `Waiver granted: "${esc(completedSession.approvedWaiver.reason)}"`
-            : `Recorded at ${formatDateTime(log?.checkedInAt)} ${isEarly ? `(+${log.earlyBonusPoints || 0} Pts Early Bonus)` : (isLate ? `(-${log.penalty} pts)` : '(On Time)')}`}
-        </p>
+            ? `<p>Waiver granted: "${esc(completedSession.approvedWaiver.reason)}"</p>`
+            : `<p>Recorded at ${formatCheckInExactTime(log?.checkedInAt || log?.checkInTimestamp)}</p>
+               <div class="flex justify-center">${renderCheckInMetricsPills(log)}</div>`
+          }
+        </div>
         <button type="button" class="smart-checkin-btn-massive" disabled>
           <svg class="w-5 h-5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
           <span>Already Checked In</span>
@@ -11027,10 +11329,147 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
   `;
 }
 
+export function renderUserSessionHistory() {
+  const container = document.getElementById('attendance-history-container');
+  const countBadge = document.getElementById('attendance-history-count');
+  if (!container) return;
+
+  const nowMs = serverNow();
+  const allSessions = (state.attendanceSessions || []).map(s => normalizeSession(s));
+  const allLogs = [...(state.attendanceLogs || []), ...(state.myAttendanceLogs || [])];
+  const uniqueLogsMap = new Map();
+  allLogs.forEach(l => {
+    if (l && l.id) uniqueLogsMap.set(l.id, l);
+  });
+  const combinedLogs = Array.from(uniqueLogsMap.values());
+
+  const historyItems = [];
+  allSessions.forEach(session => {
+    const calc = computeAttendance(session, nowMs);
+    const occStart = calc.occurrenceStart || parseDateTimeToMs(session.schedule?.startDateTime) || 0;
+    const cutoffMs = occStart + (Number(session.lateCutoffMinutes) || 120) * 60000;
+    const sessionLogs = combinedLogs.filter(l => l.sessionId === session.id);
+    const isPastOrClosed =
+      session.status === 'closed' ||
+      session.status === 'completed' ||
+      session.archived === true ||
+      session.active === false ||
+      (occStart > 0 && nowMs > cutoffMs) ||
+      sessionLogs.length > 0;
+
+    if (isPastOrClosed) {
+      const presentCount = sessionLogs.filter(l => l.status === 'early' || l.status === 'on_time' || (!l.penalty && l.status !== 'late' && l.status !== 'absent')).length;
+      const lateCount = sessionLogs.filter(l => l.status === 'late' || (l.penalty > 0 && l.status !== 'absent')).length;
+      const absentCount = sessionLogs.filter(l => l.status === 'absent').length;
+      historyItems.push({
+        session,
+        occStart,
+        isClosed: session.status === 'closed' || session.archived || (occStart > 0 && nowMs > cutoffMs),
+        presentCount,
+        lateCount,
+        absentCount,
+        totalLogs: sessionLogs.length
+      });
+    }
+  });
+
+  historyItems.sort((a, b) => (b.occStart || 0) - (a.occStart || 0));
+
+  if (countBadge) {
+    countBadge.textContent = `${historyItems.length} Sessions`;
+  }
+
+  if (historyItems.length === 0) {
+    container.innerHTML = `
+      <div class="glass-card p-6 text-center border border-dashed border-white/10">
+        <p class="ios-footnote text-neutral-400">No past or completed attendance sessions yet.</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = historyItems.map(item => {
+    const s = item.session;
+    const statusText = item.isClosed ? 'Closed' : 'Completed';
+    const statusClass = item.isClosed
+      ? 'bg-neutral-500/20 text-neutral-300 border border-neutral-500/30'
+      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+
+    return `
+      <div class="glass-card p-4 space-y-3 border border-white/10 cursor-pointer hover:bg-white/[0.04] transition rounded-2xl history-session-card" data-session-id="${esc(s.id)}">
+        <div class="flex items-start justify-between gap-2">
+          <div>
+            <h3 class="ios-headline text-white font-bold">${esc(s.title)}</h3>
+            <p class="text-[11px] text-neutral-400 mt-0.5">${formatDateTime(item.occStart)} (Cairo)</p>
+          </div>
+          <span class="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-semibold ${statusClass}">${statusText}</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 pt-1 text-center text-[11px]">
+          <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-mono">
+            <strong class="text-emerald-400">${item.presentCount}</strong> Present
+          </div>
+          <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono">
+            <strong class="text-amber-400">${item.lateCount}</strong> Late
+          </div>
+          <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 font-mono">
+            <strong class="text-rose-400">${item.absentCount}</strong> Absent
+          </div>
+        </div>
+        <div class="flex items-center justify-between pt-2 border-t border-white/5 text-[11px] text-neutral-400">
+          <span>Tap to view full attendee breakdown</span>
+          <span class="text-[#0A84FF] font-semibold">View Details &rarr;</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.history-session-card').forEach(card => {
+    card.onclick = () => {
+      const sid = card.dataset.sessionId;
+      const targetSession = state.attendanceSessions.find(s => s.id === sid);
+      if (targetSession) openAdminRosterModal(targetSession);
+    };
+  });
+}
+
 function renderAttendanceView() {
   const heroContainer = document.getElementById('smart-checkin-hero-container');
   const sessionsWrap = document.getElementById('attendance-sessions-wrap');
   const container = document.getElementById('attendance-sessions-container');
+  const btnTabActive = document.getElementById('btn-att-tab-active');
+  const btnTabHistory = document.getElementById('btn-att-tab-history');
+  const activeSection = document.getElementById('attendance-active-section');
+  const historySection = document.getElementById('attendance-history-section');
+
+  if (btnTabActive && btnTabHistory && activeSection && historySection) {
+    const syncTabsUI = () => {
+      if (userAttendanceActiveTab === 'history') {
+        btnTabActive.classList.remove('active');
+        btnTabActive.setAttribute('aria-selected', 'false');
+        btnTabHistory.classList.add('active');
+        btnTabHistory.setAttribute('aria-selected', 'true');
+        activeSection.classList.add('hidden');
+        historySection.classList.remove('hidden');
+        renderUserSessionHistory();
+      } else {
+        btnTabHistory.classList.remove('active');
+        btnTabHistory.setAttribute('aria-selected', 'false');
+        btnTabActive.classList.add('active');
+        btnTabActive.setAttribute('aria-selected', 'true');
+        historySection.classList.add('hidden');
+        activeSection.classList.remove('hidden');
+      }
+    };
+    btnTabActive.onclick = () => {
+      userAttendanceActiveTab = 'active';
+      syncTabsUI();
+    };
+    btnTabHistory.onclick = () => {
+      userAttendanceActiveTab = 'history';
+      syncTabsUI();
+    };
+    syncTabsUI();
+  }
 
   if (attendanceTickerInterval) {
     clearInterval(attendanceTickerInterval);
@@ -11077,7 +11516,7 @@ function renderAttendanceView() {
           const isBlocked = calc.status === 'blocked';
           const isLate = calc.status === 'late';
           const isOnTime = calc.status === 'on_time';
-          const isEarlyBonus = calc.isEarly && calc.earlyBonusPoints > 0;
+          const isEarlyBonus = calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0);
 
           let statusPill = '';
           if (userLog) {
@@ -11089,7 +11528,7 @@ function renderAttendanceView() {
               ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`
               : `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Closed</span>`;
           } else if (isEarlyBonus) {
-            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Early Window (+${calc.earlyBonusPoints} pts)</span>`;
+            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Early Window (+${calc.earlyBonusPoints} pts${calc.earlyBonusEGP > 0 ? ` | +${calc.earlyBonusEGP} EGP` : ''})</span>`;
           } else if (isOnTime) {
             statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Open (On Time)</span>`;
           } else {
@@ -11097,7 +11536,7 @@ function renderAttendanceView() {
           }
 
           return `
-            <div class="glass-card p-4 space-y-2 border-white/10" data-session-card="${esc(session.id)}">
+            <div class="glass-card p-4 space-y-2 border-white/10 cursor-pointer hover:bg-white/[0.04] transition" data-session-card="${esc(session.id)}">
               <div class="flex items-start justify-between gap-2">
                 <div>
                   <h3 class="ios-headline text-white">${esc(session.title)}</h3>
@@ -11107,17 +11546,27 @@ function renderAttendanceView() {
               </div>
               <div class="text-[11px] text-neutral-400 flex items-center justify-between">
                 <span>Rostered: ${session.targetType === 'all' ? 'All Members' : (session.targetType === 'badge' ? `${(session.badgeIds || []).length} Badges` : `${(session.assignedMembers || session.assignedUids || []).length} Members`)}</span>
-                ${session.earlyBonusPoints > 0 ? `<span class="text-emerald-400 font-semibold">+${session.earlyBonusPoints} Pts Early</span>` : ''}
+                ${(session.earlyBonusTiers && session.earlyBonusTiers.length > 0)
+                  ? `<span class="text-emerald-400 font-semibold">${session.earlyBonusTiers.length} Early Bonus Tiers</span>`
+                  : (session.earlyBonusPoints > 0 ? `<span class="text-emerald-400 font-semibold">+${session.earlyBonusPoints} Pts Early</span>` : '')}
               </div>
             </div>
           `;
         }).join('');
+
+        container.querySelectorAll('[data-session-card]').forEach(card => {
+          card.onclick = () => {
+            const sid = card.dataset.sessionCard;
+            const sObj = state.attendanceSessions.find(x => x.id === sid);
+            if (sObj) openAdminRosterModal(sObj);
+          };
+        });
       }
     }
   }
 
   attendanceTickerInterval = setInterval(() => {
-    if (heroContainer) {
+    if (heroContainer && userAttendanceActiveTab === 'active') {
       renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
     }
   }, 1000);
@@ -11160,17 +11609,25 @@ async function handleAttendanceCheckIn(sessionId) {
   const isEarly = Boolean(calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0));
   const earlyBonusPoints = isEarly ? (calc.earlyBonusPoints || 0) : 0;
   const earlyBonusEGP = isEarly ? (calc.earlyBonusEGP || 0) : 0;
-  const penaltyPts = (session.penaltyPointsEnabled !== false) ? calc.penalty : 0;
-  const fineEGP = (session.penaltyFinesEnabled) ? calc.penalty : 0;
+  const penaltyPts = (session.penaltyPointsEnabled !== false && calc.status === 'late') ? Math.abs(calc.pointsDelta || calc.penalty || 0) : 0;
+  const fineEGP = (session.penaltyFinesEnabled && calc.status === 'late') ? Math.abs(calc.egpDelta || calc.penalty || 0) : 0;
+  const pointsDelta = isEarly ? earlyBonusPoints : (penaltyPts > 0 ? -penaltyPts : 0);
+  const egpDelta = isEarly ? earlyBonusEGP : (fineEGP > 0 ? -fineEGP : 0);
 
   let confirmTitle = 'Confirm Check-In';
   let confirmMsg = `Check in for "${session.title}" on time with 0 penalty?`;
-  if (isEarly && earlyBonusPoints > 0) {
+  if (isEarly && (earlyBonusPoints > 0 || earlyBonusEGP > 0)) {
     confirmTitle = 'Early Check-In Bonus!';
-    confirmMsg = `Check in early for "${session.title}"? You will earn +${earlyBonusPoints} Pts Early Bonus!`;
+    const rParts = [];
+    if (earlyBonusPoints > 0) rParts.push(`+${earlyBonusPoints} pts`);
+    if (earlyBonusEGP > 0) rParts.push(`+${earlyBonusEGP} EGP`);
+    confirmMsg = `Check in early (${calc.earlyMinutes}m before start) for "${session.title}"? You will earn ${rParts.join(' & ')}!`;
   } else if (calc.status === 'late') {
     confirmTitle = 'Confirm Late Check-In';
-    confirmMsg = `You are checking in late for "${session.title}". A deduction of ${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} will be recorded. Confirm?`;
+    const dParts = [];
+    if (penaltyPts > 0) dParts.push(`-${penaltyPts} pts`);
+    if (fineEGP > 0) dParts.push(`-${fineEGP} EGP`);
+    confirmMsg = `You are checking in late (${calc.lateMinutes}m ${calc.lateSeconds}s) for "${session.title}". A deduction of ${dParts.join(' & ') || '0 pts'} will be recorded. Confirm?`;
   }
 
   const confirmed = await confirmSheet({
@@ -11197,67 +11654,155 @@ async function handleAttendanceCheckIn(sessionId) {
       occurrenceKey,
       occurrenceStart: Timestamp.fromMillis(calc.occurrenceStart),
       checkedInAt: serverTimestamp(),
+      checkInTimestamp: serverTimestamp(),
       status: isEarly ? 'early' : calc.status,
-      delaySeconds: calc.delaySeconds,
+      delaySeconds: calc.delaySeconds || 0,
+      earlyMinutes: calc.earlyMinutes || 0,
+      lateMinutes: calc.lateMinutes || 0,
+      lateSeconds: calc.lateSeconds || 0,
       penalty: penaltyPts,
       fineEGP: fineEGP,
+      pointsDelta,
+      egpDelta,
+      appliedTierLabel: calc.appliedTierLabel || '',
       penaltyUnit: session.penaltyUnit || 'minutes',
       isEarly,
       earlyBonusPoints,
-      earlyBonusEGP
+      earlyBonusEGP,
+      ledgerSynced: true
     };
 
     batch.set(logRef, logPayload);
 
-    if (earlyBonusPoints > 0) {
-      const userRef = doc(db, 'users', state.user.uid);
-      batch.update(userRef, {
-        points: increment(earlyBonusPoints),
-        totalPoints: increment(earlyBonusPoints),
-        lastOpId: logId
+    const userRef = doc(db, 'users', state.user.uid);
+    const userDocData = usersMap.get(state.user.uid) || state.user || {};
+    const userUpdates = { lastOpId: logId, updatedAt: serverTimestamp() };
+
+    if (pointsDelta !== 0) {
+      Object.assign(userUpdates, buildPointsUpdate(userDocData, pointsDelta));
+    }
+    if (penaltyPts > 0) {
+      userUpdates.penalties = increment(penaltyPts);
+    }
+    if (egpDelta !== 0) {
+      const fineChange = -egpDelta;
+      userUpdates.finesDue = increment(fineChange);
+      userUpdates.fines = increment(fineChange);
+      batch.set(doc(db, 'users_private', state.user.uid), {
+        finesEGP: increment(fineChange),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    }
+    batch.update(userRef, userUpdates);
+
+    if (pointsDelta !== 0) {
+      const txPtsRef = doc(collection(db, 'users', state.user.uid, 'transactions'));
+      batch.set(txPtsRef, {
+        type: pointsDelta > 0 ? 'bonus' : 'penalty',
+        category: 'points',
+        amount: Math.abs(pointsDelta),
+        pointsDelta,
+        sessionId: session.id,
+        logId,
+        reason: pointsDelta > 0
+          ? `Early check-in bonus (${calc.earlyMinutes}m early): ${session.title}`
+          : `Late check-in penalty (${calc.lateMinutes}m ${calc.lateSeconds}s late): ${session.title}`,
+        createdAt: serverTimestamp()
       });
     }
 
-    if (session.penaltyPointsEnabled !== false && penaltyPts > 0) {
-      const userRef = doc(db, 'users', state.user.uid);
-      batch.update(userRef, {
-        penalties: increment(penaltyPts),
-        lastOpId: logId
+    if (egpDelta !== 0) {
+      const txEgpRef = doc(collection(db, 'users', state.user.uid, 'transactions'));
+      batch.set(txEgpRef, {
+        type: egpDelta > 0 ? 'bonus' : 'fine',
+        category: 'financial',
+        amount: Math.abs(egpDelta),
+        egpDelta,
+        sessionId: session.id,
+        logId,
+        reason: egpDelta > 0
+          ? `Early check-in bonus (${calc.earlyMinutes}m early): ${session.title}`
+          : `Late check-in fine (${calc.lateMinutes}m ${calc.lateSeconds}s late): ${session.title}`,
+        createdAt: serverTimestamp()
+      });
+    }
+
+    if (pointsDelta !== 0 || egpDelta !== 0) {
+      const adjRef = doc(collection(db, 'adjustments'), `att_${logId}`);
+      batch.set(adjRef, {
+        uid: state.user.uid,
+        targetUid: state.user.uid,
+        userName: state.user.name || state.user.displayName || 'Member',
+        type: (pointsDelta > 0 || egpDelta > 0) ? 'bonus' : 'penalty',
+        pointsDelta,
+        egpDelta,
+        amountEGP: egpDelta,
+        reason: (pointsDelta > 0 || egpDelta > 0)
+          ? `Early Check-In (${calc.earlyMinutes}m early): ${session.title}`
+          : `Late Check-In (${calc.lateMinutes}m ${calc.lateSeconds}s late): ${session.title}`,
+        source: 'attendance_checkin',
+        sessionId: session.id,
+        logId,
+        createdAt: serverTimestamp()
       });
     }
 
     await batch.commit();
 
+    callGasBackend({
+      action: 'PROCESS_CHECKIN',
+      sessionId: session.id,
+      uid: state.user.uid,
+      userName: state.user.name || state.user.displayName || 'Member',
+      userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+      nowMs
+    }).catch(() => {});
+
     const optLog = normalizeAttendanceLog({
       id: logId,
       ...logPayload,
-      checkedInAt: { toMillis: () => nowMs }
+      checkedInAt: { toMillis: () => nowMs },
+      checkInTimestamp: { toMillis: () => nowMs }
     });
     state.myAttendanceLogs = [optLog, ...state.myAttendanceLogs.filter(l => l.id !== logId)];
+    state.attendanceLogs = [optLog, ...(state.attendanceLogs || []).filter(l => l.id !== logId)];
 
-    if (earlyBonusPoints > 0) {
-      state.user.points = (state.user.points || 0) + earlyBonusPoints;
-      state.user.totalPoints = (state.user.totalPoints || 0) + earlyBonusPoints;
-      updateProfileUI();
+    if (pointsDelta !== 0) {
+      state.user.points = (state.user.points || 0) + pointsDelta;
+      state.user.totalPoints = (state.user.totalPoints || 0) + pointsDelta;
+      state.user.monthPoints = (state.user.monthPoints || 0) + pointsDelta;
+      state.user.weekPoints = (state.user.weekPoints || 0) + pointsDelta;
     }
     if (penaltyPts > 0) {
       state.user.penalties = (state.user.penalties || 0) + penaltyPts;
-      updateProfileUI();
     }
+    if (egpDelta !== 0) {
+      state.user.finesDue = (state.user.finesDue || 0) - egpDelta;
+      state.user.fines = (state.user.fines || 0) - egpDelta;
+    }
+    updateProfileUI();
+    renderLeaderboard();
 
     persistToLocalCache(true);
     renderAttendanceView();
     renderAttendanceLogs();
     renderProfileAttendance();
+    renderProfileTransactions();
     updateUserTodayAttendanceBadge();
 
     getMemberDerivedEgpBalance(state.user.uid, true).then(() => { updateProfileUI(); });
 
-    let successMsg = 'Checked in successfully! (0 penalty)';
-    if (isEarly && earlyBonusPoints > 0) {
-      successMsg = `Checked in early! +${earlyBonusPoints} Pts Early Bonus awarded!`;
+    let successMsg = 'Checked in successfully! (On Time • 0 penalty)';
+    if (isEarly && (earlyBonusPoints > 0 || earlyBonusEGP > 0)) {
+      const bParts = [];
+      if (earlyBonusPoints > 0) bParts.push(`+${earlyBonusPoints} pts`);
+      if (earlyBonusEGP > 0) bParts.push(`+${earlyBonusEGP} EGP`);
+      successMsg = `Checked in early! ${bParts.join(' | ')} awarded!`;
     } else if (calc.status === 'late') {
-      successMsg = `Checked in late. -${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} applied.`;
+      const pParts = [];
+      if (penaltyPts > 0) pParts.push(`-${penaltyPts} pts`);
+      if (fineEGP > 0) pParts.push(`-${fineEGP} EGP`);
+      successMsg = `Checked in late. ${pParts.join(' | ')} applied.`;
     }
     toast(successMsg, 'success');
   } catch (err) {
@@ -11280,23 +11825,18 @@ function renderAttendanceLogs() {
   }
 
   feed.innerHTML = userLogs.map(log => {
-    const isLate = log.status === 'late' || log.penalty > 0;
+    const exactTimeStr = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp);
     return `
-      <div class="inset-row flex items-center justify-between text-xs py-2.5">
-        <div class="flex items-center gap-2.5">
-          ${renderAvatar({ displayName: log.userName, uid: log.uid, photoURL: log.userAvatar }, 'w-8 h-8')}
-          <div>
-            <div class="font-semibold text-white">${esc(log.sessionTitle)}</div>
-            <div class="text-[11px] text-neutral-400">${formatDateTime(log.checkedInAt)}</div>
+      <div class="inset-row flex items-center justify-between gap-2 text-xs py-2.5">
+        <div class="flex items-center gap-2.5 min-w-0 flex-1">
+          ${renderAvatar({ displayName: log.userName, uid: log.uid, photoURL: log.userAvatar }, 'w-8 h-8 shrink-0')}
+          <div class="min-w-0">
+            <div class="font-semibold text-white truncate">${esc(log.sessionTitle)}</div>
+            <div class="text-[11px] text-neutral-400 font-mono">${esc(exactTimeStr)}</div>
           </div>
         </div>
-        <div class="text-right">
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}">
-            ${isLate ? `Late (-${log.penalty} pts)` : 'On Time'}
-          </span>
-          ${log.delaySeconds > 0 ? `
-            <div class="text-[10px] text-neutral-500 mt-0.5">+${Math.floor(log.delaySeconds / 60)}m ${log.delaySeconds % 60}s delay</div>
-          ` : ''}
+        <div class="text-right shrink-0">
+          ${renderCheckInMetricsPills(log)}
         </div>
       </div>
     `;
@@ -11317,20 +11857,15 @@ function renderProfileAttendance() {
   }
 
   listEl.innerHTML = logs.map(log => {
-    const isLate = log.status === 'late' || log.penalty > 0;
+    const exactTimeStr = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp);
     return `
-      <div class="inset-row flex items-center justify-between py-2.5 text-xs">
-        <div>
-          <div class="font-semibold text-white">${esc(log.sessionTitle)}</div>
-          <div class="text-[11px] text-neutral-400">${formatDateTime(log.checkedInAt)}</div>
+      <div class="inset-row flex items-center justify-between gap-2 py-2.5 text-xs">
+        <div class="min-w-0 flex-1">
+          <div class="font-semibold text-white truncate">${esc(log.sessionTitle)}</div>
+          <div class="text-[11px] text-neutral-400 font-mono">${esc(exactTimeStr)}</div>
         </div>
-        <div class="text-right">
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">
-            ${isLate ? `Late (-${log.penalty} pts)` : 'On Time'}
-          </span>
-          ${log.delaySeconds > 0 ? `
-            <div class="text-[10px] text-neutral-500 mt-0.5">${Math.floor(log.delaySeconds / 60)}m ${log.delaySeconds % 60}s late</div>
-          ` : ''}
+        <div class="text-right shrink-0">
+          ${renderCheckInMetricsPills(log)}
         </div>
       </div>
     `;
@@ -14657,6 +15192,7 @@ function setupAdminSessionsSegmented() {
       id: 'admin-sessions-segmented',
       options: [
         { value: 'active', label: 'Active Sessions' },
+        { value: 'history', label: 'Session History' },
         { value: 'archived', label: 'Archived' }
       ],
       value: adminSessionsFilter || 'active',
@@ -14679,19 +15215,39 @@ function renderAdminSessions() {
 
   setupAdminSessionsSegmented();
 
+  const nowMs = serverNow();
   const isArchived = adminSessionsFilter === 'archived';
-  const filtered = state.attendanceSessions.filter(s => isArchived ? s.archived : !s.archived);
+  const isHistory = adminSessionsFilter === 'history';
+
+  let filtered = [];
+  if (isArchived) {
+    filtered = state.attendanceSessions.filter(s => s.archived);
+  } else if (isHistory) {
+    filtered = state.attendanceSessions.filter(s => {
+      if (s.archived) return false;
+      const calc = computeAttendance(s, nowMs);
+      const occStart = calc.occurrenceStart || parseDateTimeToMs(s.schedule?.startDateTime) || 0;
+      const cutoffMs = occStart + (Number(s.lateCutoffMinutes) || 120) * 60000;
+      const hasLogs = (state.attendanceLogs || []).some(l => l.sessionId === s.id);
+      return s.status === 'closed' || s.status === 'completed' || !s.active || (occStart > 0 && nowMs > cutoffMs) || hasLogs;
+    });
+    filtered.sort((a, b) => {
+      const aStart = computeAttendance(a, nowMs).occurrenceStart || parseDateTimeToMs(a.schedule?.startDateTime) || 0;
+      const bStart = computeAttendance(b, nowMs).occurrenceStart || parseDateTimeToMs(b.schedule?.startDateTime) || 0;
+      return bStart - aStart;
+    });
+  } else {
+    filtered = state.attendanceSessions.filter(s => !s.archived && s.status !== 'closed');
+  }
 
   if (filtered.length === 0) {
     list.innerHTML = `
       <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
-        No ${isArchived ? 'archived' : 'active'} attendance sessions found.
+        No ${isArchived ? 'archived' : (isHistory ? 'historical/closed' : 'active')} attendance sessions found.
       </div>
     `;
     return;
   }
-
-  const nowMs = serverNow();
 
   list.innerHTML = filtered.map(session => {
     const calc = computeAttendance(session, nowMs);
@@ -14721,8 +15277,15 @@ function renderAdminSessions() {
     const penaltyMatrixText = `${perStep} pts per ${stepDur}m late (${minPen}–${maxPen} pts)`;
     const windowBoundariesText = `Opens ${formatMinutesDuration(session.earlyCheckInMinutes)} early • Closes ${formatMinutesDuration(session.lateCutoffMinutes)} after`;
 
+    const sessionLogs = (state.attendanceLogs || []).filter(l => l.sessionId === session.id);
+    const presentCount = sessionLogs.filter(l => l.status === 'early' || l.status === 'on_time' || (!l.penalty && l.status !== 'late' && l.status !== 'absent')).length;
+    const lateCount = sessionLogs.filter(l => l.status === 'late' || (l.penalty > 0 && l.status !== 'absent')).length;
+    const absentCount = sessionLogs.filter(l => l.status === 'absent').length;
+
     let statusPillHtml = '';
-    if (calc.status === 'on_time') {
+    if (session.status === 'closed' || calc.reason === 'late') {
+      statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-white/10 text-neutral-300 border border-white/15">Closed</span>`;
+    } else if (calc.status === 'on_time') {
       statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">On Time</span>`;
     } else if (calc.status === 'late') {
       statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-rose-500/20 text-rose-400 border border-rose-500/30">Late Window</span>`;
@@ -14731,6 +15294,8 @@ function renderAdminSessions() {
     } else {
       statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-white/10 text-neutral-400 border border-white/15">Check-in Closed</span>`;
     }
+
+    const tiersCount = Array.isArray(session.earlyBonusTiers) ? session.earlyBonusTiers.length : 0;
 
     return `
       <div class="glass-card bulk-select-card p-4 space-y-3 text-xs border-white/10 cursor-pointer hover:bg-white/[0.03] transition rounded-2xl${isSelected ? ' selected' : ''}" data-session-id="${esc(session.id)}" data-bulk-id="${esc(session.id)}">
@@ -14741,15 +15306,15 @@ function renderAdminSessions() {
               <h3 class="ios-headline text-white">${esc(session.title)}</h3>
               <p class="text-[11px] text-neutral-400 mt-0.5">${esc(schedDesc)}</p>
             </div>
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${session.active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-neutral-400'}">
-              ${session.active ? 'Active' : 'Inactive'}
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${session.status === 'closed' ? 'bg-neutral-500/20 text-neutral-300 border border-neutral-500/30' : (session.active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-neutral-400')}">
+              ${session.status === 'closed' ? 'Closed' : (session.active ? 'Active' : 'Completed')}
             </span>
           </div>
 
           <div class="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-white/[0.03] text-[11px] text-neutral-300">
             <div>
               <span class="text-[10px] text-neutral-400 block font-medium">Window Boundaries</span>
-              <span>${windowBoundariesText}</span>
+              <span>${windowBoundariesText}${tiersCount > 0 ? ` • ${tiersCount} Early Tiers` : ''}</span>
             </div>
             <div>
               <span class="text-[10px] text-neutral-400 block font-medium">Penalty Matrix</span>
@@ -14757,14 +15322,29 @@ function renderAdminSessions() {
             </div>
           </div>
 
+          <div class="grid grid-cols-3 gap-2 text-center text-[11px]">
+            <div class="p-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-mono">
+              <strong>${presentCount}</strong> Present
+            </div>
+            <div class="p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono">
+              <strong>${lateCount}</strong> Late
+            </div>
+            <div class="p-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 font-mono">
+              <strong>${absentCount}</strong> Absent
+            </div>
+          </div>
+
           <div class="p-2 rounded-lg bg-black/20 text-[11px] flex items-center justify-between text-neutral-300">
-            <span>Current Occurrence: <strong class="text-white">${formatDateTime(occStart)}</strong></span>
+            <span>Occurrence: <strong class="text-white">${formatDateTime(occStart)}</strong></span>
             ${statusPillHtml}
           </div>
 
           <div class="flex items-center justify-between pt-2 border-t border-white/5">
             <button type="button" class="btn-card-view-attendance text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
-              <span>View Attendance</span> &rarr;
+              <span>View Attendance Breakdown</span> &rarr;
+            </button>
+            <button type="button" class="btn-card-edit-session text-xs font-semibold text-[#0A84FF] hover:text-blue-400 flex items-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
+              <span>Edit</span>
             </button>
           </div>
 
@@ -14778,7 +15358,12 @@ function renderAdminSessions() {
       bulkType: 'sessions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
-        openAdminSessionModal(card.dataset.sessionId);
+        if (adminSessionsFilter === 'history') {
+          const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
+          if (targetSession) openAdminRosterModal(targetSession);
+        } else {
+          openAdminSessionModal(card.dataset.sessionId);
+        }
       }
     });
 
@@ -14836,6 +15421,14 @@ function openAdminSessionModal(sessionId = null) {
   let assignedUids = new Set(Array.isArray(session?.assignedMembers) ? session.assignedMembers : (Array.isArray(session?.assignedUids) ? session.assignedUids : []));
   let earlyBonusPoints = session ? (Number(session.earlyBonusPoints) || Number(session.earlyCheckInBonusPoints) || 0) : 0;
   let earlyBonusEGP = session ? (Number(session.earlyBonusEGP) || Number(session.earlyCheckInBonusEGP) || 0) : 0;
+  let earlyBonusTiers = Array.isArray(session?.earlyBonusTiers)
+    ? session.earlyBonusTiers.map(t => ({
+        fromMinsBefore: Math.max(0, Number(t.fromMinsBefore) || 0),
+        toMinsBefore: Math.max(0, Number(t.toMinsBefore) || 0),
+        bonusPoints: Math.max(0, Number(t.bonusPoints) || 0),
+        bonusEgp: Math.max(0, Number(t.bonusEgp ?? t.bonusEGP) || 0)
+      }))
+    : [];
 
   let pointsPenalty = {
     enabled: session ? session.pointsPenalty.enabled : true,
@@ -14975,13 +15568,26 @@ function openAdminSessionModal(sessionId = null) {
       <div class="h-px bg-white/5"></div>
       <div class="grid grid-cols-2 gap-2 pt-1">
         <div>
-          <label for="attEarlyBonusPts" class="text-[11px] font-medium text-emerald-400 block mb-1">Early Bonus (Pts)</label>
+          <label for="attEarlyBonusPts" class="text-[11px] font-medium text-emerald-400 block mb-1">Default Early Bonus (Pts)</label>
           <input type="number" min="0" id="attEarlyBonusPts" value="${earlyBonusPoints}" class="w-full glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" placeholder="0" />
         </div>
         <div>
-          <label for="attEarlyBonusEGP" class="text-[11px] font-medium text-emerald-400 block mb-1">Early Bonus (EGP)</label>
+          <label for="attEarlyBonusEGP" class="text-[11px] font-medium text-emerald-400 block mb-1">Default Early Bonus (EGP)</label>
           <input type="number" min="0" id="attEarlyBonusEGP" value="${earlyBonusEGP}" class="w-full glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" placeholder="0" />
         </div>
+      </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="space-y-2 pt-1">
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <span class="text-xs font-bold text-emerald-400 block">Early Bonus Tiers (Time-Bracket Matrix)</span>
+            <span class="text-[10px] text-neutral-400 block">Award higher bonuses for earlier arrival brackets (e.g. 60m–30m vs 29m–10m before start).</span>
+          </div>
+          <button type="button" id="btn-add-early-tier" class="px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold transition shrink-0 flex items-center gap-1">
+            <span>+ Add Time Bracket</span>
+          </button>
+        </div>
+        <div id="early-bonus-tiers-list" class="space-y-2"></div>
       </div>
     </div>
   `;
@@ -14992,6 +15598,76 @@ function openAdminSessionModal(sessionId = null) {
   const inpCloses = timeCard.querySelector('#attClosesTime');
   const inpEarlyPts = timeCard.querySelector('#attEarlyBonusPts');
   const inpEarlyEGP = timeCard.querySelector('#attEarlyBonusEGP');
+  const tiersListEl = timeCard.querySelector('#early-bonus-tiers-list');
+  const addTierBtn = timeCard.querySelector('#btn-add-early-tier');
+
+  const renderEarlyTiersUI = () => {
+    if (!tiersListEl) return;
+    if (earlyBonusTiers.length === 0) {
+      tiersListEl.innerHTML = `<div class="p-2.5 rounded-xl bg-black/20 border border-dashed border-white/10 text-[11px] text-neutral-400 text-center">No custom time brackets added. Flat default early bonus above will apply if > 0.</div>`;
+      return;
+    }
+    tiersListEl.innerHTML = earlyBonusTiers.map((tier, idx) => `
+      <div class="early-tier-row" data-tier-idx="${idx}">
+        <div>
+          <label class="text-[10px] text-neutral-400 block mb-0.5">From (mins before)</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-from" value="${tier.fromMinsBefore}" placeholder="60" />
+        </div>
+        <div>
+          <label class="text-[10px] text-neutral-400 block mb-0.5">To (mins before)</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-to" value="${tier.toMinsBefore}" placeholder="30" />
+        </div>
+        <div>
+          <label class="text-[10px] text-emerald-400 block mb-0.5">+Bonus Pts</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-pts" value="${tier.bonusPoints}" placeholder="10" />
+        </div>
+        <div>
+          <label class="text-[10px] text-emerald-400 block mb-0.5">+Bonus EGP</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-egp" value="${tier.bonusEgp}" placeholder="20" />
+        </div>
+        <div class="flex items-end pb-0.5">
+          <button type="button" class="btn-remove-early-tier p-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition" data-idx="${idx}" title="Remove Bracket">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>
+          </button>
+        </div>
+      </div>
+    `).join('');
+
+    tiersListEl.querySelectorAll('.early-tier-row').forEach(row => {
+      const idx = Number(row.dataset.tierIdx);
+      const tObj = earlyBonusTiers[idx];
+      if (!tObj) return;
+      const fromInp = row.querySelector('.inp-tier-from');
+      const toInp = row.querySelector('.inp-tier-to');
+      const ptsInp = row.querySelector('.inp-tier-pts');
+      const egpInp = row.querySelector('.inp-tier-egp');
+      const delBtn = row.querySelector('.btn-remove-early-tier');
+
+      if (fromInp) fromInp.oninput = (e) => { tObj.fromMinsBefore = Math.max(0, Number(e.target.value) || 0); };
+      if (toInp) toInp.oninput = (e) => { tObj.toMinsBefore = Math.max(0, Number(e.target.value) || 0); };
+      if (ptsInp) ptsInp.oninput = (e) => { tObj.bonusPoints = Math.max(0, Number(e.target.value) || 0); };
+      if (egpInp) egpInp.oninput = (e) => { tObj.bonusEgp = Math.max(0, Number(e.target.value) || 0); };
+      if (delBtn) delBtn.onclick = () => {
+        earlyBonusTiers.splice(idx, 1);
+        renderEarlyTiersUI();
+      };
+    });
+  };
+
+  if (addTierBtn) {
+    addTierBtn.onclick = () => {
+      const nextFrom = earlyBonusTiers.length === 0 ? 60 : Math.max(10, (earlyBonusTiers[earlyBonusTiers.length - 1].toMinsBefore || 30) - 1);
+      const nextTo = Math.max(0, nextFrom - 20);
+      earlyBonusTiers.push({
+        fromMinsBefore: nextFrom,
+        toMinsBefore: nextTo,
+        bonusPoints: 5,
+        bonusEgp: 10
+      });
+      renderEarlyTiersUI();
+    };
+  }
+  renderEarlyTiersUI();
 
   if (inpDate) inpDate.onchange = (e) => { selectedDateStr = e.target.value; };
   if (inpTime) inpTime.onchange = (e) => { selectedTimeStr = e.target.value; };
@@ -15351,6 +16027,12 @@ function openAdminSessionModal(sessionId = null) {
         assignedMembers: targetType === 'custom' ? Array.from(assignedUids) : [],
         earlyBonusPoints: Math.max(0, Number(earlyBonusPoints) || 0),
         earlyBonusEGP: Math.max(0, Number(earlyBonusEGP) || 0),
+        earlyBonusTiers: earlyBonusTiers.map(t => ({
+          fromMinsBefore: Math.max(0, Number(t.fromMinsBefore) || 0),
+          toMinsBefore: Math.max(0, Number(t.toMinsBefore) || 0),
+          bonusPoints: Math.max(0, Number(t.bonusPoints) || 0),
+          bonusEgp: Math.max(0, Number(t.bonusEgp) || 0)
+        })),
         pointsPenalty: {
           enabled: Boolean(pointsPenalty.enabled),
           mode: pointsPenalty.mode,
@@ -15393,14 +16075,16 @@ function openAdminSessionModal(sessionId = null) {
             updatedAt: serverTimestamp()
           });
           toast('Attendance session updated', 'success');
+          dispatchBackendSessionMutation('SESSION_UPDATED', editingSessionId);
         } else {
-          await addDoc(collection(db, 'attendance_sessions'), {
+          const newDocRef = await addDoc(collection(db, 'attendance_sessions'), {
             ...payload,
             archived: false,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
           toast('Attendance session created', 'success');
+          dispatchBackendSessionMutation('SESSION_UPDATED', newDocRef.id);
         }
         renderAdminSessions();
         renderAttendanceView();
@@ -16112,6 +16796,7 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
     const renderSubContent = () => {
       const container = bodyEl.querySelector('#roster-tab-content');
       if (!container) return;
+      const isAdminUser = isCurrentUserAdmin();
 
       if (activeTab === 'history') {
         if (sessionLogs.length === 0) {
@@ -16127,44 +16812,24 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
           <div class="space-y-2">
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
               <span>All Event History (${sessionLogs.length})</span>
-              <span class="text-[10px] text-neutral-400 font-normal">Tap any log to edit</span>
+              ${isAdminUser ? `<span class="text-[10px] text-neutral-400 font-normal">Tap any log to edit</span>` : ''}
             </div>
             <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-80 overflow-y-auto">
               ${sessionLogs.map(l => {
                 const prof = getUserProfile(l.uid, l.userName, l.userAvatar);
-                const isLate = l.status === 'late' || (l.penalty > 0) || (l.fineEGP > 0);
-                const isExcused = l.status === 'excused' || l.excused;
-                const isAbsent = l.status === 'absent';
-                const timeStr = formatDateTime(l.checkedInAt || l.occurrenceStart);
-
-                let statusBadge = '';
-                if (isAbsent) {
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-rose-500/20 text-rose-300">Absent</span>`;
-                } else if (isExcused) {
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-blue-500/20 text-blue-300">Excused</span>`;
-                } else if (isLate) {
-                  const lateLabel = l.lateMinutes ? `Late +${l.lateMinutes}m` : 'Late';
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-amber-500/20 text-amber-300">${lateLabel}</span>`;
-                } else {
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-emerald-500/20 text-emerald-300">On Time</span>`;
-                }
+                const timeStr = formatCheckInExactTime(l.checkedInAt || l.checkInTimestamp || l.occurrenceStart, true);
 
                 return `
-                  <div class="log-history-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(l.id)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                  <div class="log-history-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(l.id)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1">
                       <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
                       <div class="min-w-0 flex-1">
                         <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400 block">${timeStr}</span>
+                        <span class="text-[10px] text-neutral-400 font-mono block">${esc(timeStr)}</span>
                       </div>
                     </div>
-                    <div class="text-right shrink-0 flex items-center gap-2">
-                      ${(l.penalty > 0 || l.fineEGP > 0) ? `
-                        <span class="text-[10px] font-mono text-rose-400">
-                          ${l.penalty > 0 ? `-${l.penalty} pts ` : ''}${l.fineEGP > 0 ? `-${l.fineEGP} EGP` : ''}
-                        </span>
-                      ` : ''}
-                      ${statusBadge}
+                    <div class="text-right shrink-0">
+                      ${renderCheckInMetricsPills(l)}
                     </div>
                   </div>
                 `;
@@ -16173,12 +16838,14 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
           </div>
         `;
 
-        container.querySelectorAll('.log-history-row').forEach(row => {
-          row.onclick = () => {
-            const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
-            if (targetLog) openAdminLogEditModal(targetLog, session);
-          };
-        });
+        if (isAdminUser) {
+          container.querySelectorAll('.log-history-row').forEach(row => {
+            row.onclick = () => {
+              const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
+              if (targetLog) openAdminLogEditModal(targetLog, session);
+            };
+          });
+        }
         return;
       }
 
@@ -16205,31 +16872,28 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
         <div class="space-y-2">
           <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
             <span>Attended (${presentList.length})</span>
-            <span class="text-[10px] text-emerald-400 font-normal">${onTimeCount} on time, ${lateCount} late • Tap log to edit</span>
+            <span class="text-[10px] text-emerald-400 font-normal">${onTimeCount} on time, ${lateCount} late${isAdminUser ? ' • Tap log to edit' : ''}</span>
           </div>
-          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-48 overflow-y-auto">
+          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-60 overflow-y-auto">
             ${presentList.length === 0 ? `
               <div class="p-3 text-xs text-neutral-400 text-center">No members checked in yet for this occurrence.</div>
             ` : presentList.map(({ member, log }) => {
-              const isLate = log.status === 'late' || (log.penalty > 0) || (log.fineEGP > 0);
               const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-              const checkInTime = formatDateTime(log.checkedInAt, { month: undefined, day: undefined });
+              const checkInTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
               return `
-                <div class="roster-log-item p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(log.id)}">
-                  <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                <div class="roster-log-item p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}">
+                  <div class="flex items-center gap-2.5 min-w-0 flex-1">
                     <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
                     <div class="min-w-0 flex-1">
                       <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
                         <span class="truncate shrink-0 max-w-[120px]">${esc(prof.displayName)}</span>
                         <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
                       </div>
-                      <div class="text-[10px] text-neutral-400">${checkInTime}</div>
+                      <div class="text-[10px] text-neutral-400 font-mono">${esc(checkInTime)}</div>
                     </div>
                   </div>
                   <div class="text-right shrink-0">
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}">
-                      ${isLate ? `Late (-${log.penalty} pts${log.fineEGP > 0 ? ' -' + log.fineEGP + ' EGP' : ''})` : 'On Time'}
-                    </span>
+                    ${renderCheckInMetricsPills(log)}
                   </div>
                 </div>
               `;
@@ -16268,7 +16932,7 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
         <div class="space-y-2">
           <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
             <span>Absent (${penalizedAbsentList.length + unprocessedAbsentList.length})</span>
-            ${(isClosed && unprocessedAbsentList.length > 0) ? `
+            ${(isAdminUser && isClosed && unprocessedAbsentList.length > 0) ? `
               <button type="button" id="btn-penalize-all-absent" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
                 <span>Penalize All Unprocessed (${unprocessedAbsentList.length})</span>
               </button>
@@ -16281,17 +16945,17 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
               ${penalizedAbsentList.map(({ member, log }) => {
                 const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
                 return `
-                  <div class="roster-log-item p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(log.id)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                  <div class="roster-log-item p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1">
                       <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
                       <div class="min-w-0 flex-1">
                         <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-rose-400 font-mono">Penalized: -${log.penalty} pts${log.fineEGP > 0 ? ' -' + log.fineEGP + ' EGP' : ''}</span>
+                        <span class="text-[10px] text-neutral-400 font-mono">${formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true)}</span>
                       </div>
                     </div>
-                    <span class="badge-penalized px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono shrink-0">
-                      Absent (Penalized)
-                    </span>
+                    <div class="text-right shrink-0">
+                      ${renderCheckInMetricsPills(log)}
+                    </div>
                   </div>
                 `;
               }).join('')}
@@ -16311,7 +16975,7 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
                       <span class="badge-unprocessed px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono">
                         ${isClosed ? 'Absent' : 'Pending'}
                       </span>
-                      ${isClosed ? `
+                      ${(isAdminUser && isClosed) ? `
                         <button type="button" class="btn-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
                           Penalize
                         </button>
@@ -16340,12 +17004,14 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
         if (mem) renderBadgeRow(c, mem.badges, mem);
       });
 
-      container.querySelectorAll('.roster-log-item').forEach(row => {
-        row.onclick = () => {
-          const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
-          if (targetLog) openAdminLogEditModal(targetLog, session);
-        };
-      });
+      if (isAdminUser) {
+        container.querySelectorAll('.roster-log-item').forEach(row => {
+          row.onclick = () => {
+            const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
+            if (targetLog) openAdminLogEditModal(targetLog, session);
+          };
+        });
+      }
 
       container.querySelectorAll('.roster-member-row').forEach(row => {
         row.onclick = (e) => {
@@ -16383,6 +17049,8 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
 
     const penaltyPts = (session.penaltyPointsEnabled !== false) ? (session.absencePenalty || session.maxPenalty || 20) : 0;
     const fineEGP = (session.penaltyFinesEnabled) ? (session.absenceFineEGP || session.maxPenalty || 50) : 0;
+    const pointsDelta = penaltyPts > 0 ? -penaltyPts : 0;
+    const egpDelta = fineEGP > 0 ? -fineEGP : 0;
 
     let processedCount = 0;
     try {
@@ -16406,17 +17074,45 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
           occurrenceKey: selectedOccKey,
           occurrenceStart: Timestamp.fromMillis(selectedOccStartMs),
           checkedInAt: serverTimestamp(),
+          checkInTimestamp: serverTimestamp(),
           status: 'absent',
+          earlyMinutes: 0,
+          lateMinutes: 0,
+          lateSeconds: 0,
           penalty: penaltyPts,
           fineEGP: fineEGP,
+          pointsDelta,
+          egpDelta,
+          ledgerSynced: true,
           processedBy: state.user.uid
         };
         batch.set(logRef, logData);
 
-        if (penaltyPts > 0) {
-          batch.update(doc(db, 'users', m.uid), {
-            penalties: increment(penaltyPts),
-            updatedAt: serverTimestamp()
+        const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
+        if (pointsDelta !== 0) {
+          const targetUserDoc = usersMap.get(m.uid) || m || {};
+          Object.assign(userUpdateObj, buildPointsUpdate(targetUserDoc, pointsDelta));
+          userUpdateObj.penalties = increment(penaltyPts);
+        }
+        if (fineEGP > 0) {
+          userUpdateObj.finesDue = increment(fineEGP);
+          userUpdateObj.fines = increment(fineEGP);
+        }
+        batch.update(doc(db, 'users', m.uid), userUpdateObj);
+
+        if (pointsDelta !== 0) {
+          const txPtsRef = doc(collection(db, 'users', m.uid, 'transactions'));
+          batch.set(txPtsRef, {
+            type: 'penalty',
+            category: 'points',
+            amount: penaltyPts,
+            pointsDelta,
+            sessionId: session.id,
+            logId: deterministicId,
+            reason: `Unexcused absence penalty: ${session.title}`,
+            adminUid: state.user.uid,
+            adminName: state.user.displayName || 'Admin',
+            createdAt: serverTimestamp()
           });
         }
 
@@ -16431,6 +17127,9 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
             type: 'fine',
             category: 'financial',
             amount: fineEGP,
+            egpDelta,
+            sessionId: session.id,
+            logId: deterministicId,
             reason: `Unexcused absence penalty: ${session.title}`,
             adminUid: state.user.uid,
             adminName: state.user.displayName || 'Admin',
@@ -16438,10 +17137,28 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
           });
         }
 
+        if (pointsDelta !== 0 || egpDelta !== 0) {
+          const adjRef = doc(collection(db, 'adjustments'), `att_${deterministicId}`);
+          batch.set(adjRef, {
+            uid: m.uid,
+            targetUid: m.uid,
+            userName: m.displayName || m.name || 'Member',
+            type: 'penalty',
+            pointsDelta,
+            egpDelta,
+            amountEGP: egpDelta,
+            reason: `Unexcused Absence: ${session.title}`,
+            source: 'attendance_absence',
+            sessionId: session.id,
+            logId: deterministicId,
+            createdAt: serverTimestamp()
+          });
+        }
+
         createNotification(batch, {
           uid: m.uid,
           title: 'Absence Penalty Recorded',
-          message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''}).`,
+          message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? '-' + penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' -' + fineEGP + ' EGP' : ''}).`,
           type: 'attendance',
           targetAction: { route: 'attendance' }
         });
@@ -16489,21 +17206,19 @@ function renderAdminAttendanceLogs() {
   }
 
   tbody.innerHTML = logs.map(l => {
-    const isLate = l.status === 'late' || l.penalty > 0;
     const prof = getUserProfile(l.uid, l.userName, l.userAvatar);
+    const exactTime = formatCheckInExactTime(l.checkedInAt || l.checkInTimestamp, true);
     return `
-      <div class="inset-row flex items-center justify-between py-2 text-xs">
-        <div class="flex items-center gap-2">
-          ${renderAvatar(prof, 'w-7 h-7')}
-          <div>
-            <div class="font-semibold text-white">${esc(prof.displayName)}</div>
-            <div class="text-[10px] text-neutral-400">${esc(l.sessionTitle)} • ${formatDateTime(l.checkedInAt)}</div>
+      <div class="inset-row flex items-center justify-between gap-2 py-2.5 text-xs">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          ${renderAvatar(prof, 'w-7 h-7 shrink-0')}
+          <div class="min-w-0">
+            <div class="font-semibold text-white truncate">${esc(prof.displayName)}</div>
+            <div class="text-[10px] text-neutral-400 font-mono truncate">${esc(l.sessionTitle)} • ${esc(exactTime)}</div>
           </div>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">
-            ${isLate ? `-${l.penalty} pts` : 'On Time'}
-          </span>
+        <div class="flex items-center gap-2 shrink-0">
+          ${renderCheckInMetricsPills(l)}
           <button class="btn-delete-attendance-log text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-rose-500/10" data-log-id="${esc(l.id)}">
             Remove
           </button>
@@ -20238,21 +20953,36 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
         sendBtn.textContent = 'Sending...';
 
         try {
-          const batch = writeBatch(db);
-          createNotification(batch, {
-            uid: selectedUid,
-            title: cleanTitle,
-            message: cleanMsg,
-            body: cleanMsg,
-            type: 'system',
-            icon: 'bell'
-          });
-          logAdminAction(batch, {
-            action: 'admin_member_custom_notification',
+          try {
+            const batch = writeBatch(db);
+            createNotification(batch, {
+              uid: selectedUid,
+              title: cleanTitle,
+              message: cleanMsg,
+              body: cleanMsg,
+              type: 'system',
+              icon: 'bell'
+            });
+            logAdminAction(batch, {
+              action: 'admin_member_custom_notification',
+              targetUid: selectedUid,
+              details: { title: cleanTitle, message: cleanMsg }
+            });
+            await batch.commit();
+          } catch (localErr) {
+            console.warn('Local Firestore write skipped/delegated to GAS backend:', localErr);
+          }
+
+          await callGasBackend({
+            action: 'DISPATCH_NOTIFICATION',
+            targetType: 'member',
             targetUid: selectedUid,
-            details: { title: cleanTitle, message: cleanMsg }
+            title: cleanTitle,
+            body: cleanMsg,
+            category: 'system',
+            icon: 'bell',
+            adminUid: state.user?.uid || ''
           });
-          await batch.commit();
 
           customTitle = '';
           customMessage = '';
@@ -20331,13 +21061,17 @@ export async function renderAdminNotifications() {
 
     rosterContainer.innerHTML = filtered.map(m => {
       const isSelected = _adminNotifSelectedTarget === m.uid;
-      const subtitle = m.email || (m.isAdmin ? 'Admin' : (m.role || 'Member'));
+      const roleLabel = (m.isAdmin || m.role === 'admin') ? 'Admin' : 'Member';
+      const subtitle = m.email || roleLabel;
       return `
         <div class="apple-member-row ${isSelected ? 'is-selected' : ''}" data-uid="${esc(m.uid)}">
-          <div class="flex items-center gap-3 min-w-0">
-            ${renderAvatar(m, 'w-10 h-10')}
-            <div class="min-w-0">
-              <div class="text-xs font-bold text-white truncate">${esc(m.displayName || m.name || 'Member')}</div>
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            ${renderAvatar(m, 'w-10 h-10 shrink-0')}
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="member-full-name text-xs font-bold text-white">${esc(m.displayName || m.name || 'Member')}</span>
+                <span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-semibold ${(m.isAdmin || m.role === 'admin') ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-white/10 text-neutral-300'}">${roleLabel}</span>
+              </div>
               <div class="text-[11px] text-neutral-400 truncate">${esc(subtitle)} · ${m.points || 0} pts</div>
             </div>
           </div>
@@ -20506,46 +21240,76 @@ export async function renderAdminNotifications() {
       }
 
       try {
-        if (_adminNotifSelectedTarget === 'all') {
-          const payload = {
-            title,
-            message: body,
-            body,
-            type: category,
-            targetType: 'all',
-            icon,
-            archived: false,
-            isArchived: false,
-            readBy: [],
-            createdAt: serverTimestamp()
-          };
-          await addDoc(collection(db, 'notifications_broadcast'), payload);
-          const batch = writeBatch(db);
-          logAdminAction(batch, {
-            action: 'dispatch_broadcast_notification',
-            details: { title, category }
-          });
-          await batch.commit();
-          toast('Broadcast notification sent to all members!', 'success');
-        } else {
-          const uid = _adminNotifSelectedTarget;
-          const batch = writeBatch(db);
-          createNotification(batch, {
-            uid,
-            title,
-            message: body,
-            body,
-            type: category,
-            icon
-          });
-          logAdminAction(batch, {
-            action: 'dispatch_member_notification',
-            targetUid: uid,
-            details: { title, body }
-          });
-          await batch.commit();
-          toast('Notification sent to member!', 'success');
+        const isBroadcastAll = _adminNotifSelectedTarget === 'all';
+        let localWriteSucceeded = false;
+
+        try {
+          if (isBroadcastAll) {
+            const payload = {
+              title,
+              message: body,
+              body,
+              type: category,
+              targetType: 'all',
+              icon,
+              archived: false,
+              isArchived: false,
+              readBy: [],
+              createdAt: serverTimestamp()
+            };
+            await addDoc(collection(db, 'notifications_broadcast'), payload);
+            const batch = writeBatch(db);
+            logAdminAction(batch, {
+              action: 'dispatch_broadcast_notification',
+              details: { title, category }
+            });
+            await batch.commit();
+            localWriteSucceeded = true;
+          } else {
+            const uid = _adminNotifSelectedTarget;
+            const batch = writeBatch(db);
+            createNotification(batch, {
+              uid,
+              title,
+              message: body,
+              body,
+              type: category,
+              icon
+            });
+            logAdminAction(batch, {
+              action: 'dispatch_member_notification',
+              targetUid: uid,
+              details: { title, body }
+            });
+            await batch.commit();
+            localWriteSucceeded = true;
+          }
+        } catch (clientWriteErr) {
+          console.warn('Client Firestore notification write blocked or skipped; routing via GAS Backend:', clientWriteErr);
         }
+
+        const gasResult = await callGasBackend({
+          action: 'DISPATCH_NOTIFICATION',
+          targetType: isBroadcastAll ? 'all' : 'member',
+          targetUid: isBroadcastAll ? '' : _adminNotifSelectedTarget,
+          title,
+          body,
+          category,
+          icon,
+          skipFirestoreWrite: localWriteSucceeded,
+          adminUid: state.user?.uid || ''
+        });
+
+        if (!localWriteSucceeded && (!gasResult || !gasResult.ok)) {
+          throw new Error(gasResult?.error || 'Backend notification dispatch failed');
+        }
+
+        toast(
+          isBroadcastAll
+            ? 'Broadcast notification & Web Push dispatched to all members!'
+            : 'Notification & Web Push sent to member!',
+          'success'
+        );
 
         if (titleInput) titleInput.value = '';
         if (bodyInput) bodyInput.value = '';
@@ -22259,4 +23023,10 @@ if (typeof window !== 'undefined') {
   window.safeReplaceChild = safeReplaceChild;
   window.isDefaultEmailProfilePic = isDefaultEmailProfilePic;
   window.renderAdminNotifications = renderAdminNotifications;
+  window.GAS_BACKEND_WEBHOOK_URL = GAS_BACKEND_WEBHOOK_URL;
+  window.callGasBackend = callGasBackend;
+  window.dispatchBackendSessionMutation = dispatchBackendSessionMutation;
+  window.formatCheckInExactTime = formatCheckInExactTime;
+  window.renderCheckInMetricsPills = renderCheckInMetricsPills;
+  window.renderUserSessionHistory = renderUserSessionHistory;
 }

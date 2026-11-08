@@ -1,4 +1,5 @@
-const CACHE_NAME = 'coc-media-cache-v3.0.2';
+const CACHE_VERSION = 'v3.1.0';
+const CACHE_NAME = 'coc-media-cache-v3.1.0';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -39,6 +40,47 @@ self.addEventListener('message', (event) => {
   }
 });
 
+self.addEventListener('push', (event) => {
+  let data = {
+    title: 'CoC Media Team',
+    body: 'New update available',
+    icon: './pwa-192x192.png',
+    badge: './pwa-192x192.png',
+    url: './'
+  };
+  if (event.data) {
+    try {
+      const parsed = event.data.json();
+      const notif = parsed.notification || (parsed.data ? parsed.data : parsed);
+      data = Object.assign(data, notif, parsed.data || {});
+    } catch (e) {
+      data.body = event.data.text();
+    }
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'CoC Media Team', {
+      body: data.body || 'New update available',
+      icon: data.icon || './pwa-192x192.png',
+      badge: data.badge || './pwa-192x192.png',
+      vibrate: [200, 100, 200],
+      data: { url: data.url || './' }
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification && event.notification.data && event.notification.data.url) || './';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if ('focus' in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(targetUrl);
+    })
+  );
+});
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
@@ -50,6 +92,8 @@ self.addEventListener('fetch', (event) => {
     url.hostname.includes('securetoken.googleapis.com') ||
     url.hostname.includes('fcmregistrations.googleapis.com') ||
     url.hostname.includes('firebaseinstallations.googleapis.com') ||
+    url.hostname.includes('script.google.com') ||
+    url.hostname.includes('script.googleusercontent.com') ||
     url.pathname.includes('firebase-messaging-sw.js')
   ) {
     return;
