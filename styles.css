@@ -550,14 +550,19 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 #side-drawer-backdrop.drawer-open,
-#side-drawer-backdrop.is-open {
+#side-drawer-backdrop.is-open,
+#side-drawer-backdrop.active {
   opacity: 1;
   pointer-events: auto;
 }
 
 #side-drawer {
-  transform: translateX(-100%);
+  transform: translate3d(-100%, 0, 0);
+  -webkit-transform: translate3d(-100%, 0, 0);
   transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
   position: fixed;
   top: 0;
   bottom: 0;
@@ -581,8 +586,10 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 #side-drawer.drawer-open,
-#side-drawer.is-open {
-  transform: translateX(0);
+#side-drawer.is-open,
+#side-drawer.active {
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
 }
 
 .admin-overlay,
@@ -2295,6 +2302,11 @@ input[type="search"],
   color: #32ADE6 !important;
   border: 1px solid rgba(50, 173, 230, 0.28) !important;
 }
+.drawer-icon-sync {
+  background: rgba(10, 132, 255, 0.18) !important;
+  color: #0A84FF !important;
+  border: 1px solid rgba(10, 132, 255, 0.28) !important;
+}
 .drawer-icon-waiver {
   background: rgba(48, 209, 88, 0.18) !important;
   color: #30D158 !important;
@@ -3661,8 +3673,7 @@ input[type="search"],
 }
 
 .modal-sheet,
-.sub-modal-sheet,
-#side-drawer {
+.sub-modal-sheet {
   transform: translateZ(0);
   -webkit-transform: translateZ(0);
   backface-visibility: hidden;

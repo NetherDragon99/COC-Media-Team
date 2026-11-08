@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.0.1';
+export const APP_VERSION = '3.0.2';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -970,8 +970,8 @@ export function closeTopmostLayerOnBack() {
   }
 
   const drawer = document.getElementById('side-drawer');
-  if (drawer && (drawer.classList.contains('is-open') || drawer.classList.contains('drawer-open'))) {
-    closeDrawer();
+  if (drawer && (drawer.classList.contains('is-open') || drawer.classList.contains('drawer-open') || drawer.classList.contains('active'))) {
+    closeDrawer(false);
     return true;
   }
 
@@ -1000,6 +1000,11 @@ export function handleAppPopState(e) {
     const hashRaw = String(window?.location?.hash || '').replace(/^#/, '');
     const stateTab = e?.state?.cocTab;
     const targetTab = stateTab || queryTab || hashRaw || 'home';
+
+    if (hashRaw === 'menu' || e?.state?.cocModal === 'menu') {
+      openDrawer(false);
+      return;
+    }
 
     if (targetTab === 'admin' || hashRaw.startsWith('admin-')) {
       const adminSubPage = hashRaw.startsWith('admin-') ? hashRaw.replace('admin-', '') : 'overview';
@@ -8241,6 +8246,15 @@ function initNavigation() {
   window.addEventListener('hashchange', () => {
     if (_isHandlingPopState) return;
     const hash = window.location.hash;
+    if (hash === '#menu') {
+      openDrawer(false);
+      return;
+    } else {
+      const drawer = document.getElementById('side-drawer');
+      if (drawer && (drawer.classList.contains('active') || drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open'))) {
+        closeDrawer(false);
+      }
+    }
     const userMatch = userPages.find(p => p.hash === hash);
     if (userMatch && userPagerInstance) {
       userPagerInstance.goTo(userMatch.id);
@@ -8255,6 +8269,14 @@ function initNavigation() {
       }
     }
   });
+
+  // On app boot, ensure the default URL hash/state does NOT trigger the side menu to open unless explicitly requested by a deep link
+  const initialHash = window.location.hash;
+  if (initialHash === '#menu') {
+    openDrawer(false);
+  } else {
+    closeDrawer(false);
+  }
 
   const initTabParam = getQueryParam('tab');
   if (initTabParam === 'admin') {
@@ -8369,39 +8391,68 @@ export function renderSettingsDrawer() {
   updateDrawerProfile();
 }
 
-export function openDrawer() {
+export function openDrawer(updateHistory = true) {
   const drawer = document.getElementById('side-drawer');
   const backdrop = document.getElementById('side-drawer-backdrop');
   if (drawer && backdrop) {
-    drawer.classList.add('drawer-open', 'is-open');
-    backdrop.classList.add('drawer-open', 'is-open');
+    drawer.classList.add('drawer-open', 'is-open', 'active');
+    backdrop.classList.add('drawer-open', 'is-open', 'active');
+    drawer.setAttribute('aria-hidden', 'false');
+    backdrop.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
     if (window.lucide && typeof window.lucide.createIcons === 'function') {
       try {
         window.lucide.createIcons();
       } catch (_) {}
     }
     updateDrawerProfile();
-    pushModalHistoryState('modal-drawer');
+    if (updateHistory && !_isHandlingPopState) {
+      pushModalHistoryState('menu', `${window.location.pathname}${window.location.search}#menu`);
+    }
   }
 }
 
-export function closeDrawer() {
+export function closeDrawer(updateHistory = true) {
   const drawer = document.getElementById('side-drawer');
   const backdrop = document.getElementById('side-drawer-backdrop');
-  if (drawer && backdrop) {
-    drawer.classList.remove('drawer-open', 'is-open');
-    backdrop.classList.remove('drawer-open', 'is-open');
+  if (drawer) {
+    drawer.classList.remove('drawer-open', 'is-open', 'active');
+    drawer.style.transform = '';
+    drawer.setAttribute('aria-hidden', 'true');
+  }
+  if (backdrop) {
+    backdrop.classList.remove('drawer-open', 'is-open', 'active');
+    backdrop.setAttribute('aria-hidden', 'true');
+  }
+  document.body.style.overflow = '';
+
+  if (updateHistory && !_isHandlingPopState && typeof history !== 'undefined' && typeof window !== 'undefined') {
+    const curHash = window.location.hash;
+    if (curHash === '#menu' || curHash === '#modal-drawer' || curHash === '#settings') {
+      const activeTab = getActiveTabRouteId() || 'home';
+      const cleanUrl = `${window.location.pathname}?tab=${activeTab}#${activeTab}`;
+      const nextState = { ...(history.state || {}), cocTab: activeTab, cocModal: null };
+      try {
+        history.replaceState(nextState, '', cleanUrl);
+      } catch (_) {}
+    }
   }
 }
 
 export function toggleDrawer() {
   const drawer = document.getElementById('side-drawer');
   if (!drawer) return;
-  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open') || drawer.classList.contains('active')) {
     closeDrawer();
   } else {
     openDrawer();
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.openDrawer = openDrawer;
+  window.closeDrawer = closeDrawer;
+  window.toggleDrawer = toggleDrawer;
 }
 
 function openAdminPortal() {
@@ -21074,13 +21125,69 @@ export async function openAdminWhatsNewEditorModal() {
 function attachEventHandlers() {
 
   const menuBtn = document.getElementById('btn-open-drawer');
-  if (menuBtn) menuBtn.onclick = openDrawer;
+  if (menuBtn) {
+    menuBtn.onclick = () => openDrawer(true);
+    menuBtn.addEventListener('click', () => openDrawer(true));
+  }
 
   const closeDrawerBtn = document.getElementById('btn-close-drawer');
-  if (closeDrawerBtn) closeDrawerBtn.onclick = closeDrawer;
+  if (closeDrawerBtn) {
+    closeDrawerBtn.onclick = () => closeDrawer(true);
+    closeDrawerBtn.addEventListener('click', () => closeDrawer(true));
+  }
 
   const backdrop = document.getElementById('side-drawer-backdrop');
-  if (backdrop) backdrop.onclick = closeDrawer;
+  if (backdrop) {
+    backdrop.onclick = () => closeDrawer(true);
+    backdrop.addEventListener('click', () => closeDrawer(true));
+  }
+
+  // Document-level fail-safe click delegation ensures X button and backdrop ALWAYS close side drawer
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#btn-close-drawer') || e.target.matches('#side-drawer-backdrop')) {
+      closeDrawer(true);
+    }
+  });
+
+  const sideDrawerEl = document.getElementById('side-drawer');
+  if (sideDrawerEl && !sideDrawerEl.__hasGestureListeners) {
+    sideDrawerEl.__hasGestureListeners = true;
+    let startX = 0;
+    let startY = 0;
+    let isTracking = false;
+
+    sideDrawerEl.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches.length === 1) {
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        isTracking = true;
+      }
+    }, { passive: true });
+
+    sideDrawerEl.addEventListener('touchmove', (e) => {
+      if (!isTracking || !e.touches || e.touches.length !== 1) return;
+      const currentX = e.touches[0].clientX;
+      const currentY = e.touches[0].clientY;
+      const deltaX = currentX - startX;
+      const deltaY = currentY - startY;
+      if (deltaX < -45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+        isTracking = false;
+        closeDrawer(true);
+      }
+    }, { passive: true });
+
+    sideDrawerEl.addEventListener('touchend', () => { isTracking = false; }, { passive: true });
+    sideDrawerEl.addEventListener('touchcancel', () => { isTracking = false; }, { passive: true });
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const d = document.getElementById('side-drawer');
+      if (d && (d.classList.contains('drawer-open') || d.classList.contains('is-open') || d.classList.contains('active'))) {
+        closeDrawer(true);
+      }
+    }
+  });
 
   const drawerRowAbout = document.getElementById('drawer-row-about');
   if (drawerRowAbout) {
@@ -21441,9 +21548,19 @@ function attachEventHandlers() {
   const btnOpenWaiver = document.getElementById('btn-open-waiver-modal');
   if (btnOpenWaiver) btnOpenWaiver.onclick = () => openRequestWaiverModal();
 
+  const sideMenuReloadBtn = document.getElementById('sideMenuReloadBtn');
+  if (sideMenuReloadBtn) {
+    sideMenuReloadBtn.onclick = () => handleReloadApp();
+  }
+
+  const sideMenuSyncBtn = document.getElementById('sideMenuSyncBtn');
+  if (sideMenuSyncBtn) {
+    sideMenuSyncBtn.onclick = () => handleForceSyncData();
+  }
+
   const sideMenuRefreshBtn = document.getElementById('sideMenuRefreshBtn');
   if (sideMenuRefreshBtn) {
-    sideMenuRefreshBtn.onclick = () => handleManualDataRefresh();
+    sideMenuRefreshBtn.onclick = () => handleForceSyncData();
   }
 
   const drawerBtnWaiver = document.getElementById('drawer-btn-waiver');
@@ -21916,13 +22033,19 @@ export async function fetchPublicLeaderboard() {
   }
 }
 
-export async function handleManualDataRefresh() {
-  const btn = document.getElementById('sideMenuRefreshBtn');
+export function handleReloadApp() {
+  if (typeof window !== 'undefined' && window.location) {
+    window.location.reload(true);
+  }
+}
+
+export async function handleForceSyncData() {
+  const btn = document.getElementById('sideMenuSyncBtn') || document.getElementById('sideMenuRefreshBtn');
   if (btn && btn.dataset.syncing === 'true') return;
 
-  const iconWrap = btn?.querySelector('.side-menu-refresh-icon');
-  const labelEl = btn?.querySelector('.refresh-btn-label');
-  const originalLabel = labelEl ? labelEl.textContent : 'Refresh / Sync Data';
+  const iconWrap = btn?.querySelector('.side-menu-sync-icon, .side-menu-refresh-icon');
+  const labelEl = btn?.querySelector('.sync-btn-label, .refresh-btn-label');
+  const originalLabel = labelEl ? labelEl.textContent : 'Force Sync Data';
 
   if (btn) {
     btn.dataset.syncing = 'true';
@@ -21941,7 +22064,9 @@ export async function handleManualDataRefresh() {
           if (snap.exists()) {
             state.user = { ...state.user, ...snap.data() };
             updateHeroStats();
-            updateHeroStats(); renderProfileSubmissions(); renderProfileAttendance(); renderProfileTransactions();
+            renderProfileSubmissions();
+            renderProfileAttendance();
+            renderProfileTransactions();
           }
         }).catch(e => console.warn('User profile sync:', e))
       );
@@ -22014,11 +22139,15 @@ export async function handleManualDataRefresh() {
 
     await Promise.allSettled(syncOps);
 
+    persistToLocalCache(true);
+
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistration().then(reg => reg?.update()).catch(() => {});
     }
+    toast('All data synced & up to date', 'success');
   } catch (err) {
-    console.warn('Manual refresh error:', err);
+    console.warn('Force sync error:', err);
+    toast('Sync failed: ' + (err.message || 'Network error'), 'error');
   } finally {
     if (btn) {
       btn.dataset.syncing = 'false';
@@ -22026,9 +22155,10 @@ export async function handleManualDataRefresh() {
       if (labelEl) labelEl.textContent = originalLabel;
     }
     closeDrawer();
-    toast('All data synced & up to date', 'success');
   }
 }
+
+export const handleManualDataRefresh = handleForceSyncData;
 
 window.addEventListener('DOMContentLoaded', () => {
   initErrorBoundary();
@@ -22096,6 +22226,8 @@ if (typeof window !== 'undefined') {
   window.openBadgePickerSheet = openBadgePickerSheet;
   window.initSheetDragGestures = initSheetDragGestures;
   window.showNotificationToast = showNotificationToast;
+  window.handleReloadApp = handleReloadApp;
+  window.handleForceSyncData = handleForceSyncData;
   window.handleManualDataRefresh = handleManualDataRefresh;
   window.fetchPublicLeaderboard = fetchPublicLeaderboard;
   window.handleWaiverDecision = handleWaiverDecision;

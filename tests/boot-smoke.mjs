@@ -417,6 +417,69 @@ try {
   sandbox.window.safeReplaceChild(p1, replaceEl, child2);
 
   console.log('PASS: What\'s New dynamic database logic & Crash-Proof DOM guards verified cleanly');
+
+  // Verify Side Drawer behaviors
+  const drawer = getOrCreateElement('side-drawer');
+  const backdrop = getOrCreateElement('side-drawer-backdrop');
+  const btnCloseDrawer = getOrCreateElement('btn-close-drawer');
+
+  // Must start closed
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+    throw new Error('side-drawer must start closed');
+  }
+
+  // Open drawer
+  sandbox.window.openDrawer();
+  if (!drawer.classList.contains('drawer-open') || !drawer.classList.contains('is-open')) {
+    throw new Error('openDrawer failed to add drawer-open / is-open classes');
+  }
+  if (!backdrop.classList.contains('drawer-open') || !backdrop.classList.contains('is-open')) {
+    throw new Error('openDrawer failed to add backdrop open classes');
+  }
+
+  // Close drawer
+  sandbox.window.closeDrawer();
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+    throw new Error('closeDrawer failed to remove drawer-open / is-open classes');
+  }
+  if (backdrop.classList.contains('drawer-open') || backdrop.classList.contains('is-open')) {
+    throw new Error('closeDrawer failed to remove backdrop open classes');
+  }
+
+  // Close via backdrop click
+  sandbox.window.openDrawer();
+  if (typeof backdrop.onclick === 'function') backdrop.onclick();
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+    throw new Error('backdrop.onclick failed to close drawer');
+  }
+
+  // Close via btn-close-drawer click
+  sandbox.window.openDrawer();
+  if (typeof btnCloseDrawer.onclick === 'function') btnCloseDrawer.onclick();
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+    throw new Error('btnCloseDrawer.onclick failed to close drawer');
+  }
+
+  // Close via Escape key
+  sandbox.window.openDrawer();
+  const keyListeners = domListeners.get('keydown') || [];
+  keyListeners.forEach(fn => fn({ key: 'Escape' }));
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+    throw new Error('Escape keydown failed to close drawer');
+  }
+
+  // Verify Split Refresh & Sync Handlers
+  if (typeof sandbox.window.handleReloadApp !== 'function') {
+    throw new Error('handleReloadApp is not defined');
+  }
+  if (typeof sandbox.window.handleForceSyncData !== 'function') {
+    throw new Error('handleForceSyncData is not defined');
+  }
+  if (typeof sandbox.window.handleManualDataRefresh !== 'function') {
+    throw new Error('handleManualDataRefresh alias is not defined');
+  }
+
+  console.log('PASS: Side Drawer open/close/gestures & split sync controls verified cleanly');
 } catch (err) {
   console.error('FAIL: Error in What\'s New smoke test:', err);
   process.exit(1);

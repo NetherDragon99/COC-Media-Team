@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v3.0.1</title>
+    <title>COC Media Team v3.0.2</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
-        <link rel="manifest" href="./manifest.json?v=3.0.1" />
+        <link rel="manifest" href="./manifest.json?v=3.0.2" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -76,7 +76,7 @@
       }
     </script>
 
-        <link rel="stylesheet" href="./styles.css?v=3.0.1" />
+        <link rel="stylesheet" href="./styles.css?v=3.0.2" />
 
         <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
     <script defer src="https://unpkg.com/lucide@latest"></script>
@@ -112,7 +112,7 @@
       </div>
       <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
         <span id="loader-app-name">COC Media Team</span>
-        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.0.1</span>
+        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.0.2</span>
       </div>
       <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
       <div class="w-7 h-7 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-spin"></div>
@@ -200,7 +200,7 @@
                         <div id="brand-header-click" class="flex items-center gap-2 cursor-pointer">
               <img id="header-logo-img" src="./image_ad59c0.jpg" alt="Logo" class="w-8 h-8 rounded-full object-cover border border-white/20 shadow-sm" />
               <span id="header-app-title" class="font-bold text-sm tracking-tight text-white">COC Media</span>
-              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.0.1</span>
+              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.0.2</span>
             </div>
 
             <button type="button" id="btn-open-notifications" class="floating-glass-btn relative" aria-label="Notifications" title="Notifications">
@@ -522,7 +522,7 @@
           </div>
 
                     <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
-            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.0.1</span></div>
+            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.0.2</span></div>
             <div class="text-[11px] text-neutral-500">Official Production Release</div>
           </div>
         </section>
@@ -577,7 +577,7 @@
 
     </div>
 
-                <div id="side-drawer-backdrop"></div>
+                <div id="side-drawer-backdrop" onclick="window.closeDrawer && window.closeDrawer()"></div>
 
     <aside id="side-drawer" role="dialog" aria-modal="true" aria-label="Settings Menu">
             <div class="p-4 border-b border-white/10 flex items-center justify-between">
@@ -585,7 +585,7 @@
           <img src="./image_ad59c0.jpg" alt="Logo" class="w-6 h-6 rounded-full object-cover" />
           <span class="ios-headline text-white">Settings</span>
         </div>
-        <button type="button" id="btn-close-drawer" class="p-1.5 rounded-full bg-white/10 text-neutral-400 hover:text-white" aria-label="Close menu">
+        <button type="button" id="btn-close-drawer" class="p-1.5 rounded-full bg-white/10 text-neutral-400 hover:text-white" aria-label="Close menu" onclick="window.closeDrawer && window.closeDrawer()">
           <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -646,14 +646,30 @@
             <div id="drawer-push-switch-container" class="shrink-0"></div>
           </div>
 
-                                        <button id="sideMenuRefreshBtn" type="button" class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
+                                        <button id="sideMenuReloadBtn" type="button" class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
             <div class="flex items-center gap-3">
-              <div class="drawer-icon-refresh w-8 h-8 rounded-lg flex items-center justify-center shrink-0 side-menu-refresh-icon">
+              <div class="drawer-icon-refresh w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
                 <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
                   <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
                 </svg>
               </div>
-              <span class="text-xs font-semibold text-white refresh-btn-label">Refresh / Sync Data</span>
+              <span class="text-xs font-semibold text-white">Reload App</span>
+            </div>
+            <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+          </button>
+
+          <button id="sideMenuSyncBtn" type="button" class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
+            <div class="flex items-center gap-3">
+              <div class="drawer-icon-sync w-8 h-8 rounded-lg flex items-center justify-center shrink-0 side-menu-sync-icon">
+                <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
+                  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+                  <path d="M12 12v9"></path>
+                  <path d="m8 17 4 4 4-4"></path>
+                </svg>
+              </div>
+              <span class="text-xs font-semibold text-white sync-btn-label">Force Sync Data</span>
             </div>
             <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
               <polyline points="9 18 15 12 9 6"></polyline>
@@ -720,7 +736,7 @@
               </div>
             </div>
             <div class="flex items-center gap-1.5">
-              <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.0.1</span>
+              <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.0.2</span>
               <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <polyline points="9 18 15 12 9 6"></polyline>
               </svg>
@@ -1784,7 +1800,7 @@
       }
     </script>
 
-        <script type="module" src="./app.js?v=3.0.1"></script>
+        <script type="module" src="./app.js?v=3.0.2"></script>
 
   
         <div id="account-status-overlay" class="fixed inset-0 z-[9999] bg-[#000000] flex items-center justify-center p-6 hidden">
