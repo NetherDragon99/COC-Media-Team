@@ -3,11 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v3.0.0</title>
+    <title>COC Media Team v3.0.1</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
-    <!-- PWA Configuration (GitHub Pages Relative Paths) -->
-    <link rel="manifest" href="./manifest.json?v=3.0.0" />
+        <link rel="manifest" href="./manifest.json?v=3.0.1" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -17,8 +16,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192x192.png" />
     <link rel="icon" type="image/jpeg" href="./image_ad59c0.jpg" />
 
-    <!-- Dev environment WebSocket / HMR error filter & crash-proof reloader -->
-    <script>
+        <script>
       window.__cocReloadApp = async function() {
         try {
           if ('serviceWorker' in navigator) {
@@ -60,8 +58,7 @@
       })();
     </script>
 
-    <!-- Tailwind CSS CDN for Zero-Build Utility Execution -->
-    <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -79,25 +76,21 @@
       }
     </script>
 
-    <!-- Apple iOS 17/18 Design System Stylesheet -->
-    <link rel="stylesheet" href="./styles.css?v=3.0.0" />
+        <link rel="stylesheet" href="./styles.css?v=3.0.1" />
 
-    <!-- Confetti & Lucide CDN for Interactions & Icons -->
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+        <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
+    <script defer src="https://unpkg.com/lucide@latest"></script>
   </head>
   <body class="selection:bg-[#0A84FF]/30 selection:text-white">
 
-    <!-- GLOBAL OFFLINE BANNER -->
-    <div id="offline-banner" class="offline-banner hidden">
+        <div id="offline-banner" class="offline-banner hidden">
       <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M1 1l22 22M16.72 11.06A10.94 10.94 0 0119 12.55M5 12.55a10.94 10.94 0 015.17-2.39M10.71 5.05A16 16 0 0122.58 9M1.42 9a15.91 15.91 0 014.7-2.88m3.42-.87A16.1 16.1 0 0112 5c.81 0 1.6.06 2.37.18M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
       </svg>
       <span>You are currently offline. Changes will sync when reconnected.</span>
     </div>
 
-    <!-- GLOBAL ERROR BOUNDARY -->
-    <div id="global-error-boundary" class="error-boundary hidden">
+        <div id="global-error-boundary" class="error-boundary hidden">
       <div class="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 mb-4">
         <svg class="w-8 h-8 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="10"/>
@@ -112,25 +105,22 @@
       </button>
     </div>
 
-    <!-- NON-BLOCKING FAIL-SAFE LOADING OVERLAY -->
-    <div id="app-loader" style="position: fixed; inset: 0; background-color: #000000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.35s ease, visibility 0.35s ease;">
+        <div id="app-loader" style="position: fixed; inset: 0; background-color: #000000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.35s ease, visibility 0.35s ease;">
       <div class="relative flex items-center justify-center mb-6">
         <div class="absolute -inset-4 bg-gradient-to-tr from-[#0A84FF]/30 to-[#FF9F0A]/30 rounded-full blur-xl animate-pulse"></div>
         <img src="./image_ad59c0.jpg" alt="COC Media Team Logo" class="relative w-20 h-20 rounded-full object-cover border-2 border-white/20 shadow-2xl" />
       </div>
       <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
         <span id="loader-app-name">COC Media Team</span>
-        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.0.0</span>
+        <span id="loader-app-version" class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.0.1</span>
       </div>
       <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...</div>
       <div class="w-7 h-7 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-spin"></div>
     </div>
 
-    <!-- MOBILE-FIRST CENTERED APP SHELL -->
-    <div id="app-root" class="app-shell">
+        <div id="app-root" class="app-shell">
 
-      <!-- GLOBAL ANNOUNCEMENT BAR (DISMISSIBLE) -->
-      <div id="announcement-bar" class="hidden mx-4 mt-3 p-3 rounded-2xl glass-card border border-amber-500/30 bg-gradient-to-r from-amber-500/10 to-transparent flex items-center justify-between gap-3 text-xs">
+            <div id="announcement-bar" class="hidden mx-4 mt-3 p-3 rounded-2xl glass-card border border-amber-500/30 bg-gradient-to-r from-amber-500/10 to-transparent flex items-center justify-between gap-3 text-xs">
         <div class="flex items-center gap-2.5 min-w-0">
           <span class="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 animate-ping"></span>
           <span class="font-bold text-amber-400" id="announcement-tag">Notice:</span>
@@ -141,13 +131,9 @@
         </button>
       </div>
 
-      <!-- USER SWIPE PAGER -->
-      <main id="user-pager" class="pager-container" aria-label="App Pages">
+            <main id="user-pager" class="pager-container" aria-label="App Pages">
 
-        <!-- ========================================== -->
-        <!-- PAGE 1: TASKS (#tasks) -->
-        <!-- ========================================== -->
-        <section id="page-notifications" class="pager-page space-y-4">
+                                <section id="page-notifications" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Updates</h1>
@@ -159,8 +145,7 @@
           </div>
 
           <div id="notifications-container" class="space-y-2.5">
-            <!-- Dynamic notifications -->
-          </div>
+                      </div>
         </section>
 
         <section id="page-tasks" class="pager-page space-y-4">
@@ -169,15 +154,13 @@
             <p class="ios-subhead text-neutral-400">Pick up quotas and submit completed proofs.</p>
           </div>
 
-          <!-- Category Chips Scroller -->
-          <div class="task-filter-bar flex items-center gap-2 overflow-x-auto pb-1" id="category-filter-chips">
+                    <div class="task-filter-bar flex items-center gap-2 overflow-x-auto pb-1" id="category-filter-chips">
             <button type="button" data-category="all" class="cat-filter-btn px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#0A84FF] text-white">
               All Tasks
             </button>
           </div>
 
-          <!-- Search & Filter Controls -->
-          <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2">
             <div class="relative flex-1">
               <input id="input-search-tasks" type="text" placeholder="Search tasks..." class="w-full pl-9 pr-3 py-2 rounded-xl text-xs glass-input" />
               <svg class="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -188,13 +171,10 @@
             <div id="status-filter-container" class="shrink-0"></div>
           </div>
 
-          <!-- Tasks Cards Container -->
-          <div id="tasks-container" class="space-y-3">
-            <!-- Rendered tasks -->
-          </div>
+                    <div id="tasks-container" class="space-y-3">
+                      </div>
 
-          <!-- Empty State -->
-          <div id="tasks-empty-state" class="hidden glass-card p-10 text-center border border-dashed border-white/15">
+                    <div id="tasks-empty-state" class="hidden glass-card p-10 text-center border border-dashed border-white/15">
             <div class="w-14 h-14 mx-auto mb-3 rounded-full bg-white/[0.05] flex items-center justify-center text-neutral-400">
               <svg class="w-7 h-7 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
@@ -208,8 +188,7 @@
 
         <section id="page-home" class="pager-page space-y-6">
 
-          <!-- Top Bar: Floating Glass Menu (Left) and Floating Glass Bell (Right) -->
-          <div class="flex items-center justify-between">
+                    <div class="flex items-center justify-between">
             <button type="button" id="btn-open-drawer" class="floating-glass-btn" aria-label="Open Navigation Menu" title="Menu">
               <svg class="w-5 h-5 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <line x1="3" y1="12" x2="21" y2="12"></line>
@@ -218,11 +197,10 @@
               </svg>
             </button>
 
-            <!-- Brand Header Clickable -->
-            <div id="brand-header-click" class="flex items-center gap-2 cursor-pointer">
+                        <div id="brand-header-click" class="flex items-center gap-2 cursor-pointer">
               <img id="header-logo-img" src="./image_ad59c0.jpg" alt="Logo" class="w-8 h-8 rounded-full object-cover border border-white/20 shadow-sm" />
               <span id="header-app-title" class="font-bold text-sm tracking-tight text-white">COC Media</span>
-              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.0.0</span>
+              <span id="header-app-version" class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.0.1</span>
             </div>
 
             <button type="button" id="btn-open-notifications" class="floating-glass-btn relative" aria-label="Notifications" title="Notifications">
@@ -234,8 +212,7 @@
             </button>
           </div>
 
-          <!-- BROADCAST CAROUSEL BANNER (Task 4 Single Progress Bar) -->
-          <div id="home-broadcast-banner" class="hidden p-3.5 rounded-2xl glass-card border border-[#0A84FF]/30 bg-gradient-to-r from-[#0A84FF]/15 via-white/5 to-transparent flex items-center justify-between gap-3 text-xs broadcast-carousel-banner cursor-pointer shadow-lg shadow-[#0A84FF]/5 relative overflow-hidden" role="button" tabindex="0" aria-label="Broadcast details">
+                    <div id="home-broadcast-banner" class="hidden p-3.5 rounded-2xl glass-card border border-[#0A84FF]/30 bg-gradient-to-r from-[#0A84FF]/15 via-white/5 to-transparent flex items-center justify-between gap-3 text-xs broadcast-carousel-banner cursor-pointer shadow-lg shadow-[#0A84FF]/5 relative overflow-hidden" role="button" tabindex="0" aria-label="Broadcast details">
             <div class="flex items-center gap-2.5 min-w-0 flex-1">
               <div id="broadcast-banner-icon" class="w-7 h-7 rounded-lg bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center flex-shrink-0">
                 <span class="w-2.5 h-2.5 rounded-full bg-[#0A84FF] flex-shrink-0 animate-pulse"></span>
@@ -247,22 +224,19 @@
                 </div>
               </div>
             </div>
-            <!-- Bottom-edge unified progress bar -->
-            <div id="broadcast-progress-track" class="broadcast-progress-track">
+                        <div id="broadcast-progress-track" class="broadcast-progress-track">
               <div id="broadcast-progress-fill" class="broadcast-progress-fill"></div>
             </div>
           </div>
 
-          <!-- Hero Greeting Card -->
-          <div class="glass-card p-5 space-y-3">
+                    <div class="glass-card p-5 space-y-3">
             <div>
               <div class="text-[11px] uppercase font-mono tracking-wider text-[#0A84FF] font-semibold" id="hero-tag">Team Operations</div>
               <h1 class="ios-title-2 text-white mt-0.5" id="hero-greeting">Welcome to COC Media Hub</h1>
               <p class="ios-subhead text-neutral-400 mt-1" id="hero-subtext">Complete your media quotas and climb the live team leaderboard.</p>
             </div>
 
-            <!-- Stats Inset Group -->
-            <div class="grid grid-cols-3 gap-2 pt-2">
+                        <div class="grid grid-cols-3 gap-2 pt-2">
               <div class="p-3 rounded-xl bg-white/[0.04] border border-white/10 text-center">
                 <div class="text-[11px] text-neutral-400 font-medium">Active Tasks</div>
                 <div id="stat-active-tasks-count" class="text-lg font-bold text-white font-mono mt-0.5">0</div>
@@ -278,24 +252,19 @@
             </div>
           </div>
 
-          <!-- Apple Activity-Style Performance Rings Card -->
-          <div class="glass-card p-4 space-y-3">
+                    <div class="glass-card p-4 space-y-3">
             <div class="flex items-center justify-between">
               <span class="text-xs uppercase font-mono font-semibold text-[#0A84FF]">My Activity Rings</span>
               <span id="home-rings-status" class="text-[11px] text-neutral-400 font-medium">Daily Goals</span>
             </div>
             <div class="flex items-center justify-around gap-2 pt-1">
-              <!-- Rings SVG Graphic -->
-              <div class="relative w-28 h-28 flex items-center justify-center flex-shrink-0">
+                            <div class="relative w-28 h-28 flex items-center justify-center flex-shrink-0">
                 <svg class="w-full h-full -rotate-90 transform" viewBox="0 0 100 100">
-                  <!-- Outer Ring: Points (Amber) -->
-                  <circle cx="50" cy="50" r="40" class="summary-ring-bg stroke-amber-500/20 fill-none" stroke-width="7" />
+                                    <circle cx="50" cy="50" r="40" class="summary-ring-bg stroke-amber-500/20 fill-none" stroke-width="7" />
                   <circle id="ring-points" cx="50" cy="50" r="40" class="summary-ring-circle stroke-amber-400 fill-none" stroke-width="7" stroke-dasharray="251.32" stroke-dashoffset="251.32" />
-                  <!-- Middle Ring: Quotas/Tasks (Emerald) -->
-                  <circle cx="50" cy="50" r="30" class="summary-ring-bg stroke-emerald-500/20 fill-none" stroke-width="7" />
+                                    <circle cx="50" cy="50" r="30" class="summary-ring-bg stroke-emerald-500/20 fill-none" stroke-width="7" />
                   <circle id="ring-quotas" cx="50" cy="50" r="30" class="summary-ring-circle stroke-emerald-400 fill-none" stroke-width="7" stroke-dasharray="188.49" stroke-dashoffset="188.49" />
-                  <!-- Inner Ring: Penalties Clearance (Rose) -->
-                  <circle cx="50" cy="50" r="20" class="summary-ring-bg stroke-rose-500/20 fill-none" stroke-width="7" />
+                                    <circle cx="50" cy="50" r="20" class="summary-ring-bg stroke-rose-500/20 fill-none" stroke-width="7" />
                   <circle id="ring-penalties" cx="50" cy="50" r="20" class="summary-ring-circle stroke-rose-400 fill-none" stroke-width="7" stroke-dasharray="125.66" stroke-dashoffset="125.66" />
                 </svg>
                 <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
@@ -304,8 +273,7 @@
                 </div>
               </div>
 
-              <!-- Rings Legend -->
-              <div class="space-y-2 flex-1 max-w-[190px]">
+                            <div class="space-y-2 flex-1 max-w-[190px]">
                 <div class="flex items-center justify-between text-xs">
                   <div class="flex items-center gap-1.5 min-w-0">
                     <span class="w-2.5 h-2.5 rounded-full bg-amber-400 flex-shrink-0"></span>
@@ -331,8 +299,7 @@
             </div>
           </div>
 
-          <!-- Today's Attendance Snapshot Card -->
-          <div class="glass-card p-4 space-y-3 border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
+                    <div class="glass-card p-4 space-y-3 border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -353,8 +320,7 @@
             </div>
           </div>
 
-          <!-- Today's Due Tasks Section (Task 7) -->
-          <div id="home-due-tasks-section" class="space-y-3">
+                    <div id="home-due-tasks-section" class="space-y-3">
             <div class="flex items-center justify-between">
               <h2 class="ios-headline text-white flex items-center gap-2">
                 <svg class="w-4 h-4 text-[#0A84FF] stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
@@ -366,12 +332,10 @@
               <a href="#tasks" class="text-xs text-[#0A84FF] font-semibold hover:underline">View All &rarr;</a>
             </div>
             <div id="home-due-tasks-list" class="space-y-2">
-              <!-- Populated dynamically via getTaskWindow -->
-            </div>
+                          </div>
           </div>
 
-          <!-- Leaderboard Podium (Top 3) -->
-          <div class="space-y-3">
+                    <div class="space-y-3">
             <div class="flex items-center justify-between">
               <h2 class="ios-headline text-white flex items-center gap-2">
                 <svg class="w-4 h-4 text-amber-400 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -387,18 +351,15 @@
               <div id="leaderboard-period-segmented-mount" class="w-auto"></div>
             </div>
 
-            <!-- Podium is rendered dynamically by renderLeaderboard(); intentionally empty on load -->
-            <div id="leaderboard-podium" class="hidden"></div>
+                        <div id="leaderboard-podium" class="hidden"></div>
 
-            <!-- Full Rankings Inset List -->
-            <div class="inset-group">
+                        <div class="inset-group">
               <div class="p-3 border-b border-white/10 flex items-center justify-between">
                 <span class="text-xs font-bold text-white uppercase tracking-wider">All Members</span>
                 <span class="text-xs text-neutral-400 font-mono" id="leaderboard-total-count">0 Members</span>
               </div>
               <div class="leaderboard-list-wrap" id="leaderboard-list">
-                <!-- Populated dynamically -->
-              </div>
+                              </div>
             </div>
           </div>
 
@@ -419,8 +380,11 @@
             </button>
           </div>
 
-          <!-- Scheduled / Active Sessions -->
-          <div class="space-y-3">
+          <!-- Single Smart Check-In Hero -->
+          <div id="smart-checkin-hero-container"></div>
+
+          <!-- Admin Sessions List (Hidden for regular users) -->
+          <div id="attendance-sessions-wrap" class="space-y-3 hidden">
             <h2 class="ios-headline text-white flex items-center gap-2">
               <svg class="w-4 h-4 text-emerald-400 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -428,23 +392,20 @@
                 <line x1="8" y1="2" x2="8" y2="6"></line>
                 <line x1="3" y1="10" x2="21" y2="10"></line>
               </svg>
-              <span>Active Sessions</span>
+              <span>All Sessions (Admin View)</span>
             </h2>
 
             <div id="attendance-sessions-container" class="space-y-3">
-              <!-- Active session cards -->
             </div>
           </div>
 
-          <!-- Attendance Logs Inset List -->
-          <div class="inset-group">
+                    <div class="inset-group">
             <div class="p-3 border-b border-white/10 flex items-center justify-between">
               <span class="text-xs font-bold text-white uppercase tracking-wider">Today's Check-in Log</span>
               <span class="text-xs text-neutral-400 font-mono" id="attendance-log-count">0 Check-ins</span>
             </div>
             <div id="attendance-logs-feed" class="divide-y divide-white/5">
-              <!-- Log entries -->
-            </div>
+                          </div>
           </div>
         </section>
 
@@ -454,10 +415,8 @@
             <p class="ios-subhead text-neutral-400">Your performance and account controls.</p>
           </div>
 
-          <!-- User Card -->
-          <div class="glass-card p-5 space-y-4">
-            <!-- Tier 1: Identity Header (Avatar + Name/Email/Role + Edit Button) -->
-            <div class="flex items-center justify-between gap-3 w-full">
+                    <div class="glass-card p-5 space-y-4">
+                        <div class="flex items-center justify-between gap-3 w-full">
               <div class="flex items-center gap-3.5 min-w-0 flex-1">
                 <button type="button" id="btn-profile-avatar-crop" class="relative group cursor-pointer focus:outline-none shrink-0" aria-label="Change Avatar">
                   <div class="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#0A84FF] shadow-lg flex-shrink-0 transition group-hover:scale-105">
@@ -484,8 +443,7 @@
               </button>
             </div>
 
-            <!-- Tier 2: Badges Showcase (Full-Width Wrapping Discord-Style Roles) -->
-            <div id="profile-badges-container" class="pt-3 border-t border-white/10 space-y-2">
+                        <div id="profile-badges-container" class="pt-3 border-t border-white/10 space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-bold text-white uppercase tracking-wider">Badges</span>
                 <button type="button" id="btn-reorder-my-badges" class="hidden px-2 py-0.5 rounded-full text-[10px] font-semibold bg-white/10 hover:bg-white/15 text-neutral-200 border border-white/10 transition inline-flex items-center gap-1">
@@ -496,8 +454,7 @@
               <div id="profile-view-badges" class="badge-pills-expanded-wrap flex flex-wrap items-center gap-1.5 w-full empty:hidden"></div>
             </div>
 
-            <!-- Conditional Guest Login Button (Only shown when unauthenticated) -->
-            <div id="profile-guest-login-container" class="hidden pt-3 border-t border-white/10">
+                        <div id="profile-guest-login-container" class="hidden pt-3 border-t border-white/10">
               <button type="button" id="btn-profile-login" class="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0071E3] transition shadow-sm flex items-center justify-center gap-2 cursor-pointer">
                 <svg class="w-4 h-4 fill-white shrink-0" viewBox="0 0 24 24">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -509,8 +466,7 @@
               </button>
             </div>
 
-            <!-- Stats Grid: 5 Columns with Computed Score Tile -->
-            <div class="grid grid-cols-5 gap-1.5 pt-3 border-t border-white/10 text-center">
+                        <div class="grid grid-cols-5 gap-1.5 pt-3 border-t border-white/10 text-center">
               <div class="p-2 rounded-xl bg-white/[0.03]">
                 <div class="text-[9px] uppercase tracking-wider text-neutral-400">Points</div>
                 <div id="profile-stat-points" class="text-base font-bold text-amber-400 font-mono mt-0.5">0</div>
@@ -534,29 +490,24 @@
             </div>
           </div>
 
-          <!-- My Submissions Inset List -->
-          <div class="inset-group">
+                    <div class="inset-group">
             <div class="p-3 border-b border-white/10 flex items-center justify-between">
               <span class="text-xs font-bold text-white uppercase tracking-wider">My Submissions</span>
             </div>
             <div id="profile-submissions-list" class="divide-y divide-white/5">
-              <!-- Populated dynamically -->
-            </div>
+                          </div>
           </div>
 
-          <!-- My Attendance History Inset List -->
-          <div class="inset-group">
+                    <div class="inset-group">
             <div class="p-3 border-b border-white/10 flex items-center justify-between">
               <span class="text-xs font-bold text-white uppercase tracking-wider">My Attendance History</span>
               <span id="profile-attendance-count" class="text-xs text-neutral-400 font-mono">0 check-ins</span>
             </div>
             <div id="profile-attendance-list" class="divide-y divide-white/5">
-              <!-- Populated dynamically -->
-            </div>
+                          </div>
           </div>
 
-          <!-- Transaction & Balance History Inset Group (Task 5) -->
-          <div id="section-profile-transactions" class="inset-group">
+                    <div id="section-profile-transactions" class="inset-group">
             <button type="button" id="btn-toggle-profile-transactions" class="w-full p-3 border-b border-white/10 flex items-center justify-between text-left hover:bg-white/[0.02] transition">
               <div class="flex items-center gap-2">
                 <span class="text-xs font-bold text-white uppercase tracking-wider">Transaction &amp; Balance History</span>
@@ -567,21 +518,18 @@
               </svg>
             </button>
             <div id="profile-transactions-list" class="divide-y divide-white/5">
-              <!-- Populated dynamically via limit(50) ordered by createdAt desc -->
-            </div>
+                          </div>
           </div>
 
-          <!-- Profile Footer -->
-          <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
-            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.0.0</span></div>
+                    <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
+            <div>COC Media Team <span id="profile-footer-version" class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.0.1</span></div>
             <div class="text-[11px] text-neutral-500">Official Production Release</div>
           </div>
         </section>
 
       </main>
 
-      <!-- FLOATING GLASS SEGMENTED-PILL DOCK (USER NAVIGATION) -->
-      <nav id="user-dock" class="glass-dock" aria-label="Main Navigation">
+            <nav id="user-dock" class="glass-dock" aria-label="Main Navigation">
         <div class="dock-thumb"></div>
 
         <button type="button" data-page="notifications" class="dock-item relative" aria-label="Updates">
@@ -629,14 +577,10 @@
 
     </div>
 
-    <!-- ================================================================= -->
-    <!-- SIDE DRAWER (IOS SETTINGS STYLE) -->
-    <!-- ================================================================= -->
-    <div id="side-drawer-backdrop"></div>
+                <div id="side-drawer-backdrop"></div>
 
     <aside id="side-drawer" role="dialog" aria-modal="true" aria-label="Settings Menu">
-      <!-- Drawer Header -->
-      <div class="p-4 border-b border-white/10 flex items-center justify-between">
+            <div class="p-4 border-b border-white/10 flex items-center justify-between">
         <div class="flex items-center gap-2">
           <img src="./image_ad59c0.jpg" alt="Logo" class="w-6 h-6 rounded-full object-cover" />
           <span class="ios-headline text-white">Settings</span>
@@ -650,10 +594,8 @@
       </div>
 
       <div class="flex-1 p-4 overflow-y-auto space-y-4">
-        <!-- Top: Inset-grouped Profile Row -->
-        <div id="drawer-profile-section" class="space-y-2">
-          <!-- Authenticated Profile Row -->
-          <div id="drawer-profile-card" class="drawer-profile-card hidden" role="button" tabindex="0" aria-label="View Profile">
+                <div id="drawer-profile-section" class="space-y-2">
+                    <div id="drawer-profile-card" class="drawer-profile-card hidden" role="button" tabindex="0" aria-label="View Profile">
             <div id="drawer-profile-avatar" class="shrink-0"></div>
             <div class="flex-1 min-w-0">
               <div id="drawer-profile-name" class="font-bold text-sm text-white truncate">Member</div>
@@ -667,8 +609,7 @@
             </svg>
           </div>
 
-          <!-- Guest / Signed Out Row -->
-          <div id="drawer-guest-card" class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
+                    <div id="drawer-guest-card" class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
             <div class="flex items-center justify-between">
               <div>
                 <div class="text-sm font-bold text-white">Guest Mode</div>
@@ -688,10 +629,8 @@
           </div>
         </div>
 
-        <!-- Drawer Rows (iOS Settings Inset Group) -->
-        <div class="inset-group">
-          <!-- Push Notifications Row -->
-          <div id="drawer-row-push" class="drawer-row border-b border-white/5">
+                <div class="inset-group">
+                    <div id="drawer-row-push" class="drawer-row border-b border-white/5">
             <div class="flex items-center gap-3 min-w-0 pr-2">
               <div class="drawer-icon-push w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
                 <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -707,9 +646,7 @@
             <div id="drawer-push-switch-container" class="shrink-0"></div>
           </div>
 
-          <!-- Request Excuse Row -->
-                    <!-- Refresh / Sync Data Row -->
-          <button id="sideMenuRefreshBtn" type="button" class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
+                                        <button id="sideMenuRefreshBtn" type="button" class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
             <div class="flex items-center gap-3">
               <div class="drawer-icon-refresh w-8 h-8 rounded-lg flex items-center justify-center shrink-0 side-menu-refresh-icon">
                 <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
@@ -738,8 +675,7 @@
             </svg>
           </button>
 
-          <!-- Admin Dashboard Row (Admins Only) -->
-          <button id="drawer-btn-admin" type="button" class="hidden w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
+                    <button id="drawer-btn-admin" type="button" class="hidden w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
             <div class="flex items-center gap-3">
               <div class="drawer-icon-admin w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
                 <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -753,8 +689,7 @@
             </svg>
           </button>
 
-          <!-- Install App Row -->
-          <button id="drawer-btn-pwa" type="button" class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
+                    <button id="drawer-btn-pwa" type="button" class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
             <div class="flex items-center gap-3">
               <div class="drawer-icon-pwa w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
                 <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -770,8 +705,7 @@
             </svg>
           </button>
 
-          <!-- About Row -->
-          <div id="drawer-row-about" class="drawer-row cursor-pointer hover:bg-white/[0.03] transition" role="button" tabindex="0" aria-label="App Version and What's New">
+                    <div id="drawer-row-about" class="drawer-row cursor-pointer hover:bg-white/[0.03] transition" role="button" tabindex="0" aria-label="App Version and What's New">
             <div class="flex items-center gap-3">
               <div class="drawer-icon-version w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
                 <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -786,7 +720,7 @@
               </div>
             </div>
             <div class="flex items-center gap-1.5">
-              <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.0.0</span>
+              <span id="drawer-footer-version" class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.0.1</span>
               <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
                 <polyline points="9 18 15 12 9 6"></polyline>
               </svg>
@@ -794,8 +728,7 @@
           </div>
         </div>
 
-        <!-- Destructive Sign Out Row -->
-        <div id="drawer-signout-container" class="inset-group hidden">
+                <div id="drawer-signout-container" class="inset-group hidden">
           <button id="drawer-btn-signout" type="button" class="w-full drawer-row text-left text-rose-400 hover:bg-rose-500/10 transition">
             <div class="flex items-center gap-3">
               <div class="drawer-icon-signout w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
@@ -814,15 +747,13 @@
         </div>
       </div>
 
-      <!-- Drawer Footer -->
-      <div class="p-4 border-t border-white/10 text-center space-y-1">
+            <div class="p-4 border-t border-white/10 text-center space-y-1">
         <div id="drawer-footer-brand" class="font-bold text-xs text-white">COC Media Team</div>
         <div id="drawer-footer-dev" class="text-[11px] text-neutral-400">Designed &amp; Developed by Steven Mario</div>
       </div>
     </aside>
 
-    <!-- FLOATING BULK SELECTION ACTION BAR -->
-    <div id="bulk-selection-bar" class="hidden floating-bulk-bar">
+        <div id="bulk-selection-bar" class="hidden floating-bulk-bar">
       <div class="bulk-bar-top-row flex items-center justify-between w-full">
         <button type="button" id="btn-bulk-select-all" class="text-xs font-semibold text-[#0A84FF] hover:text-[#0A84FF]/80 transition px-1 py-0.5">Select All</button>
         <span id="bulk-selection-count" class="text-xs font-bold text-white" style="font-variant-numeric: tabular-nums;">0 Selected</span>
@@ -832,13 +763,9 @@
       </div>
     </div>
 
-    <!-- ================================================================= -->
-    <!-- FULL-SCREEN ADMIN DASHBOARD OVERLAY -->
-    <!-- ================================================================= -->
-    <div id="modal-admin-dashboard" class="admin-overlay hidden" style="display: none;" role="dialog" aria-modal="true" aria-label="Admin Dashboard Overlay">
+                <div id="modal-admin-dashboard" class="admin-overlay hidden" style="display: none;" role="dialog" aria-modal="true" aria-label="Admin Dashboard Overlay">
       
-      <!-- Slim Glass Admin Header (Task 2) -->
-      <header id="admin-top-header" class="admin-glass-header">
+            <header id="admin-top-header" class="admin-glass-header">
         <div class="admin-header-left">
           <button id="adminHubBackBtn" type="button" class="admin-header-btn-exit admin-back-btn" aria-label="Exit Admin">
             <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24">
@@ -852,11 +779,9 @@
         <div id="admin-header-action-slot" class="admin-header-right"></div>
       </header>
 
-      <!-- Admin Pager (Never Nested Horizontally Inside User Pager) -->
-      <main id="admin-pager" class="pager-container" aria-label="Admin Dashboard Pages">
+            <main id="admin-pager" class="pager-container" aria-label="Admin Dashboard Pages">
 
-        <!-- ADMIN PAGE 1: OVERVIEW -->
-        <section id="admin-panel-overview" class="pager-page space-y-4">
+                <section id="admin-panel-overview" class="pager-page space-y-4">
           <div class="space-y-1">
             <h1 class="ios-large-title text-white">Admin Hub</h1>
             <p class="ios-subhead text-neutral-400">Overview metrics and quick operations.</p>
@@ -882,8 +807,7 @@
             </div>
           </div>
 
-          <!-- 7-Day Submissions Inline SVG Bar Chart (Task 7) -->
-          <div class="glass-card p-4 space-y-3">
+                    <div class="glass-card p-4 space-y-3">
             <div class="flex items-center justify-between">
               <div>
                 <h3 class="ios-headline text-white">7-Day Submissions Trend</h3>
@@ -892,12 +816,10 @@
               <span id="admin-chart-total-count" class="text-xs font-mono font-bold text-[#0A84FF]">0 total</span>
             </div>
             <div id="admin-overview-chart" class="w-full pt-1">
-              <!-- Rendered inline SVG bar chart -->
-            </div>
+                          </div>
           </div>
 
-          <!-- SECTION 1: APP BRANDING & IDENTITY -->
-          <form id="form-admin-settings" class="glass-card p-4 space-y-3 text-xs">
+                    <form id="form-admin-settings" class="glass-card p-4 space-y-3 text-xs">
             <div class="flex items-center justify-between pb-1 border-b border-white/10">
               <h3 class="ios-headline text-white">App Branding &amp; Identity</h3>
               <span class="text-[10px] text-neutral-400 font-mono">SETTINGS/GENERAL</span>
@@ -937,8 +859,7 @@
             <button type="submit" class="w-full py-2.5 rounded-xl font-bold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition">Save Branding</button>
           </form>
 
-          <!-- SECTION 2: SYSTEM DEFAULTS -->
-          <div class="glass-card p-4 space-y-3 text-xs">
+                    <div class="glass-card p-4 space-y-3 text-xs">
             <div class="flex items-center justify-between pb-1 border-b border-white/10">
               <h3 class="ios-headline text-white">System Defaults</h3>
               <span class="text-[10px] text-neutral-400 font-mono">DEFAULTS</span>
@@ -953,8 +874,7 @@
             </div>
           </div>
 
-          <!-- SECTION 2.5: WHAT'S NEW CHANGELOG & DRAFT EDITOR -->
-          <div class="glass-card p-4 space-y-3 text-xs">
+                    <div class="glass-card p-4 space-y-3 text-xs">
             <div class="flex items-center justify-between pb-1 border-b border-white/10">
               <h3 class="ios-headline text-white">What's New &amp; Release Notes</h3>
               <span class="text-[10px] text-[#0A84FF] font-mono">SETTINGS/WHATS_NEW</span>
@@ -966,8 +886,7 @@
             </button>
           </div>
 
-          <!-- SECTION 3: SYSTEM & DATABASE MAINTENANCE -->
-          <div class="glass-card p-4 space-y-3 text-xs">
+                    <div class="glass-card p-4 space-y-3 text-xs">
             <div class="flex items-center justify-between pb-1 border-b border-white/10">
               <h3 class="ios-headline text-white">System &amp; Database Maintenance</h3>
               <span class="text-[10px] text-rose-400 font-mono">DANGER ZONE</span>
@@ -1000,8 +919,7 @@
           </div>
         </section>
 
-        <!-- ADMIN PAGE 2: TASKS -->
-        <section id="admin-panel-tasks" class="pager-page space-y-4">
+                <section id="admin-panel-tasks" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
             <h1 class="ios-large-title text-white">Tasks</h1>
             <button type="button" id="btn-admin-add-task" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
@@ -1009,8 +927,7 @@
             </button>
           </div>
 
-          <!-- Filter Segment: Active vs Archived -->
-          <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2">
             <button type="button" id="admin-tasks-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
               Active Tasks
             </button>
@@ -1021,13 +938,11 @@
 
           <div class="inset-group">
             <div id="admin-tasks-tbody" class="divide-y divide-white/5">
-              <!-- Rendered admin tasks -->
-            </div>
+                          </div>
           </div>
         </section>
 
-        <!-- ADMIN PAGE 3: CATEGORIES -->
-        <section id="admin-panel-categories" class="pager-page space-y-4">
+                <section id="admin-panel-categories" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
             <div class="space-y-0.5"><h1 class="ios-large-title text-white">Categories</h1><p class="text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</p></div>
             <button type="button" id="btn-admin-add-category" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
@@ -1035,8 +950,7 @@
             </button>
           </div>
 
-          <!-- Filter Segment: Active vs Archived -->
-          <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2">
             <button type="button" id="admin-cats-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
               Active Categories
             </button>
@@ -1046,12 +960,10 @@
           </div>
 
           <div id="admin-categories-list" class="space-y-2">
-            <!-- Dynamic categories -->
-          </div>
+                      </div>
         </section>
 
-        <!-- ADMIN PAGE: BADGES (Section 3) -->
-        <section id="admin-panel-badges" class="pager-page space-y-4">
+                <section id="admin-panel-badges" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
             <div>
               <h1 class="ios-large-title text-white">Team Badges</h1>
@@ -1063,11 +975,9 @@
           </div>
 
           <div id="admin-badges-list" class="flex flex-col gap-2.5">
-            <!-- Dynamic Badges -->
-          </div>
+                      </div>
         </section>
-        <!-- ADMIN PAGE 4: ATTENDANCE -->
-        <section id="admin-panel-attendance" class="pager-page space-y-4">
+                <section id="admin-panel-attendance" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Attendance</h1>
@@ -1082,14 +992,11 @@
             </button>
           </div>
 
-          <!-- Filter Segmented Control: Active Sessions / Archived -->
-          <div id="mount-admin-sessions-segmented" class="w-full"></div>
+                    <div id="mount-admin-sessions-segmented" class="w-full"></div>
 
-          <!-- Sessions List -->
-          <div id="admin-sessions-list" class="space-y-3"></div>
+                    <div id="admin-sessions-list" class="space-y-3"></div>
 
-          <!-- Logs -->
-          <div class="inset-group">
+                    <div class="inset-group">
             <div class="p-3 border-b border-white/10 flex items-center justify-between">
               <span class="text-xs font-bold text-white uppercase tracking-wider">Recent Check-in Logs</span>
               <span id="admin-attendance-log-count" class="text-xs font-mono text-neutral-400">0 logs</span>
@@ -1098,8 +1005,7 @@
           </div>
         </section>
 
-        <!-- ADMIN PAGE 5: SUBMISSIONS -->
-        <section id="admin-panel-submissions" class="pager-page space-y-4">
+                <section id="admin-panel-submissions" class="pager-page space-y-4">
           <div class="flex items-center justify-between">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Submissions</h1>
@@ -1107,8 +1013,7 @@
             </div>
             </div>
 
-          <!-- Search & Filter Controls -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div class="relative">
               <input id="input-admin-search-submissions" type="text" placeholder="Search member or task..." class="w-full pl-9 pr-3 py-2 rounded-xl text-xs glass-input" />
               <svg class="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -1122,8 +1027,7 @@
    </button>
           </div>
 
-          <!-- Missed Task Penalties Actionable Container -->
-          <div id="admin-missed-tasks-container" class="hidden space-y-3">
+                    <div id="admin-missed-tasks-container" class="hidden space-y-3">
             <div class="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 space-y-2">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
@@ -1133,14 +1037,12 @@
                 <span id="admin-missed-tasks-count-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300">0</span>
               </div>
               <div id="admin-missed-tasks-list" class="space-y-2 pt-1">
-                <!-- Actionable missed task penalty banners -->
-              </div>
+                              </div>
             </div>
           </div>
 
           <div id="admin-submissions-list" class="space-y-3">
-            <!-- Dynamic submissions -->
-          </div>
+                      </div>
 
           <div id="admin-submissions-load-more-container" class="text-center pt-1 pb-2">
             <button type="button" id="btn-load-more-submissions" class="hidden px-4 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/15 text-white transition">
@@ -1149,8 +1051,7 @@
           </div>
         </section>
 
-        <!-- ADMIN PAGE: WAIVERS (EXCUSES INBOX) -->
-        <section id="admin-panel-waivers" class="pager-page space-y-4">
+                <section id="admin-panel-waivers" class="pager-page space-y-4">
           <div class="space-y-1">
             <h1 class="ios-large-title text-white">Waivers</h1>
             <p class="ios-subhead text-neutral-400">Review attendance excuse requests. <span class="block text-[11px] text-neutral-400 mt-0.5">Tap any item to edit • Hold to select</span></p>
@@ -1163,8 +1064,7 @@
           <div id="admin-waivers-list" class="space-y-3"></div>
         </section>
 
-        <!-- ADMIN PAGE 6: MEMBERS -->
-        <section id="admin-panel-members" class="pager-page space-y-4">
+                <section id="admin-panel-members" class="pager-page space-y-4">
           <div class="flex items-center justify-between gap-2">
             <div class="space-y-1">
               <h1 class="ios-large-title text-white">Members</h1>
@@ -1199,22 +1099,19 @@
         </section>
 
         
-        <!-- ADMIN PAGE: ADJUSTMENTS / TRANSFERS HUB (v2.2.2) -->
-        <section id="admin-panel-adjustments" class="pager-page space-y-4">
+                <section id="admin-panel-adjustments" class="pager-page space-y-4">
           <div class="space-y-1">
             <h1 class="ios-large-title text-white">Adjustments Hub</h1>
             <p class="ios-subhead text-neutral-400">Direct credit, penalty, and fine adjustments with atomic audit logging.</p>
           </div>
 
-          <!-- Top Recipients Block (FIX 5) -->
-          <div class="glass-card p-4 space-y-3">
+                    <div class="glass-card p-4 space-y-3">
             <div class="flex items-center justify-between">
               <span class="text-xs font-bold text-white uppercase tracking-wider">Recipients</span>
               <button type="button" id="btnHubClearRecipients" class="text-xs font-semibold text-[#0A84FF] hover:underline cursor-pointer hidden">Clear</button>
             </div>
 
-            <!-- Tappable Row: Select member(s) -->
-            <button type="button" id="btnHubOpenPicker" class="w-full p-3 rounded-xl bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] transition flex items-center justify-between text-left cursor-pointer">
+                        <button type="button" id="btnHubOpenPicker" class="w-full p-3 rounded-xl bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] transition flex items-center justify-between text-left cursor-pointer">
               <div class="flex items-center gap-3 min-w-0">
                 <div class="w-8 h-8 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
@@ -1227,19 +1124,15 @@
               <svg class="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
             </button>
 
-            <!-- Selected Members Container (Only shown when selectedUids.size > 0) -->
-            <div id="hubSelectedRecipientsContainer" class="space-y-2 hidden pt-1">
+                        <div id="hubSelectedRecipientsContainer" class="space-y-2 hidden pt-1">
               <span class="text-[11px] font-semibold text-neutral-400 block">Selected Recipients (<span id="hubSelectedCountText" style="font-variant-numeric: tabular-nums;">0</span>)</span>
               <div id="hubSelectedRecipientsList" class="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
-                <!-- Dynamically populated compact recipient chips with remove button -->
-              </div>
+                              </div>
             </div>
           </div>
 
-          <!-- Adjustment Workstation Form -->
-          <div id="hubAdjustmentFormContainer" class="glass-card p-4 space-y-4">
-            <!-- 3-Way Bucket Segmented Control -->
-            <div>
+                    <div id="hubAdjustmentFormContainer" class="glass-card p-4 space-y-4">
+                        <div>
               <label class="block text-neutral-300 font-semibold mb-1 text-xs">Target Bucket</label>
               <div class="ios-segmented-control flex p-1 rounded-xl bg-black/40 border border-white/5" id="hubBucketSegmented">
                 <button type="button" class="hub-bucket-btn flex-1 py-1.5 rounded-lg text-xs font-semibold transition active bg-white/15 text-white shadow-sm" data-bucket="points">Points</button>
@@ -1248,8 +1141,7 @@
               </div>
             </div>
 
-            <!-- Direction Segmented Control -->
-            <div>
+                        <div>
               <label class="block text-neutral-300 font-semibold mb-1 text-xs">Adjustment Action</label>
               <div class="ios-segmented-control flex p-1 rounded-xl bg-black/40 border border-white/5" id="hubDirectionSegmented">
                 <button type="button" class="hub-dir-btn flex-1 py-1.5 rounded-lg text-xs font-semibold transition active bg-white/15 text-white shadow-sm" data-dir="add">Add (+)</button>
@@ -1258,8 +1150,7 @@
               <p id="hubOperationDesc" class="text-[11px] text-neutral-400 mt-1">Credit points to member balances.</p>
             </div>
 
-            <!-- Adjustment Amount Input -->
-            <div>
+                        <div>
               <label class="block text-neutral-300 font-semibold mb-1 text-xs">Amount</label>
               <div class="relative">
                 <input type="number" id="hubAdjustAmount" min="1" step="1" placeholder="Enter amount..." class="ios-input pr-16 text-sm" style="font-variant-numeric: tabular-nums;" />
@@ -1267,30 +1158,27 @@
               </div>
             </div>
 
-            <!-- Adjustment Reason Input (Optional) -->
-            <div>
+                        <div>
               <label class="block text-neutral-300 font-semibold mb-1 text-xs">Reason (optional)</label>
               <input type="text" id="hubAdjustReason" placeholder="e.g., Manual adjustment" class="ios-input text-xs" />
             </div>
 
-            <!-- Submit Button -->
-            <button type="button" id="btnHubSubmitAdjustment" class="ios-btn-primary w-full py-3.5 px-4 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold text-sm transition shadow-lg flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                        <button type="button" id="btnHubSubmitAdjustment" class="ios-btn-primary w-full py-3.5 px-4 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold text-sm transition shadow-lg flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
               <span id="hubSubmitBtnLabel">Select Recipient(s)</span>
             </button>
           </div>
         </section>
 
-        <!-- ADMIN PAGE 7: BROADCASTS & SETTINGS -->
-        <section id="admin-panel-announcements" class="pager-page space-y-4">
+                <section id="admin-panel-announcements" class="pager-page space-y-4">
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <div class="space-y-1">
-              <h1 class="ios-large-title text-white">Broadcasts &amp; Push</h1>
-              <p class="ios-subhead text-neutral-400">Team carousel notices, push broadcasts, and configurations.</p>
+              <h1 class="ios-large-title text-white">Broadcasts &amp; Notices</h1>
+              <p class="ios-subhead text-neutral-400">Team carousel announcements, banner alerts, and schedules.</p>
             </div>
             <div class="flex items-center gap-2">
               <button type="button" id="btn-broadcasts-member-notif-center" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/10 text-white hover:bg-white/15 border border-white/10 transition flex items-center gap-1.5 shadow-sm">
                 <svg class="w-3.5 h-3.5 stroke-current fill-none text-[#0A84FF] shrink-0" stroke-width="2" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-                <span>Member Notifications</span>
+                <span>Notification Manager &rarr;</span>
               </button>
               <button type="button" id="btn-admin-add-broadcast" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition flex items-center gap-1 shadow-sm">
                 <span>+ New Broadcast</span>
@@ -1298,8 +1186,7 @@
             </div>
           </div>
 
-          <!-- Filter Segment: Active vs Archive -->
-          <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2">
             <button type="button" id="admin-broadcasts-filter-active" class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#0A84FF] text-white">
               Active Broadcasts
             </button>
@@ -1308,110 +1195,132 @@
             </button>
           </div>
 
-          <!-- Broadcasts List -->
-          <div class="space-y-2">
+                    <div class="space-y-2">
             <div class="flex items-center justify-between text-xs font-semibold text-neutral-400 px-1">
               <span id="admin-broadcasts-section-label">Live &amp; Scheduled Broadcasts</span>
             </div>
             <div id="admin-broadcasts-list" class="space-y-2">
-              <!-- Dynamic Broadcasts -->
+                          </div>
+          </div>
+        </section>
+
+                <section id="admin-panel-notifications" class="pager-page space-y-4">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <div class="space-y-1">
+              <h1 class="ios-large-title text-white">Notification Manager</h1>
+              <p class="ios-subhead text-neutral-400">Direct member messaging, team notifications &amp; delivery logs.</p>
             </div>
           </div>
 
-          <!-- ADMIN PUSH SENDER CONSOLE (Task 7 & 8) -->
-          <div class="glass-card p-4 space-y-3">
-            <div class="flex items-center gap-2">
-              <div class="w-7 h-7 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center">
-                <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-                  <path d="M22 2L11 13"></path>
-                  <path d="M22 2l-7 20-4-9-9-4 20-7z"></path>
-                </svg>
-              </div>
-              <div>
-                <h3 class="ios-headline text-white">Push &amp; Broadcast Console</h3>
-                <p class="text-[11px] text-neutral-400">Dispatch instant notifications directly to team updates feed.</p>
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                        <div class="lg:col-span-5 space-y-3">
+              <div class="glass-card p-3 space-y-2.5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold text-neutral-300 uppercase tracking-wider">Recipients</span>
+                  <span id="admin-notif-member-count" class="text-[11px] font-mono text-[#0A84FF] font-semibold">0 Members</span>
+                </div>
+
+                <div class="relative">
+                  <input id="input-admin-notif-search" type="search" placeholder="Search member by name..." class="w-full glass-input pl-8 text-xs" />
+                  <svg class="w-4 h-4 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2 stroke-current fill-none pointer-events-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </div>
+
+                <div id="btn-admin-notif-target-all" class="p-3 rounded-2xl bg-[#0A84FF]/15 border border-[#0A84FF]/40 flex items-center justify-between cursor-pointer transition hover:bg-[#0A84FF]/25 active:scale-[0.99]">
+                  <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-[#0A84FF] text-white flex items-center justify-center shrink-0 shadow-md">
+                      <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                    </div>
+                    <div>
+                      <div class="text-xs font-bold text-white">All Team Members</div>
+                      <div class="text-[11px] text-blue-200/80">Broadcast to all registered users</div>
+                    </div>
+                  </div>
+                  <div id="admin-notif-all-indicator" class="w-5 h-5 rounded-full bg-[#0A84FF] text-white flex items-center justify-center shadow-sm">
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </div>
+                </div>
+
+                <div class="text-[11px] font-semibold text-neutral-400 pt-1 px-1">Team Roster</div>
+                <div id="admin-notif-members-list" class="space-y-1.5 max-h-[380px] overflow-y-auto pr-1 apple-list-container">
+                                  </div>
               </div>
             </div>
 
-            <form id="form-admin-send-push" class="space-y-3 text-xs">
-              <div>
-                <label class="block text-neutral-400 mb-1 font-medium">Notification Title</label>
-                <input id="input-push-title" type="text" placeholder="e.g. Urgent Media Notice" class="w-full glass-input" required />
-              </div>
-
-              <div>
-                <label class="block text-neutral-400 mb-1 font-medium">Message Body</label>
-                <textarea id="input-push-body" rows="2" placeholder="Write message details for the team..." class="w-full glass-input" required></textarea>
-              </div>
-
-              <div class="grid grid-cols-2 gap-2">
-                <div>
-                  <label class="block text-neutral-400 mb-1 font-medium">Event Icon</label>
-                  <button type="button" id="btn-push-icon-picker" class="w-full glass-card p-2 rounded-xl flex items-center justify-between hover:border-white/25 transition">
-                    <div class="flex items-center gap-2">
-                      <div id="push-icon-preview" class="w-7 h-7 rounded-lg bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
-                        <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-                      </div>
-                      <span class="text-xs font-semibold text-white">Icon</span>
+                        <div class="lg:col-span-7 space-y-4">
+              <div class="glass-card p-4 space-y-3.5">
+                <div class="flex items-center justify-between pb-2 border-b border-white/10">
+                  <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
+                      <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M22 2L11 13"></path><path d="M22 2l-7 20-4-9-9-4 20-7z"></path></svg>
                     </div>
-                    <span class="text-[10px] text-neutral-400 px-2 py-0.5 rounded-full bg-white/10">Change</span>
-                  </button>
-                  <input type="hidden" id="input-push-icon" value="bell" />
+                    <div>
+                      <h3 class="ios-headline text-white">Compose Notification</h3>
+                      <p id="admin-notif-target-label" class="text-[11px] text-[#0A84FF] font-semibold">Target: All Team Members</p>
+                    </div>
+                  </div>
+                  <span id="admin-notif-target-badge" class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30">Broadcast</span>
                 </div>
 
-                <div>
-                  <label class="block text-neutral-400 mb-1 font-medium">Category</label>
-                  <button type="button" id="btn-push-category-picker" class="w-full glass-card p-2 rounded-xl flex items-center justify-between hover:border-white/25 transition text-left">
-                    <span id="push-category-label" class="text-xs font-semibold text-white truncate pr-1">System / Notice</span>
-                    <svg class="w-4 h-4 text-neutral-500 shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                <form id="form-admin-notifications-page" class="space-y-3 text-xs">
+                  <div>
+                    <label class="block text-neutral-300 mb-1 font-semibold">Notification Title *</label>
+                    <input id="input-admin-notif-title" type="text" placeholder="e.g. Schedule Change, Urgent Request..." class="w-full glass-input" required />
+                  </div>
+
+                  <div>
+                    <label class="block text-neutral-300 mb-1 font-semibold">Message Body *</label>
+                    <textarea id="input-admin-notif-body" rows="3" placeholder="Enter message details for the member..." class="w-full glass-input" required></textarea>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div>
+                      <label class="block text-neutral-300 mb-1 font-semibold">Category / Priority</label>
+                      <select id="select-admin-notif-category" class="w-full glass-input bg-neutral-900 text-white">
+                        <option value="system">Notice / Announcement</option>
+                        <option value="task">Task Assignment</option>
+                        <option value="alert">Urgent Alert</option>
+                        <option value="points">Points &amp; Badges</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="block text-neutral-300 mb-1 font-semibold">Icon</label>
+                      <select id="select-admin-notif-icon" class="w-full glass-input bg-neutral-900 text-white">
+                        <option value="bell">Notification Bell</option>
+                        <option value="star">Star / Award</option>
+                        <option value="alert-circle">Alert / Warning</option>
+                        <option value="camera">Media / Camera</option>
+                        <option value="calendar">Schedule / Date</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <button type="submit" id="btn-admin-dispatch-notif" class="w-full py-2.5 rounded-xl font-bold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition shadow-md flex items-center justify-center gap-2 text-xs">
+                    <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M22 2L11 13"></path><path d="M22 2l-7 20-4-9-9-4 20-7z"></path></svg>
+                    <span>Dispatch Notification</span>
                   </button>
-                  <input type="hidden" id="input-push-type" value="system" />
-                </div>
+                </form>
               </div>
 
-              <!-- Audience Section (Segmented: All Team / Badge / Members) -->
-              <div class="space-y-1.5">
-                <label class="block text-neutral-400 font-medium">Target Audience</label>
-                <div id="push-audience-segmented-container"></div>
-                <div id="push-audience-details-container" class="mt-2"></div>
-              </div>
-
-              <!-- Deep Link Section without typing IDs -->
-              <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 space-y-2">
-                <label class="block text-neutral-400 font-medium">Open When Tapped</label>
-                <button type="button" id="btn-push-action-picker" class="w-full glass-card p-2.5 rounded-xl flex items-center justify-between hover:border-white/25 transition text-left">
-                  <span id="push-action-label" class="text-xs font-semibold text-white">None (Default)</span>
-                  <svg class="w-4 h-4 text-neutral-500 shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                </button>
-                
-                <div id="push-sub-picker-container" class="hidden">
-                  <button type="button" id="btn-push-subitem-picker" class="w-full glass-card p-2.5 rounded-xl flex items-center justify-between hover:border-white/25 transition text-left">
-                    <span id="push-subitem-label" class="text-xs font-semibold text-[#0A84FF] truncate pr-1">Choose Item...</span>
-                    <svg class="w-4 h-4 text-neutral-500 shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <div class="glass-card p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <h4 class="ios-headline text-white">Notification History</h4>
+                    <p class="text-[11px] text-neutral-400">Recent delivered notifications and member read status.</p>
+                  </div>
+                  <button type="button" id="btn-admin-notif-refresh-history" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 font-semibold text-[11px] transition">
+                    Refresh
                   </button>
                 </div>
+                <div id="admin-notif-history-container" class="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                  </div>
               </div>
-
-              <!-- One-line Admin Note -->
-              <p class="text-[11px] text-neutral-400 italic">
-                Note: Background push delivery to a completely closed app requires a server runner (Spark plan constraint). In-app updates deliver instantly in real time.
-              </p>
-
-              <button type="submit" id="btn-admin-send-push" class="w-full py-2.5 rounded-xl font-bold bg-[#0A84FF] text-white hover:bg-[#0071E3] transition shadow-md flex items-center justify-center gap-2">
-                <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-                  <path d="M22 2L11 13"></path>
-                  <path d="M22 2l-7 20-4-9-9-4 20-7z"></path>
-                </svg>
-                <span>Send Notification</span>
-              </button>
-            </form>
+            </div>
           </div>
         </section>
 
       </main>
 
-      <!-- FLOATING GLASS DOCK (ADMIN NAVIGATION) -->
-      <nav id="admin-dock" class="glass-dock" aria-label="Admin Navigation">
+            <nav id="admin-dock" class="glass-dock" aria-label="Admin Navigation">
         <div class="dock-thumb"></div>
 
         <button type="button" data-page="overview" class="dock-item active">
@@ -1439,22 +1348,21 @@
         <button type="button" data-page="members" class="dock-item">
           <span>Members</span>
         </button>
-                <button type="button" data-page="adjustments" class="dock-item">
+        <button type="button" data-page="adjustments" class="dock-item">
           <span>Adjustments</span>
         </button>
         <button type="button" data-page="broadcasts" class="dock-item">
           <span>Broadcasts</span>
         </button>
+        <button type="button" data-page="notifications" class="dock-item">
+          <span>Notifications</span>
+        </button>
       </nav>
 
     </div>
 
-    <!-- ================================================================= -->
-    <!-- REUSABLE SHARED MODAL & ACTION SHEET ROOTS -->
-
-    <!-- SUB-MODAL OVERLAY (FOR NESTED PICKERS LIKE ICON PICKER) -->
-    <!-- UNIFIED 100-ICON PICKER SUB-MODAL OVERLAY -->
-    
+        
+            
     <div id="unifiedIconPickerOverlay" class="sub-modal-overlay is-hidden" role="dialog" aria-modal="true">
       <div class="sub-modal-sheet icon-picker-sheet">
         <div class="modal-grabber"></div>
@@ -1469,8 +1377,7 @@
           <input type="search" id="iconPickerSearch" class="ios-input ios-search-field" placeholder="Search 100 icons..." />
         </div>
         <div class="ios-pill-scroll" id="iconCategoryPills">
-          <!-- Pills: All, Media, Tasks, Rewards, People, System -->
-        </div>
+                  </div>
         <div class="icon-grid-scrollable">
           <div class="icon-picker-grid" id="iconPickerGrid"></div>
         </div>
@@ -1478,8 +1385,7 @@
       </div>
     </div>
 
-    <!-- LEGACY SUB-MODAL OVERLAY (FOR NESTED PICKERS LIKE ITEM PICKER) -->
-    <div id="subModalOverlay" class="sub-modal-overlay is-hidden" role="dialog" aria-modal="true">
+        <div id="subModalOverlay" class="sub-modal-overlay is-hidden" role="dialog" aria-modal="true">
       <div class="sub-modal-sheet modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1491,8 +1397,7 @@
       </div>
     </div>
   
-    <!-- ================================================================= -->
-    <div id="shared-modal-root" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="shared-modal-root" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1517,12 +1422,8 @@
       </div>
     </div>
 
-    <!-- ================================================================= -->
-    <!-- LEGACY / EXISTING FORM MODALS (STYLED FOR APPLE SYSTEM) -->
-    <!-- ================================================================= -->
-
-    <!-- EDIT PROFILE MODAL (v2.2.2 Apple HIG) -->
-    <div id="modal-edit-profile" class="modal-backdrop" role="dialog" aria-modal="true">
+            
+        <div id="modal-edit-profile" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1532,8 +1433,7 @@
         </div>
         <div class="modal-body pt-4">
           <form id="form-edit-profile" class="space-y-4 text-xs">
-            <!-- Current Avatar Preview & Actions -->
-            <div class="flex flex-col items-center gap-3 edit-profile-avatar-section">
+                        <div class="flex flex-col items-center gap-3 edit-profile-avatar-section">
               <div class="relative w-20 h-20 rounded-full overflow-hidden border-2 border-[#0A84FF] shadow-lg bg-neutral-900 flex items-center justify-center">
                 <img id="edit-profile-preview" src="./image_ad59c0.jpg" alt="Preview" class="w-full h-full object-cover" />
               </div>
@@ -1553,19 +1453,16 @@
               </div>
             </div>
 
-            <!-- Preset Avatar Gallery (Collapsible / Toggleable) -->
-            <div id="profilePresetsGallery" class="hidden p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
+                        <div id="profilePresetsGallery" class="hidden p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
               <div class="flex items-center justify-between text-neutral-400 text-[11px]">
                 <span>Choose a media persona</span>
                 <span class="text-neutral-500 font-mono">24 presets</span>
               </div>
               <div id="profilePresetsGrid" class="grid grid-cols-4 gap-3 max-h-56 overflow-y-auto p-1">
-                <!-- Dynamically populated 24 SVG Avatars -->
-              </div>
+                              </div>
             </div>
 
-            <!-- Full Name Input -->
-            <div>
+                        <div>
               <label class="block text-neutral-300 mb-1 font-semibold">Full Name <span class="text-rose-400">*</span></label>
               <input id="input-edit-profile-name" type="text" class="ios-input" placeholder="Your full name" required />
             </div>
@@ -1576,8 +1473,7 @@
       </div>
     </div>
 
-    <!-- ADMIN MASTER PASSWORD MODAL -->
-    <div id="modal-admin-auth" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-admin-auth" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1596,8 +1492,7 @@
       </div>
     </div>
 
-    <!-- SUBMIT TASK PROOF MODAL -->
-    <div id="modal-task-submit" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-task-submit" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1631,8 +1526,7 @@
       </div>
     </div>
 
-    <!-- TASK COMPETITION / COMPLETIONS MODAL -->
-    <div id="modal-task-competition" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-task-competition" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1644,8 +1538,7 @@
       </div>
     </div>
 
-    <!-- AUTH MODAL -->
-    <div id="modal-auth" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-auth" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1667,8 +1560,7 @@
       </div>
     </div>
 
-    <!-- UNAUTHORIZED DOMAIN MODAL -->
-    <div id="modal-unauthorized-domain" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-unauthorized-domain" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1687,8 +1579,7 @@
       </div>
     </div>
 
-    <!-- ADMIN ADJUST POINTS MODAL -->
-    <div id="modal-admin-adjust-points" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-admin-adjust-points" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1718,8 +1609,7 @@
       </div>
     </div>
 
-    <!-- ADMIN DIRECT NOTIFICATION MODAL -->
-    <div id="modal-admin-direct-notification" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-admin-direct-notification" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1749,8 +1639,7 @@
       </div>
     </div>
 
-    <!-- ADMIN EDIT LOG MODAL -->
-    <div id="modal-admin-edit-log" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-admin-edit-log" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-header">
@@ -1786,8 +1675,7 @@
       </div>
     </div>
 
-    <!-- CUSTOM DIALOGS FOR BACKWARD COMPATIBILITY -->
-    <div id="modal-custom-alert" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div id="modal-custom-alert" class="modal-backdrop" role="dialog" aria-modal="true">
       <div class="modal-sheet">
         <div class="modal-grabber"></div>
         <div class="modal-body text-center space-y-3">
@@ -1839,10 +1727,8 @@
       </div>
     </div>
 
-    <!-- TOAST CONTAINER -->
-    <div id="toast-container" class="toast-container"></div>
-    <!-- Real-time Live iOS Notification Banner Toast -->
-    <div id="live-notification-toast" class="ios-banner-toast hidden" role="alert" aria-live="assertive">
+        <div id="toast-container" class="toast-container"></div>
+        <div id="live-notification-toast" class="ios-banner-toast hidden" role="alert" aria-live="assertive">
       <div class="flex items-start gap-3">
         <div id="live-toast-icon" class="w-9 h-9 rounded-xl bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
           <svg class="w-5 h-5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
@@ -1867,8 +1753,7 @@
     </div>
 
 
-    <!-- SERVICE WORKER REGISTRATION (GITHUB PAGES SAFE) -->
-    <script>
+        <script>
       // Error-screen "Reload App": drop every service worker registration and cache, then ALWAYS reload.
       // (The messaging worker re-registers on the next load.)
       window.__cocReloadApp = async function () {
@@ -1899,12 +1784,10 @@
       }
     </script>
 
-    <!-- CORE VANILLA JS APPLICATION MODULE -->
-    <script type="module" src="./app.js?v=3.0.0"></script>
+        <script type="module" src="./app.js?v=3.0.1"></script>
 
   
-    <!-- ACCOUNT STATUS OVERLAY (Disabled / Blocked) -->
-    <div id="account-status-overlay" class="fixed inset-0 z-[9999] bg-[#000000] flex items-center justify-center p-6 hidden">
+        <div id="account-status-overlay" class="fixed inset-0 z-[9999] bg-[#000000] flex items-center justify-center p-6 hidden">
       <div class="max-w-sm w-full text-center space-y-4">
         <div id="account-status-icon" class="w-16 h-16 mx-auto rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center">
           <svg class="w-8 h-8 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>

@@ -723,6 +723,9 @@ body.selection-mode-active .bulk-select-card.selected {
   margin: 8px auto 12px;
   flex-shrink: 0;
   cursor: grab;
+  touch-action: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 .modal-header {
@@ -732,6 +735,16 @@ body.selection-mode-active .bulk-select-card.selected {
   justify-content: space-between;
   border-bottom: 0.5px solid var(--separator);
   cursor: grab;
+  touch-action: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.modal-grabber:active,
+.sheet-grabber:active,
+.modal-header:active,
+.sub-modal-toolbar:active {
+  cursor: grabbing;
 }
 
 .modal-title {
@@ -3365,14 +3378,17 @@ input[type="search"],
   transition: max-height 0.26s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.22s ease, margin 0.26s ease;
 }
 
-.universal-swipe-wrapper.collapsing {
+.universal-swipe-wrapper.collapsing,
+.universal-swipe-wrapper.swiped-collapsed {
   max-height: 0 !important;
+  height: 0 !important;
   opacity: 0 !important;
   margin-top: 0 !important;
   margin-bottom: 0 !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
-  pointer-events: none;
+  pointer-events: none !important;
+  overflow: hidden !important;
 }
 
 .universal-swipe-bg {
@@ -3492,11 +3508,163 @@ input[type="search"],
 .undo-snackbar-progress {
   position: absolute;
   bottom: 0;
-  left: 12px;
-  right: 12px;
-  height: 2px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-bottom-left-radius: 9999px;
+  border-bottom-right-radius: 9999px;
+  overflow: hidden;
+}
+
+.undo-snackbar-progress-bar {
+  width: 100%;
+  height: 100%;
   background: #0A84FF;
-  border-radius: 1px;
-  transform-origin: left;
-  transition: transform linear;
+  transform-origin: left center;
+  transition: width 5000ms linear;
+}
+
+/* Unified Smart Check-in Hero */
+.smart-checkin-hero-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  padding: 24px 20px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  text-align: center;
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.smart-checkin-hero-card.hero-active {
+  border-color: rgba(16, 185, 129, 0.35);
+  box-shadow: 0 20px 48px rgba(16, 185, 129, 0.15), 0 0 0 1px rgba(16, 185, 129, 0.2);
+}
+
+.smart-checkin-hero-card.hero-late {
+  border-color: rgba(244, 63, 94, 0.35);
+  box-shadow: 0 20px 48px rgba(244, 63, 94, 0.15), 0 0 0 1px rgba(244, 63, 94, 0.2);
+}
+
+.smart-checkin-btn-massive {
+  position: relative;
+  width: 100%;
+  padding: 18px 24px;
+  border-radius: 20px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+.smart-checkin-btn-massive:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.smart-checkin-btn-massive:disabled {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.35);
+  cursor: not-allowed;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.smart-checkin-pulse-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 24px;
+  border: 2px solid rgba(16, 185, 129, 0.5);
+  animation: smartCheckinPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes smartCheckinPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 0;
+  }
+}
+
+.att-member-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.att-member-picker-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.att-member-picker-row:active {
+  transform: scale(0.99);
+}
+
+.apple-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: all 0.16s cubic-bezier(0.2, 0, 0, 1);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.apple-member-row:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.apple-member-row:active {
+  transform: scale(0.985);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.apple-member-row.is-selected {
+  background: rgba(10, 132, 255, 0.18);
+  border-color: rgba(10, 132, 255, 0.45);
+}
+
+.pager-page,
+#user-feed-container,
+.ios-table-view,
+#admin-tasks-list,
+#admin-submissions-list,
+#admin-notif-members-list {
+  contain: layout style;
+}
+
+.modal-sheet,
+.sub-modal-sheet,
+#side-drawer {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }

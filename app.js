@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.0.0';
+export const APP_VERSION = '3.0.1';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -1020,10 +1020,26 @@ export function handleAppPopState(e) {
   }
 }
 
+export function isDefaultEmailProfilePic(url) {
+  if (!url || typeof url !== 'string') return true;
+  const clean = url.trim();
+  if (!clean || clean === './image_ad59c0.jpg') return true;
+  if (/default-user/i.test(clean)) return true;
+  if (/AAAAAAAAAAA/i.test(clean)) return true;
+  if (/ui-avatars\.com/i.test(clean)) return true;
+  if (/dicebear\.com.*\/initials/i.test(clean)) return true;
+  if (/gravatar\.com\/avatar\/.*[\?&]d=(?:identicon|retro|initials|mp|blank)/i.test(clean)) return true;
+  if (/placeholder/i.test(clean) && !clean.startsWith('data:image/svg')) return true;
+  return false;
+}
+
 export function normalizeUser(raw) {
   if (!raw) return null;
   const name = raw.name || raw.displayName || 'Team Member';
-  const avatarUrl = raw.avatarUrl || raw.photoURL || '';
+  const rawAvatar = raw.avatarUrl || raw.photoURL || '';
+  const uid = raw.uid || '';
+  const isDefault = isDefaultEmailProfilePic(rawAvatar);
+  const avatarUrl = isDefault ? getDeterministicPresetAvatar(uid || name) : rawAvatar;
   const penalties = typeof raw.penalties === 'number' ? raw.penalties : (typeof raw.totalPenalties === 'number' ? raw.totalPenalties : 0);
   const badges = Array.isArray(raw.badges) ? raw.badges : [];
   const badgeIds = Array.isArray(raw.badgeIds)
@@ -1031,7 +1047,7 @@ export function normalizeUser(raw) {
     : badges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
 
   return {
-    uid: raw.uid || '',
+    uid,
     name,
     displayName: name,
     avatarUrl,
@@ -1059,7 +1075,8 @@ export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = ''
   if (uid && usersMap.has(uid)) {
     const u = usersMap.get(uid);
     const rawAvatar = u.avatarUrl || u.photoURL || fallbackAvatar;
-    const resolvedAvatar = (rawAvatar && rawAvatar !== './image_ad59c0.jpg') ? rawAvatar : getDeterministicPresetAvatar(u.uid);
+    const isDefault = isDefaultEmailProfilePic(rawAvatar);
+    const resolvedAvatar = !isDefault ? rawAvatar : getDeterministicPresetAvatar(u.uid || u.name || fallbackName);
     return {
       uid: u.uid,
       name: u.name || u.displayName || fallbackName,
@@ -1078,7 +1095,8 @@ export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = ''
       badgeIds: u.badgeIds || []
     };
   }
-  const resolvedAvatar = (fallbackAvatar && fallbackAvatar !== './image_ad59c0.jpg') ? fallbackAvatar : getDeterministicPresetAvatar(uid);
+  const isDefault = isDefaultEmailProfilePic(fallbackAvatar);
+  const resolvedAvatar = !isDefault ? fallbackAvatar : getDeterministicPresetAvatar(uid || fallbackName);
   return {
     uid: uid || '',
     name: fallbackName,
@@ -1185,7 +1203,8 @@ function normalizeNotification(raw) {
     isArchived,
     timestamp: raw.timestamp || raw.createdAt || null,
     createdAt: raw.createdAt || raw.timestamp || null,
-    read: Boolean(raw.read),
+    read: Boolean(raw.read || raw.isRead),
+    isRead: Boolean(raw.isRead || raw.read),
     readBy: Array.isArray(raw.readBy) ? raw.readBy : [],
     link: raw.link || ''
   };
@@ -2145,15 +2164,25 @@ function normalizeSession(s) {
     };
   }
 
-  const targetType = s.targetType || (Array.isArray(s.assignedUids) && s.assignedUids.length > 0 ? 'custom' : (Array.isArray(s.badgeIds) && s.badgeIds.length > 0 ? 'badge' : 'all'));
+  const assignmentType = s.assignmentType || (s.targetType === 'custom' ? 'specific' : (s.targetType === 'badge' ? 'by_badge' : 'all'));
+  const targetType = s.targetType || (assignmentType === 'specific' ? 'custom' : (assignmentType === 'by_badge' ? 'badge' : 'all'));
+  const assignedMembers = Array.isArray(s.assignedMembers) ? s.assignedMembers : (Array.isArray(s.assignedUids) ? s.assignedUids : []);
+  const assignedUids = Array.isArray(s.assignedUids) ? s.assignedUids : assignedMembers;
+  const earlyBonusPoints = Math.max(0, Number(s.earlyBonusPoints) || Number(s.earlyCheckInBonusPoints) || 0);
+  const earlyBonusEGP = Math.max(0, Number(s.earlyBonusEGP) || Number(s.earlyCheckInBonusEGP) || 0);
+
   return {
     ...s,
     id: s.id || '',
     title: s.title || 'Attendance Session',
     schedule: s.schedule || { type: 'once', startDateTime: s.startTime || s.startDateTime || Date.now() },
+    assignmentType,
     targetType,
     badgeIds: Array.isArray(s.badgeIds) ? s.badgeIds : [],
-    assignedUids: Array.isArray(s.assignedUids) ? s.assignedUids : [],
+    assignedMembers,
+    assignedUids,
+    earlyBonusPoints,
+    earlyBonusEGP,
     active: s.active !== false && s.status !== 'closed' && s.status !== 'archived',
     archived: Boolean(s.archived || s.status === 'archived'),
     status: s.status || (s.archived ? 'archived' : (s.active === false ? 'inactive' : 'active')),
@@ -2164,6 +2193,33 @@ function normalizeSession(s) {
     earlyCheckInMinutes: typeof s.earlyCheckInMinutes === 'number' ? s.earlyCheckInMinutes : (typeof s.earlyWindowMinutes === 'number' ? s.earlyWindowMinutes : 30),
     lateCutoffMinutes: typeof s.lateCutoffMinutes === 'number' ? s.lateCutoffMinutes : 120
   };
+}
+
+function isUserEligibleForSession(session, user = state.user) {
+  if (!session || !user || !user.uid) return false;
+  const norm = normalizeSession(session);
+  const assignmentType = norm.assignmentType || (norm.targetType === 'custom' ? 'specific' : (norm.targetType === 'badge' ? 'by_badge' : 'all'));
+
+  if (assignmentType === 'all') return true;
+
+  if (assignmentType === 'specific') {
+    const list = Array.isArray(norm.assignedMembers) && norm.assignedMembers.length > 0
+      ? norm.assignedMembers
+      : (Array.isArray(norm.assignedUids) ? norm.assignedUids : []);
+    return list.includes(user.uid);
+  }
+
+  if (assignmentType === 'by_badge') {
+    const userBadgeIds = new Set([
+      ...(Array.isArray(user.badgeIds) ? user.badgeIds : []),
+      ...(Array.isArray(user.badges) ? user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : [])
+    ]);
+    const bIds = Array.isArray(norm.badgeIds) ? norm.badgeIds : [];
+    if (bIds.length === 0) return true;
+    return bIds.some(bid => userBadgeIds.has(bid));
+  }
+
+  return true;
 }
 
 function calculateSystemPenalty(sys, delaySeconds, isAbsent = false) {
@@ -2242,8 +2298,22 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   }
 
   if (nowMs <= S) {
+    const isEarly = nowMs < S;
+    const earlyBonusPoints = isEarly ? (norm.earlyBonusPoints || 0) : 0;
+    const earlyBonusEGP = isEarly ? (norm.earlyBonusEGP || 0) : 0;
+    let message = 'On time (0 EGP penalty)';
+    if (isEarly && (earlyBonusPoints > 0 || earlyBonusEGP > 0)) {
+      const parts = [];
+      if (earlyBonusPoints > 0) parts.push(`+${earlyBonusPoints} Pts Early Bonus`);
+      if (earlyBonusEGP > 0) parts.push(`+${earlyBonusEGP} EGP`);
+      message = parts.join(', ');
+    }
+
     return {
       status: 'on_time',
+      isEarly,
+      earlyBonusPoints,
+      earlyBonusEGP,
       penalty: 0,
       pointsPenalty: 0,
       finePenalty: 0,
@@ -2251,7 +2321,7 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
       delaySeconds: 0,
       occurrenceKey,
       occurrenceStart: S,
-      message: 'On time (0 EGP penalty)'
+      message
     };
   }
 
@@ -2279,6 +2349,9 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
 
   return {
     status: 'late',
+    isEarly: false,
+    earlyBonusPoints: 0,
+    earlyBonusEGP: 0,
     penalty: pointsPenalty,
     pointsPenalty,
     finePenalty,
@@ -2346,6 +2419,7 @@ if (typeof globalThis !== 'undefined') {
   globalThis.normalizeSession = normalizeSession;
   globalThis.calculateSystemPenalty = calculateSystemPenalty;
   globalThis.computeAttendance = computeAttendance;
+  globalThis.isUserEligibleForSession = isUserEligibleForSession;
   globalThis.weekKeyOf = weekKeyOf;
   globalThis.monthKeyOf = monthKeyOf;
   globalThis.getTimeBucketKeys = getTimeBucketKeys;
@@ -2761,7 +2835,7 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
   }
 const ENGINE_END_MARKER = 1;
 
-export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank };
+export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank, isUserEligibleForSession };
 
 export function safeInsertBefore(parent, newNode, referenceNode) {
   if (!parent || !newNode) return null;
@@ -3988,10 +4062,14 @@ export function initSheetDragGestures() {
   let activeSheet = null;
   let startY = 0;
   let startTime = 0;
+  let initialSheetHeight = 0;
   let viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
   let isDragging = false;
+  let isGrabberDrag = false;
   let potentialContentDrag = false;
   let activeScrollEl = null;
+  let pointerCaptureTarget = null;
+  let pointerCaptureId = null;
 
   const onStart = (e) => {
     const target = e.target;
@@ -4009,18 +4087,29 @@ export function initSheetDragGestures() {
 
     startY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
     startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    viewportH = window.innerHeight || 800;
+    viewportH = (typeof window !== 'undefined' && window.innerHeight) || 800;
     activeSheet = sheet;
     activeScrollEl = scrollEl;
+    initialSheetHeight = sheet.getBoundingClientRect().height;
 
     if (grabber) {
       isDragging = true;
+      isGrabberDrag = true;
       potentialContentDrag = false;
       sheet.classList.add('is-dragging');
       sheet.style.transition = 'none';
+
+      if (e.pointerId != null && typeof target.setPointerCapture === 'function') {
+        try {
+          target.setPointerCapture(e.pointerId);
+          pointerCaptureTarget = target;
+          pointerCaptureId = e.pointerId;
+        } catch (_) {}
+      }
     } else if (scrollEl && scrollEl.scrollTop <= 0) {
       potentialContentDrag = true;
       isDragging = false;
+      isGrabberDrag = false;
     }
   };
 
@@ -4033,6 +4122,7 @@ export function initSheetDragGestures() {
     if (!isDragging && potentialContentDrag) {
       if (deltaY > 8 && (!activeScrollEl || activeScrollEl.scrollTop <= 0)) {
         isDragging = true;
+        isGrabberDrag = false;
         potentialContentDrag = false;
         activeSheet.classList.add('is-dragging');
         activeSheet.style.transition = 'none';
@@ -4045,10 +4135,28 @@ export function initSheetDragGestures() {
     if (!isDragging) return;
     if (e.cancelable) e.preventDefault();
 
-    if (deltaY > 0) {
-      activeSheet.style.transform = `translateY(${deltaY}px)`;
+    if (isGrabberDrag) {
+      const minHeight = Math.max(160, viewportH * 0.20);
+      const maxHeight = Math.min(viewportH - 12, viewportH * 0.96);
+      const calculatedHeight = initialSheetHeight - deltaY;
+
+      if (calculatedHeight >= minHeight) {
+        const clampedH = Math.min(maxHeight, calculatedHeight);
+        activeSheet.style.height = `${clampedH}px`;
+        activeSheet.style.maxHeight = `${clampedH}px`;
+        activeSheet.style.transform = 'translateY(0)';
+      } else {
+        const overflowDown = minHeight - calculatedHeight;
+        activeSheet.style.height = `${minHeight}px`;
+        activeSheet.style.maxHeight = `${minHeight}px`;
+        activeSheet.style.transform = `translateY(${overflowDown}px)`;
+      }
     } else {
-      activeSheet.style.transform = `translateY(${deltaY * 0.25}px)`;
+      if (deltaY > 0) {
+        activeSheet.style.transform = `translateY(${deltaY}px)`;
+      } else {
+        activeSheet.style.transform = `translateY(${deltaY * 0.25}px)`;
+      }
     }
 
     const backdrop = activeSheet.closest('.modal-backdrop, .sub-modal-overlay');
@@ -4061,6 +4169,16 @@ export function initSheetDragGestures() {
   const onEnd = (e) => {
     if (!activeSheet) return;
 
+    if (pointerCaptureTarget && pointerCaptureId != null) {
+      try {
+        if (typeof pointerCaptureTarget.releasePointerCapture === 'function') {
+          pointerCaptureTarget.releasePointerCapture(pointerCaptureId);
+        }
+      } catch (_) {}
+      pointerCaptureTarget = null;
+      pointerCaptureId = null;
+    }
+
     const currentY = e.clientY ?? e.changedTouches?.[0]?.clientY ?? startY;
     const deltaY = currentY - startY;
     const nowTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -4069,7 +4187,11 @@ export function initSheetDragGestures() {
 
     const sheet = activeSheet;
     const wasDragging = isDragging;
+    const wasGrabber = isGrabberDrag;
+    const initialH = initialSheetHeight;
+
     isDragging = false;
+    isGrabberDrag = false;
     potentialContentDrag = false;
     activeSheet = null;
     activeScrollEl = null;
@@ -4082,6 +4204,37 @@ export function initSheetDragGestures() {
     }
 
     if (!wasDragging) return;
+
+    const minHeight = Math.max(160, viewportH * 0.20);
+    const maxHeight = Math.min(viewportH - 12, viewportH * 0.96);
+
+    if (wasGrabber) {
+      const calculatedHeight = initialH - deltaY;
+      const shouldDismiss = (calculatedHeight < minHeight - 60) || (deltaY > 180 && velocity > 0.55);
+
+      if (shouldDismiss) {
+        sheet.style.transition = 'transform 0.22s cubic-bezier(0.32, 0.72, 0, 1)';
+        sheet.style.transform = 'translateY(100%)';
+        setTimeout(() => {
+          sheet.style.transform = '';
+          sheet.style.transition = '';
+          sheet.style.height = '';
+          sheet.style.maxHeight = '';
+          dismissModalSheet(sheet);
+        }, 220);
+        return;
+      }
+
+      const finalHeight = Math.max(minHeight, Math.min(maxHeight, calculatedHeight));
+      sheet.style.transition = 'height 0.15s ease-out, max-height 0.15s ease-out, transform 0.15s ease-out';
+      sheet.style.height = `${finalHeight}px`;
+      sheet.style.maxHeight = `${finalHeight}px`;
+      sheet.style.transform = 'translateY(0)';
+      setTimeout(() => {
+        sheet.style.transition = '';
+      }, 160);
+      return;
+    }
 
     const shouldDismiss = (deltaY > 110) || (velocity > 0.45 && deltaY > 30);
 
@@ -4172,8 +4325,9 @@ export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   const uid = user?.uid || user?.userId || 'guest';
   const photo = user?.avatarUrl || user?.photoURL || user?.userAvatar || '';
   const isSafe = /^data:image\/(webp|jpeg|png|svg\+xml);base64,/i.test(photo) || /^data:image\/svg\+xml/i.test(photo) || /^https?:\/\//i.test(photo);
-  const fallbackPreset = getDeterministicPresetAvatar(uid);
-  const effectivePhoto = (isSafe && photo && photo !== './image_ad59c0.jpg') ? photo : fallbackPreset;
+  const fallbackPreset = getDeterministicPresetAvatar(uid || name);
+  const isDefault = isDefaultEmailProfilePic(photo);
+  const effectivePhoto = (isSafe && !isDefault) ? photo : fallbackPreset;
 
   return `
     <div class="${sizeClass} rounded-full overflow-hidden border border-white/20 flex-shrink-0 bg-white/5 relative">
@@ -5915,11 +6069,22 @@ export async function markSingleNotificationReadInFirestore(notifOrId, uid = sta
   if (!id) return;
   const notif = typeof notifOrId === 'object' ? notifOrId : state.notifications.find(n => n.id === id);
 
-  if (notif) notif.read = readState;
+  if (notif) {
+    notif.read = readState;
+    notif.isRead = readState;
+  }
   const pItem = (state.personalNotifications || []).find(n => n.id === id);
-  if (pItem) pItem.read = readState;
+  if (pItem) {
+    pItem.read = readState;
+    pItem.isRead = readState;
+  }
   const uItem = (userNotifications || []).find(n => n.id === id);
-  if (uItem) uItem.read = readState;
+  if (uItem) {
+    uItem.read = readState;
+    uItem.isRead = readState;
+  }
+
+  persistToLocalCache(true);
 
   if (!db || !uid) return;
 
@@ -5928,16 +6093,22 @@ export async function markSingleNotificationReadInFirestore(notifOrId, uid = sta
       await updateDoc(doc(db, 'notifications_broadcast', id), {
         readBy: readState ? arrayUnion(uid) : arrayRemove(uid)
       });
-    } catch (_) {  }
+    } catch (err) {
+      console.warn('Broadcast read sync warning:', err);
+    }
     return;
   }
 
   const targetUid = notif?.uid || uid;
   const ops = [];
   if (targetUid) {
-    ops.push(updateDoc(doc(db, 'users', targetUid, 'notifications', id), { read: readState }).catch(() => {}));
+    ops.push(updateDoc(doc(db, 'users', targetUid, 'notifications', id), { read: readState, isRead: readState }).catch(err => {
+      console.warn('User notification read update error:', err);
+    }));
   }
-  ops.push(updateDoc(doc(db, 'notifications', id), { read: readState }).catch(() => {}));
+  ops.push(updateDoc(doc(db, 'notifications', id), { read: readState, isRead: readState }).catch(err => {
+    console.warn('Notification read update error:', err);
+  }));
   await Promise.all(ops);
 }
 
@@ -5951,6 +6122,8 @@ export async function deleteSingleNotificationFromFirestore(notifOrId, uid = sta
   userNotifications = (userNotifications || []).filter(n => n.id !== id);
   state.broadcastNotificationsAll = (state.broadcastNotificationsAll || []).filter(n => n.id !== id);
   state.broadcastNotificationsBadge = (state.broadcastNotificationsBadge || []).filter(n => n.id !== id);
+
+  persistToLocalCache(true);
 
   if (!db) return;
   const targetUid = notif?.uid || uid;
@@ -5970,13 +6143,23 @@ export async function handleBulkMarkRead() {
   const uid = state.user?.uid;
   ids.forEach(id => {
     const notif = state.notifications.find(n => n.id === id);
-    if (notif) notif.read = true;
+    if (notif) {
+      notif.read = true;
+      notif.isRead = true;
+    }
     const pItem = (state.personalNotifications || []).find(n => n.id === id);
-    if (pItem) pItem.read = true;
+    if (pItem) {
+      pItem.read = true;
+      pItem.isRead = true;
+    }
     const uItem = (userNotifications || []).find(n => n.id === id);
-    if (uItem) uItem.read = true;
+    if (uItem) {
+      uItem.read = true;
+      uItem.isRead = true;
+    }
   });
 
+  persistToLocalCache(true);
   updateNotificationBadges();
   renderNotifications();
   exitSelectionMode();
@@ -6092,11 +6275,13 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
 }
 
 let activeSnackbarTimer = null;
+let activeSnackbarCountdownTimer = null;
 let activeSnackbarEl = null;
 
-export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 4000) {
+export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 5000) {
   if (activeSnackbarEl) {
     if (activeSnackbarTimer) clearTimeout(activeSnackbarTimer);
+    if (activeSnackbarCountdownTimer) clearInterval(activeSnackbarCountdownTimer);
     activeSnackbarEl.classList.remove('show');
     const oldExpire = activeSnackbarEl._onExpire;
     if (typeof oldExpire === 'function') oldExpire();
@@ -6104,10 +6289,13 @@ export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 40
     activeSnackbarEl = null;
   }
 
+  const baseMessage = String(message || '').replace(/\s*-\s*\d+s$/, '');
+  let secondsLeft = Math.max(1, Math.ceil(duration / 1000));
+
   const container = document.createElement('div');
   container.className = 'undo-snackbar-container';
   container.innerHTML = `
-    <span>${esc(message)}</span>
+    <span class="undo-snackbar-message">${esc(baseMessage)} - <span class="undo-snackbar-secs font-mono font-bold">${secondsLeft}s</span></span>
     <button type="button" class="undo-btn">UNDO</button>
     <div class="undo-snackbar-progress">
       <div class="undo-snackbar-progress-bar"></div>
@@ -6118,13 +6306,27 @@ export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 40
   activeSnackbarEl = container;
   container._onExpire = onExpire;
 
+  const secsEl = container.querySelector('.undo-snackbar-secs');
+  activeSnackbarCountdownTimer = setInterval(() => {
+    secondsLeft--;
+    if (secondsLeft >= 1 && secsEl) {
+      secsEl.textContent = `${secondsLeft}s`;
+    } else {
+      clearInterval(activeSnackbarCountdownTimer);
+      activeSnackbarCountdownTimer = null;
+    }
+  }, 1000);
+
   requestAnimationFrame(() => {
     container.classList.add('show');
     const bar = container.querySelector('.undo-snackbar-progress-bar');
     if (bar) {
-      bar.style.transition = `transform ${duration}ms linear`;
+      bar.style.width = '100%';
+      bar.style.transition = `width ${duration}ms linear`;
       requestAnimationFrame(() => {
-        bar.style.transform = 'scaleX(0)';
+        requestAnimationFrame(() => {
+          bar.style.width = '0%';
+        });
       });
     }
   });
@@ -6137,6 +6339,7 @@ export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 40
       if (undone) return;
       undone = true;
       if (activeSnackbarTimer) clearTimeout(activeSnackbarTimer);
+      if (activeSnackbarCountdownTimer) clearInterval(activeSnackbarCountdownTimer);
       container.classList.remove('show');
       setTimeout(() => container.remove(), 250);
       activeSnackbarEl = null;
@@ -6146,6 +6349,7 @@ export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 40
 
   activeSnackbarTimer = setTimeout(() => {
     if (undone) return;
+    if (activeSnackbarCountdownTimer) clearInterval(activeSnackbarCountdownTimer);
     container.classList.remove('show');
     setTimeout(() => container.remove(), 250);
     activeSnackbarEl = null;
@@ -6486,13 +6690,68 @@ export function attachUniversalSwipeActions(wrapperEl, {
     const parentNode = wrapperEl.parentNode;
     const nextSibling = wrapperEl.nextSibling;
 
-    wrapperEl.classList.add('swiped-collapsed');
+    if (actionType === 'archive' && archiveLabel === 'Mark Read') {
+      contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = '';
+      if (bgArchive) {
+        bgArchive.style.display = 'none';
+        bgArchive.style.backgroundColor = '';
+      }
+      const unreadDot = contentCard.querySelector('.unread-dot') || contentCard.querySelector('.w-1\\.5.h-1\\.5.rounded-full');
+      if (unreadDot) unreadDot.style.display = 'none';
+      contentCard.classList.remove('unread', 'border-l-4', 'border-l-[#0A84FF]');
+      contentCard.classList.add('read', 'opacity-75');
+
+      if (typeof onArchive === 'function') {
+        onArchive(wrapperEl);
+      }
+
+      showUndoSnackbar(`${entityName} marked as read`, () => {
+        if (unreadDot) unreadDot.style.display = '';
+        contentCard.classList.remove('read', 'opacity-75');
+        contentCard.classList.add('unread', 'border-l-4', 'border-l-[#0A84FF]');
+        if (typeof wrapperEl._onUndoRead === 'function') {
+          wrapperEl._onUndoRead();
+        }
+      }, null, 5000);
+      return;
+    }
+
+    const origHeight = wrapperEl.offsetHeight || 80;
+    if (bgDelete) bgDelete.style.display = 'none';
+    if (bgArchive) bgArchive.style.display = 'none';
+
+    wrapperEl.style.height = `${origHeight}px`;
+    wrapperEl.style.overflow = 'hidden';
+    wrapperEl.style.transition = 'height 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), margin 0.2s ease, opacity 0.2s ease, padding 0.2s ease';
+    requestAnimationFrame(() => {
+      wrapperEl.style.height = '0px';
+      wrapperEl.style.marginTop = '0px';
+      wrapperEl.style.marginBottom = '0px';
+      wrapperEl.style.paddingTop = '0px';
+      wrapperEl.style.paddingBottom = '0px';
+      wrapperEl.style.opacity = '0';
+      wrapperEl.style.pointerEvents = 'none';
+    });
+
+    const detachTimer = setTimeout(() => {
+      if (wrapperEl.parentNode) {
+        wrapperEl.remove();
+      }
+    }, 200);
 
     let isRestored = false;
     const restoreDOM = () => {
       if (isRestored) return;
       isRestored = true;
-      wrapperEl.classList.remove('swiped-collapsed');
+      clearTimeout(detachTimer);
+      if (parentNode && !parentNode.contains(wrapperEl)) {
+        safeInsertBefore(parentNode, wrapperEl, nextSibling);
+      }
+      wrapperEl.style.display = '';
+      wrapperEl.style.height = '0px';
+      wrapperEl.style.opacity = '0';
+      wrapperEl.style.pointerEvents = '';
       contentCard.style.transition = 'transform 0.25s ease';
       contentCard.style.transform = '';
       if (bgArchive) {
@@ -6509,9 +6768,20 @@ export function attachUniversalSwipeActions(wrapperEl, {
         const ic = bgDelete.querySelector('.universal-swipe-icon-container');
         if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
       }
-      if (parentNode && !parentNode.contains(wrapperEl)) {
-        safeInsertBefore(parentNode, wrapperEl, nextSibling);
-      }
+      requestAnimationFrame(() => {
+        wrapperEl.style.transition = 'height 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), margin 0.2s ease, opacity 0.2s ease, padding 0.2s ease';
+        wrapperEl.style.height = `${origHeight}px`;
+        wrapperEl.style.opacity = '1';
+        wrapperEl.style.marginTop = '';
+        wrapperEl.style.marginBottom = '';
+        wrapperEl.style.paddingTop = '';
+        wrapperEl.style.paddingBottom = '';
+        setTimeout(() => {
+          wrapperEl.style.height = '';
+          wrapperEl.style.overflow = '';
+          wrapperEl.style.transition = '';
+        }, 220);
+      });
     };
 
     if (actionType === 'archive' && typeof onArchive === 'function') {
@@ -6519,13 +6789,13 @@ export function attachUniversalSwipeActions(wrapperEl, {
         restoreDOM();
       }, () => {
         onArchive(wrapperEl);
-      });
+      }, 5000);
     } else if (actionType === 'delete' && typeof onDelete === 'function') {
       showUndoSnackbar(`${entityName} deleted`, () => {
         restoreDOM();
       }, () => {
         onDelete(wrapperEl);
-      });
+      }, 5000);
     }
   };
 
@@ -7950,7 +8220,8 @@ function initNavigation() {
     { id: 'waivers', hash: '#admin-waivers' },
     { id: 'members', hash: '#admin-members' },
     { id: 'adjustments', hash: '#admin-adjustments' },
-    { id: 'broadcasts', hash: '#admin-broadcasts' }
+    { id: 'broadcasts', hash: '#admin-broadcasts' },
+    { id: 'notifications', hash: '#admin-notifications' }
   ];
 
   if (adminPagerEl && adminDockEl) {
@@ -7961,6 +8232,7 @@ function initNavigation() {
       else if (pageId === 'members') renderAdminMembers();
       else if (pageId === 'adjustments') renderAdminAdjustments();
       else if (pageId === 'broadcasts') renderAdminBroadcasts();
+      else if (pageId === 'notifications') renderAdminNotifications();
     });
   }
 
@@ -8103,6 +8375,11 @@ export function openDrawer() {
   if (drawer && backdrop) {
     drawer.classList.add('drawer-open', 'is-open');
     backdrop.classList.add('drawer-open', 'is-open');
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      try {
+        window.lucide.createIcons();
+      } catch (_) {}
+    }
     updateDrawerProfile();
     pushModalHistoryState('modal-drawer');
   }
@@ -8174,12 +8451,14 @@ export function showAdminDashboard(targetPage = 'overview') {
     renderAdminMembers();
     renderAdminSubmissions();
     renderAdminBroadcasts();
+    renderAdminNotifications();
     updateAdminOverviewStats();
     if (adminPagerInstance) {
       adminPagerInstance.goTo(targetPage);
     }
     if (targetPage === 'waivers') renderAdminWaivers();
     else if (targetPage === 'adjustments') renderAdminAdjustments();
+    else if (targetPage === 'notifications') renderAdminNotifications();
   }
 }
 
@@ -8422,9 +8701,11 @@ async function setupAuthLifecycle() {
           state.user = normalizeUser({ uid: firebaseUser.uid, ...userSnap.data() });
         } else {
 
+          const rawPhoto = firebaseUser.photoURL || '';
+          const initialAvatar = isDefaultEmailProfilePic(rawPhoto) ? getDeterministicPresetAvatar(firebaseUser.uid) : rawPhoto;
           const initialUser = {
             name: firebaseUser.displayName || 'Team Member',
-            avatarUrl: firebaseUser.photoURL || '',
+            avatarUrl: initialAvatar,
             role: 'member',
             points: 0,
             penalties: 0,
@@ -10523,256 +10804,271 @@ function openTaskCompetitionModal(taskId) {
 
 let attendanceTickerInterval = null;
 
+function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
+  if (!heroContainer) return;
+
+  if (!state.user) {
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card space-y-3">
+        <div class="space-y-1">
+          <span class="text-xs uppercase font-bold tracking-wider text-neutral-400 font-mono">Attendance</span>
+          <h2 class="ios-title text-white text-lg font-bold">Sign In Required</h2>
+          <p class="text-xs text-neutral-400">Sign in to check in to your rostered attendance sessions.</p>
+        </div>
+        <button type="button" id="btn-smart-hero-login" class="smart-checkin-btn-massive bg-[#0A84FF] hover:bg-[#0070E0] text-white">
+          <span>Sign In to Check In</span>
+        </button>
+      </div>
+    `;
+    const btn = heroContainer.querySelector('#btn-smart-hero-login');
+    if (btn) btn.onclick = handleGoogleSignIn;
+    return;
+  }
+
+  const nowMs = serverNow();
+
+  const evaluated = eligibleSessions.map(session => {
+    const calc = computeAttendance(session, nowMs);
+    const occurrenceKey = calc.occurrenceKey;
+    const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
+    const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
+    const isOpen = (calc.status === 'on_time' || calc.status === 'late');
+    return { session, calc, occurrenceKey, userLog, approvedWaiver, isOpen };
+  });
+
+  const openUnchecked = evaluated.filter(item => item.isOpen && !item.userLog && !item.approvedWaiver);
+
+  if (openUnchecked.length > 0) {
+    openUnchecked.sort((a, b) => Math.abs(a.calc.occurrenceStart - nowMs) - Math.abs(b.calc.occurrenceStart - nowMs));
+    const target = openUnchecked[0];
+    const isLate = target.calc.status === 'late';
+    const isEarlyWithBonus = target.calc.isEarly && target.calc.earlyBonusPoints > 0;
+
+    let badgeHtml = '';
+    if (isEarlyWithBonus) {
+      badgeHtml = `
+        <div class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono shadow-sm">
+          <svg class="w-3.5 h-3.5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+          <span>+${target.calc.earlyBonusPoints} Pts Early Bonus</span>
+        </div>
+      `;
+    } else if (!isLate) {
+      badgeHtml = `
+        <div class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono">
+          <svg class="w-3.5 h-3.5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <span>On Time &bull; 0 Penalty</span>
+        </div>
+      `;
+    } else {
+      badgeHtml = `
+        <div class="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono animate-pulse">
+          <svg class="w-3.5 h-3.5 text-rose-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          <span>Late Penalty: -${target.calc.penalty} ${target.session.penaltyFinesEnabled ? 'EGP' : 'pts'}</span>
+        </div>
+      `;
+    }
+
+    let btnText = 'Check In Now';
+    if (isEarlyWithBonus) {
+      btnText = `Check In Early (+${target.calc.earlyBonusPoints} Pts)`;
+    } else if (isLate) {
+      btnText = `Check In Late (-${target.calc.penalty} ${target.session.penaltyFinesEnabled ? 'EGP' : 'pts'})`;
+    }
+
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card ${isLate ? 'hero-late' : 'hero-active'} space-y-4">
+        <div class="space-y-1">
+          <div class="flex items-center justify-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full ${isLate ? 'bg-rose-500 animate-ping' : 'bg-emerald-500 animate-pulse'}"></span>
+            <span class="text-xs uppercase font-bold tracking-wider ${isLate ? 'text-rose-400' : 'text-emerald-400'} font-mono">
+              ${isLate ? 'Late Window Open' : (isEarlyWithBonus ? 'Early Check-In Open' : 'Check-In Open')}
+            </span>
+          </div>
+          <h2 class="ios-title text-white text-xl font-bold truncate">${esc(target.session.title)}</h2>
+          <p class="text-xs text-neutral-300">
+            Scheduled: ${formatDateTime(target.calc.occurrenceStart)} (Cairo)
+          </p>
+        </div>
+
+        <div class="flex items-center justify-center">
+          ${badgeHtml}
+        </div>
+
+        <div class="relative">
+          <div class="smart-checkin-pulse-ring"></div>
+          <button type="button" id="btn-smart-hero-checkin" data-session-id="${esc(target.session.id)}" class="smart-checkin-btn-massive ${isLate ? 'bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-lg shadow-rose-900/30' : 'bg-gradient-to-r from-emerald-600 to-emerald-500 text-white shadow-lg shadow-emerald-900/30'}">
+            <svg class="w-5 h-5 shrink-0 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span>${btnText}</span>
+          </button>
+        </div>
+      </div>
+    `;
+
+    const btn = heroContainer.querySelector('#btn-smart-hero-checkin');
+    if (btn) {
+      btn.onclick = () => handleAttendanceCheckIn(target.session.id);
+    }
+    return;
+  }
+
+  const completedSession = evaluated.find(item => item.userLog || item.approvedWaiver);
+  if (completedSession) {
+    const isWaiver = Boolean(completedSession.approvedWaiver);
+    const log = completedSession.userLog;
+    const isLate = log?.status === 'late' || (log?.penalty > 0);
+    const isEarly = log?.status === 'early' || log?.isEarly;
+
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card border-emerald-500/20 bg-emerald-500/[0.04] space-y-3">
+        <div class="flex items-center justify-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+          <span class="text-xs uppercase font-bold tracking-wider text-emerald-400 font-mono">${isWaiver ? 'Excuse Approved' : 'Checked In'}</span>
+        </div>
+        <h2 class="ios-title text-white text-xl font-bold truncate">${esc(completedSession.session.title)}</h2>
+        <p class="text-xs text-neutral-300">
+          ${isWaiver
+            ? `Waiver granted: "${esc(completedSession.approvedWaiver.reason)}"`
+            : `Recorded at ${formatDateTime(log?.checkedInAt)} ${isEarly ? `(+${log.earlyBonusPoints || 0} Pts Early Bonus)` : (isLate ? `(-${log.penalty} pts)` : '(On Time)')}`}
+        </p>
+        <button type="button" class="smart-checkin-btn-massive" disabled>
+          <svg class="w-5 h-5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <span>Already Checked In</span>
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  const upcomingSessions = evaluated.filter(item => item.calc.status === 'blocked' && item.calc.reason === 'early');
+  if (upcomingSessions.length > 0) {
+    upcomingSessions.sort((a, b) => a.calc.opensAt - b.calc.opensAt);
+    const nextItem = upcomingSessions[0];
+
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card space-y-3">
+        <div class="space-y-1">
+          <span class="text-xs uppercase font-bold tracking-wider text-neutral-400 font-mono">Next Session</span>
+          <h2 class="ios-title text-white text-xl font-bold truncate">${esc(nextItem.session.title)}</h2>
+          <p class="text-xs text-neutral-400">${nextItem.calc.message || `Opens at ${formatDateTime(nextItem.calc.opensAt)}`}</p>
+        </div>
+        <button type="button" class="smart-checkin-btn-massive" disabled>
+          <svg class="w-5 h-5 text-neutral-400 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          <span>${nextItem.calc.message || 'Check-in Opens Soon'}</span>
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  heroContainer.innerHTML = `
+    <div class="smart-checkin-hero-card space-y-3">
+      <div class="space-y-1">
+        <span class="text-xs uppercase font-bold tracking-wider text-neutral-500 font-mono">Attendance</span>
+        <h2 class="ios-title text-neutral-300 text-lg font-bold">No active sessions right now</h2>
+        <p class="text-xs text-neutral-500">You are not currently rostered for an active check-in.</p>
+      </div>
+      <button type="button" class="smart-checkin-btn-massive" disabled>
+        <span>No Active Sessions Right Now</span>
+      </button>
+    </div>
+  `;
+}
+
 function renderAttendanceView() {
+  const heroContainer = document.getElementById('smart-checkin-hero-container');
+  const sessionsWrap = document.getElementById('attendance-sessions-wrap');
   const container = document.getElementById('attendance-sessions-container');
-  if (!container) return;
 
   if (attendanceTickerInterval) {
     clearInterval(attendanceTickerInterval);
     attendanceTickerInterval = null;
   }
 
-  const userUid = state.user?.uid;
   const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin' || state.isAdminUnlocked);
-  const userBadgeIds = new Set([
-    ...(Array.isArray(state.user?.badgeIds) ? state.user.badgeIds : []),
-    ...(Array.isArray(state.user?.badges) ? state.user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : [])
-  ]);
 
-  const activeSessions = (state.attendanceSessions || []).filter(s => {
-    if (!s.active || s.archived) return false;
-    if (isAdmin) return true;
-    if (!userUid) return false;
-
-    const targetType = s.targetType || (Array.isArray(s.assignedUids) && s.assignedUids.length > 0 ? 'custom' : (Array.isArray(s.badgeIds) && s.badgeIds.length > 0 ? 'badge' : 'all'));
-    if (targetType === 'all') return true;
-    if (targetType === 'badge') {
-      const bIds = Array.isArray(s.badgeIds) ? s.badgeIds : [];
-      if (bIds.length === 0) return true;
-      return bIds.some(bid => userBadgeIds.has(bid));
+  if (sessionsWrap) {
+    if (isAdmin) {
+      sessionsWrap.classList.remove('hidden');
+    } else {
+      sessionsWrap.classList.add('hidden');
     }
-    if (targetType === 'custom') {
-      const uids = Array.isArray(s.assignedUids) ? s.assignedUids : [];
-      return uids.includes(userUid);
-    }
-    return true;
-  });
-
-  if (activeSessions.length === 0) {
-    container.innerHTML = `
-      <div class="glass-card p-6 text-center border border-dashed border-white/10">
-        <p class="ios-footnote text-neutral-400">No active attendance sessions currently open for you.</p>
-      </div>
-    `;
-    return;
   }
 
-  const nowMs = serverNow();
+  const allActiveSessions = (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived && s.status !== 'closed' && s.status !== 'archived');
+  const eligibleSessions = state.user ? allActiveSessions.filter(s => isUserEligibleForSession(s, state.user)) : [];
 
-  container.innerHTML = activeSessions.map(session => {
-    const calc = computeAttendance(session, nowMs);
-    const occurrenceKey = calc.occurrenceKey;
+  if (heroContainer) {
+    renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
+  }
 
-    const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
-
-    const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
-
-    const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
-    const startFormatted = formatDateTime(S);
-
-    if (userLog) {
-      const isLate = userLog.status === 'late' || (userLog.penalty > 0);
-      const isAbsent = userLog.status === 'absent';
-      return `
-        <div class="glass-card p-4 space-y-3 ${isAbsent ? 'border-rose-500/20 bg-rose-500/[0.03]' : 'border-emerald-500/20 bg-emerald-500/[0.03]'}">
-          <div class="flex items-center justify-between">
-            <div>
-              <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-              <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
-            </div>
-            <span class="px-2.5 py-1 rounded-full text-xs font-semibold ${isAbsent ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'} flex items-center gap-1">
-              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-                ${isAbsent ? '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>' : '<polyline points="20 6 9 17 4 12"></polyline>'}
-              </svg>
-              <span>${isAbsent ? 'Recorded Absent' : 'Checked In'}</span>
-            </span>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-white/[0.03] text-xs">
-            <div>
-              <span class="text-[10px] text-neutral-400 block">${isAbsent ? 'Record Time' : 'Time Checked In'}</span>
-              <span class="text-white font-medium">${formatDateTime(userLog.checkedInAt)}</span>
-            </div>
-            <div>
-              <span class="text-[10px] text-neutral-400 block">Status &amp; Deductions</span>
-              <span class="font-semibold ${isLate || isAbsent ? 'text-rose-400' : 'text-emerald-400'} font-mono">
-                ${isAbsent ? `Absent (-${userLog.penalty} pts${userLog.fineEGP > 0 ? ' -' + userLog.fineEGP + ' EGP' : ''})` : (isLate ? `Late (-${userLog.penalty} pts${userLog.fineEGP > 0 ? ' -' + userLog.fineEGP + ' EGP' : ''})` : 'On Time (0 penalty)')}
-              </span>
-            </div>
-          </div>
-          ${userLog.delaySeconds > 0 ? `
-            <div class="text-[11px] text-neutral-400">
-              Recorded delay: ${Math.floor(userLog.delaySeconds / 60)}m ${userLog.delaySeconds % 60}s
-            </div>
-          ` : ''}
-        </div>
-      `;
-    }
-
-    if (approvedWaiver) {
-      return `
-        <div class="glass-card p-4 space-y-3 border-blue-500/20 bg-blue-500/[0.03]">
-          <div class="flex items-center justify-between">
-            <div>
-              <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-              <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
-            </div>
-            <span class="badge-waived px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 font-mono">
-              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              <span>Excuse Approved</span>
-            </span>
-          </div>
-          <div class="p-2.5 rounded-xl bg-white/[0.03] text-xs space-y-1">
-            <span class="text-[10px] text-neutral-400 block font-semibold">Exempted from attendance penalty</span>
-            <p class="text-neutral-300 italic text-[11px]">"${esc(approvedWaiver.reason)}"</p>
-            ${approvedWaiver.adminNote ? `<div class="text-[10px] text-blue-300">Admin note: ${esc(approvedWaiver.adminNote)}</div>` : ''}
-          </div>
-        </div>
-      `;
-    }
-
-    const isBlocked = calc.status === 'blocked';
-    const isLate = calc.status === 'late';
-    const isOnTime = calc.status === 'on_time';
-
-    let statusPill = '';
-    let previewBox = '';
-    let btnText = '';
-    let btnDisabled = false;
-
-    if (isBlocked) {
-      btnDisabled = true;
-      if (calc.reason === 'early') {
-        statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`;
-        previewBox = `
-          <div class="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-2">
-            <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            <span id="preview-text-${esc(session.id)}">${calc.message}</span>
-          </div>
-        `;
-        btnText = `Check-in Opens Soon`;
-      } else {
-        statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Closed</span>`;
-        previewBox = `
-          <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
-            <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
-            <span id="preview-text-${esc(session.id)}">${calc.message}</span>
-          </div>
-        `;
-        btnText = `Check-in Closed`;
-      }
-    } else if (isOnTime) {
-      statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Open (On Time)</span>`;
-      previewBox = `
-        <div class="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            <span id="preview-text-${esc(session.id)}">On time check-in window</span>
-          </div>
-          <span class="font-bold font-mono text-emerald-400">0 penalty</span>
-        </div>
-      `;
-      btnText = `Check In Now (0 Penalty)`;
+  if (container) {
+    if (!isAdmin) {
+      container.innerHTML = '';
     } else {
+      const nowMs = serverNow();
+      if (allActiveSessions.length === 0) {
+        container.innerHTML = `
+          <div class="glass-card p-6 text-center border border-dashed border-white/10">
+            <p class="ios-footnote text-neutral-400">No active attendance sessions in database.</p>
+          </div>
+        `;
+      } else {
+        container.innerHTML = allActiveSessions.map(session => {
+          const calc = computeAttendance(session, nowMs);
+          const occurrenceKey = calc.occurrenceKey;
+          const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
+          const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
+          const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
+          const startFormatted = formatDateTime(S);
 
-      statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">Late Window</span>`;
-      previewBox = `
-        <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
-          <div class="flex items-center justify-between font-semibold">
-            <span id="preview-text-${esc(session.id)}">${calc.message}</span>
-            <span id="preview-penalty-${esc(session.id)}" class="font-bold font-mono text-rose-400">-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'}</span>
-          </div>
-          <div class="text-[10px] text-rose-300/70">
-            Deduction step: +${session.penaltyPerStep} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'} every ${session.stepDuration} ${session.penaltyUnit}
-          </div>
-        </div>
-      `;
-      btnText = `Check In Now (-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'})`;
+          const isBlocked = calc.status === 'blocked';
+          const isLate = calc.status === 'late';
+          const isOnTime = calc.status === 'on_time';
+          const isEarlyBonus = calc.isEarly && calc.earlyBonusPoints > 0;
+
+          let statusPill = '';
+          if (userLog) {
+            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Checked In</span>`;
+          } else if (approvedWaiver) {
+            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">Waived</span>`;
+          } else if (isBlocked) {
+            statusPill = calc.reason === 'early'
+              ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`
+              : `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Closed</span>`;
+          } else if (isEarlyBonus) {
+            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Early Window (+${calc.earlyBonusPoints} pts)</span>`;
+          } else if (isOnTime) {
+            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Open (On Time)</span>`;
+          } else {
+            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">Late Window</span>`;
+          }
+
+          return `
+            <div class="glass-card p-4 space-y-2 border-white/10" data-session-card="${esc(session.id)}">
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <h3 class="ios-headline text-white">${esc(session.title)}</h3>
+                  <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
+                </div>
+                ${statusPill}
+              </div>
+              <div class="text-[11px] text-neutral-400 flex items-center justify-between">
+                <span>Rostered: ${session.targetType === 'all' ? 'All Members' : (session.targetType === 'badge' ? `${(session.badgeIds || []).length} Badges` : `${(session.assignedMembers || session.assignedUids || []).length} Members`)}</span>
+                ${session.earlyBonusPoints > 0 ? `<span class="text-emerald-400 font-semibold">+${session.earlyBonusPoints} Pts Early</span>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
     }
-
-    return `
-      <div class="glass-card p-4 space-y-3 border-white/10" data-session-card="${esc(session.id)}">
-        <div class="flex items-start justify-between gap-2">
-          <div>
-            <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-            <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
-          </div>
-          ${statusPill}
-        </div>
-
-        <div class="text-[11px] text-neutral-400 space-y-0.5">
-          <div>Early window: ${session.earlyCheckInMinutes} mins before start</div>
-          <div>Late cutoff: ${session.lateCutoffMinutes} mins after start</div>
-        </div>
-
-        <div id="session-preview-container-${esc(session.id)}">
-          ${previewBox}
-        </div>
-
-        <button
-          class="btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition ${btnDisabled ? 'bg-white/10 text-neutral-500 cursor-not-allowed' : (isLate ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white')}"
-          data-session-id="${esc(session.id)}"
-          ${btnDisabled ? 'disabled' : ''}
-          id="btn-session-checkin-${esc(session.id)}">
-          ${btnText}
-        </button>
-      </div>
-    `;
-  }).join('');
-
-  container.querySelectorAll('.btn-check-in-session:not([disabled])').forEach(btn => {
-    btn.onclick = () => handleAttendanceCheckIn(btn.dataset.sessionId);
-  });
+  }
 
   attendanceTickerInterval = setInterval(() => {
-    const curNow = serverNow();
-    activeSessions.forEach(session => {
-      const card = container.querySelector(`[data-session-card="${session.id}"]`);
-      if (!card) return;
-
-      const calc = computeAttendance(session, curNow);
-      const prevTextEl = card.querySelector(`#preview-text-${session.id}`);
-      const prevPenEl = card.querySelector(`#preview-penalty-${session.id}`);
-      const btn = card.querySelector(`#btn-session-checkin-${session.id}`);
-
-      if (calc.status === 'blocked') {
-        if (prevTextEl) prevTextEl.textContent = calc.message;
-        if (btn && !btn.disabled) {
-          btn.disabled = true;
-          btn.className = 'btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition bg-white/10 text-neutral-500 cursor-not-allowed';
-          btn.textContent = calc.reason === 'early' ? 'Check-in Opens Soon' : 'Check-in Closed';
-        }
-      } else if (calc.status === 'on_time') {
-        if (prevTextEl) prevTextEl.textContent = 'On time check-in window';
-        if (btn && btn.disabled) {
-          btn.disabled = false;
-          btn.className = 'btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition bg-emerald-600 hover:bg-emerald-500 text-white';
-          btn.textContent = 'Check In Now (0 Penalty)';
-          btn.onclick = () => handleAttendanceCheckIn(session.id);
-        }
-      } else if (calc.status === 'late') {
-        if (prevTextEl) prevTextEl.textContent = calc.message;
-        if (prevPenEl) prevPenEl.textContent = `-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'}`;
-        if (btn) {
-          btn.disabled = false;
-          btn.className = 'btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition bg-rose-600 hover:bg-rose-500 text-white';
-          btn.textContent = `Check In Now (-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'})`;
-          btn.onclick = () => handleAttendanceCheckIn(session.id);
-        }
-      }
-    });
+    if (heroContainer) {
+      renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
+    }
   }, 1000);
 }
 
@@ -10783,8 +11079,16 @@ async function handleAttendanceCheckIn(sessionId) {
     return;
   }
 
-  const session = state.attendanceSessions.find(s => s.id === sessionId);
-  if (!session) return;
+  const session = (state.attendanceSessions || []).find(s => s.id === sessionId);
+  if (!session) {
+    toast('Session not found', 'error');
+    return;
+  }
+
+  if (!isUserEligibleForSession(session, state.user)) {
+    toast('You are not eligible for this attendance session', 'error');
+    return;
+  }
 
   const nowMs = serverNow();
   const calc = computeAttendance(session, nowMs);
@@ -10802,14 +11106,25 @@ async function handleAttendanceCheckIn(sessionId) {
     return;
   }
 
+  const isEarly = Boolean(calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0));
+  const earlyBonusPoints = isEarly ? (calc.earlyBonusPoints || 0) : 0;
+  const earlyBonusEGP = isEarly ? (calc.earlyBonusEGP || 0) : 0;
   const penaltyPts = (session.penaltyPointsEnabled !== false) ? calc.penalty : 0;
   const fineEGP = (session.penaltyFinesEnabled) ? calc.penalty : 0;
 
+  let confirmTitle = 'Confirm Check-In';
+  let confirmMsg = `Check in for "${session.title}" on time with 0 penalty?`;
+  if (isEarly && earlyBonusPoints > 0) {
+    confirmTitle = 'Early Check-In Bonus!';
+    confirmMsg = `Check in early for "${session.title}"? You will earn +${earlyBonusPoints} Pts Early Bonus!`;
+  } else if (calc.status === 'late') {
+    confirmTitle = 'Confirm Late Check-In';
+    confirmMsg = `You are checking in late for "${session.title}". A deduction of ${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} will be recorded. Confirm?`;
+  }
+
   const confirmed = await confirmSheet({
-    title: calc.status === 'on_time' ? 'Confirm Check-In' : 'Confirm Late Check-In',
-    message: calc.status === 'on_time'
-      ? `Check in for "${session.title}" on time with 0 penalty?`
-      : `You are checking in late for "${session.title}". A deduction of ${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} will be recorded. Confirm?`,
+    title: confirmTitle,
+    message: confirmMsg,
     confirmLabel: 'Check In',
     destructive: calc.status === 'late'
   });
@@ -10831,14 +11146,26 @@ async function handleAttendanceCheckIn(sessionId) {
       occurrenceKey,
       occurrenceStart: Timestamp.fromMillis(calc.occurrenceStart),
       checkedInAt: serverTimestamp(),
-      status: calc.status,
+      status: isEarly ? 'early' : calc.status,
       delaySeconds: calc.delaySeconds,
       penalty: penaltyPts,
       fineEGP: fineEGP,
-      penaltyUnit: session.penaltyUnit || 'minutes'
+      penaltyUnit: session.penaltyUnit || 'minutes',
+      isEarly,
+      earlyBonusPoints,
+      earlyBonusEGP
     };
 
     batch.set(logRef, logPayload);
+
+    if (earlyBonusPoints > 0) {
+      const userRef = doc(db, 'users', state.user.uid);
+      batch.update(userRef, {
+        points: increment(earlyBonusPoints),
+        totalPoints: increment(earlyBonusPoints),
+        lastOpId: logId
+      });
+    }
 
     if (session.penaltyPointsEnabled !== false && penaltyPts > 0) {
       const userRef = doc(db, 'users', state.user.uid);
@@ -10856,17 +11183,32 @@ async function handleAttendanceCheckIn(sessionId) {
       checkedInAt: { toMillis: () => nowMs }
     });
     state.myAttendanceLogs = [optLog, ...state.myAttendanceLogs.filter(l => l.id !== logId)];
+
+    if (earlyBonusPoints > 0) {
+      state.user.points = (state.user.points || 0) + earlyBonusPoints;
+      state.user.totalPoints = (state.user.totalPoints || 0) + earlyBonusPoints;
+      updateProfileUI();
+    }
     if (penaltyPts > 0) {
       state.user.penalties = (state.user.penalties || 0) + penaltyPts;
       updateProfileUI();
     }
+
+    persistToLocalCache(true);
     renderAttendanceView();
     renderAttendanceLogs();
     renderProfileAttendance();
     updateUserTodayAttendanceBadge();
 
     getMemberDerivedEgpBalance(state.user.uid, true).then(() => { updateProfileUI(); });
-    toast(calc.status === 'on_time' ? 'Checked in successfully! (0 penalty)' : `Checked in late. -${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} applied.`, 'success');
+
+    let successMsg = 'Checked in successfully! (0 penalty)';
+    if (isEarly && earlyBonusPoints > 0) {
+      successMsg = `Checked in early! +${earlyBonusPoints} Pts Early Bonus awarded!`;
+    } else if (calc.status === 'late') {
+      successMsg = `Checked in late. -${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} applied.`;
+    }
+    toast(successMsg, 'success');
   } catch (err) {
     console.error('Attendance check-in error:', err);
     toast(err.message || 'Check-in failed', 'error');
@@ -11993,7 +12335,7 @@ export function renderNotifications() {
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between gap-2">
                 <div class="flex items-center gap-1.5 min-w-0 truncate">
-                  ${isUnread ? '<span class="w-1.5 h-1.5 rounded-full bg-[#0A84FF] shrink-0"></span>' : ''}
+                  ${isUnread ? '<span class="w-1.5 h-1.5 rounded-full bg-[#0A84FF] shrink-0 unread-dot"></span>' : ''}
                   <div class="font-bold text-white text-xs truncate">${esc(n.title)}</div>
                 </div>
                 <span class="text-[10px] text-neutral-400 shrink-0 font-mono">${timeFormatted}</span>
@@ -12062,8 +12404,10 @@ export function openNotificationDetailModal(notif) {
 
   if (!notif.read && state.user) {
     notif.read = true;
+    notif.isRead = true;
     updateNotificationBadges();
     renderNotifications();
+    persistToLocalCache(true);
     markSingleNotificationReadInFirestore(notif, state.user.uid, true).catch(() => {});
   }
 
@@ -12203,7 +12547,11 @@ async function markAllNotificationsRead() {
   const uid = state.user.uid;
   unreads.forEach(n => {
     n.read = true;
+    n.isRead = true;
   });
+  (state.personalNotifications || []).forEach(n => { n.read = true; n.isRead = true; });
+  (userNotifications || []).forEach(n => { n.read = true; n.isRead = true; });
+  persistToLocalCache(true);
   updateNotificationBadges();
   renderNotifications();
 
@@ -14434,7 +14782,9 @@ function openAdminSessionModal(sessionId = null) {
 
   let targetType = session?.targetType || (Array.isArray(session?.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session?.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
   let selectedBadgeIds = new Set(Array.isArray(session?.badgeIds) ? session.badgeIds : []);
-  let assignedUids = new Set(Array.isArray(session?.assignedUids) ? session.assignedUids : []);
+  let assignedUids = new Set(Array.isArray(session?.assignedMembers) ? session.assignedMembers : (Array.isArray(session?.assignedUids) ? session.assignedUids : []));
+  let earlyBonusPoints = session ? (Number(session.earlyBonusPoints) || Number(session.earlyCheckInBonusPoints) || 0) : 0;
+  let earlyBonusEGP = session ? (Number(session.earlyBonusEGP) || Number(session.earlyCheckInBonusEGP) || 0) : 0;
 
   let pointsPenalty = {
     enabled: session ? session.pointsPenalty.enabled : true,
@@ -14571,6 +14921,17 @@ function openAdminSessionModal(sessionId = null) {
         <label for="attClosesTime" class="text-xs font-medium text-neutral-300">Check-in Closes</label>
         <input type="time" id="attClosesTime" value="${closesTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
       </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="grid grid-cols-2 gap-2 pt-1">
+        <div>
+          <label for="attEarlyBonusPts" class="text-[11px] font-medium text-emerald-400 block mb-1">Early Bonus (Pts)</label>
+          <input type="number" min="0" id="attEarlyBonusPts" value="${earlyBonusPoints}" class="w-full glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" placeholder="0" />
+        </div>
+        <div>
+          <label for="attEarlyBonusEGP" class="text-[11px] font-medium text-emerald-400 block mb-1">Early Bonus (EGP)</label>
+          <input type="number" min="0" id="attEarlyBonusEGP" value="${earlyBonusEGP}" class="w-full glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" placeholder="0" />
+        </div>
+      </div>
     </div>
   `;
 
@@ -14578,11 +14939,15 @@ function openAdminSessionModal(sessionId = null) {
   const inpTime = timeCard.querySelector('#attSessionTime');
   const inpOpens = timeCard.querySelector('#attOpensTime');
   const inpCloses = timeCard.querySelector('#attClosesTime');
+  const inpEarlyPts = timeCard.querySelector('#attEarlyBonusPts');
+  const inpEarlyEGP = timeCard.querySelector('#attEarlyBonusEGP');
 
   if (inpDate) inpDate.onchange = (e) => { selectedDateStr = e.target.value; };
   if (inpTime) inpTime.onchange = (e) => { selectedTimeStr = e.target.value; };
   if (inpOpens) inpOpens.onchange = (e) => { opensTimeStr = e.target.value; };
   if (inpCloses) inpCloses.onchange = (e) => { closesTimeStr = e.target.value; };
+  if (inpEarlyPts) inpEarlyPts.oninput = (e) => { earlyBonusPoints = Math.max(0, Number(e.target.value) || 0); };
+  if (inpEarlyEGP) inpEarlyEGP.oninput = (e) => { earlyBonusEGP = Math.max(0, Number(e.target.value) || 0); };
   bodyEl.appendChild(timeCard);
 
   const assignBox = document.createElement('div');
@@ -14619,17 +14984,29 @@ function openAdminSessionModal(sessionId = null) {
         <span class="text-neutral-400">Select Individual Members:</span>
         <span id="att-custom-count-label" class="text-[#0A84FF] font-semibold">${assignedUids.size} selected</span>
       </div>
-      <div class="max-h-48 overflow-y-auto rounded-xl bg-black/20 border border-white/5 divide-y divide-white/5">
+      <div class="max-h-60 overflow-y-auto rounded-xl bg-black/20 border border-white/5 divide-y divide-white/5 p-1 space-y-1">
         ${(state.members || []).map(m => {
           const isSelected = assignedUids.has(m.uid);
           return `
-            <label class="flex items-center justify-between p-2 hover:bg-white/5 transition cursor-pointer text-xs">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="font-medium text-white truncate">${esc(m.displayName || m.name || m.email || m.uid)}</span>
-                ${m.role === 'admin' ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Admin</span>' : ''}
+            <div class="att-member-picker-row ${isSelected ? 'selected border-[#0A84FF]/40 bg-[#0A84FF]/5' : ''}" data-uid="${esc(m.uid)}">
+              <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-3">
+                ${renderAvatar(m, 'w-8 h-8 rounded-full border border-white/10 shrink-0')}
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-medium text-xs text-white truncate">${esc(m.displayName || m.name || m.email || m.uid)}</span>
+                    <span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium ${m.role === 'admin' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-white/10 text-neutral-400'}">${m.role === 'admin' ? 'Admin' : 'Member'}</span>
+                  </div>
+                  <p class="text-[10px] text-neutral-400 truncate">${esc(m.email || '')}</p>
+                </div>
               </div>
-              <input type="checkbox" class="att-member-cb rounded bg-white/10 border-white/20 text-[#0A84FF] focus:ring-0" data-uid="${esc(m.uid)}" ${isSelected ? 'checked' : ''} />
-            </label>
+              <div class="att-member-check shrink-0">
+                <div class="w-5 h-5 rounded-full border flex items-center justify-center transition-all ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF]' : 'border-white/20 bg-white/5'}">
+                  <svg class="w-3.5 h-3.5 text-white transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0'}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </div>
+              </div>
+            </div>
           `;
         }).join('')}
       </div>
@@ -14653,11 +15030,33 @@ function openAdminSessionModal(sessionId = null) {
     };
   });
 
-  assignBox.querySelectorAll('.att-member-cb').forEach(cb => {
-    cb.onchange = (e) => {
-      const uid = cb.dataset.uid;
-      if (e.target.checked) assignedUids.add(uid);
-      else assignedUids.delete(uid);
+  assignBox.querySelectorAll('.att-member-picker-row').forEach(row => {
+    row.onclick = () => {
+      const uid = row.dataset.uid;
+      if (!uid) return;
+      const checkCircle = row.querySelector('.att-member-check > div');
+      const checkSvg = row.querySelector('.att-member-check svg');
+      if (assignedUids.has(uid)) {
+        assignedUids.delete(uid);
+        row.classList.remove('selected', 'border-[#0A84FF]/40', 'bg-[#0A84FF]/5');
+        if (checkCircle) {
+          checkCircle.className = 'w-5 h-5 rounded-full border flex items-center justify-center transition-all border-white/20 bg-white/5';
+        }
+        if (checkSvg) {
+          checkSvg.classList.remove('opacity-100');
+          checkSvg.classList.add('opacity-0');
+        }
+      } else {
+        assignedUids.add(uid);
+        row.classList.add('selected', 'border-[#0A84FF]/40', 'bg-[#0A84FF]/5');
+        if (checkCircle) {
+          checkCircle.className = 'w-5 h-5 rounded-full border flex items-center justify-center transition-all bg-[#0A84FF] border-[#0A84FF]';
+        }
+        if (checkSvg) {
+          checkSvg.classList.remove('opacity-0');
+          checkSvg.classList.add('opacity-100');
+        }
+      }
       if (customCountLabel) customCountLabel.textContent = `${assignedUids.size} selected`;
     };
   });
@@ -14895,8 +15294,12 @@ function openAdminSessionModal(sessionId = null) {
         earlyCheckInMinutes,
         lateCutoffMinutes,
         targetType,
+        assignmentType: targetType === 'custom' ? 'specific' : (targetType === 'badge' ? 'by_badge' : 'all'),
         badgeIds: targetType === 'badge' ? Array.from(selectedBadgeIds) : [],
         assignedUids: targetType === 'custom' ? Array.from(assignedUids) : [],
+        assignedMembers: targetType === 'custom' ? Array.from(assignedUids) : [],
+        earlyBonusPoints: Math.max(0, Number(earlyBonusPoints) || 0),
+        earlyBonusEGP: Math.max(0, Number(earlyBonusEGP) || 0),
         pointsPenalty: {
           enabled: Boolean(pointsPenalty.enabled),
           mode: pointsPenalty.mode,
@@ -19831,6 +20234,288 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
   });
 }
 
+let _adminNotifSelectedTarget = 'all';
+let _adminNotifSearchQuery = '';
+let _adminNotifHistory = [];
+let _adminNotifLoadingHistory = false;
+
+export async function renderAdminNotifications() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
+
+  const rosterContainer = document.getElementById('admin-notif-members-list');
+  const countEl = document.getElementById('admin-notif-member-count');
+  const searchInput = document.getElementById('input-admin-notif-search');
+  const targetAllBtn = document.getElementById('btn-admin-notif-target-all');
+  const allIndicator = document.getElementById('admin-notif-all-indicator');
+  const targetLabel = document.getElementById('admin-notif-target-label');
+  const targetBadge = document.getElementById('admin-notif-target-badge');
+  const form = document.getElementById('form-admin-notifications-page');
+  const historyContainer = document.getElementById('admin-notif-history-container');
+  const refreshHistoryBtn = document.getElementById('btn-admin-notif-refresh-history');
+
+  if (!rosterContainer) return;
+
+  const getAllMembersList = () => {
+    const list = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
+    return list.sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  };
+
+  const members = getAllMembersList();
+  if (countEl) countEl.textContent = `${members.length} Members`;
+
+  function renderRoster() {
+    const q = (_adminNotifSearchQuery || '').toLowerCase().trim();
+    const filtered = members.filter(m => {
+      if (!q) return true;
+      const name = (m.displayName || m.name || '').toLowerCase();
+      const email = (m.email || '').toLowerCase();
+      return name.includes(q) || email.includes(q) || (m.uid || '').toLowerCase().includes(q);
+    });
+
+    if (filtered.length === 0) {
+      rosterContainer.innerHTML = '<div class="p-4 text-center text-xs text-neutral-400">No matching members found</div>';
+      return;
+    }
+
+    rosterContainer.innerHTML = filtered.map(m => {
+      const isSelected = _adminNotifSelectedTarget === m.uid;
+      const subtitle = m.email || (m.isAdmin ? 'Admin' : (m.role || 'Member'));
+      return `
+        <div class="apple-member-row ${isSelected ? 'is-selected' : ''}" data-uid="${esc(m.uid)}">
+          <div class="flex items-center gap-3 min-w-0">
+            ${renderAvatar(m, 'w-10 h-10')}
+            <div class="min-w-0">
+              <div class="text-xs font-bold text-white truncate">${esc(m.displayName || m.name || 'Member')}</div>
+              <div class="text-[11px] text-neutral-400 truncate">${esc(subtitle)} · ${m.points || 0} pts</div>
+            </div>
+          </div>
+          <div class="w-5 h-5 rounded-full ${isSelected ? 'bg-[#0A84FF] text-white' : 'border border-white/20'} flex items-center justify-center shrink-0">
+            ${isSelected ? '<svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    rosterContainer.querySelectorAll('.apple-member-row').forEach(row => {
+      row.onclick = () => {
+        const uid = row.dataset.uid;
+        _adminNotifSelectedTarget = uid;
+        updateTargetUI();
+        renderRoster();
+        fetchHistory();
+      };
+    });
+  }
+
+  function updateTargetUI() {
+    if (_adminNotifSelectedTarget === 'all') {
+      if (allIndicator) {
+        allIndicator.className = 'w-5 h-5 rounded-full bg-[#0A84FF] text-white flex items-center justify-center shadow-sm';
+        allIndicator.innerHTML = '<svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      }
+      if (targetAllBtn) {
+        targetAllBtn.className = 'p-3 rounded-2xl bg-[#0A84FF]/15 border border-[#0A84FF]/40 flex items-center justify-between cursor-pointer transition hover:bg-[#0A84FF]/25 active:scale-[0.99]';
+      }
+      if (targetLabel) targetLabel.textContent = 'Target: All Team Members';
+      if (targetBadge) {
+        targetBadge.textContent = 'Broadcast';
+        targetBadge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30';
+      }
+    } else {
+      if (allIndicator) {
+        allIndicator.className = 'w-5 h-5 rounded-full border border-white/20 flex items-center justify-center shadow-sm';
+        allIndicator.innerHTML = '';
+      }
+      if (targetAllBtn) {
+        targetAllBtn.className = 'p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between cursor-pointer transition hover:bg-white/10 active:scale-[0.99]';
+      }
+      const targetUser = usersMap.get(_adminNotifSelectedTarget) || members.find(m => m.uid === _adminNotifSelectedTarget);
+      const name = targetUser?.displayName || targetUser?.name || 'Selected Member';
+      if (targetLabel) targetLabel.textContent = `Target: ${name}`;
+      if (targetBadge) {
+        targetBadge.textContent = 'Direct Push';
+        targetBadge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+      }
+    }
+  }
+
+  if (targetAllBtn) {
+    targetAllBtn.onclick = () => {
+      _adminNotifSelectedTarget = 'all';
+      updateTargetUI();
+      renderRoster();
+      fetchHistory();
+    };
+  }
+
+  if (searchInput) {
+    searchInput.oninput = (e) => {
+      _adminNotifSearchQuery = e.target.value;
+      renderRoster();
+    };
+  }
+
+  async function fetchHistory() {
+    if (!historyContainer || !db) return;
+    _adminNotifLoadingHistory = true;
+    renderHistory();
+
+    try {
+      if (_adminNotifSelectedTarget === 'all') {
+        const snap = await getDocs(query(collection(db, 'notifications_broadcast'), orderBy('createdAt', 'desc'), limit(20))).catch(() => ({ docs: [] }));
+        _adminNotifHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      } else {
+        const uid = _adminNotifSelectedTarget;
+        const [subSnap, rootSnap] = await Promise.all([
+          getDocs(query(collection(db, 'users', uid, 'notifications'), limit(50))).catch(() => ({ docs: [] })),
+          getDocs(query(collection(db, 'notifications'), where('uid', '==', uid), limit(50))).catch(() => ({ docs: [] }))
+        ]);
+        const map = new Map();
+        subSnap.docs.forEach(d => {
+          const n = normalizeNotification({ id: d.id, uid, ...d.data() });
+          if (n) map.set(n.id, n);
+        });
+        rootSnap.docs.forEach(d => {
+          const n = normalizeNotification({ id: d.id, uid, ...d.data() });
+          if (n && !map.has(n.id)) map.set(n.id, n);
+        });
+        _adminNotifHistory = Array.from(map.values()).sort((a, b) => {
+          const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
+          const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
+          return tB - tA;
+        });
+      }
+    } catch (err) {
+      console.warn('Fetch admin notification history:', err);
+      _adminNotifHistory = [];
+    } finally {
+      _adminNotifLoadingHistory = false;
+      renderHistory();
+    }
+  }
+
+  function renderHistory() {
+    if (!historyContainer) return;
+    if (_adminNotifLoadingHistory) {
+      historyContainer.innerHTML = '<div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2"><div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div><span>Loading history...</span></div>';
+      return;
+    }
+    if (_adminNotifHistory.length === 0) {
+      historyContainer.innerHTML = '<div class="p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-xl">No notification history records found.</div>';
+      return;
+    }
+
+    historyContainer.innerHTML = _adminNotifHistory.map(item => {
+      const isRead = Boolean(item.read || (item.readBy && item.readBy.length > 0));
+      const title = item.title || 'Notification';
+      const body = item.body || item.message || '';
+      const timeStr = item.createdAt ? formatDateTime(item.createdAt) : (item.timestamp ? formatDateTime(item.timestamp) : 'Recent');
+      return `
+        <div class="p-3 rounded-xl bg-white/5 border border-white/10 flex items-start justify-between gap-3 text-xs">
+          <div class="space-y-1 min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-white truncate">${esc(title)}</span>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${isRead ? 'bg-neutral-500/20 text-neutral-300' : 'bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30'}">${isRead ? 'Read' : 'Delivered'}</span>
+            </div>
+            <p class="text-neutral-300 text-[11px] line-clamp-2">${esc(body)}</p>
+            <div class="text-[10px] text-neutral-500">${esc(timeStr)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  if (refreshHistoryBtn) {
+    refreshHistoryBtn.onclick = () => fetchHistory();
+  }
+
+  if (form) {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const titleInput = document.getElementById('input-admin-notif-title');
+      const bodyInput = document.getElementById('input-admin-notif-body');
+      const catSelect = document.getElementById('select-admin-notif-category');
+      const iconSelect = document.getElementById('select-admin-notif-icon');
+      const submitBtn = document.getElementById('btn-admin-dispatch-notif');
+
+      const title = titleInput?.value.trim();
+      const body = bodyInput?.value.trim();
+      const category = catSelect?.value || 'system';
+      const icon = iconSelect?.value || 'bell';
+
+      if (!title || !body) {
+        toast('Please enter both Title and Message Body', 'warning');
+        return;
+      }
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Dispatching...';
+      }
+
+      try {
+        if (_adminNotifSelectedTarget === 'all') {
+          const payload = {
+            title,
+            message: body,
+            body,
+            type: category,
+            targetType: 'all',
+            icon,
+            archived: false,
+            isArchived: false,
+            readBy: [],
+            createdAt: serverTimestamp()
+          };
+          await addDoc(collection(db, 'notifications_broadcast'), payload);
+          const batch = writeBatch(db);
+          logAdminAction(batch, {
+            action: 'dispatch_broadcast_notification',
+            details: { title, category }
+          });
+          await batch.commit();
+          toast('Broadcast notification sent to all members!', 'success');
+        } else {
+          const uid = _adminNotifSelectedTarget;
+          const batch = writeBatch(db);
+          createNotification(batch, {
+            uid,
+            title,
+            message: body,
+            body,
+            type: category,
+            icon
+          });
+          logAdminAction(batch, {
+            action: 'dispatch_member_notification',
+            targetUid: uid,
+            details: { title, body }
+          });
+          await batch.commit();
+          toast('Notification sent to member!', 'success');
+        }
+
+        if (titleInput) titleInput.value = '';
+        if (bodyInput) bodyInput.value = '';
+        await fetchHistory();
+      } catch (err) {
+        console.error('Error dispatching notification:', err);
+        toast('Failed to dispatch notification: ' + (err.message || err), 'error');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M22 2L11 13"></path><path d="M22 2l-7 20-4-9-9-4 20-7z"></path></svg><span>Dispatch Notification</span>';
+        }
+      }
+    };
+  }
+
+  updateTargetUI();
+  renderRoster();
+  fetchHistory();
+}
+
 const WHATS_NEW_IDB_NAME = 'coc_media_drafts_db';
 const WHATS_NEW_IDB_STORE = 'drafts';
 const WHATS_NEW_DRAFT_KEY = 'whats_new_draft';
@@ -20419,7 +21104,10 @@ function attachEventHandlers() {
   }
   const btnBroadcastsMemberNotifCenter = document.getElementById('btn-broadcasts-member-notif-center');
   if (btnBroadcastsMemberNotifCenter) {
-    btnBroadcastsMemberNotifCenter.onclick = () => openAdminMemberNotificationCenter();
+    btnBroadcastsMemberNotifCenter.onclick = () => {
+      if (adminPagerInstance) adminPagerInstance.goTo('notifications');
+      else openAdminMemberNotificationCenter();
+    };
   }
 
   const notifBell = document.getElementById('btn-open-notifications');
@@ -21360,12 +22048,6 @@ window.addEventListener('DOMContentLoaded', () => {
   setupAuthLifecycle();
   safeInit('applySettings', applySettings);
   safeInit('fcm', initFCM);
-
-  setTimeout(() => {
-    safeInit('lucide', () => {
-      if (window.lucide) window.lucide.createIcons();
-    });
-  }, 400);
 });
 
 if (typeof window !== 'undefined') {
@@ -21443,4 +22125,6 @@ if (typeof window !== 'undefined') {
   window.safeInsertBefore = safeInsertBefore;
   window.safeRemoveChild = safeRemoveChild;
   window.safeReplaceChild = safeReplaceChild;
+  window.isDefaultEmailProfilePic = isDefaultEmailProfilePic;
+  window.renderAdminNotifications = renderAdminNotifications;
 }

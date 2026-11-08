@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coc-media-cache-v3.0.0';
+const CACHE_NAME = 'coc-media-cache-v3.0.1';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',

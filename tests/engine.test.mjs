@@ -37,10 +37,10 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession } = exportsObj;
 assert.strictEqual(typeof computeCropRect, 'function', 'computeCropRect must be a function');
 assert.strictEqual(typeof createRowGesture, 'function', 'createRowGesture must be a function');
 assert.strictEqual(typeof buildRoster, 'function', 'buildRoster must be a function');
@@ -508,7 +508,7 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
 // ==========================================
 {
   const targetMs = zonedDateToMs(2026, 5, 1, 12, 0, 0, 'Africa/Cairo');
-  
+
   // All representation variants
   const variants = [
     { label: 'number timestamp', val: targetMs },
@@ -560,7 +560,7 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
     assert.strictEqual(typeof parts.d, 'number');
     assert.strictEqual(typeof parts.hh, 'number');
     assert.strictEqual(typeof parts.mm, 'number');
-    
+
     const roundMs = zonedPartsToMs(parts, tz);
     assert.strictEqual(roundMs, baseMs, `Round trip ms <-> zonedParts must match exactly for ${tz}`);
 
@@ -1454,6 +1454,152 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   const saturdayMs = zonedPartsToMs({ year: 2026, month: 11, day: 7, hour: 12, minute: 0, second: 0 }, 'Africa/Cairo');
   const rosterSat = buildRoster({ session: weeklySession, members, nowMs: saturdayMs });
   assert.strictEqual(rosterSat.state, 'closed', 'Must remain in closed state showing last occurrence');
+}
+
+// ==========================================
+// 14. DEFAULT AVATAR DETECTION, RESIZING & NOTIFICATION MANAGER
+// ==========================================
+{
+  const isDefaultProfilePicFn = vm.runInContext(`(() => {
+    return function isDefaultEmailProfilePic(url) {
+      if (!url || typeof url !== 'string') return true;
+      const clean = url.trim();
+      if (!clean || clean === './image_ad59c0.jpg') return true;
+      if (/default-user/i.test(clean)) return true;
+      if (/AAAAAAAAAAA/i.test(clean)) return true;
+      if (/ui-avatars\\.com/i.test(clean)) return true;
+      if (/dicebear\\.com.*\\/initials/i.test(clean)) return true;
+      if (/gravatar\\.com\\/avatar\\/.*[\\?&]d=(?:identicon|retro|initials|mp|blank)/i.test(clean)) return true;
+      if (/placeholder/i.test(clean) && !clean.startsWith('data:image/svg')) return true;
+      return false;
+    };
+  })()`, sandbox);
+
+  assert.strictEqual(isDefaultProfilePicFn(''), true, 'Empty url must be detected as default profile pic');
+  assert.strictEqual(isDefaultProfilePicFn(null), true, 'Null url must be detected as default profile pic');
+  assert.strictEqual(isDefaultProfilePicFn('./image_ad59c0.jpg'), true, 'App generic logo url must be detected as default');
+  assert.strictEqual(isDefaultProfilePicFn('https://lh3.googleusercontent.com/a/default-user=s96-c'), true, 'Google default initial photo must be detected');
+  assert.strictEqual(isDefaultProfilePicFn('https://lh3.googleusercontent.com/a/default-user'), true, 'Google default-user photo must be detected');
+  assert.strictEqual(isDefaultProfilePicFn('https://lh3.googleusercontent.com/AAAAAAAAAAA/photo.jpg'), true, 'Google legacy default photo must be detected');
+  assert.strictEqual(isDefaultProfilePicFn('https://ui-avatars.com/api/?name=Steven'), true, 'ui-avatars letter url must be detected');
+  assert.strictEqual(isDefaultProfilePicFn('https://images.unsplash.com/photo-1534528741775-53994a69daeb'), false, 'Custom real photo must not be detected as default');
+  assert.strictEqual(isDefaultProfilePicFn('data:image/svg+xml;utf8,<svg>...</svg>'), false, 'Preset SVG avatar must not be detected as default');
+
+  const indexHtml = fs.readFileSync('index.html', 'utf8');
+  assert.ok(indexHtml.includes('id="admin-panel-notifications"'), 'index.html must have standalone admin-panel-notifications page');
+  assert.ok(indexHtml.includes('data-page="notifications"'), 'index.html must have notifications dock item');
+  assert.ok(indexHtml.includes('id="admin-notif-members-list"'), 'Notification manager must have members list');
+  assert.ok(indexHtml.includes('id="form-admin-notifications-page"'), 'Notification manager must have compose form');
+
+  assert.ok(appCode.includes('function renderAdminNotifications'), 'app.js must contain renderAdminNotifications');
+  assert.ok(appCode.includes('calculatedHeight = initialSheetHeight - deltaY'), 'app.js must dynamically calculate sheet height on finger drag');
+  assert.ok(appCode.includes('target.setPointerCapture'), 'app.js must capture pointer for smooth finger tracking');
+}
+
+// ==========================================
+// 15. v3.0.1 SMART CHECK-IN, ELIGIBILITY, EARLY BONUSES & CACHE SYNC
+// ==========================================
+{
+  assert.strictEqual(typeof isUserEligibleForSession, 'function', 'isUserEligibleForSession must be exported as a function');
+
+  const userAlice = { uid: 'user_alice', displayName: 'Alice', badgeIds: ['badge_video'] };
+  const userBob = { uid: 'user_bob', displayName: 'Bob', badgeIds: ['badge_audio'] };
+  const userCharlie = { uid: 'user_charlie', displayName: 'Charlie', badgeIds: [] };
+
+  // 15.1 All members eligibility
+  const sessionAll = normalizeSession({
+    id: 'sess_all',
+    title: 'General Meeting',
+    assignmentType: 'all',
+    schedule: { type: 'once', startDateTime: Date.now() }
+  });
+  assert.strictEqual(isUserEligibleForSession(sessionAll, userAlice), true, 'All session must be eligible for Alice');
+  assert.strictEqual(isUserEligibleForSession(sessionAll, userBob), true, 'All session must be eligible for Bob');
+  assert.strictEqual(isUserEligibleForSession(sessionAll, userCharlie), true, 'All session must be eligible for Charlie');
+
+  // 15.2 Strict Specific Members eligibility
+  const sessionSpecific = normalizeSession({
+    id: 'sess_specific',
+    title: 'Video Team Only',
+    assignmentType: 'specific',
+    assignedMembers: ['user_alice'],
+    schedule: { type: 'once', startDateTime: Date.now() }
+  });
+  assert.strictEqual(isUserEligibleForSession(sessionSpecific, userAlice), true, 'Assigned user Alice must be eligible');
+  assert.strictEqual(isUserEligibleForSession(sessionSpecific, userBob), false, 'Non-assigned user Bob must NOT be eligible');
+  assert.strictEqual(isUserEligibleForSession(sessionSpecific, userCharlie), false, 'Non-assigned user Charlie must NOT be eligible');
+
+  // Legacy targetType: custom with assignedUids
+  const sessionCustomLegacy = normalizeSession({
+    id: 'sess_custom_legacy',
+    title: 'Sound Crew',
+    targetType: 'custom',
+    assignedUids: ['user_bob'],
+    schedule: { type: 'once', startDateTime: Date.now() }
+  });
+  assert.strictEqual(isUserEligibleForSession(sessionCustomLegacy, userBob), true, 'Bob must be eligible via legacy assignedUids');
+  assert.strictEqual(isUserEligibleForSession(sessionCustomLegacy, userAlice), false, 'Alice must NOT be eligible');
+
+  // 15.3 Badge based eligibility
+  const sessionBadge = normalizeSession({
+    id: 'sess_badge',
+    title: 'Audio Engineers',
+    assignmentType: 'by_badge',
+    badgeIds: ['badge_audio'],
+    schedule: { type: 'once', startDateTime: Date.now() }
+  });
+  assert.strictEqual(isUserEligibleForSession(sessionBadge, userBob), true, 'Bob has badge_audio and must be eligible');
+  assert.strictEqual(isUserEligibleForSession(sessionBadge, userAlice), false, 'Alice lacks badge_audio and must NOT be eligible');
+
+  // 15.4 Early Arrival Bonus calculation in computeAttendance
+  const baseStartMs = zonedDateToMs(2026, 6, 1, 10, 0, 0, 'Africa/Cairo');
+  const sessionBonus = normalizeSession({
+    id: 'sess_bonus',
+    title: 'Sunday Morning Service',
+    earlyBonusPoints: 15,
+    earlyBonusEGP: 25,
+    earlyCheckInMinutes: 30,
+    lateCutoffMinutes: 60,
+    schedule: { type: 'once', startDateTime: baseStartMs }
+  });
+
+  // Check-in 10 minutes before start (within early window)
+  const earlyCheckInMs = baseStartMs - 10 * 60000;
+  const calcEarly = computeAttendance(sessionBonus, earlyCheckInMs);
+  assert.strictEqual(calcEarly.status, 'on_time', 'Early check-in within window must be on_time status');
+  assert.strictEqual(calcEarly.isEarly, true, 'isEarly must be true');
+  assert.strictEqual(calcEarly.earlyBonusPoints, 15, 'Early bonus points must be 15');
+  assert.strictEqual(calcEarly.earlyBonusEGP, 25, 'Early bonus EGP must be 25');
+  assert.strictEqual(calcEarly.penalty, 0, 'Early check-in must have 0 penalty');
+
+  // Check-in exactly at start time
+  const exactStartMs = baseStartMs;
+  const calcExact = computeAttendance(sessionBonus, exactStartMs);
+  assert.strictEqual(calcExact.status, 'on_time');
+  assert.strictEqual(calcExact.isEarly, false, 'Exact start time is not early');
+  assert.strictEqual(calcExact.earlyBonusPoints, 0, 'No early bonus at exact start time');
+
+  // Check-in 15 minutes late
+  const lateMs = baseStartMs + 15 * 60000;
+  const calcLate = computeAttendance(sessionBonus, lateMs);
+  assert.strictEqual(calcLate.status, 'late');
+  assert.strictEqual(calcLate.isEarly, false);
+
+  // 15.5 DOM and Styling guards for v3.0.1
+  const indexHtml = fs.readFileSync('index.html', 'utf8');
+  assert.ok(indexHtml.includes('id="smart-checkin-hero-container"'), 'index.html must contain smart-checkin-hero-container');
+  assert.ok(indexHtml.includes('id="attendance-sessions-wrap"'), 'index.html must wrap admin sessions in attendance-sessions-wrap');
+
+  const stylesCss = fs.readFileSync('styles.css', 'utf8');
+  assert.ok(stylesCss.includes('.smart-checkin-hero-card'), 'styles.css must have smart-checkin-hero-card class');
+  assert.ok(stylesCss.includes('.smart-checkin-btn-massive'), 'styles.css must have smart-checkin-btn-massive class');
+  assert.ok(stylesCss.includes('.undo-snackbar-progress-bar'), 'styles.css must have undo-snackbar-progress-bar class');
+  assert.ok(stylesCss.includes('.att-member-picker-row'), 'styles.css must have att-member-picker-row class');
+
+  // 15.6 Notification read and cache sync functions
+  assert.ok(appCode.includes('function renderSmartCheckInHero'), 'app.js must contain renderSmartCheckInHero');
+  assert.ok(appCode.includes('persistToLocalCache(true)'), 'app.js must immediately persist to local cache');
+  assert.ok(appCode.includes('undo-snackbar-secs'), 'app.js must render undo-snackbar-secs countdown');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
