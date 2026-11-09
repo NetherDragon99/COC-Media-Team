@@ -846,12 +846,13 @@ body.selection-mode-active .bulk-select-card.selected {
   border: 0.5px solid var(--border-glass);
 }
 
-.toast-container {
+.toast-container,
+#toast-container {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 12px);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 2500;
+  z-index: 99999 !important;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -862,6 +863,7 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 .toast {
+  z-index: 99999 !important;
   pointer-events: auto;
   cursor: pointer;
   background: var(--bg-dock);
@@ -3851,6 +3853,15 @@ input[type="search"],
   position: relative !important;
   box-sizing: border-box !important;
 }
+
+#modal-delete-confirm {
+  z-index: 99998 !important;
+}
+
+#modal-delete-confirm.hidden {
+  display: none !important;
+}
+
 
 
 

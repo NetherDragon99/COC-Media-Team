@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.1.6)
+ * CoC Media Team - Dedicated Serverless Backend (v3.1.7)
  * Autonomous Attendance Watchdog, Bidirectional Brackets & Grace Period Engine, Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -18,7 +18,7 @@ const CONFIG = {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.1.6",
+    version: "3.1.7",
     system: "CoC Media Backend Watchdog & Push Engine",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -422,10 +422,15 @@ function processCheckInAndSyncLedger(payload) {
     const curPen = Number(userDoc.penalties) || 0;
     const curFines = Number(userDoc.finesDue != null ? userDoc.finesDue : (userDoc.fines || 0));
 
+    const bonusPts = pointsDelta > 0 ? pointsDelta : 0;
+    const penaltyPts = pointsDelta < 0 ? Math.abs(pointsDelta) : 0;
+    const bonusEGP = egpDelta > 0 ? egpDelta : 0;
+    const penaltyEGP = egpDelta < 0 ? Math.abs(egpDelta) : 0;
+
     const newPoints = curPts + pointsDelta;
     const newTotalPoints = curTotalPts + pointsDelta;
-    const newPenalties = pointsDelta < 0 ? curPen + Math.abs(pointsDelta) : curPen;
-    const newFines = egpDelta !== 0 ? Math.max(0, curFines - egpDelta) : curFines;
+    const newPenalties = Math.max(0, curPen - bonusPts + penaltyPts);
+    const newFines = Math.max(0, curFines - bonusEGP + penaltyEGP);
 
     const userPatch = {
       points: newPoints,
@@ -530,10 +535,15 @@ function deleteAttendanceLogAndReverse(payload) {
       const curPen = Number(userDoc.penalties) || 0;
       const curFines = Number(userDoc.finesDue != null ? userDoc.finesDue : (userDoc.fines || 0));
 
+      const bonusPts = pointsDelta > 0 ? pointsDelta : 0;
+      const penaltyPts = pointsDelta < 0 ? Math.abs(pointsDelta) : 0;
+      const bonusEGP = egpDelta > 0 ? egpDelta : 0;
+      const penaltyEGP = egpDelta < 0 ? Math.abs(egpDelta) : 0;
+
       const reversedPoints = curPts - pointsDelta;
       const reversedTotal = curTotal - pointsDelta;
-      const reversedPen = pointsDelta < 0 ? Math.max(0, curPen - Math.abs(pointsDelta)) : curPen;
-      const reversedFines = egpDelta !== 0 ? Math.max(0, curFines + egpDelta) : curFines;
+      const reversedPen = Math.max(0, curPen + bonusPts - penaltyPts);
+      const reversedFines = Math.max(0, curFines + bonusEGP - penaltyEGP);
 
       const userPatch = {
         points: reversedPoints,
@@ -688,8 +698,8 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
     const currentFines = Number(freshUser.finesDue != null ? freshUser.finesDue : (freshUser.fines || 0));
     const nextPoints = currentPoints - ptsAbsence;
     const nextTotalPoints = currentTotalPoints - ptsAbsence;
-    const nextPenalties = currentPenalties + ptsAbsence;
-    const nextFines = currentFines + fineAbsence;
+    const nextPenalties = Math.max(0, currentPenalties + ptsAbsence);
+    const nextFines = Math.max(0, currentFines + fineAbsence);
 
     firestorePatch(`users/${uid}`, {
       points: nextPoints,

@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.6';
+export const APP_VERSION = '3.1.7';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -171,6 +171,89 @@ export const listeners = {
     }
   }
 };
+
+if (typeof window !== 'undefined') {
+  window.fsListeners = window.fsListeners || {};
+}
+
+export function clearFsListener(key) {
+  if (typeof window !== 'undefined' && window.fsListeners && window.fsListeners[key]) {
+    try {
+      window.fsListeners[key]();
+    } catch (e) {
+      console.warn(`[clearFsListener] Error clearing listener ${key}:`, e);
+    }
+    delete window.fsListeners[key];
+  }
+}
+
+export function setFsListener(key, unsub) {
+  clearFsListener(key);
+  if (typeof window !== 'undefined' && window.fsListeners) {
+    window.fsListeners[key] = unsub;
+  }
+}
+
+export function openDeleteConfirmModal({ title = 'Delete Attendance Record?', message = 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.', confirmText = 'Delete' } = {}) {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve(true);
+      return;
+    }
+    const modal = document.getElementById('modal-delete-confirm');
+    if (!modal) {
+      resolve(true);
+      return;
+    }
+
+    const titleEl = document.getElementById('delete-confirm-title');
+    const msgEl = document.getElementById('delete-confirm-message');
+    const btnCancel = document.getElementById('btn-delete-confirm-cancel');
+    const btnProceed = document.getElementById('btn-delete-confirm-proceed');
+
+    if (titleEl && title) titleEl.textContent = title;
+    if (msgEl && message) msgEl.textContent = message;
+    if (btnProceed && confirmText) btnProceed.textContent = confirmText;
+
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      modal.classList.remove('open');
+      modal.style.display = 'none';
+      btnCancel?.removeEventListener('click', onCancel);
+      btnProceed?.removeEventListener('click', onProceed);
+      modal.removeEventListener('click', onBackdrop);
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    const onProceed = () => {
+      cleanup();
+      resolve(true);
+    };
+
+    const onBackdrop = (e) => {
+      if (e.target === modal) {
+        cleanup();
+        resolve(false);
+      }
+    };
+
+    btnCancel?.addEventListener('click', onCancel);
+    btnProceed?.addEventListener('click', onProceed);
+    modal.addEventListener('click', onBackdrop);
+
+    modal.classList.remove('hidden');
+    modal.classList.add('open');
+    modal.style.display = 'flex';
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.openDeleteConfirmModal = openDeleteConfirmModal;
+}
 
 export const categoriesMap = new Map();
 export const badgesMap = new Map();
@@ -9248,9 +9331,16 @@ function setupSubmissionsListeners() {
 
 function setupAttendanceListeners() {
   if (!db) return;
+  clearFsListener('my_attendance_logs');
+  clearFsListener('my_attendance_logs_fallback');
+  clearFsListener('attendance_logs');
+  clearFsListener('attendance_records');
+  clearFsListener('attendance_records_fallback');
+
   if (!state.user) {
     listeners.clear('my_attendance_logs');
     listeners.clear('attendance_logs');
+    listeners.clear('attendance_records');
     state.myAttendanceLogs = [];
     state.attendanceLogs = [];
     renderAttendanceView();
@@ -9278,7 +9368,29 @@ function setupAttendanceListeners() {
       updateUserTodayAttendanceBadge();
     }, (err) => {
       console.warn('My attendance logs listener:', err);
+      try {
+        const qMyFallback = query(
+          collection(db, 'attendance_logs'),
+          where('uid', '==', state.user.uid),
+          limit(50)
+        );
+        const unsubFallback = onSnapshot(qMyFallback, (snapshot) => {
+          const list = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+          list.sort((a, b) => (parseDateTimeToMs(b.checkedInAt || b.timestamp) - parseDateTimeToMs(a.checkedInAt || a.timestamp)));
+          state.myAttendanceLogs = list;
+          if (!isCurrentUserAdmin()) {
+            state.attendanceLogs = state.myAttendanceLogs;
+          }
+          persistToLocalCache();
+          renderTodayCheckIns(state.myAttendanceLogs);
+          renderProfileAttendance();
+          updateUserTodayAttendanceBadge();
+        }, () => {});
+        setFsListener('my_attendance_logs_fallback', unsubFallback);
+        listeners.add('my_attendance_logs', unsubFallback);
+      } catch (_) {}
     });
+    setFsListener('my_attendance_logs', unsubMyLogs);
     listeners.add('my_attendance_logs', unsubMyLogs);
   } catch (e) { console.warn('Error setting up my attendance logs listener:', e); }
 
@@ -9298,6 +9410,7 @@ function setupAttendanceListeners() {
         renderTodayCheckIns(state.attendanceLogs);
         updateUserTodayAttendanceBadge();
       }, (err) => console.warn('Admin attendance logs listener:', err));
+      setFsListener('attendance_logs', unsubAllLogs);
       listeners.add('attendance_logs', unsubAllLogs);
     } catch (e) { console.warn('Error setting up admin attendance logs listener:', e); }
   }
@@ -9332,9 +9445,11 @@ function setupAttendanceListeners() {
           renderTodayCheckIns(records);
           if (adminSessionsFilter === 'recent_logs') renderRecentLogs();
         }, () => {});
+        setFsListener('attendance_records_fallback', unsubFallback);
         listeners.add('attendance_records', unsubFallback);
       } catch (_) {}
     });
+    setFsListener('attendance_records', unsubRecords);
     listeners.add('attendance_records', unsubRecords);
   } catch (e) {
     console.warn('Error setting up attendance_records listener:', e);
@@ -11658,11 +11773,7 @@ function renderAttendanceView() {
   const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin' || state.isAdminUnlocked);
 
   if (sessionsWrap) {
-    if (isAdmin) {
-      sessionsWrap.classList.remove('hidden');
-    } else {
-      sessionsWrap.classList.add('hidden');
-    }
+    sessionsWrap.classList.remove('hidden');
   }
 
   const allActiveSessions = (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived && s.status !== 'closed' && s.status !== 'archived');
@@ -11673,74 +11784,76 @@ function renderAttendanceView() {
   }
 
   if (container) {
-    if (!isAdmin) {
-      container.innerHTML = '';
+    const nowMs = serverNow();
+    if (allActiveSessions.length === 0) {
+      container.innerHTML = `
+        <div class="glass-card p-6 text-center border border-dashed border-white/10">
+          <p class="ios-footnote text-neutral-400">No active attendance sessions right now.</p>
+        </div>
+      `;
     } else {
-      const nowMs = serverNow();
-      if (allActiveSessions.length === 0) {
-        container.innerHTML = `
-          <div class="glass-card p-6 text-center border border-dashed border-white/10">
-            <p class="ios-footnote text-neutral-400">No active attendance sessions in database.</p>
+      container.innerHTML = allActiveSessions.map(session => {
+        const calc = computeAttendance(session, nowMs);
+        const occurrenceKey = calc.occurrenceKey;
+        const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
+        const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
+        const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
+        const startFormatted = formatDateTime(S);
+
+        const isBlocked = calc.status === 'blocked';
+        const isLate = calc.status === 'late';
+        const isOnTime = calc.status === 'on_time';
+        const isEarlyBonus = calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0);
+
+        let statusPill = '';
+        if (userLog) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Checked In</span>`;
+        } else if (approvedWaiver) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">Waived</span>`;
+        } else if (isBlocked) {
+          statusPill = calc.reason === 'early'
+            ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`
+            : `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Closed</span>`;
+        } else if (isEarlyBonus) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Early Window (+${calc.earlyBonusPoints} pts${calc.earlyBonusEGP > 0 ? ` | +${calc.earlyBonusEGP} EGP` : ''})</span>`;
+        } else if (isOnTime) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Open (On Time)</span>`;
+        } else {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">Late Window</span>`;
+        }
+
+        return `
+          <div class="glass-card p-4 space-y-2 border-white/10 cursor-pointer hover:bg-white/[0.04] transition" data-session-card="${esc(session.id)}">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <h3 class="ios-headline text-white">${esc(session.title)}</h3>
+                <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
+              </div>
+              ${statusPill}
+            </div>
+            <div class="text-[11px] text-neutral-400 flex items-center justify-between">
+              <span>Rostered: ${session.targetType === 'all' ? 'All Members' : (session.targetType === 'badge' ? `${(session.badgeIds || []).length} Badges` : `${(session.assignedMembers || session.assignedUids || []).length} Members`)}</span>
+              ${(session.earlyBonusTiers && session.earlyBonusTiers.length > 0)
+                ? `<span class="text-emerald-400 font-semibold">${session.earlyBonusTiers.length} Early Bonus Tiers</span>`
+                : (session.earlyBonusPoints > 0 ? `<span class="text-emerald-400 font-semibold">+${session.earlyBonusPoints} Pts Early</span>` : '')}
+            </div>
           </div>
         `;
-      } else {
-        container.innerHTML = allActiveSessions.map(session => {
-          const calc = computeAttendance(session, nowMs);
-          const occurrenceKey = calc.occurrenceKey;
-          const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
-          const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
-          const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
-          const startFormatted = formatDateTime(S);
+      }).join('');
 
-          const isBlocked = calc.status === 'blocked';
-          const isLate = calc.status === 'late';
-          const isOnTime = calc.status === 'on_time';
-          const isEarlyBonus = calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0);
-
-          let statusPill = '';
-          if (userLog) {
-            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Checked In</span>`;
-          } else if (approvedWaiver) {
-            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">Waived</span>`;
-          } else if (isBlocked) {
-            statusPill = calc.reason === 'early'
-              ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`
-              : `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Closed</span>`;
-          } else if (isEarlyBonus) {
-            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Early Window (+${calc.earlyBonusPoints} pts${calc.earlyBonusEGP > 0 ? ` | +${calc.earlyBonusEGP} EGP` : ''})</span>`;
-          } else if (isOnTime) {
-            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Open (On Time)</span>`;
-          } else {
-            statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">Late Window</span>`;
+      container.querySelectorAll('[data-session-card]').forEach(card => {
+        card.onclick = () => {
+          const sid = card.dataset.sessionCard;
+          const sObj = state.attendanceSessions.find(x => x.id === sid);
+          if (sObj) {
+            if (isAdmin) {
+              openAdminRosterModal(String(sObj.id));
+            } else {
+              openSessionBreakdownModal(String(sObj.id), true);
+            }
           }
-
-          return `
-            <div class="glass-card p-4 space-y-2 border-white/10 cursor-pointer hover:bg-white/[0.04] transition" data-session-card="${esc(session.id)}">
-              <div class="flex items-start justify-between gap-2">
-                <div>
-                  <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-                  <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
-                </div>
-                ${statusPill}
-              </div>
-              <div class="text-[11px] text-neutral-400 flex items-center justify-between">
-                <span>Rostered: ${session.targetType === 'all' ? 'All Members' : (session.targetType === 'badge' ? `${(session.badgeIds || []).length} Badges` : `${(session.assignedMembers || session.assignedUids || []).length} Members`)}</span>
-                ${(session.earlyBonusTiers && session.earlyBonusTiers.length > 0)
-                  ? `<span class="text-emerald-400 font-semibold">${session.earlyBonusTiers.length} Early Bonus Tiers</span>`
-                  : (session.earlyBonusPoints > 0 ? `<span class="text-emerald-400 font-semibold">+${session.earlyBonusPoints} Pts Early</span>` : '')}
-              </div>
-            </div>
-          `;
-        }).join('');
-
-        container.querySelectorAll('[data-session-card]').forEach(card => {
-          card.onclick = () => {
-            const sid = card.dataset.sessionCard;
-            const sObj = state.attendanceSessions.find(x => x.id === sid);
-            if (sObj) openAdminRosterModal(String(sObj.id));
-          };
-        });
-      }
+        };
+      });
     }
   }
 
@@ -11880,19 +11993,20 @@ async function handleAttendanceCheckIn(sessionId) {
     state.myAttendanceLogs = [optLog, ...(state.myAttendanceLogs || []).filter(l => l.id !== logId)];
     state.attendanceLogs = [optLog, ...(state.attendanceLogs || []).filter(l => l.id !== logId)];
 
+    const bonusPts = earlyBonusPoints > 0 ? earlyBonusPoints : (pointsDelta > 0 ? pointsDelta : 0);
+    const penaltyPointsVal = penaltyPts > 0 ? penaltyPts : (pointsDelta < 0 ? Math.abs(pointsDelta) : 0);
+    const bonusEGPVal = earlyBonusEGP > 0 ? earlyBonusEGP : (egpDelta > 0 ? egpDelta : 0);
+    const penaltyEGPVal = fineEGP > 0 ? fineEGP : (egpDelta < 0 ? Math.abs(egpDelta) : 0);
+
     if (pointsDelta !== 0) {
       state.user.points = (state.user.points || 0) + pointsDelta;
       state.user.totalPoints = (state.user.totalPoints || 0) + pointsDelta;
       state.user.monthPoints = (state.user.monthPoints || 0) + pointsDelta;
       state.user.weekPoints = (state.user.weekPoints || 0) + pointsDelta;
     }
-    if (penaltyPts > 0) {
-      state.user.penalties = (state.user.penalties || 0) + penaltyPts;
-    }
-    if (egpDelta !== 0) {
-      state.user.finesDue = Math.max(0, (state.user.finesDue || 0) - egpDelta);
-      state.user.fines = Math.max(0, (state.user.fines || 0) - egpDelta);
-    }
+    state.user.penalties = Math.max(0, (state.user.penalties || 0) - bonusPts + penaltyPointsVal);
+    state.user.finesDue = Math.max(0, (state.user.finesDue || 0) - bonusEGPVal + penaltyEGPVal);
+    state.user.fines = Math.max(0, (state.user.fines || 0) - bonusEGPVal + penaltyEGPVal);
     updateProfileUI();
     renderLeaderboard();
 
@@ -13349,10 +13463,11 @@ function updateProfileUI() {
     if (ptsEl) ptsEl.textContent = state.user.points || 0;
     const completedCount = state.submissions.filter(s => s.userId === state.user.uid).length;
     if (compEl) compEl.textContent = completedCount;
-    if (penEl) penEl.textContent = `${state.user.penalties || 0} pts`;
+    const userPenalties = Math.max(0, state.user.penalties || 0);
+    if (penEl) penEl.textContent = `${userPenalties} pts`;
 
     const scoreEl = document.getElementById('profile-stat-score');
-    const netScore = Math.max(0, (state.user.points || 0) - (state.user.penalties || 0));
+    const netScore = Math.max(0, (state.user.points || 0) - userPenalties);
     if (scoreEl) scoreEl.textContent = netScore;
 
     const myRank = getUserRank(state.user.uid, 'all');
@@ -16858,7 +16973,7 @@ function openAdminLogEditModal(log, session) {
           <polyline points="3 6 5 6 21 6"></polyline>
           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
         </svg>
-        <span>Delete Attendance Log</span>
+        <span>Delete Attendance</span>
       </button>
     </div>
   `;
@@ -16870,8 +16985,12 @@ function openAdminLogEditModal(log, session) {
   const deleteBtn = bodyEl.querySelector('#adm-log-btn-delete');
 
   deleteBtn.onclick = async () => {
-    // FIX 3: Strict native browser prompt to avoid hidden dialog behind modals
-    if (!confirm('Delete log and reverse points?')) return;
+    const confirmed = await openDeleteConfirmModal({
+      title: 'Delete Attendance Record?',
+      message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
+      confirmText: 'Delete'
+    });
+    if (!confirmed) return;
 
     try {
       const targetUid = log.uid || log.userId;
@@ -17076,6 +17195,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
   `;
 
   let unsubLogs = null;
+  clearFsListener('roster');
 
   openModal({
     title: `${session.title} Details`,
@@ -17084,8 +17204,9 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
     clearStack: true,
     onSave: async () => true,
     onClose: () => {
+      clearFsListener('roster');
       if (unsubLogs) {
-        unsubLogs();
+        try { unsubLogs(); } catch (_) {}
         unsubLogs = null;
       }
     }
@@ -17750,11 +17871,13 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
   // Listen to attendance_logs updates
   if (targetSessionId && typeof targetSessionId === 'string') {
     try {
+      clearFsListener('roster');
       const qSnap = query(collection(db, 'attendance_logs'), where('sessionId', '==', targetSessionId), limit(300));
       unsubLogs = onSnapshot(qSnap, (snap) => {
         snap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
         renderModal();
       }, (err) => console.warn('[openAdminRosterModal] logs listener:', err));
+      setFsListener('roster', unsubLogs);
     } catch (e) {
       console.warn('[openAdminRosterModal] logs listener setup error:', e);
     }
@@ -17781,6 +17904,7 @@ export function renderTodayCheckIns(records = []) {
 export async function renderRecentLogs() {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
+  clearFsListener('recent');
   const tbody = document.getElementById('admin-attendance-logs-tbody');
   const countEl = document.getElementById('admin-attendance-log-count');
   if (!tbody) return;
@@ -17909,8 +18033,12 @@ export async function renderRecentLogs() {
     tbody.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
       btn.onclick = async (e) => {
         e.stopPropagation();
-        // FIX 3: Strict native browser prompt: if(confirm('Delete log and reverse points?')) { ... }
-        if (!confirm('Delete log and reverse points?')) return;
+        const confirmed = await openDeleteConfirmModal({
+          title: 'Delete Attendance Record?',
+          message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
+          confirmText: 'Delete'
+        });
+        if (!confirmed) return;
         const logId = btn.dataset.logId;
         const targetLog = logs.find(l => l.id === logId) || {};
         const memberUid = targetLog.userId || targetLog.uid;

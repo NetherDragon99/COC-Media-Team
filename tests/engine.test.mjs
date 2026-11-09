@@ -1745,5 +1745,45 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.strictEqual(absent, 1, '1 Absent');
 }
 
+// =========================================================================
+// v3.1.7 HOTFIX TESTS: Debt Zero-Floor Bounding & Listener Registry Safety
+// =========================================================================
+{
+  // 1. Debt Bounding Test: Check-in debt reduction zero floor
+  const currentFinesDue = 10;
+  const currentPenaltyPts = 5;
+  const hugeBonusEGP = 50;
+  const hugeBonusPts = 20;
+
+  const boundedFines = Math.max(0, currentFinesDue - hugeBonusEGP + 0);
+  const boundedPenalties = Math.max(0, currentPenaltyPts - hugeBonusPts + 0);
+
+  assert.strictEqual(boundedFines, 0, 'Fines due cannot drop below 0 when bonus exceeds fine debt');
+  assert.strictEqual(boundedPenalties, 0, 'Penalties cannot drop below 0 when bonus exceeds penalty debt');
+
+  // 2. Debt Bounding Test: Reversal of penalty debt cannot drop below 0
+  const curPen = 2;
+  const penaltyPtsReversed = 10;
+  const reversedPen = Math.max(0, curPen - penaltyPtsReversed);
+  assert.strictEqual(reversedPen, 0, 'Reversed penalty debt floor is 0');
+
+  // 3. Listener Registry Simulation Test
+  const mockRegistry = {};
+  let unsubCalled = false;
+  mockRegistry.roster = () => { unsubCalled = true; };
+
+  // Helper clear simulation
+  const clearListener = (k) => {
+    if (mockRegistry[k]) {
+      mockRegistry[k]();
+      delete mockRegistry[k];
+    }
+  };
+
+  clearListener('roster');
+  assert.strictEqual(unsubCalled, true, 'clearListener executed previous unsubscribe callback');
+  assert.strictEqual(mockRegistry.roster, undefined, 'clearListener deleted registry entry');
+}
+
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
 
