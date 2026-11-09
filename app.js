@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.3';
+export const APP_VERSION = '3.1.4';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -9296,6 +9296,9 @@ function setupAttendanceListeners() {
         renderAdminAttendanceLogs();
         renderAttendanceLogs();
         updateUserTodayAttendanceBadge();
+        (state.attendanceSessions || []).forEach(s => {
+          hydrateSessionCardStats(s.id);
+        });
       }, (err) => console.warn('Admin attendance logs listener:', err));
       listeners.add('attendance_logs', unsubAllLogs);
     } catch (e) { console.warn('Error setting up admin attendance logs listener:', e); }
@@ -15360,79 +15363,130 @@ const sessionCardStatsCache = new Map();
 export async function hydrateSessionCardStats(sessionId, occurrenceKey = null) {
   if (!sessionId) return { present: 0, late: 0, absent: 0 };
 
-  const computeTallies = (logs) => {
+  const session = (state.attendanceSessions || []).find(s => s.id === sessionId);
+  const nowMs = serverNow();
+
+  const getAssignedCount = () => {
+    if (!session) return 0;
+    const allActive = (usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])]).filter(m => m && !m.disabled && !m.blocked);
+    if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
+      return allActive.filter(m => {
+        const userBadges = Array.isArray(m.badges) ? m.badges : (Array.isArray(m.badgeIds) ? m.badgeIds : []);
+        return userBadges.some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b));
+      }).length || allActive.length;
+    } else if ((session.targetType === 'custom' || !session.targetType) && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      return allActive.filter(m => session.assignedUids.includes(m.uid)).length || allActive.length;
+    }
+    return allActive.length;
+  };
+
+  const computeTallies = (logs, occStartMs) => {
     let present = 0;
     let late = 0;
     let absent = 0;
+    const handledUids = new Set();
+
     logs.forEach(l => {
+      const uid = l.uid || l.userId;
+      if (uid) handledUids.add(uid);
       const st = String(l.status || '').toLowerCase();
-      if (st === 'early' || st === 'on_time' || (!l.penalty && !l.fineEGP && st !== 'late' && st !== 'absent')) {
+      if (st === 'early' || st === 'on_time' || (!l.penalty && !l.fineEGP && st !== 'late' && st !== 'absent' && st !== 'excused')) {
         present++;
-      } else if (st === 'late' || (Number(l.penalty) > 0 && st !== 'absent') || (Number(l.fineEGP) > 0 && st !== 'absent')) {
+      } else if (st === 'late' || (Number(l.penalty) > 0 && st !== 'absent')) {
         late++;
       } else if (st === 'absent') {
         absent++;
       }
     });
+
+    if (session) {
+      const assignedCount = getAssignedCount();
+      const cutoffMs = (occStartMs || nowMs) + (Number(session.lateCutoffMinutes) || 120) * 60000;
+      const isClosed = session.status === 'closed' || session.status === 'completed' || nowMs > cutoffMs;
+      if (isClosed && assignedCount > handledUids.size) {
+        absent = Math.max(absent, (assignedCount - handledUids.size) + logs.filter(l => l.status === 'absent').length);
+      }
+    }
+
     return { present, late, absent };
   };
 
-  const localLogs = (state.attendanceLogs || []).filter(l => l.sessionId === sessionId);
-  let localFiltered = localLogs;
-  if (occurrenceKey && occurrenceKey !== 'once') {
-    const occLogs = localLogs.filter(l => l.occurrenceKey === occurrenceKey);
-    if (occLogs.length > 0) localFiltered = occLogs;
-  }
+  // Determine target occurrence
+  let resolvedOcc = session ? (resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs)) : null;
+  let targetOccKey = occurrenceKey || (resolvedOcc ? resolvedOcc.key : 'once');
+  let targetOccStartMs = resolvedOcc ? resolvedOcc.start : (parseDateTimeToMs(session?.schedule?.startDateTime) || nowMs);
 
-  let stats = computeTallies(localFiltered);
+  // 1. Initial fast tally from local state
+  const localLogs = (state.attendanceLogs || []).filter(l => l.sessionId === sessionId);
+  let localFiltered = localLogs.filter(l => !targetOccKey || targetOccKey === 'once' || l.occurrenceKey === targetOccKey || l.occurrenceDate === targetOccKey);
+  if (localFiltered.length === 0 && localLogs.length > 0) {
+    localFiltered = localLogs;
+  }
+  let stats = computeTallies(localFiltered, targetOccStartMs);
   sessionCardStatsCache.set(sessionId, stats);
   updateSessionCardStatsDOM(sessionId, stats);
 
+  // 2. Aggressive scan of attendance_records and attendance_logs in Firestore
   try {
     const [recSnap, logSnap] = await Promise.all([
-      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', sessionId), limit(300))).catch(() => ({ docs: [] })),
-      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', sessionId), limit(300))).catch(() => ({ docs: [] }))
+      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', sessionId), limit(500))).catch(() => ({ docs: [] })),
+      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', sessionId), limit(500))).catch(() => ({ docs: [] }))
     ]);
 
-    const merged = new Map();
+    const logsMap = new Map();
     recSnap.docs.forEach(d => {
       const data = d.data();
-      const uid = data.uid || data.userId || d.id;
-      if (uid) merged.set(uid, data);
+      const id = d.id;
+      logsMap.set(id, { id, ...data });
     });
     logSnap.docs.forEach(d => {
       const data = d.data();
-      const uid = data.uid || data.userId || d.id;
-      if (uid && !merged.has(uid)) merged.set(uid, data);
+      const id = d.id;
+      if (logsMap.has(id)) {
+        logsMap.set(id, { ...logsMap.get(id), ...data });
+      } else {
+        logsMap.set(id, { id, ...data });
+      }
     });
 
-    if (merged.size > 0) {
-      const dbLogs = Array.from(merged.values());
-      let dbFiltered = dbLogs;
-      if (occurrenceKey && occurrenceKey !== 'once') {
-        const occDbLogs = dbLogs.filter(l => l.occurrenceKey === occurrenceKey);
-        if (occDbLogs.length > 0) dbFiltered = occDbLogs;
+    const allDbLogs = Array.from(logsMap.values());
+    if (allDbLogs.length > 0) {
+      const occDateGroups = new Map();
+      allDbLogs.forEach(l => {
+        const dKey = l.occurrenceDate || (l.occurrenceKey && l.occurrenceKey !== 'once' ? l.occurrenceKey : '') || (l.checkedInAt ? new Date(parseDateTimeToMs(l.checkedInAt)).toISOString().slice(0, 10) : 'once');
+        if (!occDateGroups.has(dKey)) occDateGroups.set(dKey, []);
+        occDateGroups.get(dKey).push(l);
+      });
+
+      let targetLogs = [];
+      if (targetOccKey && occDateGroups.has(targetOccKey)) {
+        targetLogs = occDateGroups.get(targetOccKey);
+      } else {
+        const sortedKeys = Array.from(occDateGroups.keys()).sort().reverse();
+        targetLogs = occDateGroups.get(sortedKeys[0]) || allDbLogs;
       }
-      stats = computeTallies(dbFiltered);
+
+      stats = computeTallies(targetLogs, targetOccStartMs);
       sessionCardStatsCache.set(sessionId, stats);
       updateSessionCardStatsDOM(sessionId, stats);
     }
   } catch (err) {
-    console.warn('[hydrateSessionCardStats] error:', err);
+    console.warn('[hydrateSessionCardStats] error scanning records & logs:', err);
   }
 
   return stats;
 }
 
 function updateSessionCardStatsDOM(sessionId, stats) {
-  const card = document.querySelector(`[data-session-id="${sessionId}"]`);
-  if (!card) return;
-  const pEl = card.querySelector('.stat-present');
-  const lEl = card.querySelector('.stat-late');
-  const aEl = card.querySelector('.stat-absent');
-  if (pEl) pEl.textContent = stats.present;
-  if (lEl) lEl.textContent = stats.late;
-  if (aEl) aEl.textContent = stats.absent;
+  const cards = document.querySelectorAll(`[data-session-id="${sessionId}"]`);
+  cards.forEach(card => {
+    const pEl = card.querySelector('.stat-present');
+    const lEl = card.querySelector('.stat-late');
+    const aEl = card.querySelector('.stat-absent');
+    if (pEl) pEl.textContent = stats.present;
+    if (lEl) lEl.textContent = stats.late;
+    if (aEl) aEl.textContent = stats.absent;
+  });
 }
 
 function renderAdminSessions() {
@@ -15609,14 +15663,14 @@ function renderAdminSessions() {
       bulkType: 'sessions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
-        openSessionBreakdownModal(sessionId, false);
+        openAdminRosterModal(sessionId);
       }
     });
 
     card.onclick = (e) => {
       if (e.target.closest('button') || e.target.closest('[data-no-row-tap="true"]')) return;
       if (selectionState.active && selectionState.type === 'sessions') return;
-      openSessionBreakdownModal(sessionId, false);
+      openAdminRosterModal(sessionId);
     };
 
     const btnEdit = card.querySelector('.btn-card-edit-session');
@@ -16888,656 +16942,7 @@ function openAdminLogEditModal(log, session) {
   });
 }
 
-async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart) {
-  const rawSession = (typeof sessionOrId === 'string'
-    ? state.attendanceSessions.find(s => s.id === sessionOrId)
-    : sessionOrId) || sessionOrId;
-
-  if (!rawSession) {
-    toast('Session not found', 'error');
-    return;
-  }
-  const session = normalizeSession(rawSession);
-
-  const getAssignedRosterMembers = () => {
-    const allActiveMembers = (usersMap.size > 0
-      ? Array.from(usersMap.values())
-      : [...state.members]
-    ).filter(m => m && !m.disabled && !m.blocked);
-
-    let filtered = allActiveMembers;
-    if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
-      filtered = allActiveMembers.filter(m => {
-        const userBadges = Array.isArray(m.badges) ? m.badges : (Array.isArray(m.badgeIds) ? m.badgeIds : []);
-        return userBadges.some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b));
-      });
-    } else if (session.targetType === 'custom' && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-      filtered = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
-    } else if (!session.targetType && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-      filtered = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
-    }
-    return filtered.length > 0 ? filtered : allActiveMembers;
-  };
-
-  const nowMs = serverNow();
-  const isOnceSession = (session.schedule?.type || session.type || 'once') === 'once';
-  let occ = null;
-  if (occurrenceKey && occurrenceStart) {
-    occ = { key: occurrenceKey, start: Number(occurrenceStart) || nowMs };
-  } else if (isOnceSession) {
-    const startMs = parseDateTimeToMs(session.schedule?.startDateTime || session.startDateTime) || nowMs;
-    occ = { key: 'once', start: startMs };
-  } else {
-    occ = resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs) || { key: 'once', start: session.schedule?.startDateTime || nowMs };
-  }
-  let selectedOccKey = occ ? occ.key : 'once';
-  let selectedOccStartMs = occ ? occ.start : nowMs;
-
-  const occurrenceOptions = new Map();
-  occurrenceOptions.set(selectedOccKey, selectedOccStartMs);
-
-  let activeTab = 'occurrence';
-  let sessionLogs = [];
-  let waiversMap = new Map();
-  let unsubLogs = null;
-
-  const bodyEl = document.createElement('div');
-  bodyEl.className = 'space-y-4';
-  bodyEl.innerHTML = `
-    <div class="p-6 text-center text-xs text-neutral-400">
-      Loading attendance for ${esc(session.title)}...
-    </div>
-  `;
-
-  openModal({
-    title: `${session.title} Attendance`,
-    body: bodyEl,
-    saveLabel: 'Done',
-    clearStack: true,
-    onSave: async () => true,
-    onClose: () => {
-      if (unsubLogs) {
-        unsubLogs();
-        unsubLogs = null;
-      }
-    }
-  });
-
-  try {
-    const waiversSnap = await getDocs(query(
-      collection(db, 'waiver_requests'),
-      where('sessionId', '==', session.id),
-      limit(300)
-    )).catch(() => ({ docs: [] }));
-    waiversSnap.docs.forEach(d => {
-      const w = d.data();
-      if (w.status === 'approved') {
-        waiversMap.set(w.uid, { id: d.id, ...w });
-      }
-    });
-  } catch (e) {
-    console.warn('Could not fetch waivers:', e);
-  }
-
-  const qLogs = query(
-    collection(db, 'attendance_logs'),
-    where('sessionId', '==', session.id),
-    limit(300)
-  );
-
-  const renderRosterView = () => {
-    const assignedMembers = getAssignedRosterMembers();
-
-    if (!isOnceSession) {
-      sessionLogs.forEach(l => {
-        if (l.occurrenceKey && (l.occurrenceStart || l.checkedInAt)) {
-          const ms = parseDateTimeToMs(l.occurrenceStart) || parseDateTimeToMs(l.checkedInAt);
-          if (ms && !occurrenceOptions.has(l.occurrenceKey)) {
-            occurrenceOptions.set(l.occurrenceKey, ms);
-          }
-        }
-      });
-    }
-
-    const occLogs = sessionLogs.filter(l => matchesOccurrence(l, selectedOccKey, selectedOccStartMs, session));
-    const attendedMap = new Map();
-    occLogs.forEach(l => attendedMap.set(l.uid, l));
-
-    const presentList = [];
-    const excusedList = [];
-    const penalizedAbsentList = [];
-    const unprocessedAbsentList = [];
-    const handledUids = new Set();
-
-    const occCutoffMs = selectedOccStartMs + (session.lateCutoffMinutes || 120) * 60000;
-    const isClosed = serverNow() > occCutoffMs;
-
-    assignedMembers.forEach(m => {
-      handledUids.add(m.uid);
-      if (attendedMap.has(m.uid)) {
-        const log = attendedMap.get(m.uid);
-        if (log.status === 'excused' || log.excused === true) {
-          excusedList.push({ member: m, log, waiver: waiversMap.get(m.uid) });
-        } else if (log.status === 'absent') {
-          penalizedAbsentList.push({ member: m, log });
-        } else {
-          presentList.push({ member: m, log });
-        }
-      } else if (waiversMap.has(m.uid)) {
-        excusedList.push({ member: m, waiver: waiversMap.get(m.uid) });
-      } else {
-        unprocessedAbsentList.push(m);
-      }
-    });
-
-    occLogs.forEach(log => {
-      if (!log.uid || handledUids.has(log.uid)) return;
-      handledUids.add(log.uid);
-      const fallbackMember = usersMap.get(log.uid) || {
-        uid: log.uid,
-        displayName: log.userName || 'Member',
-        name: log.userName || 'Member',
-        photoURL: log.userAvatar || '',
-        avatarUrl: log.userAvatar || ''
-      };
-      if (log.status === 'excused' || log.excused === true) {
-        excusedList.push({ member: fallbackMember, log, waiver: waiversMap.get(log.uid) });
-      } else if (log.status === 'absent') {
-        penalizedAbsentList.push({ member: fallbackMember, log });
-      } else {
-        presentList.push({ member: fallbackMember, log });
-      }
-    });
-
-    const totalAssignedCount = Math.max(assignedMembers.length, handledUids.size);
-    const onTimeCount = presentList.filter(p => p.log.status === 'on_time' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
-    const lateCount = presentList.filter(p => p.log.status === 'late' || p.log.penalty > 0 || p.log.fineEGP > 0).length;
-    const excusedCount = excusedList.length;
-    const absentCount = penalizedAbsentList.length + unprocessedAbsentList.length;
-
-    const totalPenalties = presentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0) +
-      penalizedAbsentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0);
-    const totalFines = presentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0) +
-      penalizedAbsentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0);
-
-    const dateStr = formatDateTime(selectedOccStartMs, { hour: undefined, minute: undefined });
-
-    bodyEl.innerHTML = `
-      <div class="flex items-center justify-between pb-1">
-        <div class="space-y-0.5">
-          <div class="text-xs text-neutral-400 flex items-center gap-1.5">
-            <span>Occurrence: <strong class="text-white">${dateStr}</strong></span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="font-mono text-[10px] px-2 py-0.5 rounded-full ${isClosed ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}">
-              ${isClosed ? 'Window Closed' : 'Check-in Open'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-5 gap-1.5 text-center text-xs">
-        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-          <span class="text-[10px] text-neutral-400 block font-medium">Assigned</span>
-          <span class="font-bold text-white mt-0.5 block" style="font-variant-numeric: tabular-nums;">${totalAssignedCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-          <span class="text-[10px] text-emerald-300 block font-medium">On Time</span>
-          <span class="font-bold text-emerald-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${onTimeCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
-          <span class="text-[10px] text-amber-300 block font-medium">Late</span>
-          <span class="font-bold text-amber-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${lateCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
-          <span class="text-[10px] text-blue-300 block font-medium">Excused</span>
-          <span class="font-bold text-blue-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${excusedCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
-          <span class="text-[10px] text-rose-300 block font-medium">Absent</span>
-          <span class="font-bold text-rose-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${absentCount}</span>
-        </div>
-      </div>
-
-      ${(totalPenalties > 0 || totalFines > 0) ? `
-        <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center justify-between font-mono">
-          <span>Deductions Incurred:</span>
-          <span>${totalPenalties > 0 ? `-${totalPenalties} pts ` : ''}${totalFines > 0 ? `-${totalFines} EGP` : ''}</span>
-        </div>
-      ` : ''}
-
-      <div id="mount-roster-tab-segmented" class="w-full"></div>
-
-      <div id="roster-tab-content" class="space-y-4"></div>
-    `;
-
-    const segMount = bodyEl.querySelector('#mount-roster-tab-segmented');
-    if (segMount) {
-      if (isClosed || isOnceSession || session.status === 'closed') {
-        segMount.innerHTML = '';
-      } else {
-        segMount.appendChild(renderSegmented({
-          id: 'seg-roster-view',
-          options: [
-            { value: 'occurrence', label: 'This Occurrence' },
-            { value: 'history', label: 'Session History' }
-          ],
-          value: activeTab,
-          onChange: (val) => {
-            activeTab = val;
-            renderSubContent();
-          }
-        }));
-      }
-    }
-
-    const renderSubContent = () => {
-      const container = bodyEl.querySelector('#roster-tab-content');
-      if (!container) return;
-      const isAdminUser = isCurrentUserAdmin();
-
-      if (activeTab === 'history') {
-        if (sessionLogs.length === 0) {
-          container.innerHTML = `
-            <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
-              No attendance events recorded for this session yet.
-            </div>
-          `;
-          return;
-        }
-
-        container.innerHTML = `
-          <div class="space-y-2">
-            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-              <span>All Event History (${sessionLogs.length})</span>
-              ${isAdminUser ? `<span class="text-[10px] text-neutral-400 font-normal">Tap any log to edit</span>` : ''}
-            </div>
-            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-80 overflow-y-auto">
-              ${sessionLogs.map(l => {
-                const prof = getUserProfile(l.uid, l.userName, l.userAvatar);
-                const timeStr = formatCheckInExactTime(l.checkedInAt || l.checkInTimestamp || l.occurrenceStart, true);
-
-                return `
-                  <div class="log-history-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(l.id)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400 font-mono block">${esc(timeStr)}</span>
-                      </div>
-                    </div>
-                    <div class="text-right shrink-0">
-                      ${renderCheckInMetricsPills(l)}
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        `;
-
-        if (isAdminUser) {
-          container.querySelectorAll('.log-history-row').forEach(row => {
-            row.onclick = () => {
-              const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
-              if (targetLog) openAdminLogEditModal(targetLog, session);
-            };
-          });
-        }
-        return;
-      }
-
-      let occPickerHtml = '';
-      if (occurrenceOptions.size > 1) {
-        const sortedOccs = Array.from(occurrenceOptions.entries()).sort((a, b) => b[1] - a[1]);
-        occPickerHtml = `
-          <div class="flex items-center gap-2 pb-1">
-            <label class="text-[11px] text-neutral-400 shrink-0 font-medium">Select Date:</label>
-            <select id="sel-roster-occurrence" class="ios-input text-xs py-1 px-2.5 flex-1 font-mono">
-              ${sortedOccs.map(([k, ms]) => `
-                <option value="${esc(k)}" ${k === selectedOccKey ? 'selected' : ''}>
-                  ${formatDateTime(ms, { hour: undefined, minute: undefined })} (${formatDateTime(ms, { month: undefined, day: undefined })})
-                </option>
-              `).join('')}
-            </select>
-          </div>
-        `;
-      }
-
-      container.innerHTML = `
-        ${occPickerHtml}
-
-        <div class="space-y-2">
-          <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-            <span>Attended (${presentList.length})</span>
-            <span class="text-[10px] text-emerald-400 font-normal">${onTimeCount} on time, ${lateCount} late${isAdminUser ? ' • Tap log to edit' : ''}</span>
-          </div>
-          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-60 overflow-y-auto">
-            ${presentList.length === 0 ? `
-              <div class="p-3 text-xs text-neutral-400 text-center">No members checked in yet for this occurrence.</div>
-            ` : presentList.map(({ member, log }) => {
-              const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-              const checkInTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
-              return `
-                <div class="roster-log-item p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}">
-                  <div class="flex items-center gap-2.5 min-w-0 flex-1">
-                    <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                    <div class="min-w-0 flex-1">
-                      <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
-                        <span class="truncate shrink-0 max-w-[120px]">${esc(prof.displayName)}</span>
-                        <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
-                      </div>
-                      <div class="text-[10px] text-neutral-400 font-mono">${esc(checkInTime)}</div>
-                    </div>
-                  </div>
-                  <div class="text-right shrink-0">
-                    ${renderCheckInMetricsPills(log)}
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-
-        ${excusedList.length > 0 ? `
-          <div class="space-y-2">
-            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-              <span>Excused (${excusedList.length})</span>
-              <span class="text-[10px] text-blue-400 font-normal">Approved Waiver</span>
-            </div>
-            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-36 overflow-y-auto">
-              ${excusedList.map(({ member, waiver }) => {
-                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                return `
-                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-member-uid="${esc(member.uid)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-6 h-6')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400 truncate block">"${esc(waiver?.reason || 'Approved Excuse')}"</span>
-                      </div>
-                    </div>
-                    <span class="badge-waived px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono shrink-0">
-                      Excused
-                    </span>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        ` : ''}
-
-        <div class="space-y-2">
-          <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-            <span>Absent (${penalizedAbsentList.length + unprocessedAbsentList.length})</span>
-            ${(isAdminUser && isClosed && unprocessedAbsentList.length > 0) ? `
-              <button type="button" id="btn-penalize-all-absent" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
-                <span>Penalize All Unprocessed (${unprocessedAbsentList.length})</span>
-              </button>
-            ` : ''}
-          </div>
-          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-48 overflow-y-auto">
-            ${(penalizedAbsentList.length === 0 && unprocessedAbsentList.length === 0) ? `
-              <div class="p-3 text-xs text-emerald-400 text-center">All assigned members present or excused!</div>
-            ` : `
-              ${penalizedAbsentList.map(({ member, log }) => {
-                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                return `
-                  <div class="roster-log-item p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400 font-mono">${formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true)}</span>
-                      </div>
-                    </div>
-                    <div class="text-right shrink-0">
-                      ${renderCheckInMetricsPills(log)}
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-
-              ${unprocessedAbsentList.map(member => {
-                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                return `
-                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-xl" data-member-uid="${esc(member.uid)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400">Not checked in</span>
-                      </div>
-                    </div>
-                    <div class="flex items-center gap-1.5 shrink-0">
-                      <span class="badge-unprocessed px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono">
-                        ${isClosed ? 'Absent' : 'Pending'}
-                      </span>
-                      ${(isAdminUser && isClosed) ? `
-                        <button type="button" class="btn-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
-                          Penalize
-                        </button>
-                      ` : ''}
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            `}
-          </div>
-        </div>
-      `;
-
-      const occSelect = container.querySelector('#sel-roster-occurrence');
-      if (occSelect) {
-        occSelect.onchange = (e) => {
-          selectedOccKey = e.target.value;
-          selectedOccStartMs = occurrenceOptions.get(selectedOccKey) || nowMs;
-          renderRosterView();
-        };
-      }
-
-      container.querySelectorAll('.badge-row-container').forEach(c => {
-        const uid = c.dataset.uid;
-        const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-        if (mem) renderBadgeRow(c, mem.badges, mem);
-      });
-
-      if (isAdminUser) {
-        container.querySelectorAll('.roster-log-item').forEach(row => {
-          row.onclick = () => {
-            const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
-            if (targetLog) openAdminLogEditModal(targetLog, session);
-          };
-        });
-      }
-
-      container.querySelectorAll('.roster-member-row').forEach(row => {
-        row.onclick = (e) => {
-          if (e.target.closest('button')) return;
-          const uid = row.dataset.memberUid;
-          if (uid) openMiniProfileSheet(uid);
-        };
-      });
-
-      const penalizeAllBtn = container.querySelector('#btn-penalize-all-absent');
-      if (penalizeAllBtn) {
-        penalizeAllBtn.onclick = () => {
-          applyAbsencePenalties([...unprocessedAbsentList], penalizeAllBtn);
-        };
-      }
-
-      container.querySelectorAll('.btn-penalize-single').forEach(btn => {
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          const targetUid = btn.dataset.uid;
-          const targetMember = unprocessedAbsentList.find(m => m.uid === targetUid);
-          if (targetMember) applyAbsencePenalties([targetMember], btn);
-        };
-      });
-    };
-
-    renderSubContent();
-  };
-
-  const applyAbsencePenalties = async (targetMembers, buttonEl) => {
-    if (buttonEl) {
-      buttonEl.disabled = true;
-      buttonEl.textContent = 'Processing...';
-    }
-
-    const penaltyPts = (session.penaltyPointsEnabled !== false) ? (session.absencePenalty || session.maxPenalty || 20) : 0;
-    const fineEGP = (session.penaltyFinesEnabled) ? (session.absenceFineEGP || session.maxPenalty || 50) : 0;
-    const pointsDelta = penaltyPts > 0 ? -penaltyPts : 0;
-    const egpDelta = fineEGP > 0 ? -fineEGP : 0;
-
-    let processedCount = 0;
-    try {
-      for (const m of targetMembers) {
-        const deterministicId = `${session.id}_${selectedOccKey}_${m.uid}`;
-
-        const existingInMem = sessionLogs.find(l => l.id === deterministicId);
-        if (existingInMem) continue;
-
-        const snap = await getDoc(doc(db, 'attendance_logs', deterministicId));
-        if (snap.exists()) continue;
-
-        const batch = writeBatch(db);
-        const logRef = doc(db, 'attendance_logs', deterministicId);
-        const logData = {
-          sessionId: session.id,
-          sessionTitle: session.title,
-          uid: m.uid,
-          userName: m.displayName || m.name || 'Member',
-          userAvatar: m.avatarUrl || m.photoURL || '',
-          occurrenceKey: selectedOccKey,
-          occurrenceStart: Timestamp.fromMillis(selectedOccStartMs),
-          checkedInAt: serverTimestamp(),
-          checkInTimestamp: serverTimestamp(),
-          status: 'absent',
-          earlyMinutes: 0,
-          lateMinutes: 0,
-          lateSeconds: 0,
-          penalty: penaltyPts,
-          fineEGP: fineEGP,
-          pointsDelta,
-          egpDelta,
-          ledgerSynced: true,
-          processedBy: state.user.uid
-        };
-        batch.set(logRef, logData);
-        batch.set(doc(db, 'attendance_records', deterministicId), logData);
-
-        const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
-        if (pointsDelta !== 0) {
-          const targetUserDoc = usersMap.get(m.uid) || m || {};
-          Object.assign(userUpdateObj, buildPointsUpdate(targetUserDoc, pointsDelta));
-          userUpdateObj.penalties = increment(penaltyPts);
-        }
-        if (fineEGP > 0) {
-          userUpdateObj.finesDue = increment(fineEGP);
-          userUpdateObj.fines = increment(fineEGP);
-        }
-        batch.update(doc(db, 'users', m.uid), userUpdateObj);
-
-        if (pointsDelta !== 0) {
-          const txPtsRef = doc(collection(db, 'users', m.uid, 'transactions'));
-          batch.set(txPtsRef, {
-            type: 'penalty',
-            category: 'points',
-            amount: penaltyPts,
-            pointsDelta,
-            sessionId: session.id,
-            logId: deterministicId,
-            reason: `Unexcused absence penalty: ${session.title}`,
-            adminUid: state.user.uid,
-            adminName: state.user.displayName || 'Admin',
-            createdAt: serverTimestamp()
-          });
-        }
-
-        if (fineEGP > 0) {
-          batch.set(doc(db, 'users_private', m.uid), {
-            finesEGP: increment(fineEGP),
-            updatedAt: serverTimestamp()
-          }, { merge: true });
-
-          const txRef = doc(collection(db, 'users', m.uid, 'transactions'));
-          batch.set(txRef, {
-            type: 'fine',
-            category: 'financial',
-            amount: fineEGP,
-            egpDelta,
-            sessionId: session.id,
-            logId: deterministicId,
-            reason: `Unexcused absence penalty: ${session.title}`,
-            adminUid: state.user.uid,
-            adminName: state.user.displayName || 'Admin',
-            createdAt: serverTimestamp()
-          });
-        }
-
-        if (pointsDelta !== 0 || egpDelta !== 0) {
-          const adjRef = doc(collection(db, 'adjustments'), `att_${deterministicId}`);
-          batch.set(adjRef, {
-            uid: m.uid,
-            targetUid: m.uid,
-            userName: m.displayName || m.name || 'Member',
-            type: 'penalty',
-            pointsDelta,
-            egpDelta,
-            amountEGP: egpDelta,
-            reason: `Unexcused Absence: ${session.title}`,
-            source: 'attendance_absence',
-            sessionId: session.id,
-            logId: deterministicId,
-            createdAt: serverTimestamp()
-          });
-        }
-
-        createNotification(batch, {
-          uid: m.uid,
-          title: 'Absence Penalty Recorded',
-          message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? '-' + penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' -' + fineEGP + ' EGP' : ''}).`,
-          type: 'attendance',
-          targetAction: { route: 'attendance' }
-        });
-
-        logAdminAction(batch, {
-          action: 'absence_penalty_applied',
-          targetUid: m.uid,
-          details: { sessionId: session.id, occKey: selectedOccKey, penaltyPts, fineEGP }
-        });
-
-        await batch.commit();
-        processedCount++;
-      }
-
-      toast(`Absence penalty applied for ${processedCount} member(s)`, 'success');
-    } catch (err) {
-      console.error('Error applying absence penalty:', err);
-      toast(err.message || 'Failed to apply absence penalty', 'error');
-    }
-  };
-
-  unsubLogs = onSnapshot(qLogs, (snap) => {
-    sessionLogs = snap.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-    sessionLogs.sort((a, b) => (parseDateTimeToMs(b.checkedInAt) || 0) - (parseDateTimeToMs(a.checkedInAt) || 0));
-    renderRosterView();
-  }, (err) => {
-    console.error('Snapshot error for attendance logs:', err);
-    bodyEl.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load attendance logs: ${esc(err.message)}</div>`;
-  });
-}
-
-export function closeSessionBreakdownModal() {
-  const modal = document.getElementById('modal-session-breakdown');
-  if (modal) {
-    modal.classList.remove('active');
-    modal.style.display = 'none';
-  }
-}
-
-export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false) {
+export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = null, initialOccurrenceStart = null, isReadOnly = false) {
   let rawSession = (typeof sessionOrId === 'string'
     ? state.attendanceSessions.find(s => s.id === sessionOrId)
     : sessionOrId) || sessionOrId;
@@ -17559,88 +16964,117 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
   }
   const session = normalizeSession(rawSession);
 
-  const modal = document.getElementById('modal-session-breakdown');
-  const titleEl = document.getElementById('breakdown-modal-title');
-  const bodyEl = document.getElementById('breakdown-modal-body');
-  const closeBtn = document.getElementById('btn-close-session-breakdown');
+  const getAssignedRosterMembers = () => {
+    const allActiveMembers = (usersMap.size > 0
+      ? Array.from(usersMap.values())
+      : [...(state.members || [])]
+    ).filter(m => m && !m.disabled && !m.blocked);
 
-  if (!modal || !bodyEl) {
-    openAdminRosterModal(session);
-    return;
-  }
-
-  if (titleEl) {
-    titleEl.textContent = `${session.title || 'Session'} Breakdown`;
-  }
-
-  if (closeBtn) {
-    closeBtn.onclick = () => closeSessionBreakdownModal();
-  }
-
-  modal.onclick = (e) => {
-    if (e.target === modal) {
-      closeSessionBreakdownModal();
+    let filtered = allActiveMembers;
+    if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
+      filtered = allActiveMembers.filter(m => {
+        const userBadges = Array.isArray(m.badges) ? m.badges : (Array.isArray(m.badgeIds) ? m.badgeIds : []);
+        return userBadges.some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b));
+      });
+    } else if (session.targetType === 'custom' && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      filtered = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
+    } else if (!session.targetType && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      filtered = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
     }
+    return filtered.length > 0 ? filtered : allActiveMembers;
   };
 
-  modal.style.display = 'flex';
-  modal.classList.add('active');
+  const getLogOccurrenceDateKey = (log) => {
+    if (log.occurrenceDate && typeof log.occurrenceDate === 'string' && log.occurrenceDate.length >= 8) {
+      return log.occurrenceDate;
+    }
+    if (log.occurrenceKey && typeof log.occurrenceKey === 'string' && log.occurrenceKey !== 'once' && /^\d{4}-\d{2}-\d{2}/.test(log.occurrenceKey)) {
+      return log.occurrenceKey;
+    }
+    const ms = parseDateTimeToMs(log.occurrenceStart) ||
+               parseDateTimeToMs(log.checkedInAt) ||
+               parseDateTimeToMs(log.checkInTimestamp) ||
+               parseDateTimeToMs(log.createdAt) ||
+               parseDateTimeToMs(log.date);
+    if (ms) {
+      try {
+        const d = new Date(ms);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      } catch (_) {}
+    }
+    return log.occurrenceKey || 'once';
+  };
 
+  const getLogTimestampMs = (log) => {
+    return parseDateTimeToMs(log.occurrenceStart) ||
+           parseDateTimeToMs(log.checkedInAt) ||
+           parseDateTimeToMs(log.checkInTimestamp) ||
+           parseDateTimeToMs(log.createdAt) ||
+           0;
+  };
+
+  const formatOccurrenceLabel = (dateKey, startMs) => {
+    if (startMs && startMs > 0) {
+      return formatDateTime(startMs, { hour: undefined, minute: undefined });
+    }
+    if (dateKey && dateKey !== 'once' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      const [y, m, d] = dateKey.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      return formatDateTime(dt.getTime(), { hour: undefined, minute: undefined });
+    }
+    return dateKey || 'Session Occurrence';
+  };
+
+  let activeTab = 'occurrence'; // 'occurrence' | 'history'
+  let selectedOccKey = initialOccurrenceKey || null;
+  let selectedOccStartMs = initialOccurrenceStart || null;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4';
   bodyEl.innerHTML = `
     <div class="p-8 text-center text-xs text-neutral-400 flex flex-col items-center justify-center gap-3">
       <div class="w-6 h-6 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
-      <span>Loading attendance records &amp; logs...</span>
+      <span>Loading attendance records &amp; history...</span>
     </div>
   `;
 
+  let unsubLogs = null;
+
+  openModal({
+    title: `${session.title} Details`,
+    body: bodyEl,
+    saveLabel: 'Done',
+    clearStack: true,
+    onSave: async () => true,
+    onClose: () => {
+      if (unsubLogs) {
+        unsubLogs();
+        unsubLogs = null;
+      }
+    }
+  });
+
+  const mergedRecordsMap = new Map();
+  const waiversMap = new Map();
+
+  const addOrUpdateRecord = (raw) => {
+    if (!raw) return;
+    const log = normalizeAttendanceLog(raw);
+    const id = log.id || raw.id || `${session.id}_${log.occurrenceKey}_${log.uid}`;
+    if (mergedRecordsMap.has(id)) {
+      mergedRecordsMap.set(id, { ...mergedRecordsMap.get(id), ...log });
+    } else {
+      mergedRecordsMap.set(id, log);
+    }
+  };
+
   try {
-    const [recordsSnap, logsSnap, waiversSnap] = await Promise.all([
-      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', session.id), limit(300))).catch(() => ({ docs: [] })),
-      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', session.id), limit(300))).catch(() => ({ docs: [] })),
+    const [recSnap, logSnap, waiversSnap] = await Promise.all([
+      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', session.id), limit(500))).catch(() => ({ docs: [] })),
+      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', session.id), limit(500))).catch(() => ({ docs: [] })),
       getDocs(query(collection(db, 'waiver_requests'), where('sessionId', '==', session.id), limit(300))).catch(() => ({ docs: [] }))
     ]);
 
-    const mergedLogsMap = new Map();
-    const allRecords = [];
-    const seenLogDocIds = new Set();
-
-    recordsSnap.docs.forEach(d => {
-      const log = normalizeAttendanceLog({ id: d.id, ...d.data() });
-      seenLogDocIds.add(d.id);
-      allRecords.push(log);
-      const uid = log.uid || log.userId || d.id;
-      if (uid) mergedLogsMap.set(uid, log);
-    });
-
-    logsSnap.docs.forEach(d => {
-      const log = normalizeAttendanceLog({ id: d.id, ...d.data() });
-      if (!seenLogDocIds.has(d.id)) {
-        seenLogDocIds.add(d.id);
-        allRecords.push(log);
-      }
-      const uid = log.uid || log.userId || d.id;
-      if (uid) {
-        if (mergedLogsMap.has(uid)) {
-          mergedLogsMap.set(uid, { ...log, ...mergedLogsMap.get(uid) });
-        } else {
-          mergedLogsMap.set(uid, log);
-        }
-      }
-    });
-
-    (state.attendanceLogs || []).filter(l => l.sessionId === session.id).forEach(l => {
-      const logId = l.id || `${session.id}_${l.occurrenceKey}_${l.uid}`;
-      if (!seenLogDocIds.has(logId)) {
-        seenLogDocIds.add(logId);
-        allRecords.push(normalizeAttendanceLog({ id: logId, ...l }));
-      }
-      const uid = l.uid || l.userId || l.id;
-      if (uid && !mergedLogsMap.has(uid)) {
-        mergedLogsMap.set(uid, l);
-      }
-    });
-
-    const waiversMap = new Map();
     waiversSnap.docs.forEach(d => {
       const w = d.data();
       if (w.status === 'approved') {
@@ -17648,73 +17082,112 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
       }
     });
 
-    const allActiveMembers = (usersMap.size > 0
-      ? Array.from(usersMap.values())
-      : [...(state.members || [])]
-    ).filter(m => m && !m.disabled && !m.blocked);
+    recSnap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
+    logSnap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
+    (state.attendanceLogs || []).filter(l => l.sessionId === session.id).forEach(l => addOrUpdateRecord(l));
+  } catch (err) {
+    console.warn('[openAdminRosterModal] query error:', err);
+  }
 
-    let assignedMembers = allActiveMembers;
-    if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
-      assignedMembers = allActiveMembers.filter(m => {
-        const userBadges = Array.isArray(m.badges) ? m.badges : (Array.isArray(m.badgeIds) ? m.badgeIds : []);
-        return userBadges.some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b));
-      });
-    } else if (session.targetType === 'custom' && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-      assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
-    } else if (!session.targetType && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
-      assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
-    }
-    if (assignedMembers.length === 0) assignedMembers = allActiveMembers;
+  const renderModal = () => {
+    const allRecords = Array.from(mergedRecordsMap.values());
+    const assignedMembers = getAssignedRosterMembers();
+    const isAdminUser = !isReadOnly && isCurrentUserAdmin();
 
-    // Occurrence grouping
+    // Group records by occurrenceDate
     const occGroups = new Map();
     allRecords.forEach(log => {
-      const key = log.occurrenceKey || (log.checkInTimestamp ? formatZonedDateKey(parseDateTimeToMs(log.checkInTimestamp), APP_TIMEZONE) : 'once');
-      if (!occGroups.has(key)) occGroups.set(key, []);
-      occGroups.get(key).push(log);
+      const dateKey = getLogOccurrenceDateKey(log);
+      if (!occGroups.has(dateKey)) {
+        occGroups.set(dateKey, {
+          dateKey,
+          startMs: getLogTimestampMs(log),
+          logs: []
+        });
+      }
+      const grp = occGroups.get(dateKey);
+      grp.logs.push(log);
+      const lMs = getLogTimestampMs(log);
+      if (lMs > grp.startMs) grp.startMs = lMs;
     });
 
     const nowMs = serverNow();
-    const currentOcc = resolveSessionOccurrence(session, nowMs);
-    const latestOccKey = currentOcc ? currentOcc.key : 'once';
-    const sortedOccKeys = Array.from(occGroups.keys()).sort().reverse();
-    const activeLatestKey = (occGroups.has(latestOccKey) || sortedOccKeys.length === 0) ? latestOccKey : sortedOccKeys[0];
+    const currOcc = resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs);
+    const currDateKey = currOcc ? currOcc.key : (session.schedule?.startDateTime ? formatZonedDateKey(parseDateTimeToMs(session.schedule.startDateTime)) : 'once');
+    const currStartMs = currOcc ? currOcc.start : (parseDateTimeToMs(session.schedule?.startDateTime) || nowMs);
 
-    const isAdminUser = !isReadOnly && isCurrentUserAdmin();
-    const penaltyPtsDef = (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
-    const fineAbsenceDef = (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+    if (!occGroups.has(currDateKey)) {
+      occGroups.set(currDateKey, {
+        dateKey: currDateKey,
+        startMs: currStartMs,
+        logs: []
+      });
+    }
 
-    let currentBreakdownTab = 'latest';
+    const sortedOccGroups = Array.from(occGroups.values()).sort((a, b) => (b.startMs || 0) - (a.startMs || 0));
+
+    if (!selectedOccKey) {
+      const hasLogsForCurr = occGroups.get(currDateKey)?.logs.length > 0;
+      if (hasLogsForCurr || sortedOccGroups.length <= 1) {
+        selectedOccKey = currDateKey;
+        selectedOccStartMs = currStartMs;
+      } else {
+        selectedOccKey = sortedOccGroups[0]?.dateKey || currDateKey;
+        selectedOccStartMs = sortedOccGroups[0]?.startMs || currStartMs;
+      }
+    }
 
     bodyEl.innerHTML = `
       <div class="space-y-3.5">
-        <div id="mount-breakdown-subtabs" class="w-full"></div>
-        <div id="breakdown-subtab-content" class="space-y-4"></div>
+        <div id="mount-admin-roster-segmented" class="w-full"></div>
+        <div id="admin-roster-tab-content" class="space-y-4"></div>
       </div>
     `;
 
-    const subtabsMount = bodyEl.querySelector('#mount-breakdown-subtabs');
-    const subtabContent = bodyEl.querySelector('#breakdown-subtab-content');
+    const segMount = bodyEl.querySelector('#mount-admin-roster-segmented');
+    const tabContent = bodyEl.querySelector('#admin-roster-tab-content');
 
-    const renderActiveSubTab = () => {
-      if (!subtabContent) return;
+    if (segMount) {
+      segMount.appendChild(renderSegmented({
+        id: 'segmented-roster-subtabs',
+        options: [
+          { value: 'occurrence', label: 'This Occurrence' },
+          { value: 'history', label: 'Session History' }
+        ],
+        value: activeTab,
+        onChange: (val) => {
+          activeTab = val;
+          renderTabContent();
+        }
+      }));
+    }
 
-      if (currentBreakdownTab === 'latest') {
-        // --- TAB 1: LATEST OCCURRENCE ---
-        const latestLogs = occGroups.get(activeLatestKey) || (sortedOccKeys.length > 0 ? occGroups.get(sortedOccKeys[0]) || [] : Array.from(mergedLogsMap.values()));
-        const latestLogsMap = new Map();
-        latestLogs.forEach(l => {
+    const renderTabContent = () => {
+      if (!tabContent) return;
+
+      if (activeTab === 'occurrence') {
+        // --- TAB 1: THIS OCCURRENCE ---
+        const activeOccRecord = occGroups.get(selectedOccKey) || { dateKey: selectedOccKey, startMs: selectedOccStartMs || nowMs, logs: [] };
+        const occLogs = activeOccRecord.logs;
+        const occStartMs = activeOccRecord.startMs || selectedOccStartMs || nowMs;
+
+        const attendedMap = new Map();
+        occLogs.forEach(l => {
           const uid = l.uid || l.userId;
-          if (uid) latestLogsMap.set(uid, l);
+          if (uid) attendedMap.set(uid, l);
         });
 
-        const handledUids = new Set();
         const attendedList = [];
         const excusedList = [];
         const penalizedAbsentList = [];
         const unprocessedAbsentList = [];
+        const handledUids = new Set();
 
-        latestLogsMap.forEach((log, uid) => {
+        const occCutoffMs = occStartMs + (Number(session.lateCutoffMinutes) || 120) * 60000;
+        const isClosed = session.status === 'closed' || session.status === 'completed' || nowMs > occCutoffMs;
+
+        // Tally logs
+        attendedMap.forEach((log, uid) => {
           handledUids.add(uid);
           const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {
             uid,
@@ -17733,6 +17206,7 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
           }
         });
 
+        // Roster members not in logs
         assignedMembers.forEach(m => {
           if (handledUids.has(m.uid)) return;
           handledUids.add(m.uid);
@@ -17743,24 +17217,50 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
           }
         });
 
-        attendedList.sort((a, b) => {
-          const msA = parseDateTimeToMs(a.log.checkInTimestamp || a.log.checkedInAt || a.log.createdAt) || 0;
-          const msB = parseDateTimeToMs(b.log.checkInTimestamp || b.log.checkedInAt || b.log.createdAt) || 0;
-          return msB - msA;
-        });
+        attendedList.sort((a, b) => (getLogTimestampMs(b.log) - getLogTimestampMs(a.log)));
 
         const totalAssigned = Math.max(assignedMembers.length, handledUids.size);
         const onTimeCount = attendedList.filter(p => p.log.status === 'on_time' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
-        const lateCount = attendedList.filter(p => p.log.status === 'late' || p.log.penalty > 0 || p.log.fineEGP > 0).length;
+        const lateCount = attendedList.filter(p => p.log.status === 'late' || Number(p.log.penalty) > 0 || Number(p.log.fineEGP) > 0).length;
         const earlyCount = attendedList.filter(p => p.log.status === 'early' || Number(p.log.earlyMinutes) > 0).length;
         const totalAbsent = penalizedAbsentList.length + unprocessedAbsentList.length;
 
-        const totalPenalties = attendedList.reduce((sum, p) => sum + (p.log.penalty || 0), 0) +
-          penalizedAbsentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0);
-        const totalFines = attendedList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0) +
-          penalizedAbsentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0);
+        const totalPenalties = attendedList.reduce((sum, p) => sum + (Number(p.log.penalty) || 0), 0) +
+          penalizedAbsentList.reduce((sum, p) => sum + (Number(p.log.penalty) || 0), 0);
+        const totalFines = attendedList.reduce((sum, p) => sum + (Number(p.log.fineEGP) || 0), 0) +
+          penalizedAbsentList.reduce((sum, p) => sum + (Number(p.log.fineEGP) || 0), 0);
 
-        subtabContent.innerHTML = `
+        const penaltyPtsDef = (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
+        const fineAbsenceDef = (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+
+        let occPickerHtml = '';
+        if (sortedOccGroups.length > 1) {
+          occPickerHtml = `
+            <div class="flex items-center gap-2 pb-1">
+              <label class="text-[11px] text-neutral-400 shrink-0 font-medium">Select Occurrence Date:</label>
+              <select id="sel-admin-roster-occ" class="ios-input text-xs py-1 px-2.5 flex-1 font-mono">
+                ${sortedOccGroups.map(g => `
+                  <option value="${esc(g.dateKey)}" ${g.dateKey === selectedOccKey ? 'selected' : ''}>
+                    ${formatOccurrenceLabel(g.dateKey, g.startMs)}${g.dateKey === currDateKey ? ' (Current)' : ''}
+                  </option>
+                `).join('')}
+              </select>
+            </div>
+          `;
+        }
+
+        tabContent.innerHTML = `
+          ${occPickerHtml}
+
+          <div class="flex items-center justify-between pb-1">
+            <div class="space-y-0.5">
+              <span class="text-xs text-neutral-400">Date: <strong class="text-white">${formatOccurrenceLabel(selectedOccKey, occStartMs)}</strong></span>
+            </div>
+            <span class="font-mono text-[10px] px-2 py-0.5 rounded-full ${isClosed ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}">
+              ${isClosed ? 'Window Closed' : 'Check-in Open'}
+            </span>
+          </div>
+
           <!-- Overview Stats Grid -->
           <div class="grid grid-cols-4 gap-2 text-center text-xs">
             <div class="p-2.5 rounded-xl bg-white/[0.04] border border-white/10">
@@ -17793,19 +17293,19 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
               <span>Attended Members (${attendedList.length})</span>
               <span class="text-[10px] text-emerald-400 font-normal">
-                ${earlyCount > 0 ? `${earlyCount} early · ` : ''}${onTimeCount} on time · ${lateCount} late
+                ${earlyCount > 0 ? `${earlyCount} early · ` : ''}${onTimeCount} on time · ${lateCount} late${isAdminUser ? ' · Tap to edit' : ''}
               </span>
             </div>
             <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-72 overflow-y-auto">
               ${attendedList.length === 0 ? `
-                <div class="p-4 text-xs text-neutral-400 text-center">No check-ins recorded for this occurrence.</div>
+                <div class="p-4 text-xs text-neutral-400 text-center">No check-ins recorded for this occurrence yet.</div>
               ` : attendedList.map(({ member, log }) => {
                 const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                const exactTime = getLogExactTimeStr(log, true);
+                const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
                 const tierLabel = log.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(log.appliedTierLabel)}</span>` : '';
 
                 return `
-                  <div class="roster-breakdown-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
+                  <div class="admin-roster-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
                     <div class="flex items-center gap-2.5 min-w-0 flex-1">
                       <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
                       <div class="min-w-0 flex-1">
@@ -17833,7 +17333,7 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
               <span>Absent Members (${totalAbsent})</span>
               ${(isAdminUser && unprocessedAbsentList.length > 0) ? `
-                <button type="button" id="btn-breakdown-penalize-all" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
+                <button type="button" id="btn-roster-penalize-all" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
                   <span>Penalize All Unprocessed (${unprocessedAbsentList.length})</span>
                 </button>
               ` : ''}
@@ -17844,9 +17344,9 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
               ` : `
                 ${penalizedAbsentList.map(({ member, log }) => {
                   const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                  const exactTime = getLogExactTimeStr(log, true);
+                  const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
                   return `
-                    <div class="roster-breakdown-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
+                    <div class="admin-roster-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
                       <div class="flex items-center gap-2.5 min-w-0 flex-1">
                         <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
                         <div class="min-w-0 flex-1">
@@ -17875,7 +17375,7 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
                       <div class="flex items-center gap-2 shrink-0">
                         <span class="checkin-timing-pill pill-absent">Absent</span>
                         ${isAdminUser ? `
-                          <button type="button" class="btn-breakdown-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
+                          <button type="button" class="btn-roster-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
                             Penalize
                           </button>
                         ` : ''}
@@ -17916,55 +17416,67 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
           ` : ''}
         `;
 
-        // Render badges
-        subtabContent.querySelectorAll('.badge-row-container').forEach(c => {
+        const selOcc = tabContent.querySelector('#sel-admin-roster-occ');
+        if (selOcc) {
+          selOcc.onchange = (e) => {
+            selectedOccKey = e.target.value;
+            const targetGrp = occGroups.get(selectedOccKey);
+            selectedOccStartMs = targetGrp ? targetGrp.startMs : nowMs;
+            renderTabContent();
+          };
+        }
+
+        tabContent.querySelectorAll('.badge-row-container').forEach(c => {
           const uid = c.dataset.uid;
           const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
           if (mem) renderBadgeRow(c, mem.badges, mem);
         });
 
-        // Wire row clicks for editing
         if (isAdminUser) {
-          subtabContent.querySelectorAll('.roster-breakdown-row').forEach(row => {
+          tabContent.querySelectorAll('.admin-roster-row').forEach(row => {
             row.onclick = () => {
               const logId = row.dataset.logId;
-              const targetLog = allRecords.find(l => l.id === logId) || mergedLogsMap.get(row.dataset.uid);
+              const targetLog = allRecords.find(l => l.id === logId) || mergedRecordsMap.get(logId);
               if (targetLog) openAdminLogEditModal(targetLog, session);
             };
           });
         }
 
-        const penalizeAllBtn = subtabContent.querySelector('#btn-breakdown-penalize-all');
+        const penalizeAllBtn = tabContent.querySelector('#btn-roster-penalize-all');
         if (penalizeAllBtn) {
           penalizeAllBtn.onclick = () => {
-            penalizeAbsentMembersInBreakdown([...unprocessedAbsentList], penalizeAllBtn);
+            penalizeAbsentMembers([...unprocessedAbsentList], penalizeAllBtn);
           };
         }
 
-        subtabContent.querySelectorAll('.btn-breakdown-penalize-single').forEach(btn => {
+        tabContent.querySelectorAll('.btn-roster-penalize-single').forEach(btn => {
           btn.onclick = (e) => {
             e.stopPropagation();
             const targetUid = btn.dataset.uid;
             const targetMember = unprocessedAbsentList.find(m => m.uid === targetUid);
-            if (targetMember) penalizeAbsentMembersInBreakdown([targetMember], btn);
+            if (targetMember) penalizeAbsentMembers([targetMember], btn);
           };
         });
 
       } else {
-        // --- TAB 2: FULL HISTORY ---
-        if (sortedOccKeys.length === 0) {
-          subtabContent.innerHTML = `
+        // --- TAB 2: SESSION HISTORY ---
+        if (sortedOccGroups.length === 0) {
+          tabContent.innerHTML = `
             <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-2xl">
-              No historical check-in occurrences found for this session yet.
+              No historical check-in occurrences recorded for this session yet.
             </div>
           `;
           return;
         }
 
-        subtabContent.innerHTML = `
+        tabContent.innerHTML = `
           <div class="space-y-3">
-            ${sortedOccKeys.map(occKey => {
-              const logsForOcc = occGroups.get(occKey) || [];
+            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+              <span>All Historical Occurrences (${sortedOccGroups.length})</span>
+              <span class="text-[10px] text-neutral-400 font-normal">Click any occurrence to view or edit details</span>
+            </div>
+            ${sortedOccGroups.map(grp => {
+              const logsForOcc = grp.logs;
               const occAttended = logsForOcc.filter(l => l.status !== 'absent' && l.status !== 'excused').length;
               const occLate = logsForOcc.filter(l => l.status === 'late' || Number(l.penalty) > 0 || Number(l.fineEGP) > 0).length;
               const occAbsent = logsForOcc.filter(l => l.status === 'absent').length;
@@ -17974,23 +17486,37 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
               const totalFineDed = logsForOcc.reduce((acc, l) => acc + (Number(l.fineEGP) || 0), 0);
 
               return `
-                <div class="inset-group space-y-2 p-3 bg-white/[0.02] border border-white/10 rounded-2xl">
+                <div class="history-occurrence-card p-3 rounded-2xl bg-white/[0.02] border border-white/10 space-y-2.5 transition hover:bg-white/[0.04] cursor-pointer" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
                   <div class="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
                     <div>
-                      <span class="text-xs font-bold text-white block">Occurrence: ${esc(occKey)}</span>
-                      <span class="text-[10px] text-neutral-400">${occAttended} attended • ${occLate} late • ${occAbsent} absent${occExcused > 0 ? ` • ${occExcused} excused` : ''}</span>
-                    </div>
-                    ${(totalPtsDed > 0 || totalFineDed > 0) ? `
-                      <span class="text-[10px] font-mono text-rose-400 px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20">
-                        ${totalPtsDed > 0 ? `-${totalPtsDed} pts ` : ''}${totalFineDed > 0 ? `-${totalFineDed} EGP` : ''}
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs font-bold text-white">${formatOccurrenceLabel(grp.dateKey, grp.startMs)}</span>
+                        ${grp.dateKey === currDateKey ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Current</span>` : ''}
+                      </div>
+                      <span class="text-[10px] text-neutral-400 font-mono mt-0.5 block">
+                        ${occAttended} attended • ${occLate} late • ${occAbsent} absent${occExcused > 0 ? ` • ${occExcused} excused` : ''}
                       </span>
-                    ` : ''}
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                      ${(totalPtsDed > 0 || totalFineDed > 0) ? `
+                        <span class="text-[10px] font-mono text-rose-400 px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20">
+                          ${totalPtsDed > 0 ? `-${totalPtsDed} pts ` : ''}${totalFineDed > 0 ? `-${totalFineDed} EGP` : ''}
+                        </span>
+                      ` : ''}
+                      <button type="button" class="btn-load-occ-breakdown px-2.5 py-1 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] text-[11px] font-semibold border border-[#0A84FF]/30 transition flex items-center gap-1" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                        <span>View Details</span>
+                        <svg class="w-3 h-3 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                      </button>
+                    </div>
                   </div>
+
                   <div class="divide-y divide-white/5 max-h-48 overflow-y-auto">
-                    ${logsForOcc.map(log => {
+                    ${logsForOcc.length === 0 ? `
+                      <div class="p-2 text-xs text-neutral-500 text-center">No individual check-ins recorded for this occurrence.</div>
+                    ` : logsForOcc.map(log => {
                       const memberUid = log.uid || log.userId;
                       const prof = getUserProfile(memberUid, log.userName || log.displayName || 'Member', log.userAvatar);
-                      const exactTime = getLogExactTimeStr(log, true);
+                      const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
                       const tierLabel = log.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(log.appliedTierLabel)}</span>` : '';
 
                       return `
@@ -18018,11 +17544,32 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
           </div>
         `;
 
+        tabContent.querySelectorAll('.history-occurrence-card').forEach(card => {
+          card.onclick = (e) => {
+            if (e.target.closest('.history-log-row')) return;
+            selectedOccKey = card.dataset.dateKey;
+            selectedOccStartMs = Number(card.dataset.startMs) || nowMs;
+            activeTab = 'occurrence';
+            renderModal();
+          };
+        });
+
+        tabContent.querySelectorAll('.btn-load-occ-breakdown').forEach(btn => {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            selectedOccKey = btn.dataset.dateKey;
+            selectedOccStartMs = Number(btn.dataset.startMs) || nowMs;
+            activeTab = 'occurrence';
+            renderModal();
+          };
+        });
+
         if (isAdminUser) {
-          subtabContent.querySelectorAll('.history-log-row').forEach(row => {
-            row.onclick = () => {
+          tabContent.querySelectorAll('.history-log-row').forEach(row => {
+            row.onclick = (e) => {
+              e.stopPropagation();
               const logId = row.dataset.logId;
-              const targetLog = allRecords.find(l => l.id === logId);
+              const targetLog = allRecords.find(l => l.id === logId) || mergedRecordsMap.get(logId);
               if (targetLog) openAdminLogEditModal(targetLog, session);
             };
           });
@@ -18030,138 +17577,128 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
       }
     };
 
-    if (subtabsMount) {
-      subtabsMount.appendChild(renderSegmented({
-        id: 'segmented-breakdown-subtabs',
-        options: [
-          { value: 'latest', label: 'Latest Occurrence' },
-          { value: 'history', label: 'Full History' }
-        ],
-        value: currentBreakdownTab,
-        onChange: (val) => {
-          currentBreakdownTab = val;
-          renderActiveSubTab();
-        }
-      }));
+    renderTabContent();
+  };
+
+  const penalizeAbsentMembers = async (targetMembers, buttonEl) => {
+    if (buttonEl) {
+      buttonEl.disabled = true;
+      buttonEl.textContent = 'Processing...';
     }
 
-    renderActiveSubTab();
+    const penaltyPtsDef = (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
+    const fineAbsenceDef = (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+    const pointsDelta = penaltyPtsDef > 0 ? -penaltyPtsDef : 0;
+    const egpDelta = fineAbsenceDef > 0 ? -fineAbsenceDef : 0;
+    const occKey = selectedOccKey || 'once';
 
-    // Helper to penalize unprocessed absent members
-    const penalizeAbsentMembersInBreakdown = async (targetMembers, buttonEl) => {
-      if (buttonEl) {
-        buttonEl.disabled = true;
-        buttonEl.textContent = 'Processing...';
-      }
+    let processedCount = 0;
+    try {
+      for (const m of targetMembers) {
+        const deterministicId = `${session.id}_${occKey}_${m.uid}`;
+        const batch = writeBatch(db);
+        const logData = {
+          sessionId: session.id,
+          sessionTitle: session.title,
+          uid: m.uid,
+          userName: m.displayName || m.name || 'Member',
+          userAvatar: m.avatarUrl || m.photoURL || '',
+          occurrenceKey: occKey,
+          occurrenceDate: occKey,
+          occurrenceStart: serverTimestamp(),
+          checkedInAt: serverTimestamp(),
+          checkInTimestamp: serverTimestamp(),
+          status: 'absent',
+          earlyMinutes: 0,
+          lateMinutes: 0,
+          lateSeconds: 0,
+          penalty: penaltyPtsDef,
+          fineEGP: fineAbsenceDef,
+          pointsDelta,
+          egpDelta,
+          ledgerSynced: true,
+          processedBy: state.user?.uid || 'admin'
+        };
 
-      const penaltyPts = penaltyPtsDef;
-      const fineEGP = fineAbsenceDef;
-      const pointsDelta = penaltyPts > 0 ? -penaltyPts : 0;
-      const egpDelta = fineEGP > 0 ? -fineEGP : 0;
-      const occKey = activeLatestKey !== 'once' ? activeLatestKey : new Date().toISOString().slice(0, 10);
+        batch.set(doc(db, 'attendance_logs', deterministicId), logData);
+        batch.set(doc(db, 'attendance_records', deterministicId), logData);
 
-      let processedCount = 0;
-      try {
-        for (const m of targetMembers) {
-          const deterministicId = `${session.id}_${occKey}_${m.uid}`;
-          const batch = writeBatch(db);
-          const logData = {
-            sessionId: session.id,
-            sessionTitle: session.title,
+        const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
+        if (pointsDelta !== 0) {
+          const targetUserDoc = usersMap.get(m.uid) || m || {};
+          Object.assign(userUpdateObj, buildPointsUpdate(targetUserDoc, pointsDelta));
+          userUpdateObj.penalties = increment(penaltyPtsDef);
+        }
+        if (fineAbsenceDef > 0) {
+          userUpdateObj.finesDue = increment(fineAbsenceDef);
+          userUpdateObj.fines = increment(fineAbsenceDef);
+          batch.set(doc(db, 'users_private', m.uid), {
+            finesEGP: increment(fineAbsenceDef),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
+        batch.update(doc(db, 'users', m.uid), userUpdateObj);
+
+        if (pointsDelta !== 0 || egpDelta !== 0) {
+          const adjRef = doc(collection(db, 'adjustments'), `att_${deterministicId}`);
+          batch.set(adjRef, {
             uid: m.uid,
+            targetUid: m.uid,
             userName: m.displayName || m.name || 'Member',
-            userAvatar: m.avatarUrl || m.photoURL || '',
-            occurrenceKey: occKey,
-            occurrenceStart: serverTimestamp(),
-            checkedInAt: serverTimestamp(),
-            checkInTimestamp: serverTimestamp(),
-            status: 'absent',
-            earlyMinutes: 0,
-            lateMinutes: 0,
-            lateSeconds: 0,
-            penalty: penaltyPts,
-            fineEGP: fineEGP,
+            type: 'penalty',
             pointsDelta,
             egpDelta,
-            ledgerSynced: true,
-            processedBy: state.user?.uid || 'admin'
-          };
-          batch.set(doc(db, 'attendance_logs', deterministicId), logData);
-          batch.set(doc(db, 'attendance_records', deterministicId), logData);
-
-          const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
-          if (pointsDelta !== 0) {
-            const targetUserDoc = usersMap.get(m.uid) || m || {};
-            Object.assign(userUpdateObj, buildPointsUpdate(targetUserDoc, pointsDelta));
-            userUpdateObj.penalties = increment(penaltyPts);
-          }
-          if (fineEGP > 0) {
-            userUpdateObj.finesDue = increment(fineEGP);
-            userUpdateObj.fines = increment(fineEGP);
-            batch.set(doc(db, 'users_private', m.uid), {
-              finesEGP: increment(fineEGP),
-              updatedAt: serverTimestamp()
-            }, { merge: true });
-          }
-          batch.update(doc(db, 'users', m.uid), userUpdateObj);
-
-          if (pointsDelta !== 0 || egpDelta !== 0) {
-            const adjRef = doc(collection(db, 'adjustments'), `att_${deterministicId}`);
-            batch.set(adjRef, {
-              uid: m.uid,
-              targetUid: m.uid,
-              userName: m.displayName || m.name || 'Member',
-              type: 'penalty',
-              pointsDelta,
-              egpDelta,
-              amountEGP: egpDelta,
-              reason: `Absent: ${session.title}`,
-              source: 'attendance_absence',
-              sessionId: session.id,
-              logId: deterministicId,
-              createdAt: serverTimestamp(),
-              timestamp: serverTimestamp()
-            });
-          }
-
-          createNotification(batch, {
-            uid: m.uid,
-            title: 'Absence Penalty Recorded',
-            message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? '-' + penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' -' + fineEGP + ' EGP' : ''}).`,
-            type: 'attendance',
-            targetAction: { route: 'attendance' }
+            amountEGP: egpDelta,
+            reason: `Absent: ${session.title}`,
+            source: 'attendance_absence',
+            sessionId: session.id,
+            logId: deterministicId,
+            createdAt: serverTimestamp(),
+            timestamp: serverTimestamp()
           });
+        }
 
-          await batch.commit();
-          processedCount++;
-        }
-        toast(`Absence penalty applied for ${processedCount} member(s)`, 'success');
-        openSessionBreakdownModal(session, isReadOnly);
-      } catch (err) {
-        console.error('Error applying absence penalty:', err);
-        toast(err.message || 'Failed to apply absence penalty', 'error');
-        if (buttonEl) {
-          buttonEl.disabled = false;
-          buttonEl.textContent = 'Retry';
-        }
+        createNotification(batch, {
+          uid: m.uid,
+          title: 'Absence Penalty Recorded',
+          message: `Unexcused absence recorded for "${session.title}" (${penaltyPtsDef > 0 ? '-' + penaltyPtsDef + ' pts' : ''}${fineAbsenceDef > 0 ? ' -' + fineAbsenceDef + ' EGP' : ''}).`,
+          type: 'attendance',
+          targetAction: { route: 'attendance' }
+        });
+
+        await batch.commit();
+        addOrUpdateRecord({ id: deterministicId, ...logData });
+        processedCount++;
       }
-    };
 
-  } catch (err) {
-    console.error('Failed to load session breakdown:', err);
-    bodyEl.innerHTML = `
-      <div class="p-6 text-center text-xs text-rose-400 space-y-2">
-        <p>Failed to load attendance records: ${esc(err.message || err)}</p>
-        <button type="button" id="btn-retry-breakdown-modal" class="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold transition">
-          Retry
-        </button>
-      </div>
-    `;
-    const retryBtn = bodyEl.querySelector('#btn-retry-breakdown-modal');
-    if (retryBtn) {
-      retryBtn.onclick = () => openSessionBreakdownModal(session, isReadOnly);
+      toast(`Absence penalty applied for ${processedCount} member(s)`, 'success');
+      hydrateSessionCardStats(session.id);
+      renderModal();
+    } catch (err) {
+      console.error('Error applying absence penalty:', err);
+      toast(err.message || 'Failed to apply absence penalty', 'error');
+      if (buttonEl) {
+        buttonEl.disabled = false;
+        buttonEl.textContent = 'Retry';
+      }
     }
-  }
+  };
+
+  renderModal();
+
+  // Listen to attendance_logs updates
+  unsubLogs = onSnapshot(query(collection(db, 'attendance_logs'), where('sessionId', '==', session.id), limit(300)), (snap) => {
+    snap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
+    renderModal();
+  }, (err) => console.warn('[openAdminRosterModal] logs listener:', err));
+}
+
+export function closeSessionBreakdownModal() {
+  closeModal();
+}
+
+export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false) {
+  return openAdminRosterModal(sessionOrId, null, null, isReadOnly);
 }
 
 function renderAdminAttendanceLogs() {
@@ -24034,6 +23571,7 @@ if (typeof window !== 'undefined') {
   window.formatCheckInExactTime = formatCheckInExactTime;
   window.renderCheckInMetricsPills = renderCheckInMetricsPills;
   window.renderUserSessionHistory = renderUserSessionHistory;
+  window.openAdminRosterModal = openAdminRosterModal;
   window.openSessionBreakdownModal = openSessionBreakdownModal;
   window.closeSessionBreakdownModal = closeSessionBreakdownModal;
   window.getLogExactTimeStr = getLogExactTimeStr;

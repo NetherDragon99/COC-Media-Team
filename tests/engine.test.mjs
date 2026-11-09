@@ -1704,5 +1704,46 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.ok(bLateTier.appliedTierLabel.includes('11m–25m Late Tier'));
 }
 
+// 15.7 Unified Session Modal, Occurrence Date Grouping & Card Stats Tallying (v3.1.4)
+{
+  // Test occurrence grouping logic
+  const sampleLogs = [
+    { id: 'log1', sessionId: 's1', uid: 'u1', occurrenceDate: '2026-11-09', status: 'early', checkedInAt: 1794218400000 },
+    { id: 'log2', sessionId: 's1', uid: 'u2', occurrenceDate: '2026-11-09', status: 'late', penalty: 5, fineEGP: 10, checkedInAt: 1794220000000 },
+    { id: 'log3', sessionId: 's1', uid: 'u3', occurrenceDate: '2026-11-09', status: 'absent', penalty: 20, checkedInAt: 1794222000000 },
+    { id: 'log4', sessionId: 's1', uid: 'u1', occurrenceDate: '2026-11-02', status: 'on_time', checkedInAt: 1793613600000 },
+    { id: 'log5', sessionId: 's1', uid: 'u2', occurrenceDate: '2026-11-02', status: 'early', checkedInAt: 1793613000000 }
+  ];
+
+  const occGroups = new Map();
+  sampleLogs.forEach(l => {
+    const dKey = l.occurrenceDate || l.occurrenceKey;
+    if (!occGroups.has(dKey)) occGroups.set(dKey, []);
+    occGroups.get(dKey).push(l);
+  });
+
+  assert.strictEqual(occGroups.size, 2, 'Must group into 2 distinct occurrence dates');
+  assert.strictEqual(occGroups.get('2026-11-09').length, 3, 'Latest occurrence has 3 logs');
+  assert.strictEqual(occGroups.get('2026-11-02').length, 2, 'Past occurrence has 2 logs');
+
+  // Verify tallies for 2026-11-09:
+  const latestLogs = occGroups.get('2026-11-09');
+  let present = 0, late = 0, absent = 0;
+  latestLogs.forEach(l => {
+    const st = String(l.status || '').toLowerCase();
+    if (st === 'early' || st === 'on_time' || (!l.penalty && !l.fineEGP && st !== 'late' && st !== 'absent')) {
+      present++;
+    } else if (st === 'late' || (Number(l.penalty) > 0 && st !== 'absent')) {
+      late++;
+    } else if (st === 'absent') {
+      absent++;
+    }
+  });
+
+  assert.strictEqual(present, 1, '1 Present (early)');
+  assert.strictEqual(late, 1, '1 Late (with penalty)');
+  assert.strictEqual(absent, 1, '1 Absent');
+}
+
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
 

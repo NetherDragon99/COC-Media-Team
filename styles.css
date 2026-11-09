@@ -3820,4 +3820,14 @@ input[type="search"],
   max-height: 90vh;
 }
 
+.history-occurrence-card {
+  transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.history-occurrence-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+
 
