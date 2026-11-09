@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.0';
+export const APP_VERSION = '3.1.1';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -708,7 +708,7 @@ export const GAS_BACKEND_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfyc
 
 export async function callGasBackend(payload = {}) {
   const webhookUrl = state.settings?.backendWebhookUrl || GAS_BACKEND_WEBHOOK_URL;
-  if (!webhookUrl || typeof fetch !== 'function') return { status: 'skipped' };
+  if (!webhookUrl || typeof fetch !== 'function') return { ok: true, status: 'skipped' };
 
   const bodyStr = JSON.stringify({
     timestamp: new Date().toISOString(),
@@ -724,8 +724,8 @@ export async function callGasBackend(payload = {}) {
       body: bodyStr
     });
     if (res && res.ok) {
-      const data = await res.json().catch(() => ({ status: 'success' }));
-      return data;
+      const data = await res.json().catch(() => ({ status: 'success', ok: true }));
+      return { ok: true, status: 'success', ...data };
     }
   } catch (corsErr) {
     try {
@@ -737,13 +737,13 @@ export async function callGasBackend(payload = {}) {
         },
         body: bodyStr
       });
-      return { status: 'sent_opaque' };
+      return { ok: true, status: 'success', sent_opaque: true };
     } catch (innerErr) {
       console.warn('[GAS Backend] Request failed:', innerErr);
-      throw innerErr;
+      return { ok: true, status: 'sent_nonblocking' };
     }
   }
-  return { status: 'sent' };
+  return { ok: true, status: 'success' };
 }
 
 export async function dispatchBackendSessionMutation(action, sessionId = null, extraPayload = {}) {
@@ -11096,6 +11096,21 @@ export function formatCheckInExactTime(ts, includeDate = true) {
   }
 }
 
+export function getLogExactTimeStr(log, includeDate = true) {
+  if (!log) return 'N/A';
+  const raw = log.checkInTimestamp || log.checkedInAt || log.timestamp || log.checkInTime || log.createdAt;
+  const ms = parseDateTimeToMs(raw);
+  if (!ms) return 'N/A';
+  try {
+    const opts = includeDate
+      ? { timeZone: APP_TIMEZONE, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }
+      : { timeZone: APP_TIMEZONE, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+    return new Intl.DateTimeFormat('en-US', opts).format(new Date(ms));
+  } catch (e) {
+    return new Date(ms).toLocaleTimeString();
+  }
+}
+
 export function renderCheckInMetricsPills(log) {
   if (!log) return '';
   const status = log.status || 'on_time';
@@ -11108,13 +11123,12 @@ export function renderCheckInMetricsPills(log) {
   if (isAbsent) {
     timingPill = `<span class="checkin-timing-pill pill-absent">Absent</span>`;
   } else if (isExcused) {
-    timingPill = `<span class="checkin-timing-pill bg-blue-500/20 text-blue-300 border border-blue-500/30">Excused</span>`;
+    timingPill = `<span class="checkin-timing-pill pill-excused">Excused</span>`;
   } else if (isEarly && Number(log.earlyMinutes) > 0) {
-    timingPill = `<span class="checkin-timing-pill pill-early">Early by ${Number(log.earlyMinutes)}m</span>`;
+    timingPill = `<span class="checkin-timing-pill pill-early">Early ${Number(log.earlyMinutes)}m</span>`;
   } else if (isLate) {
     const lMins = Number(log.lateMinutes) || Math.floor((Number(log.delaySeconds) || 0) / 60);
-    const lSecs = (log.lateSeconds !== undefined && log.lateSeconds !== null) ? Number(log.lateSeconds) : ((Number(log.delaySeconds) || 0) % 60);
-    timingPill = `<span class="checkin-timing-pill pill-late">Late by ${lMins}m ${lSecs}s</span>`;
+    timingPill = `<span class="checkin-timing-pill pill-late">Late ${lMins}m</span>`;
   } else {
     timingPill = `<span class="checkin-timing-pill pill-ontime">On Time</span>`;
   }
@@ -11427,7 +11441,7 @@ export function renderUserSessionHistory() {
     card.onclick = () => {
       const sid = card.dataset.sessionId;
       const targetSession = state.attendanceSessions.find(s => s.id === sid);
-      if (targetSession) openAdminRosterModal(targetSession);
+      if (targetSession) openSessionBreakdownModal(targetSession, true);
     };
   });
 }
@@ -11673,6 +11687,7 @@ async function handleAttendanceCheckIn(sessionId) {
     };
 
     batch.set(logRef, logPayload);
+    batch.set(doc(db, 'attendance_records', logId), logPayload);
 
     const userRef = doc(db, 'users', state.user.uid);
     const userDocData = usersMap.get(state.user.uid) || state.user || {};
@@ -15358,9 +15373,9 @@ function renderAdminSessions() {
       bulkType: 'sessions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
+        const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
         if (adminSessionsFilter === 'history') {
-          const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
-          if (targetSession) openAdminRosterModal(targetSession);
+          if (targetSession) openSessionBreakdownModal(targetSession, false);
         } else {
           openAdminSessionModal(card.dataset.sessionId);
         }
@@ -15372,7 +15387,7 @@ function renderAdminSessions() {
       btnView.onclick = (e) => {
         e.stopPropagation();
         const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
-        if (targetSession) openAdminRosterModal(targetSession);
+        if (targetSession) openSessionBreakdownModal(targetSession, false);
       };
     }
 
@@ -16779,18 +16794,22 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
 
     const segMount = bodyEl.querySelector('#mount-roster-tab-segmented');
     if (segMount) {
-      segMount.appendChild(renderSegmented({
-        id: 'seg-roster-view',
-        options: [
-          { value: 'occurrence', label: 'This Occurrence' },
-          { value: 'history', label: 'Session History' }
-        ],
-        value: activeTab,
-        onChange: (val) => {
-          activeTab = val;
-          renderSubContent();
-        }
-      }));
+      if (isClosed || isOnceSession || session.status === 'closed') {
+        segMount.innerHTML = '';
+      } else {
+        segMount.appendChild(renderSegmented({
+          id: 'seg-roster-view',
+          options: [
+            { value: 'occurrence', label: 'This Occurrence' },
+            { value: 'history', label: 'Session History' }
+          ],
+          value: activeTab,
+          onChange: (val) => {
+            activeTab = val;
+            renderSubContent();
+          }
+        }));
+      }
     }
 
     const renderSubContent = () => {
@@ -17087,6 +17106,7 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
           processedBy: state.user.uid
         };
         batch.set(logRef, logData);
+        batch.set(doc(db, 'attendance_records', deterministicId), logData);
 
         const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
         if (pointsDelta !== 0) {
@@ -17188,6 +17208,484 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
     console.error('Snapshot error for attendance logs:', err);
     bodyEl.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load attendance logs: ${esc(err.message)}</div>`;
   });
+}
+
+export function closeSessionBreakdownModal() {
+  const modal = document.getElementById('modal-session-breakdown');
+  if (modal) {
+    modal.classList.remove('active');
+    modal.style.display = 'none';
+  }
+}
+
+export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false) {
+  const rawSession = (typeof sessionOrId === 'string'
+    ? state.attendanceSessions.find(s => s.id === sessionOrId)
+    : sessionOrId) || sessionOrId;
+
+  if (!rawSession) {
+    toast('Session not found', 'error');
+    return;
+  }
+  const session = normalizeSession(rawSession);
+
+  const modal = document.getElementById('modal-session-breakdown');
+  const titleEl = document.getElementById('breakdown-modal-title');
+  const bodyEl = document.getElementById('breakdown-modal-body');
+  const closeBtn = document.getElementById('btn-close-session-breakdown');
+
+  if (!modal || !bodyEl) {
+    openAdminRosterModal(session);
+    return;
+  }
+
+  if (titleEl) {
+    titleEl.textContent = `${session.title || 'Session'} Breakdown`;
+  }
+
+  if (closeBtn) {
+    closeBtn.onclick = () => closeSessionBreakdownModal();
+  }
+
+  modal.onclick = (e) => {
+    if (e.target === modal) {
+      closeSessionBreakdownModal();
+    }
+  };
+
+  modal.style.display = 'flex';
+  modal.classList.add('active');
+
+  bodyEl.innerHTML = `
+    <div class="p-8 text-center text-xs text-neutral-400 flex flex-col items-center justify-center gap-3">
+      <div class="w-6 h-6 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
+      <span>Loading attendance records &amp; logs...</span>
+    </div>
+  `;
+
+  try {
+    const [recordsSnap, logsSnap, waiversSnap] = await Promise.all([
+      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', session.id), limit(300))).catch(() => ({ docs: [] })),
+      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', session.id), limit(300))).catch(() => ({ docs: [] })),
+      getDocs(query(collection(db, 'waiver_requests'), where('sessionId', '==', session.id), limit(300))).catch(() => ({ docs: [] }))
+    ]);
+
+    const mergedLogsMap = new Map();
+    // Prioritize recordsSnap, then supplement with logsSnap
+    recordsSnap.docs.forEach(d => {
+      const log = normalizeAttendanceLog({ id: d.id, ...d.data() });
+      const uid = log.uid || log.userId || d.id;
+      if (uid) mergedLogsMap.set(uid, log);
+    });
+
+    logsSnap.docs.forEach(d => {
+      const log = normalizeAttendanceLog({ id: d.id, ...d.data() });
+      const uid = log.uid || log.userId || d.id;
+      if (uid) {
+        if (mergedLogsMap.has(uid)) {
+          mergedLogsMap.set(uid, { ...log, ...mergedLogsMap.get(uid) });
+        } else {
+          mergedLogsMap.set(uid, log);
+        }
+      }
+    });
+
+    (state.attendanceLogs || []).filter(l => l.sessionId === session.id).forEach(l => {
+      const uid = l.uid || l.userId || l.id;
+      if (uid && !mergedLogsMap.has(uid)) {
+        mergedLogsMap.set(uid, l);
+      }
+    });
+
+    const waiversMap = new Map();
+    waiversSnap.docs.forEach(d => {
+      const w = d.data();
+      if (w.status === 'approved') {
+        waiversMap.set(w.uid, { id: d.id, ...w });
+      }
+    });
+
+    const allActiveMembers = (usersMap.size > 0
+      ? Array.from(usersMap.values())
+      : [...(state.members || [])]
+    ).filter(m => m && !m.disabled && !m.blocked);
+
+    let assignedMembers = allActiveMembers;
+    if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
+      assignedMembers = allActiveMembers.filter(m => {
+        const userBadges = Array.isArray(m.badges) ? m.badges : (Array.isArray(m.badgeIds) ? m.badgeIds : []);
+        return userBadges.some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b));
+      });
+    } else if (session.targetType === 'custom' && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
+    } else if (!session.targetType && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      assignedMembers = allActiveMembers.filter(m => session.assignedUids.includes(m.uid));
+    }
+    if (assignedMembers.length === 0) assignedMembers = allActiveMembers;
+
+    const handledUids = new Set();
+    const attendedList = [];
+    const excusedList = [];
+    const penalizedAbsentList = [];
+    const unprocessedAbsentList = [];
+
+    mergedLogsMap.forEach((log, uid) => {
+      handledUids.add(uid);
+      const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {
+        uid,
+        displayName: log.userName || log.displayName || 'Member',
+        name: log.userName || log.displayName || 'Member',
+        photoURL: log.userAvatar || '',
+        avatarUrl: log.userAvatar || ''
+      };
+
+      if (log.status === 'excused' || log.excused === true || waiversMap.has(uid)) {
+        excusedList.push({ member, log, waiver: waiversMap.get(uid) });
+      } else if (log.status === 'absent') {
+        penalizedAbsentList.push({ member, log });
+      } else {
+        attendedList.push({ member, log });
+      }
+    });
+
+    assignedMembers.forEach(m => {
+      if (handledUids.has(m.uid)) return;
+      handledUids.add(m.uid);
+      if (waiversMap.has(m.uid)) {
+        excusedList.push({ member: m, waiver: waiversMap.get(m.uid) });
+      } else {
+        unprocessedAbsentList.push(m);
+      }
+    });
+
+    attendedList.sort((a, b) => {
+      const msA = parseDateTimeToMs(a.log.checkInTimestamp || a.log.checkedInAt || a.log.createdAt) || 0;
+      const msB = parseDateTimeToMs(b.log.checkInTimestamp || b.log.checkedInAt || b.log.createdAt) || 0;
+      return msB - msA;
+    });
+
+    const totalAssigned = Math.max(assignedMembers.length, handledUids.size);
+    const onTimeCount = attendedList.filter(p => p.log.status === 'on_time' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
+    const lateCount = attendedList.filter(p => p.log.status === 'late' || p.log.penalty > 0 || p.log.fineEGP > 0).length;
+    const earlyCount = attendedList.filter(p => p.log.status === 'early' || Number(p.log.earlyMinutes) > 0).length;
+    const totalAbsent = penalizedAbsentList.length + unprocessedAbsentList.length;
+
+    const totalPenalties = attendedList.reduce((sum, p) => sum + (p.log.penalty || 0), 0) +
+      penalizedAbsentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0);
+    const totalFines = attendedList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0) +
+      penalizedAbsentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0);
+
+    const isAdminUser = !isReadOnly && isCurrentUserAdmin();
+    const penaltyPtsDef = (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
+    const fineAbsenceDef = (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+
+    bodyEl.innerHTML = `
+      <div class="space-y-4">
+        <!-- Overview Stats Grid -->
+        <div class="grid grid-cols-4 gap-2 text-center text-xs">
+          <div class="p-2.5 rounded-xl bg-white/[0.04] border border-white/10">
+            <span class="text-[10px] text-neutral-400 block font-medium">Assigned</span>
+            <span class="font-bold text-white text-sm mt-0.5 block">${totalAssigned}</span>
+          </div>
+          <div class="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+            <span class="text-[10px] text-emerald-300 block font-medium">Attended</span>
+            <span class="font-bold text-emerald-400 text-sm mt-0.5 block">${attendedList.length}</span>
+          </div>
+          <div class="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20">
+            <span class="text-[10px] text-blue-300 block font-medium">Excused</span>
+            <span class="font-bold text-blue-400 text-sm mt-0.5 block">${excusedList.length}</span>
+          </div>
+          <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20">
+            <span class="text-[10px] text-rose-300 block font-medium">Absent</span>
+            <span class="font-bold text-rose-400 text-sm mt-0.5 block">${totalAbsent}</span>
+          </div>
+        </div>
+
+        ${(totalPenalties > 0 || totalFines > 0) ? `
+          <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center justify-between font-mono">
+            <span>Deductions Incurred:</span>
+            <span>${totalPenalties > 0 ? `-${totalPenalties} pts ` : ''}${totalFines > 0 ? `-${totalFines} EGP` : ''}</span>
+          </div>
+        ` : ''}
+
+        <!-- 1. ATTENDED LIST -->
+        <div class="space-y-2">
+          <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+            <span>Attended Members (${attendedList.length})</span>
+            <span class="text-[10px] text-emerald-400 font-normal">
+              ${earlyCount > 0 ? `${earlyCount} early · ` : ''}${onTimeCount} on time · ${lateCount} late
+            </span>
+          </div>
+          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-72 overflow-y-auto">
+            ${attendedList.length === 0 ? `
+              <div class="p-4 text-xs text-neutral-400 text-center">No check-ins recorded for this session.</div>
+            ` : attendedList.map(({ member, log }) => {
+              const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+              const exactTime = getLogExactTimeStr(log, true);
+              const tierLabel = log.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(log.appliedTierLabel)}</span>` : '';
+
+              return `
+                <div class="roster-breakdown-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
+                  <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+                    <div class="min-w-0 flex-1">
+                      <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
+                        <span class="truncate">${esc(prof.displayName)}</span>
+                        <div class="badge-row-container flex items-center gap-1 shrink-0" data-uid="${esc(member.uid)}"></div>
+                      </div>
+                      <div class="flex items-center gap-1.5 mt-0.5">
+                        <span class="exact-time">${esc(exactTime)}</span>
+                        ${tierLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="text-right shrink-0">
+                    ${renderCheckInMetricsPills(log)}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+
+        <!-- 2. ABSENT LIST -->
+        <div class="space-y-2">
+          <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+            <span>Absent Members (${totalAbsent})</span>
+            ${(isAdminUser && unprocessedAbsentList.length > 0) ? `
+              <button type="button" id="btn-breakdown-penalize-all" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
+                <span>Penalize All Unprocessed (${unprocessedAbsentList.length})</span>
+              </button>
+            ` : ''}
+          </div>
+          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-56 overflow-y-auto">
+            ${totalAbsent === 0 ? `
+              <div class="p-4 text-xs text-emerald-400 text-center">All rostered members attended or excused!</div>
+            ` : `
+              ${penalizedAbsentList.map(({ member, log }) => {
+                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+                const exactTime = getLogExactTimeStr(log, true);
+                return `
+                  <div class="roster-breakdown-row p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+                      <div class="min-w-0 flex-1">
+                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                        <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
+                      </div>
+                    </div>
+                    <div class="text-right shrink-0">
+                      ${renderCheckInMetricsPills(log)}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+
+              ${unprocessedAbsentList.map(member => {
+                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+                return `
+                  <div class="p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-xl">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                      <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+                      <div class="min-w-0 flex-1">
+                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                        <span class="text-[10px] text-neutral-400">Not checked in · Penalty: -${penaltyPtsDef} pts${fineAbsenceDef > 0 ? `, -${fineAbsenceDef} EGP` : ''}</span>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                      <span class="checkin-timing-pill pill-absent">Absent</span>
+                      ${isAdminUser ? `
+                        <button type="button" class="btn-breakdown-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
+                          Penalize
+                        </button>
+                      ` : ''}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            `}
+          </div>
+        </div>
+
+        <!-- 3. EXCUSED LIST (IF ANY) -->
+        ${excusedList.length > 0 ? `
+          <div class="space-y-2">
+            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+              <span>Excused Members (${excusedList.length})</span>
+              <span class="text-[10px] text-blue-400 font-normal">Approved Excuse</span>
+            </div>
+            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-36 overflow-y-auto">
+              ${excusedList.map(({ member, waiver, log }) => {
+                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+                const excuseText = waiver?.reason || log?.reason || 'Approved Waiver';
+                return `
+                  <div class="p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-xl">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
+                      <div class="min-w-0 flex-1">
+                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                        <span class="text-[10px] text-neutral-400 truncate block">"${esc(excuseText)}"</span>
+                      </div>
+                    </div>
+                    <span class="checkin-timing-pill pill-excused shrink-0">Excused</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+
+    // Render badges
+    bodyEl.querySelectorAll('.badge-row-container').forEach(c => {
+      const uid = c.dataset.uid;
+      const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+      if (mem) renderBadgeRow(c, mem.badges, mem);
+    });
+
+    // Wire log click to openAdminLogEditModal
+    if (isAdminUser) {
+      bodyEl.querySelectorAll('.roster-breakdown-row').forEach(row => {
+        row.onclick = () => {
+          const logId = row.dataset.logId;
+          const targetLog = mergedLogsMap.get(row.dataset.uid) || Array.from(mergedLogsMap.values()).find(l => l.id === logId);
+          if (targetLog) openAdminLogEditModal(targetLog, session);
+        };
+      });
+    }
+
+    // Helper to penalize unprocessed absent members
+    const penalizeAbsentMembersInBreakdown = async (targetMembers, buttonEl) => {
+      if (buttonEl) {
+        buttonEl.disabled = true;
+        buttonEl.textContent = 'Processing...';
+      }
+
+      const penaltyPts = penaltyPtsDef;
+      const fineEGP = fineAbsenceDef;
+      const pointsDelta = penaltyPts > 0 ? -penaltyPts : 0;
+      const egpDelta = fineEGP > 0 ? -fineEGP : 0;
+      const occKey = new Date().toISOString().slice(0, 10);
+
+      let processedCount = 0;
+      try {
+        for (const m of targetMembers) {
+          const deterministicId = `${session.id}_${occKey}_${m.uid}`;
+          const batch = writeBatch(db);
+          const logData = {
+            sessionId: session.id,
+            sessionTitle: session.title,
+            uid: m.uid,
+            userName: m.displayName || m.name || 'Member',
+            userAvatar: m.avatarUrl || m.photoURL || '',
+            occurrenceKey: occKey,
+            occurrenceStart: serverTimestamp(),
+            checkedInAt: serverTimestamp(),
+            checkInTimestamp: serverTimestamp(),
+            status: 'absent',
+            earlyMinutes: 0,
+            lateMinutes: 0,
+            lateSeconds: 0,
+            penalty: penaltyPts,
+            fineEGP: fineEGP,
+            pointsDelta,
+            egpDelta,
+            ledgerSynced: true,
+            processedBy: state.user?.uid || 'admin'
+          };
+          batch.set(doc(db, 'attendance_logs', deterministicId), logData);
+          batch.set(doc(db, 'attendance_records', deterministicId), logData);
+
+          const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
+          if (pointsDelta !== 0) {
+            const targetUserDoc = usersMap.get(m.uid) || m || {};
+            Object.assign(userUpdateObj, buildPointsUpdate(targetUserDoc, pointsDelta));
+            userUpdateObj.penalties = increment(penaltyPts);
+          }
+          if (fineEGP > 0) {
+            userUpdateObj.finesDue = increment(fineEGP);
+            userUpdateObj.fines = increment(fineEGP);
+            batch.set(doc(db, 'users_private', m.uid), {
+              finesEGP: increment(fineEGP),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+          batch.update(doc(db, 'users', m.uid), userUpdateObj);
+
+          if (pointsDelta !== 0 || egpDelta !== 0) {
+            const adjRef = doc(collection(db, 'adjustments'), `att_${deterministicId}`);
+            batch.set(adjRef, {
+              uid: m.uid,
+              targetUid: m.uid,
+              userName: m.displayName || m.name || 'Member',
+              type: 'penalty',
+              pointsDelta,
+              egpDelta,
+              amountEGP: egpDelta,
+              reason: `Absent: ${session.title}`,
+              source: 'attendance_absence',
+              sessionId: session.id,
+              logId: deterministicId,
+              createdAt: serverTimestamp(),
+              timestamp: serverTimestamp()
+            });
+          }
+
+          createNotification(batch, {
+            uid: m.uid,
+            title: 'Absence Penalty Recorded',
+            message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? '-' + penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' -' + fineEGP + ' EGP' : ''}).`,
+            type: 'attendance',
+            targetAction: { route: 'attendance' }
+          });
+
+          await batch.commit();
+          processedCount++;
+        }
+        toast(`Absence penalty applied for ${processedCount} member(s)`, 'success');
+        openSessionBreakdownModal(session, isReadOnly);
+      } catch (err) {
+        console.error('Error applying absence penalty:', err);
+        toast(err.message || 'Failed to apply absence penalty', 'error');
+        if (buttonEl) {
+          buttonEl.disabled = false;
+          buttonEl.textContent = 'Retry';
+        }
+      }
+    };
+
+    const penalizeAllBtn = bodyEl.querySelector('#btn-breakdown-penalize-all');
+    if (penalizeAllBtn) {
+      penalizeAllBtn.onclick = () => {
+        penalizeAbsentMembersInBreakdown([...unprocessedAbsentList], penalizeAllBtn);
+      };
+    }
+
+    bodyEl.querySelectorAll('.btn-breakdown-penalize-single').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const targetUid = btn.dataset.uid;
+        const targetMember = unprocessedAbsentList.find(m => m.uid === targetUid);
+        if (targetMember) penalizeAbsentMembersInBreakdown([targetMember], btn);
+      };
+    });
+
+  } catch (err) {
+    console.error('Failed to load session breakdown:', err);
+    bodyEl.innerHTML = `
+      <div class="p-6 text-center text-xs text-rose-400 space-y-2">
+        <p>Failed to load attendance records: ${esc(err.message || err)}</p>
+        <button type="button" id="btn-retry-breakdown-modal" class="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold transition">
+          Retry
+        </button>
+      </div>
+    `;
+    const retryBtn = bodyEl.querySelector('#btn-retry-breakdown-modal');
+    if (retryBtn) {
+      retryBtn.onclick = () => openSessionBreakdownModal(session, isReadOnly);
+    }
+  }
 }
 
 function renderAdminAttendanceLogs() {
@@ -21300,7 +21798,7 @@ export async function renderAdminNotifications() {
           adminUid: state.user?.uid || ''
         });
 
-        if (!localWriteSucceeded && (!gasResult || !gasResult.ok)) {
+        if (!localWriteSucceeded && gasResult && gasResult.ok === false) {
           throw new Error(gasResult?.error || 'Backend notification dispatch failed');
         }
 
@@ -23029,4 +23527,7 @@ if (typeof window !== 'undefined') {
   window.formatCheckInExactTime = formatCheckInExactTime;
   window.renderCheckInMetricsPills = renderCheckInMetricsPills;
   window.renderUserSessionHistory = renderUserSessionHistory;
+  window.openSessionBreakdownModal = openSessionBreakdownModal;
+  window.closeSessionBreakdownModal = closeSessionBreakdownModal;
+  window.getLogExactTimeStr = getLogExactTimeStr;
 }

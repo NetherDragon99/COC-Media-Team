@@ -3753,3 +3753,64 @@ input[type="search"],
   white-space: nowrap;
 }
 
+/* v3.1.1 Timing & Impact Pills and Breakdown Modal */
+.pill-early {
+  background: rgba(48, 209, 88, 0.18);
+  color: #30d158;
+  border: 1px solid rgba(48, 209, 88, 0.35);
+}
+
+.pill-ontime {
+  background: rgba(52, 199, 89, 0.15);
+  color: #34c759;
+  border: 1px solid rgba(52, 199, 89, 0.3);
+}
+
+.pill-late {
+  background: rgba(255, 159, 10, 0.18);
+  color: #ff9f0a;
+  border: 1px solid rgba(255, 159, 10, 0.35);
+}
+
+.pill-absent {
+  background: rgba(255, 69, 58, 0.18);
+  color: #ff453a;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+}
+
+.pill-excused {
+  background: rgba(10, 132, 255, 0.18);
+  color: #0a84ff;
+  border: 1px solid rgba(10, 132, 255, 0.35);
+}
+
+.impact-positive {
+  background: rgba(48, 209, 88, 0.2);
+  color: #30d158;
+  border: 1px solid rgba(48, 209, 88, 0.35);
+}
+
+.impact-negative {
+  background: rgba(255, 69, 58, 0.2);
+  color: #ff453a;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+}
+
+.impact-neutral {
+  background: rgba(255, 255, 255, 0.08);
+  color: #a1a1aa;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.exact-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
+#modal-session-breakdown .modal-sheet {
+  max-width: 680px;
+  max-height: 90vh;
+}
+
+

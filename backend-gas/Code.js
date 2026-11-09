@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.1.0)
+ * CoC Media Team - Dedicated Serverless Backend (v3.1.1)
  * Autonomous Attendance Watchdog, Tiered Early Bonus Engine, Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -18,7 +18,7 @@ const CONFIG = {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.1.0",
+    version: "3.1.1",
     system: "CoC Media Backend Watchdog & Push Engine",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -333,84 +333,116 @@ function processCheckInAndSyncLedger(payload) {
   const egpDelta = payload.egpDelta !== undefined ? Number(payload.egpDelta) : evalResult.egpDelta;
   const nowIso = new Date().toISOString();
 
-  // Update attendance_logs/{logId} if logId provided
+  // Update attendance_logs/{logId} AND attendance_records/{logId} if logId provided
+  const logPayload = {
+    sessionId: sessionId,
+    sessionTitle: session.title || payload.sessionTitle || "Attendance Session",
+    occurrenceKey: payload.occurrenceKey || "",
+    uid: uid,
+    userId: uid,
+    userName: payload.userName || "Member",
+    displayName: payload.userName || "Member",
+    userAvatar: payload.userAvatar || "",
+    status: evalResult.status,
+    earlyMinutes: evalResult.earlyMinutes,
+    lateMinutes: evalResult.lateMinutes,
+    lateSeconds: evalResult.lateSeconds,
+    earlyBonusPoints: evalResult.earlyBonusPoints,
+    earlyBonusEGP: evalResult.earlyBonusEGP,
+    penalty: evalResult.penaltyPts,
+    fineEGP: evalResult.fineEGP,
+    pointsDelta: pointsDelta,
+    egpDelta: egpDelta,
+    appliedTierLabel: evalResult.appliedTierLabel || "",
+    ledgerSynced: true,
+    checkInTimestamp: checkInMs,
+    checkInTime: nowIso,
+    updatedAt: nowIso
+  };
+  const logMask = [
+    "status", "earlyMinutes", "lateMinutes", "lateSeconds",
+    "earlyBonusPoints", "earlyBonusEGP", "penalty", "fineEGP",
+    "pointsDelta", "egpDelta", "appliedTierLabel", "ledgerSynced",
+    "checkInTimestamp", "checkInTime", "updatedAt"
+  ];
+
   if (logId) {
-    firestorePatch(`attendance_logs/${logId}`, {
-      status: evalResult.status,
-      earlyMinutes: evalResult.earlyMinutes,
-      lateMinutes: evalResult.lateMinutes,
-      lateSeconds: evalResult.lateSeconds,
-      earlyBonusPoints: evalResult.earlyBonusPoints,
-      earlyBonusEGP: evalResult.earlyBonusEGP,
-      penalty: evalResult.penaltyPts,
-      fineEGP: evalResult.fineEGP,
-      pointsDelta: pointsDelta,
-      egpDelta: egpDelta,
-      appliedTierLabel: evalResult.appliedTierLabel || "",
-      ledgerSynced: true,
-      updatedAt: nowIso
-    }, [
-      "status", "earlyMinutes", "lateMinutes", "lateSeconds",
-      "earlyBonusPoints", "earlyBonusEGP", "penalty", "fineEGP",
-      "pointsDelta", "egpDelta", "appliedTierLabel", "ledgerSynced", "updatedAt"
-    ]);
+    firestorePatch(`attendance_logs/${logId}`, logPayload, logMask);
+    firestorePatch(`attendance_records/${logId}`, logPayload, logMask);
   }
 
-  // Only mutate user balances if client did not already commit the ledger transaction
-  if (!payload.clientSyncedLedger) {
-    const userDoc = firestoreGet(`users/${uid}`);
-    if (userDoc) {
-      const curPts = Number(userDoc.points) || 0;
-      const curTotalPts = Number(userDoc.totalPoints != null ? userDoc.totalPoints : curPts);
-      const curPen = Number(userDoc.penalties) || 0;
-      const curFines = Number(userDoc.finesDue != null ? userDoc.finesDue : (userDoc.fines || 0));
+  // Force backend to write ledger sync to users/{uid}
+  const userDoc = firestoreGet(`users/${uid}`);
+  if (userDoc) {
+    const curPts = Number(userDoc.points) || 0;
+    const curTotalPts = Number(userDoc.totalPoints != null ? userDoc.totalPoints : curPts);
+    const curPen = Number(userDoc.penalties) || 0;
+    const curFines = Number(userDoc.finesDue != null ? userDoc.finesDue : (userDoc.fines || 0));
 
-      const userPatch = { updatedAt: nowIso };
-      const mask = ["updatedAt"];
+    const newPoints = curPts + pointsDelta;
+    const newTotalPoints = curTotalPts + pointsDelta;
+    const newPenalties = pointsDelta < 0 ? curPen + Math.abs(pointsDelta) : curPen;
+    const newFines = egpDelta !== 0 ? Math.max(0, curFines - egpDelta) : curFines;
 
-      if (pointsDelta > 0) {
-        userPatch.points = curPts + pointsDelta;
-        userPatch.totalPoints = curTotalPts + pointsDelta;
-        mask.push("points", "totalPoints");
-      } else if (pointsDelta < 0) {
-        userPatch.penalties = curPen + Math.abs(pointsDelta);
-        mask.push("penalties");
-      }
+    const userPatch = {
+      points: newPoints,
+      totalPoints: newTotalPoints,
+      penalties: newPenalties,
+      fines: newFines,
+      finesDue: newFines,
+      updatedAt: nowIso
+    };
+    const mask = ["points", "totalPoints", "penalties", "fines", "finesDue", "updatedAt"];
 
-      if (egpDelta !== 0) {
-        const nextFines = Math.max(0, curFines - egpDelta);
-        userPatch.finesDue = nextFines;
-        userPatch.fines = nextFines;
-        mask.push("finesDue", "fines");
-        firestorePatch(`users_private/${uid}`, {
-          finesEGP: nextFines,
-          updatedAt: nowIso
-        }, ["finesEGP", "updatedAt"]);
-      }
+    firestorePatch(`users/${uid}`, userPatch, mask);
 
-      firestorePatch(`users/${uid}`, userPatch, mask);
+    if (egpDelta !== 0) {
+      firestorePatch(`users_private/${uid}`, {
+        finesEGP: newFines,
+        updatedAt: nowIso
+      }, ["finesEGP", "updatedAt"]);
+    }
 
-      if (pointsDelta !== 0 || egpDelta !== 0) {
-        const sessionTitle = session.title || payload.sessionTitle || "Attendance Session";
-        firestorePost(`users/${uid}/transactions`, {
-          uid: uid,
-          userId: uid,
-          sessionId: sessionId,
-          logId: logId || "",
-          bucket: pointsDelta > 0 ? "points" : (pointsDelta < 0 ? "penalties" : "fines"),
-          direction: (pointsDelta > 0 || egpDelta > 0) ? "add" : "deduct",
-          type: evalResult.status === "early" ? "attendance_early_bonus" : "attendance_late_penalty",
-          category: "attendance",
-          amount: Math.abs(pointsDelta || egpDelta),
-          pointsDelta: pointsDelta,
-          egpDelta: egpDelta,
-          reason: `${sessionTitle} (${evalResult.appliedTierLabel || evalResult.status})`,
-          status: "active",
-          createdAt: nowIso,
-          timestamp: nowIso,
-          createdAtMs: checkInMs
-        });
-      }
+    if (pointsDelta !== 0 || egpDelta !== 0) {
+      const sessionTitle = session.title || payload.sessionTitle || "Attendance Session";
+      firestorePost(`users/${uid}/transactions`, {
+        uid: uid,
+        userId: uid,
+        sessionId: sessionId,
+        logId: logId || "",
+        bucket: pointsDelta > 0 ? "points" : (pointsDelta < 0 ? "penalties" : "fines"),
+        direction: (pointsDelta > 0 || egpDelta > 0) ? "add" : "deduct",
+        type: evalResult.status === "early" ? "attendance_early_bonus" : "attendance_late_penalty",
+        category: "attendance",
+        amount: Math.abs(pointsDelta || egpDelta),
+        pointsDelta: pointsDelta,
+        egpDelta: egpDelta,
+        reason: `${sessionTitle} (${evalResult.appliedTierLabel || evalResult.status})`,
+        status: "active",
+        createdAt: nowIso,
+        timestamp: nowIso,
+        createdAtMs: checkInMs
+      });
+
+      // Write audit trail in adjustments collection
+      firestorePost("adjustments", {
+        uid: uid,
+        targetUid: uid,
+        userName: payload.userName || userDoc.displayName || userDoc.name || "Member",
+        type: (pointsDelta > 0 || egpDelta > 0) ? "bonus" : "penalty",
+        pointsDelta: pointsDelta,
+        egpDelta: egpDelta,
+        amountEGP: egpDelta,
+        reason: (pointsDelta > 0 || egpDelta > 0)
+          ? `Early Check-In (${evalResult.earlyMinutes || 0}m early): ${sessionTitle}`
+          : `Late Check-In (${evalResult.lateMinutes || 0}m late): ${sessionTitle}`,
+        source: "attendance_checkin",
+        sessionId: sessionId,
+        logId: logId || "",
+        createdAt: nowIso,
+        timestamp: nowIso,
+        createdAtMs: checkInMs
+      });
     }
   }
 
@@ -500,7 +532,7 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
     const logDocId = `${sessionId}_${effOccKey}_${uid}`;
 
     // A. Create absent attendance log
-    firestorePatch(`attendance_logs/${logDocId}`, {
+    const absentLogData = {
       sessionId: sessionId,
       sessionTitle: sessionTitle,
       occurrenceKey: effOccKey,
@@ -525,20 +557,29 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
       checkInTimestamp: nowMs,
       checkInTime: nowIso,
       createdAt: nowIso
-    });
+    };
+    firestorePatch(`attendance_logs/${logDocId}`, absentLogData);
+    firestorePatch(`attendance_records/${logDocId}`, absentLogData);
 
-    // B. Update member profile penalties & fines
-    const currentPenalties = Number(member.penalties) || 0;
-    const currentFines = Number(member.finesDue != null ? member.finesDue : (member.fines || 0));
+    // B. Update member profile points, totalPoints, penalties & fines
+    const freshUser = firestoreGet(`users/${uid}`) || member;
+    const currentPoints = Number(freshUser.points) || 0;
+    const currentTotalPoints = Number(freshUser.totalPoints != null ? freshUser.totalPoints : currentPoints);
+    const currentPenalties = Number(freshUser.penalties) || 0;
+    const currentFines = Number(freshUser.finesDue != null ? freshUser.finesDue : (freshUser.fines || 0));
+    const nextPoints = currentPoints - ptsAbsence;
+    const nextTotalPoints = currentTotalPoints - ptsAbsence;
     const nextPenalties = currentPenalties + ptsAbsence;
     const nextFines = currentFines + fineAbsence;
 
     firestorePatch(`users/${uid}`, {
+      points: nextPoints,
+      totalPoints: nextTotalPoints,
       penalties: nextPenalties,
       fines: nextFines,
       finesDue: nextFines,
       updatedAt: nowIso
-    }, ["penalties", "fines", "finesDue", "updatedAt"]);
+    }, ["points", "totalPoints", "penalties", "fines", "finesDue", "updatedAt"]);
 
     if (fineAbsence > 0) {
       firestorePatch(`users_private/${uid}`, {
@@ -546,6 +587,27 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
         updatedAt: nowIso
       }, ["finesEGP", "updatedAt"]);
     }
+
+    // Write audit trail in adjustments collection
+    firestorePost("adjustments", {
+      uid: uid,
+      targetUid: uid,
+      userName: member.displayName || member.name || "Member",
+      type: "penalty",
+      amount: ptsAbsence,
+      pointsDelta: -ptsAbsence,
+      egpDelta: -fineAbsence,
+      amountEGP: -fineAbsence,
+      fineAmount: fineAbsence,
+      reason: `Absent: ${sessionTitle} (${effOccKey})`,
+      sessionId: sessionId,
+      sessionTitle: sessionTitle,
+      occurrenceKey: effOccKey,
+      adminId: "system_watchdog",
+      status: "applied",
+      createdAt: nowIso,
+      timestamp: nowIso
+    });
 
     // C. Write ledger transaction
     firestorePost(`users/${uid}/transactions`, {
@@ -680,13 +742,19 @@ function handleDispatchNotification(payload) {
   const targetUserObjs = allUsers.filter(u => targetUidSet.has(u.id || u.uid));
 
   // Collect FCM Web Push tokens and send live push
-  const tokens = collectFcmTokensForUsers(targetUserObjs);
   let pushSentCount = 0;
-  if (tokens.length > 0) {
-    pushSentCount = sendFcmWebPush(tokens, title, body, CONFIG.PWA_URL + "#notifications");
+  try {
+    const tokens = collectFcmTokensForUsers(targetUserObjs);
+    if (tokens.length > 0) {
+      pushSentCount = sendFcmWebPush(tokens, title, body, CONFIG.PWA_URL + "#notifications");
+    }
+  } catch (pushErr) {
+    console.warn("[handleDispatchNotification] FCM push dispatch warning:", (pushErr && pushErr.message) || pushErr);
   }
 
   return {
+    status: "success",
+    ok: true,
     recipientCount: targetUids.length,
     pushSentCount: pushSentCount
   };
