@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.1.7)
+ * CoC Media Team - Dedicated Serverless Backend (v3.1.8)
  * Autonomous Attendance Watchdog, Bidirectional Brackets & Grace Period Engine, Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -18,7 +18,7 @@ const CONFIG = {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.1.7",
+    version: "3.1.8",
     system: "CoC Media Backend Watchdog & Push Engine",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -216,6 +216,17 @@ function notifySessionWindowOpened(session, occ, allUsers) {
 function evaluateCheckInTiming(session, checkInMs, startMs) {
   const S = Number(startMs) || (getSessionStartDate(session) ? getSessionStartDate(session).getTime() : checkInMs);
   const gracePeriodMins = Number(session.gracePeriodMins != null ? session.gracePeriodMins : (session.graceMinutes != null ? session.graceMinutes : 0));
+  const earlyCheckInMins = Number(session.earlyCheckInMinutes != null ? session.earlyCheckInMinutes : 30);
+  const opensAt = S - earlyCheckInMins * 60000;
+
+  // STRICT CHECK-IN OPENS GATE
+  if (checkInMs < opensAt) {
+    let openTimeFormatted = "scheduled time";
+    try {
+      openTimeFormatted = Utilities.formatDate(new Date(opensAt), CONFIG.TIMEZONE, "HH:mm");
+    } catch (_) {}
+    throw new Error(`Check-in window is not open yet (opens at ${openTimeFormatted})`);
+  }
 
   const timeBrackets = Array.isArray(session.timeBrackets)
     ? session.timeBrackets
@@ -429,8 +440,10 @@ function processCheckInAndSyncLedger(payload) {
 
     const newPoints = curPts + pointsDelta;
     const newTotalPoints = curTotalPts + pointsDelta;
-    const newPenalties = Math.max(0, curPen - bonusPts + penaltyPts);
+    // Early bonus points strictly increment points and NEVER reduce penalties!
+    const newPenalties = Math.max(0, curPen + penaltyPts);
     const newFines = Math.max(0, curFines - bonusEGP + penaltyEGP);
+    const newNetPts = Math.max(0, newPoints - newPenalties);
 
     const userPatch = {
       points: newPoints,
@@ -438,9 +451,10 @@ function processCheckInAndSyncLedger(payload) {
       penalties: newPenalties,
       fines: newFines,
       finesDue: newFines,
+      netPts: newNetPts,
       updatedAt: nowIso
     };
-    const mask = ["points", "totalPoints", "penalties", "fines", "finesDue", "updatedAt"];
+    const mask = ["points", "totalPoints", "penalties", "fines", "finesDue", "netPts", "updatedAt"];
 
     firestorePatch(`users/${uid}`, userPatch, mask);
 
@@ -542,8 +556,10 @@ function deleteAttendanceLogAndReverse(payload) {
 
       const reversedPoints = curPts - pointsDelta;
       const reversedTotal = curTotal - pointsDelta;
-      const reversedPen = Math.max(0, curPen + bonusPts - penaltyPts);
+      // Reversing penalty decreases penalty debt; bonus points never reduced penalties
+      const reversedPen = Math.max(0, curPen - penaltyPts);
       const reversedFines = Math.max(0, curFines + bonusEGP - penaltyEGP);
+      const reversedNet = Math.max(0, reversedPoints - reversedPen);
 
       const userPatch = {
         points: reversedPoints,
@@ -551,9 +567,10 @@ function deleteAttendanceLogAndReverse(payload) {
         penalties: reversedPen,
         fines: reversedFines,
         finesDue: reversedFines,
+        netPts: reversedNet,
         updatedAt: nowIso
       };
-      firestorePatch(`users/${targetUid}`, userPatch, ["points", "totalPoints", "penalties", "fines", "finesDue", "updatedAt"]);
+      firestorePatch(`users/${targetUid}`, userPatch, ["points", "totalPoints", "penalties", "fines", "finesDue", "netPts", "updatedAt"]);
 
       if (egpDelta !== 0) {
         firestorePatch(`users_private/${targetUid}`, {
@@ -700,6 +717,7 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
     const nextTotalPoints = currentTotalPoints - ptsAbsence;
     const nextPenalties = Math.max(0, currentPenalties + ptsAbsence);
     const nextFines = Math.max(0, currentFines + fineAbsence);
+    const nextNetPts = Math.max(0, nextPoints - nextPenalties);
 
     firestorePatch(`users/${uid}`, {
       points: nextPoints,
@@ -707,8 +725,9 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
       penalties: nextPenalties,
       fines: nextFines,
       finesDue: nextFines,
+      netPts: nextNetPts,
       updatedAt: nowIso
-    }, ["points", "totalPoints", "penalties", "fines", "finesDue", "updatedAt"]);
+    }, ["points", "totalPoints", "penalties", "fines", "finesDue", "netPts", "updatedAt"]);
 
     if (fineAbsence > 0) {
       firestorePatch(`users_private/${uid}`, {

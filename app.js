@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.7';
+export const APP_VERSION = '3.1.8';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -2498,7 +2498,7 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
       opensAt,
       occurrenceKey,
       occurrenceStart: S,
-      message: `Check-in opens at ${hh}:${mm}`
+      message: `Check-in window is not open yet (opens at ${hh}:${mm})`
     };
   }
 
@@ -2717,6 +2717,71 @@ function addDaysZoned(dateOrMs, n = 0, tz = APP_TIMEZONE) {
   return zonedDateToMs(p.year, p.month, p.day + n, p.hour, p.minute, p.second, tz);
 }
 
+function validateSessionWindowAndBrackets({
+  openTotalMins,
+  startTotalMins,
+  closeTotalMins,
+  earlyCheckInMinutes,
+  lateCutoffMinutes,
+  gracePeriodMins = 0,
+  timeBrackets = []
+}) {
+  if (openTotalMins > startTotalMins) {
+    return { valid: false, error: 'Check-in opens must be at or before session start time.' };
+  }
+  if (closeTotalMins <= startTotalMins) {
+    return { valid: false, error: 'Check-in closes must be strictly after session start time.' };
+  }
+  if (openTotalMins >= closeTotalMins) {
+    return { valid: false, error: 'Check-in opens must be strictly before check-in closes.' };
+  }
+
+  const earlyBrackets = (timeBrackets || []).filter(t => t.type !== 'after');
+  for (let i = 0; i < earlyBrackets.length; i++) {
+    const b = earlyBrackets[i];
+    const bLow = Math.min(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    const bHigh = Math.max(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    if (bLow <= 0) {
+      return { valid: false, error: `Early bonus bracket (${b.fromMins}m–${b.toMins}m) must be strictly before start time (> 0m).` };
+    }
+    if (bHigh > earlyCheckInMinutes) {
+      return { valid: false, error: `Early bonus bracket (${bHigh}m) extends earlier than check-in opens (${earlyCheckInMinutes}m before start).` };
+    }
+    for (let j = i + 1; j < earlyBrackets.length; j++) {
+      const o = earlyBrackets[j];
+      const oLow = Math.min(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      const oHigh = Math.max(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      if (Math.max(bLow, oLow) <= Math.min(bHigh, oHigh)) {
+        return { valid: false, error: `Early bonus brackets conflict: [${bLow}m–${bHigh}m] overlaps with [${oLow}m–${oHigh}m].` };
+      }
+    }
+  }
+
+  const lateBrackets = (timeBrackets || []).filter(t => t.type === 'after');
+  const grace = Math.max(0, Number(gracePeriodMins) || 0);
+  for (let i = 0; i < lateBrackets.length; i++) {
+    const b = lateBrackets[i];
+    const bLow = Math.min(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    const bHigh = Math.max(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    if (bLow <= grace) {
+      return { valid: false, error: `Late penalty bracket starts at ${bLow}m, which conflicts with grace period (${grace}m).` };
+    }
+    if (bHigh > lateCutoffMinutes) {
+      return { valid: false, error: `Late penalty bracket (${bHigh}m) extends past check-in cutoff (${lateCutoffMinutes}m after start).` };
+    }
+    for (let j = i + 1; j < lateBrackets.length; j++) {
+      const o = lateBrackets[j];
+      const oLow = Math.min(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      const oHigh = Math.max(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      if (Math.max(bLow, oLow) <= Math.min(bHigh, oHigh)) {
+        return { valid: false, error: `Late penalty brackets conflict: [${bLow}m–${bHigh}m] overlaps with [${oLow}m–${oHigh}m].` };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 if (typeof globalThis !== 'undefined') {
   globalThis.APP_TIMEZONE = APP_TIMEZONE;
   globalThis.getOccurrences = getOccurrences;
@@ -2744,6 +2809,7 @@ if (typeof globalThis !== 'undefined') {
   globalThis.zonedPartsToMs = zonedPartsToMs;
   globalThis.startOfZonedDay = startOfZonedDay;
   globalThis.addDaysZoned = addDaysZoned;
+  globalThis.validateSessionWindowAndBrackets = validateSessionWindowAndBrackets;
   if (typeof usersMap !== 'undefined') globalThis.usersMap = usersMap;
   if (typeof getUserProfile !== 'undefined') globalThis.getUserProfile = getUserProfile;
 }
@@ -3149,7 +3215,7 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
   }
 const ENGINE_END_MARKER = 1;
 
-export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank, isUserEligibleForSession };
+export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank, isUserEligibleForSession, validateSessionWindowAndBrackets };
 
 export function safeInsertBefore(parent, newNode, referenceNode) {
   if (!parent || !newNode) return null;
@@ -8859,6 +8925,10 @@ async function updateAdminOverviewStats() {
   const sEl = document.getElementById('admin-overview-submissions');
   const pEl = document.getElementById('admin-overview-penalties');
   const sesEl = document.getElementById('admin-overview-sessions');
+  const finesDueEl = document.getElementById('admin-overview-fines-due-val');
+
+  const totalFinesLocal = (state.members || []).reduce((sum, m) => sum + Math.max(0, m.finesDue ?? m.fines ?? m.quotas ?? 0), 0);
+  if (finesDueEl) finesDueEl.textContent = `${totalFinesLocal} EGP`;
 
   if (tEl && !tEl.textContent) tEl.textContent = state.tasks.filter(t => t.active).length;
   if (mEl && !mEl.textContent) mEl.textContent = state.members.length;
@@ -8909,6 +8979,10 @@ async function updateAdminOverviewStats() {
     if (pEl && penaltiesSnap) {
       const pen = penaltiesSnap.data().totalPenalty || 0;
       pEl.textContent = `${pen} EGP`;
+    }
+    if (finesDueEl) {
+      const totalFines = (state.members || []).reduce((sum, m) => sum + Math.max(0, m.finesDue ?? m.fines ?? m.quotas ?? 0), 0);
+      finesDueEl.textContent = `${totalFines} EGP`;
     }
 
     renderSubmissionsTrendChart();
@@ -11776,8 +11850,8 @@ function renderAttendanceView() {
     sessionsWrap.classList.remove('hidden');
   }
 
-  const allActiveSessions = (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived && s.status !== 'closed' && s.status !== 'archived');
-  const eligibleSessions = state.user ? allActiveSessions.filter(s => isUserEligibleForSession(s, state.user)) : [];
+  const allActiveSessions = (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived && s.status !== 'archived');
+  const eligibleSessions = state.user ? allActiveSessions.filter(s => s.status !== 'closed' && isUserEligibleForSession(s, state.user)) : [];
 
   if (heroContainer) {
     renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
@@ -11800,20 +11874,23 @@ function renderAttendanceView() {
         const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
         const startFormatted = formatDateTime(S);
 
+        const isClosed = session.status === 'closed';
         const isBlocked = calc.status === 'blocked';
         const isLate = calc.status === 'late';
         const isOnTime = calc.status === 'on_time';
         const isEarlyBonus = calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0);
 
         let statusPill = '';
-        if (userLog) {
+        if (isClosed) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-neutral-800 text-neutral-400 border border-neutral-700/50 flex items-center gap-1"><i class="fa-solid fa-lock text-[9px]"></i> Closed</span>`;
+        } else if (userLog) {
           statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Checked In</span>`;
         } else if (approvedWaiver) {
           statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">Waived</span>`;
         } else if (isBlocked) {
           statusPill = calc.reason === 'early'
             ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`
-            : `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Closed</span>`;
+            : `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-neutral-800 text-neutral-400 border border-neutral-700/50 flex items-center gap-1"><i class="fa-solid fa-lock text-[9px]"></i> Closed</span>`;
         } else if (isEarlyBonus) {
           statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Early Window (+${calc.earlyBonusPoints} pts${calc.earlyBonusEGP > 0 ? ` | +${calc.earlyBonusEGP} EGP` : ''})</span>`;
         } else if (isOnTime) {
@@ -12004,9 +12081,12 @@ async function handleAttendanceCheckIn(sessionId) {
       state.user.monthPoints = (state.user.monthPoints || 0) + pointsDelta;
       state.user.weekPoints = (state.user.weekPoints || 0) + pointsDelta;
     }
-    state.user.penalties = Math.max(0, (state.user.penalties || 0) - bonusPts + penaltyPointsVal);
-    state.user.finesDue = Math.max(0, (state.user.finesDue || 0) - bonusEGPVal + penaltyEGPVal);
-    state.user.fines = Math.max(0, (state.user.fines || 0) - bonusEGPVal + penaltyEGPVal);
+    // Non-Negotiable Math Rule: Bonus points NEVER reduce historical penalties!
+    state.user.penalties = Math.max(0, (state.user.penalties || 0) + penaltyPointsVal);
+    const curFines = Math.max(0, state.user.finesDue ?? state.user.fines ?? state.user.quotas ?? 0);
+    state.user.finesDue = Math.max(0, curFines - bonusEGPVal + penaltyEGPVal);
+    state.user.fines = state.user.finesDue;
+    state.user.netPts = Math.max(0, (state.user.points || 0) - (state.user.penalties || 0));
     updateProfileUI();
     renderLeaderboard();
 
@@ -12043,23 +12123,47 @@ function renderAttendanceLogs() {
   const countEl = document.getElementById('attendance-log-count');
   if (!feed) return;
 
-  const userLogs = state.myAttendanceLogs || [];
-  if (countEl) countEl.textContent = `${userLogs.length} Check-ins`;
+  const nowMs = serverNow();
+  const todayKey = formatZonedDateKey(nowMs, APP_TIMEZONE);
 
-  if (userLogs.length === 0) {
-    feed.innerHTML = '<p class="text-xs text-neutral-400 py-4 text-center">No check-ins recorded yet.</p>';
+  const allLogs = (state.attendanceLogs && state.attendanceLogs.length > 0)
+    ? state.attendanceLogs
+    : (state.myAttendanceLogs || []);
+
+  const todayLogs = allLogs.filter(l => {
+    const tMs = parseDateTimeToMs(l.timestamp || l.checkedInAt || l.checkInTimestamp || l.occurrenceStart);
+    return tMs && formatZonedDateKey(tMs, APP_TIMEZONE) === todayKey;
+  }).sort((a, b) => {
+    const tA = parseDateTimeToMs(a.timestamp || a.checkedInAt || a.checkInTimestamp || 0);
+    const tB = parseDateTimeToMs(b.timestamp || b.checkedInAt || b.checkInTimestamp || 0);
+    return tB - tA;
+  });
+
+  if (countEl) countEl.textContent = `${todayLogs.length} Check-ins`;
+
+  if (todayLogs.length === 0) {
+    feed.innerHTML = '<p class="text-xs text-neutral-400 py-4 text-center">No check-ins recorded yet today.</p>';
     return;
   }
 
-  feed.innerHTML = userLogs.map(log => {
-    const exactTimeStr = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp);
+  feed.innerHTML = todayLogs.map(log => {
+    const exactTimeStr = formatCheckInExactTime(log.timestamp || log.checkedInAt || log.checkInTimestamp, false);
+    const uid = log.userId || log.uid;
+    const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {};
+    const prof = getUserProfile(uid, log.userName || log.displayName || member.displayName || member.name, log.userAvatar || member.photoURL || member.avatarUrl);
+    const sessionTitle = log.sessionTitle || (state.attendanceSessions?.find(s => s.id === log.sessionId)?.title) || 'Attendance';
+
     return `
-      <div class="inset-row flex items-center justify-between gap-2 text-xs py-2.5">
+      <div class="inset-row flex items-center justify-between gap-2 text-xs py-2.5 px-3">
         <div class="flex items-center gap-2.5 min-w-0 flex-1">
-          ${renderAvatar({ displayName: log.userName, uid: log.uid, photoURL: log.userAvatar }, 'w-8 h-8 shrink-0')}
+          ${renderAvatar(prof, 'w-8 h-8 shrink-0')}
           <div class="min-w-0">
-            <div class="font-semibold text-white truncate">${esc(log.sessionTitle)}</div>
-            <div class="text-[11px] text-neutral-400 font-mono">${esc(exactTimeStr)}</div>
+            <div class="font-semibold text-white truncate">${esc(prof.displayName)}</div>
+            <div class="text-[11px] text-neutral-400 font-mono flex items-center gap-1.5">
+              <span>${esc(sessionTitle)}</span>
+              <span>•</span>
+              <span>${esc(exactTimeStr)}</span>
+            </div>
           </div>
         </div>
         <div class="text-right shrink-0">
@@ -13383,8 +13487,9 @@ function updateProfileUI() {
   const streakEl = document.getElementById('profile-view-streak');
 
   const ptsEl = document.getElementById('profile-stat-points');
-  const compEl = document.getElementById('profile-stat-completed');
+  const finesEl = document.getElementById('profile-stat-fines') || document.getElementById('profile-stat-completed');
   const penEl = document.getElementById('profile-stat-penalties');
+  const scoreEl = document.getElementById('profile-stat-score');
   const rankEl = document.getElementById('profile-stat-rank');
 
   const guestCard = document.getElementById('drawer-guest-card');
@@ -13460,13 +13565,12 @@ function updateProfileUI() {
     if (roleEl) roleEl.textContent = state.user.role.toUpperCase();
     if (streakEl) streakEl.textContent = `${state.user.streakDays || 0} Day Streak`;
 
-    if (ptsEl) ptsEl.textContent = state.user.points || 0;
-    const completedCount = state.submissions.filter(s => s.userId === state.user.uid).length;
-    if (compEl) compEl.textContent = completedCount;
+    if (ptsEl) ptsEl.textContent = Math.max(0, state.user.points || 0);
+    const userFines = Math.max(0, state.user.finesDue ?? state.user.fines ?? state.user.quotas ?? 0);
+    if (finesEl) finesEl.textContent = `${userFines} EGP`;
     const userPenalties = Math.max(0, state.user.penalties || 0);
     if (penEl) penEl.textContent = `${userPenalties} pts`;
 
-    const scoreEl = document.getElementById('profile-stat-score');
     const netScore = Math.max(0, (state.user.points || 0) - userPenalties);
     if (scoreEl) scoreEl.textContent = netScore;
 
@@ -13500,9 +13604,8 @@ function updateProfileUI() {
     if (streakEl) streakEl.textContent = '0 Days';
 
     if (ptsEl) ptsEl.textContent = '0';
-    if (compEl) compEl.textContent = '0';
-    if (penEl) penEl.textContent = '0';
-    const scoreEl = document.getElementById('profile-stat-score');
+    if (finesEl) finesEl.textContent = '0 EGP';
+    if (penEl) penEl.textContent = '0 pts';
     if (scoreEl) scoreEl.textContent = '0';
     if (rankEl) rankEl.textContent = '--';
 
@@ -16479,15 +16582,24 @@ function openAdminSessionModal(sessionId = null) {
       const openTotalMins = (oHour || 0) * 60 + (oMin || 0);
       const closeTotalMins = (cHour || 0) * 60 + (cMin || 0);
 
-      // FIX 6: Strict time boundary validation in settings:
-      // checkInOpens <= startTime, checkInCloses >= startTime, and checkInOpens < checkInCloses
-      if (openTotalMins > startTotalMins || closeTotalMins < startTotalMins || openTotalMins >= closeTotalMins) {
-        toast('Invalid check-in window boundaries.', 'error');
-        return false;
-      }
-
       const earlyCheckInMinutes = startTotalMins - openTotalMins;
       const lateCutoffMinutes = closeTotalMins - startTotalMins;
+
+      // Strict validation on session save: window boundaries and bidirectional non-overlapping tiers
+      const valRes = validateSessionWindowAndBrackets({
+        openTotalMins,
+        startTotalMins,
+        closeTotalMins,
+        earlyCheckInMinutes,
+        lateCutoffMinutes,
+        gracePeriodMins,
+        timeBrackets
+      });
+
+      if (!valRes.valid) {
+        toast(valRes.error, 'error');
+        return false;
+      }
 
       const dateParts = selectedDateStr.split('-').map(Number);
       const startDateTimeMs = zonedDateToMs(
@@ -17047,6 +17159,37 @@ function openAdminLogEditModal(log, session) {
           adminNote: newNote,
           updatedAt: serverTimestamp()
         });
+        batch.set(doc(db, 'attendance_records', log.id), {
+          status: newStatus,
+          penalty: newPenalty,
+          fineEGP: newFine,
+          adminNote: newNote,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+
+        const targetUid = log.uid || log.userId;
+        const penDiff = newPenalty - (Number(log.penalty) || 0);
+        const fineDiff = newFine - (Number(log.fineEGP) || 0);
+
+        if (targetUid && (penDiff !== 0 || fineDiff !== 0)) {
+          const uDocSnap = await getDoc(doc(db, 'users', targetUid));
+          if (uDocSnap.exists()) {
+            const uData = uDocSnap.data();
+            const curPen = Math.max(0, uData.penalties || 0);
+            const curFines = Math.max(0, uData.finesDue ?? uData.fines ?? uData.quotas ?? 0);
+            const curPts = Number(uData.points) || 0;
+            const nextPen = Math.max(0, curPen + penDiff);
+            const nextFines = Math.max(0, curFines + fineDiff);
+            const nextNet = Math.max(0, curPts - nextPen);
+            batch.update(doc(db, 'users', targetUid), {
+              penalties: nextPen,
+              finesDue: nextFines,
+              fines: nextFines,
+              netPts: nextNet,
+              updatedAt: serverTimestamp()
+            });
+          }
+        }
 
         logAdminAction(batch, {
           action: 'attendance_log_updated',
@@ -17676,7 +17819,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
                         ${grp.dateKey === currDateKey ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">Current</span>` : ''}
                       </div>
                       <span class="text-[10px] text-neutral-400 font-mono mt-0.5 block truncate">
-                        ${occAttended} attended • ${occLate} late • ${occAbsent} absent${occExcused > 0 ? ` • ${occExcused} excused` : ''}
+                        ${Math.max(0, occAttended - occLate)} Present • ${occLate} Late • ${occAbsent} Absent • ${occExcused} Excused
                       </span>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
@@ -17686,7 +17829,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
                         </span>
                       ` : ''}
                       <button type="button" class="btn-load-occ-breakdown px-2.5 py-1 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] text-[11px] font-semibold border border-[#0A84FF]/30 transition flex items-center gap-1 shrink-0 whitespace-nowrap" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
-                        <span>View Details</span>
+                        <span>View in Tab 1</span>
                         <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
                       </button>
                     </div>
@@ -19305,9 +19448,9 @@ function renderAdminMembers() {
     const isDisabled = Boolean(m.disabled);
     const isSelected = selectionState.active && selectionState.type === 'members' && selectionState.selectedIds.has(m.uid);
     const memberEmail = esc(usersPrivate.get(m.uid)?.email || m.email || '');
-    const points = m.points || 0;
-    const penalties = m.penalties || 0;
-    const finesDue = m.finesDue || 0;
+    const points = Math.max(0, m.points || 0);
+    const penalties = Math.max(0, m.penalties || 0);
+    const finesDue = Math.max(0, m.finesDue ?? m.fines ?? m.quotas ?? 0);
 
     return `
       <div class="admin-member-row member-card-row bulk-select-card hover:bg-white/5 transition cursor-pointer select-none rounded-xl p-3 bg-white/[0.02] border border-white/5 mb-2${isDisabled ? ' member-disabled' : ''}${isSelected ? ' selected' : ''}" data-member-uid="${esc(m.uid)}" data-bulk-id="${esc(m.uid)}">
@@ -19480,7 +19623,7 @@ function openMemberControlModal(member) {
   const privateData = usersPrivate.get(currentMember.uid) || {};
   const memberEmail = privateData.email || currentMember.email || 'No email on record';
   const cachedFineSum = egpAggregateCache.get(currentMember.uid)?.fineSum || 0;
-  const finesBalance = (privateData.finesEGP || currentMember.finesDue || 0) + cachedFineSum;
+  const finesBalance = Math.max(0, (privateData.finesEGP ?? currentMember.finesDue ?? currentMember.fines ?? currentMember.quotas ?? 0) + cachedFineSum);
 
   function markDirty() {
     hasPendingChanges = true;

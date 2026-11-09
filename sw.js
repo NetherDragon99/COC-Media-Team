@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.1.7';
-const CACHE_NAME = 'coc-media-cache-v3.1.7';
+const CACHE_VERSION = 'v3.1.8';
+const CACHE_NAME = 'coc-media-cache-v3.1.8';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -152,10 +152,37 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  const isNavigation = event.request.mode === 'navigate';
+  const isNavigation = event.request.mode === 'navigate' ||
+    url.pathname.endsWith('/index.html') ||
+    url.pathname === '/' ||
+    url.pathname === './';
+
+  // STRICT NETWORK-FIRST STRATEGY FOR NAVIGATION TO PREVENT STALE BOOT/LOADING
+  if (isNavigation) {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
+            if (cachedResponse) return cachedResponse;
+            return caches.match('./index.html', { ignoreSearch: true }).then((indexFallback) => {
+              return indexFallback || caches.match('./');
+            });
+          });
+        })
+    );
+    return;
+  }
+
   const isSameOriginCode = url.origin === self.location.origin;
 
-  if (isNavigation || isSameOriginCode) {
+  if (isSameOriginCode) {
     event.respondWith(
       caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
         const networkPromise = fetch(event.request)
@@ -168,9 +195,6 @@ self.addEventListener('fetch', (event) => {
           })
           .catch(() => {
             if (cachedResponse) return cachedResponse;
-            if (isNavigation) {
-              return caches.match('./index.html', { ignoreSearch: true }).then((indexFallback) => indexFallback || caches.match('./'));
-            }
             return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
           });
 

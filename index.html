@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>COC Media Team v3.1.7</title>
+    <title>COC Media Team v3.1.8</title>
     <meta name="description" content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
     
-        <link rel="manifest" href="./manifest.json?v=3.1.7" />
+        <link rel="manifest" href="./manifest.json?v=3.1.8" />
     <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -380,18 +380,6 @@
             </button>
           </div>
 
-          <!-- Segmented Switcher: Active Check-In vs Session History -->
-          <div id="mount-user-attendance-segmented" class="w-full">
-            <div class="ios-segmented-control grid grid-cols-2 gap-1 p-1 rounded-xl bg-white/[0.06] border border-white/10">
-              <button type="button" id="btn-att-tab-active" data-att-tab="active" class="att-view-tab-btn py-2 px-3 rounded-lg text-xs font-bold transition bg-[#0A84FF] text-white shadow-sm">
-                Active Check-In
-              </button>
-              <button type="button" id="btn-att-tab-history" data-att-tab="history" class="att-view-tab-btn py-2 px-3 rounded-lg text-xs font-bold transition text-neutral-400 hover:text-white">
-                Session History
-              </button>
-            </div>
-          </div>
-
           <div id="attendance-active-section" class="space-y-5">
             <!-- Single Smart Check-In Hero -->
             <div id="smart-checkin-hero-container"></div>
@@ -414,21 +402,12 @@
 
             <div class="inset-group">
               <div class="p-3 border-b border-white/10 flex items-center justify-between">
-                <span class="text-xs font-bold text-white uppercase tracking-wider">Today's Check-in Log</span>
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Today's Attendance History</span>
                 <span class="text-xs text-neutral-400 font-mono" id="attendance-log-count">0 Check-ins</span>
               </div>
               <div id="attendance-logs-feed" class="divide-y divide-white/5">
               </div>
             </div>
-          </div>
-
-          <!-- Session History Section -->
-          <div id="attendance-history-section" class="space-y-3 hidden">
-            <div class="flex items-center justify-between px-1">
-              <span class="text-xs font-bold text-white uppercase tracking-wider">Past &amp; Closed Sessions</span>
-              <span id="attendance-history-count" class="text-xs text-neutral-400 font-mono">0 Sessions</span>
-            </div>
-            <div id="attendance-history-container" class="space-y-3"></div>
           </div>
         </section>
 
@@ -495,15 +474,15 @@
                 <div id="profile-stat-points" class="text-base font-bold text-amber-400 font-mono mt-0.5">0</div>
               </div>
               <div class="p-2 rounded-xl bg-white/[0.03]">
-                <div class="text-[9px] uppercase tracking-wider text-neutral-400">Quotas</div>
-                <div id="profile-stat-completed" class="text-base font-bold text-white font-mono mt-0.5">0</div>
+                <div class="text-[9px] uppercase tracking-wider text-neutral-400">Fines</div>
+                <div id="profile-stat-fines" class="text-base font-bold text-rose-400 font-mono mt-0.5">0 EGP</div>
               </div>
               <div class="p-2 rounded-xl bg-white/[0.03]">
                 <div class="text-[9px] uppercase tracking-wider text-neutral-400">Penalties</div>
                 <div id="profile-stat-penalties" class="text-base font-bold text-rose-400 font-mono mt-0.5">0</div>
               </div>
               <div class="p-2 rounded-xl bg-white/[0.03]">
-                <div class="text-[9px] uppercase tracking-wider text-neutral-400">Score</div>
+                <div class="text-[9px] uppercase tracking-wider text-neutral-400">Net Pts</div>
                 <div id="profile-stat-score" class="text-base font-bold text-emerald-400 font-mono mt-0.5">0</div>
               </div>
               <div class="p-2 rounded-xl bg-white/[0.03]">
@@ -844,6 +823,18 @@
               <div id="admin-overview-penalties" class="text-2xl font-bold font-mono text-rose-400">0 EGP</div>
               <div id="admin-overview-sessions" class="hidden">0</div>
             </div>
+          </div>
+
+          <!-- Standalone Total Fines Due Highlight Banner (v3.1.8) -->
+          <div id="admin-banner-fines-due" class="glass-card p-4 rounded-2xl bg-gradient-to-r from-rose-500/10 via-amber-500/10 to-transparent border border-rose-500/20 flex items-center justify-between">
+            <div class="space-y-0.5">
+              <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>Total Fines Due</span>
+                <span class="text-[11px] text-neutral-400 font-normal">(إجمالي الغرامات المستحقة)</span>
+              </div>
+              <div class="text-[11px] text-neutral-400">Outstanding financial liability aggregated across all team members.</div>
+            </div>
+            <div id="admin-overview-fines-due-val" class="text-2xl font-bold font-mono text-rose-400">0 EGP</div>
           </div>
 
                     <div class="glass-card p-4 space-y-3">
@@ -1823,7 +1814,7 @@
       }
     </script>
 
-        <script type="module" src="./app.js?v=3.1.7"></script>
+        <script type="module" src="./app.js?v=3.1.8"></script>
 
         <!-- Dedicated Session Breakdown Modal (v3.1.1) -->
     <div id="modal-session-breakdown" class="modal-backdrop" role="dialog" aria-modal="true" style="display: none;">

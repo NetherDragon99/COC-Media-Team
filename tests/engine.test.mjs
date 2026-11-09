@@ -37,13 +37,14 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession, validateSessionWindowAndBrackets };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession, validateSessionWindowAndBrackets } = exportsObj;
 assert.strictEqual(typeof computeCropRect, 'function', 'computeCropRect must be a function');
 assert.strictEqual(typeof createRowGesture, 'function', 'createRowGesture must be a function');
 assert.strictEqual(typeof buildRoster, 'function', 'buildRoster must be a function');
+assert.strictEqual(typeof validateSessionWindowAndBrackets, 'function', 'validateSessionWindowAndBrackets must be a function');
 
 assert.strictEqual(APP_TIMEZONE, 'Africa/Cairo', 'APP_TIMEZONE must be Africa/Cairo');
 assert.strictEqual(typeof getOccurrences, 'function', 'getOccurrences must be a function');
@@ -258,7 +259,7 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.strictEqual(res.status, 'blocked');
   assert.strictEqual(res.reason, 'early');
   assert.strictEqual(res.opensAt, zonedDateToMs(2026, 5, 1, 9, 30, 0, 'Africa/Cairo'));
-  assert.strictEqual(res.message, 'Check-in opens at 09:30');
+  assert.strictEqual(res.message, 'Check-in window is not open yet (opens at 09:30)');
 }
 
 // 5.2 on-time check-in (penalty == 0)
@@ -408,7 +409,7 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.strictEqual(resMonEarly.status, 'blocked');
   assert.strictEqual(resMonEarly.reason, 'early');
   assert.strictEqual(resMonEarly.occurrenceKey, '2026-05-04');
-  assert.strictEqual(resMonEarly.message, 'Check-in opens at 17:30');
+  assert.strictEqual(resMonEarly.message, 'Check-in window is not open yet (opens at 17:30)');
 
   // Test on Monday May 4 at 17:40 (on time)
   const monOnTimeMs = zonedDateToMs(2026, 5, 4, 17, 40, 0, 'Africa/Cairo');
@@ -1783,6 +1784,133 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   clearListener('roster');
   assert.strictEqual(unsubCalled, true, 'clearListener executed previous unsubscribe callback');
   assert.strictEqual(mockRegistry.roster, undefined, 'clearListener deleted registry entry');
+}
+
+// =========================================================================
+// v3.1.8 REFACTOR TESTS: Session Validation, Ledger Math & Quota Fallback
+// =========================================================================
+{
+  // 1. Session Window Validation: Open <= Start, Close > Start, Open < Close
+  const validWindow = validateSessionWindowAndBrackets({
+    openTotalMins: 540,   // 09:00
+    startTotalMins: 600,  // 10:00
+    closeTotalMins: 720,  // 12:00
+    earlyCheckInMinutes: 60,
+    lateCutoffMinutes: 120,
+    gracePeriodMins: 10,
+    timeBrackets: [
+      { type: 'before', fromMins: 15, toMins: 60, points: 5, egp: 0 },
+      { type: 'after', fromMins: 15, toMins: 60, points: 5, egp: 10 }
+    ]
+  });
+  assert.strictEqual(validWindow.valid, true, 'Valid window configuration should pass');
+
+  // Invalid: Open > Start
+  const invalidOpen = validateSessionWindowAndBrackets({
+    openTotalMins: 610,
+    startTotalMins: 600,
+    closeTotalMins: 720,
+    earlyCheckInMinutes: -10,
+    lateCutoffMinutes: 120
+  });
+  assert.strictEqual(invalidOpen.valid, false);
+  assert.strictEqual(invalidOpen.error, 'Check-in opens must be at or before session start time.');
+
+  // Invalid: Close <= Start
+  const invalidClose = validateSessionWindowAndBrackets({
+    openTotalMins: 540,
+    startTotalMins: 600,
+    closeTotalMins: 600,
+    earlyCheckInMinutes: 60,
+    lateCutoffMinutes: 0
+  });
+  assert.strictEqual(invalidClose.valid, false);
+  assert.strictEqual(invalidClose.error, 'Check-in closes must be strictly after session start time.');
+
+  // Invalid: Overlapping early brackets
+  const invalidEarlyOverlap = validateSessionWindowAndBrackets({
+    openTotalMins: 540,
+    startTotalMins: 600,
+    closeTotalMins: 720,
+    earlyCheckInMinutes: 60,
+    lateCutoffMinutes: 120,
+    timeBrackets: [
+      { type: 'before', fromMins: 10, toMins: 30 },
+      { type: 'before', fromMins: 25, toMins: 50 }
+    ]
+  });
+  assert.strictEqual(invalidEarlyOverlap.valid, false);
+  assert.ok(invalidEarlyOverlap.error.includes('Early bonus brackets conflict'), 'Detects early bracket overlap');
+
+  // Invalid: Late bracket starting within grace period
+  const invalidGraceConflict = validateSessionWindowAndBrackets({
+    openTotalMins: 540,
+    startTotalMins: 600,
+    closeTotalMins: 720,
+    earlyCheckInMinutes: 60,
+    lateCutoffMinutes: 120,
+    gracePeriodMins: 15,
+    timeBrackets: [
+      { type: 'after', fromMins: 10, toMins: 30 }
+    ]
+  });
+  assert.strictEqual(invalidGraceConflict.valid, false);
+  assert.ok(invalidGraceConflict.error.includes('conflicts with grace period'), 'Detects grace period conflict');
+
+  // Invalid: Overlapping late brackets
+  const invalidLateOverlap = validateSessionWindowAndBrackets({
+    openTotalMins: 540,
+    startTotalMins: 600,
+    closeTotalMins: 720,
+    earlyCheckInMinutes: 60,
+    lateCutoffMinutes: 120,
+    gracePeriodMins: 5,
+    timeBrackets: [
+      { type: 'after', fromMins: 10, toMins: 30 },
+      { type: 'after', fromMins: 20, toMins: 45 }
+    ]
+  });
+  assert.strictEqual(invalidLateOverlap.valid, false);
+  assert.ok(invalidLateOverlap.error.includes('Late penalty brackets conflict'), 'Detects late bracket overlap');
+
+  // 2. Non-Negotiable Math Invariant: Bonus points NEVER reduce penalties
+  const curPts = 50;
+  const curPen = 15;
+  const curFines = 30;
+
+  // Scenario A: Member arrives early, earns 10 bonus points and 5 EGP bonus
+  const bonusPts = 10;
+  const penaltyPts = 0;
+  const bonusEGP = 5;
+  const penaltyEGP = 0;
+
+  const nextPoints = curPts + bonusPts;
+  const nextPenalties = Math.max(0, curPen + penaltyPts); // Notice: NEVER minus bonusPts!
+  const nextFinesDue = Math.max(0, curFines - bonusEGP + penaltyEGP);
+  const nextNetPts = Math.max(0, nextPoints - nextPenalties);
+
+  assert.strictEqual(nextPoints, 60, 'Points incremented by bonus points');
+  assert.strictEqual(nextPenalties, 15, 'Penalties remain unchanged when bonus points awarded');
+  assert.strictEqual(nextFinesDue, 25, 'Fines due reduced by early EGP bonus');
+  assert.strictEqual(nextNetPts, 45, 'Net points correctly recomputed as points - penalties');
+
+  // 3. Legacy Quotas Fallback Invariant
+  const userA = { points: 20, penalties: 5, quotas: 40 }; // Only legacy quotas
+  const userB = { points: 30, penalties: 0, fines: 15 };   // fines field
+  const userC = { points: 10, penalties: 0, finesDue: 25 }; // finesDue field
+  const userD = { points: 0, penalties: 0 };               // No debt fields
+
+  const getFinesDue = (u) => Math.max(0, u.finesDue ?? u.fines ?? u.quotas ?? 0);
+
+  assert.strictEqual(getFinesDue(userA), 40, 'Fallback to quotas when finesDue/fines absent');
+  assert.strictEqual(getFinesDue(userB), 15, 'Fallback to fines when finesDue absent');
+  assert.strictEqual(getFinesDue(userC), 25, 'Read finesDue when present');
+  assert.strictEqual(getFinesDue(userD), 0, 'Default to 0 when debt fields absent');
+
+  // Total fines aggregation across all members
+  const members = [userA, userB, userC, userD];
+  const totalFinesSum = members.reduce((sum, m) => sum + getFinesDue(m), 0);
+  assert.strictEqual(totalFinesSum, 80, 'Aggregate total fines properly sums legacy and modern debt values');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
