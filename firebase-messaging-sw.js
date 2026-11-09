@@ -25,6 +25,15 @@ messaging.onBackgroundMessage((payload) => {
     }
   };
 
+  clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    clientList.forEach((client) => {
+      client.postMessage({
+        type: 'NEW_PUSH_NOTIFICATION',
+        payload
+      });
+    });
+  });
+
   self.registration.showNotification(notificationTitle, notificationOptions);
 });
 

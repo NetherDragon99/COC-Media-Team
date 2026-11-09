@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.1.1';
-const CACHE_NAME = 'coc-media-cache-v3.1.1';
+const CACHE_VERSION = 'v3.1.2';
+const CACHE_NAME = 'coc-media-cache-v3.1.2';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -57,14 +57,27 @@ self.addEventListener('push', (event) => {
       data.body = event.data.text();
     }
   }
+
+  const notifyClients = clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    clientList.forEach((client) => {
+      client.postMessage({
+        type: 'NEW_PUSH_NOTIFICATION',
+        payload: data
+      });
+    });
+  });
+
   event.waitUntil(
-    self.registration.showNotification(data.title || 'CoC Media Team', {
-      body: data.body || 'New update available',
-      icon: data.icon || './pwa-192x192.png',
-      badge: data.badge || './pwa-192x192.png',
-      vibrate: [200, 100, 200],
-      data: { url: data.url || './' }
-    })
+    Promise.all([
+      self.registration.showNotification(data.title || 'CoC Media Team', {
+        body: data.body || 'New update available',
+        icon: data.icon || './pwa-192x192.png',
+        badge: data.badge || './pwa-192x192.png',
+        vibrate: [200, 100, 200],
+        data: { url: data.url || './' }
+      }),
+      notifyClients
+    ])
   );
 });
 

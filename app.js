@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.1';
+export const APP_VERSION = '3.1.2';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -9434,6 +9434,7 @@ function setupWaiverRequestsListener() {
 
 function mergeAndRenderNotifications() {
   const personal = state.personalNotifications || [];
+  const targetNotifs = state.targetNotifications || [];
   const userSubs = userNotifications || [];
   const bAll = state.broadcastNotificationsAll || [];
   const bBadge = state.broadcastNotificationsBadge || [];
@@ -9447,6 +9448,17 @@ function mergeAndRenderNotifications() {
       isBroadcast: false,
       read: Boolean(n.read)
     });
+  });
+
+  targetNotifs.forEach(n => {
+    if (!combinedMap.has(n.id)) {
+      combinedMap.set(n.id, {
+        ...n,
+        _inRoot: true,
+        isBroadcast: false,
+        read: Boolean(n.read)
+      });
+    }
   });
 
   userSubs.forEach(n => {
@@ -9628,7 +9640,6 @@ function setupNotificationsListener() {
     isUserNotificationsInitialLoad = true;
     const qUserNotifs = query(
       collection(db, 'users', state.user.uid, 'notifications'),
-      orderBy('timestamp', 'desc'),
       limit(50)
     );
     unsubscribeUserNotifications = onSnapshot(qUserNotifs, (snapshot) => {
@@ -9656,7 +9667,6 @@ function setupNotificationsListener() {
     const qPersonal = query(
       collection(db, 'notifications'),
       where('uid', '==', state.user.uid),
-      orderBy('createdAt', 'desc'),
       limit(100)
     );
     const unsubPersonal = onSnapshot(qPersonal, (snapshot) => {
@@ -9682,11 +9692,26 @@ function setupNotificationsListener() {
   }
 
   try {
+    listeners.clear('notifications_target');
+    const qTarget = query(
+      collection(db, 'notifications'),
+      where('targetUid', '==', state.user.uid),
+      limit(100)
+    );
+    const unsubTarget = onSnapshot(qTarget, (snapshot) => {
+      state.targetNotifications = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
+      mergeAndRenderNotifications();
+    }, (err) => console.warn('Target notifications listener:', err));
+    listeners.add('notifications_target', unsubTarget);
+  } catch (e) {
+    console.warn('Target notifications listener error:', e);
+  }
+
+  try {
     listeners.clear('notifications_broadcast_all');
     const qBroadcastAll = query(
       collection(db, 'notifications_broadcast'),
       where('targetType', '==', 'all'),
-      orderBy('createdAt', 'desc'),
       limit(50)
     );
     const unsubBroadcastAll = onSnapshot(qBroadcastAll, (snapshot) => {
@@ -9721,7 +9746,6 @@ function setupNotificationsListener() {
         collection(db, 'notifications_broadcast'),
         where('targetType', '==', 'badge'),
         where('badgeId', 'in', userBadges),
-        orderBy('createdAt', 'desc'),
         limit(50)
       );
       const unsubBroadcastBadge = onSnapshot(qBroadcastBadge, (snapshot) => {
@@ -15200,25 +15224,8 @@ function openAdminTaskModal(taskId = null) {
 let adminSessionsSegmentedInstance = null;
 function setupAdminSessionsSegmented() {
   const mount = document.getElementById('mount-admin-sessions-segmented');
-  if (!mount) return;
-  if (!adminSessionsSegmentedInstance || !mount.contains(adminSessionsSegmentedInstance)) {
+  if (mount) {
     mount.innerHTML = '';
-    adminSessionsSegmentedInstance = renderSegmented({
-      id: 'admin-sessions-segmented',
-      options: [
-        { value: 'active', label: 'Active Sessions' },
-        { value: 'history', label: 'Session History' },
-        { value: 'archived', label: 'Archived' }
-      ],
-      value: adminSessionsFilter || 'active',
-      onChange: (val) => {
-        adminSessionsFilter = val;
-        renderAdminSessions();
-      }
-    });
-    mount.appendChild(adminSessionsSegmentedInstance);
-  } else if (adminSessionsSegmentedInstance.getValue && adminSessionsSegmentedInstance.getValue() !== (adminSessionsFilter || 'active')) {
-    adminSessionsSegmentedInstance.setValue(adminSessionsFilter || 'active', false);
   }
 }
 
@@ -15232,33 +15239,44 @@ function renderAdminSessions() {
 
   const nowMs = serverNow();
   const isArchived = adminSessionsFilter === 'archived';
-  const isHistory = adminSessionsFilter === 'history';
 
   let filtered = [];
   if (isArchived) {
-    filtered = state.attendanceSessions.filter(s => s.archived);
-  } else if (isHistory) {
-    filtered = state.attendanceSessions.filter(s => {
-      if (s.archived) return false;
-      const calc = computeAttendance(s, nowMs);
-      const occStart = calc.occurrenceStart || parseDateTimeToMs(s.schedule?.startDateTime) || 0;
-      const cutoffMs = occStart + (Number(s.lateCutoffMinutes) || 120) * 60000;
-      const hasLogs = (state.attendanceLogs || []).some(l => l.sessionId === s.id);
-      return s.status === 'closed' || s.status === 'completed' || !s.active || (occStart > 0 && nowMs > cutoffMs) || hasLogs;
-    });
-    filtered.sort((a, b) => {
-      const aStart = computeAttendance(a, nowMs).occurrenceStart || parseDateTimeToMs(a.schedule?.startDateTime) || 0;
-      const bStart = computeAttendance(b, nowMs).occurrenceStart || parseDateTimeToMs(b.schedule?.startDateTime) || 0;
-      return bStart - aStart;
-    });
+    filtered = (state.attendanceSessions || []).filter(s => s.archived);
   } else {
-    filtered = state.attendanceSessions.filter(s => !s.archived && s.status !== 'closed');
+    const unarchived = (state.attendanceSessions || []).filter(s => !s.archived);
+    const activeSessions = [];
+    const closedSessions = [];
+
+    unarchived.forEach(session => {
+      const calc = computeAttendance(session, nowMs);
+      const occStart = calc.occurrenceStart || parseDateTimeToMs(session.schedule?.startDateTime) || 0;
+      const cutoffMs = occStart + (Number(session.lateCutoffMinutes) || 120) * 60000;
+      const isClosed = session.status === 'closed' || session.status === 'completed' || session.active === false || (occStart > 0 && nowMs > cutoffMs);
+
+      if (isClosed) {
+        closedSessions.push({ session, occStart });
+      } else {
+        activeSessions.push({ session, occStart });
+      }
+    });
+
+    // Active sessions at the top (soonest occurrence first)
+    activeSessions.sort((a, b) => (a.occStart || 0) - (b.occStart || 0));
+
+    // Closed/historical sessions sorted by date (newest first)
+    closedSessions.sort((a, b) => (b.occStart || 0) - (a.occStart || 0));
+
+    filtered = [
+      ...activeSessions.map(x => x.session),
+      ...closedSessions.map(x => x.session)
+    ];
   }
 
   if (filtered.length === 0) {
     list.innerHTML = `
       <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
-        No ${isArchived ? 'archived' : (isHistory ? 'historical/closed' : 'active')} attendance sessions found.
+        ${isArchived ? 'No archived attendance sessions found.' : 'No attendance sessions found. Create a new session to get started.'}
       </div>
     `;
     return;
@@ -15354,11 +15372,13 @@ function renderAdminSessions() {
             ${statusPillHtml}
           </div>
 
-          <div class="flex items-center justify-between pt-2 border-t border-white/5">
-            <button type="button" class="btn-card-view-attendance text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
-              <span>View Attendance Breakdown</span> &rarr;
+          <div class="flex items-center justify-between pt-2 border-t border-white/5 gap-2">
+            <button type="button" class="btn-card-view-attendance flex-1 py-2 px-3 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm" data-session-id="${esc(session.id)}" data-no-row-tap="true">
+              <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              <span>View Attendance</span>
             </button>
-            <button type="button" class="btn-card-edit-session text-xs font-semibold text-[#0A84FF] hover:text-blue-400 flex items-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
+            <button type="button" class="btn-card-edit-session px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-200 text-xs font-semibold flex items-center justify-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
               <span>Edit</span>
             </button>
           </div>
@@ -15369,33 +15389,37 @@ function renderAdminSessions() {
   }).join('');
 
   list.querySelectorAll('.bulk-select-card').forEach(card => {
+    const sessionId = card.dataset.sessionId;
+
     attachRowGestures(card, {
       bulkType: 'sessions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
-        const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
-        if (adminSessionsFilter === 'history') {
-          if (targetSession) openSessionBreakdownModal(targetSession, false);
-        } else {
-          openAdminSessionModal(card.dataset.sessionId);
-        }
+        openSessionBreakdownModal(sessionId, false);
       }
     });
+
+    card.onclick = (e) => {
+      if (e.target.closest('button') || e.target.closest('[data-no-row-tap="true"]')) return;
+      if (selectionState.active && selectionState.type === 'sessions') return;
+      openSessionBreakdownModal(sessionId, false);
+    };
 
     const btnView = card.querySelector('.btn-card-view-attendance');
     if (btnView) {
       btnView.onclick = (e) => {
+        e.preventDefault();
         e.stopPropagation();
-        const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
-        if (targetSession) openSessionBreakdownModal(targetSession, false);
+        openSessionBreakdownModal(sessionId, false);
       };
     }
 
     const btnEdit = card.querySelector('.btn-card-edit-session');
     if (btnEdit) {
       btnEdit.onclick = (e) => {
+        e.preventDefault();
         e.stopPropagation();
-        openAdminSessionModal(card.dataset.sessionId);
+        openAdminSessionModal(sessionId);
       };
     }
   });
@@ -17219,11 +17243,22 @@ export function closeSessionBreakdownModal() {
 }
 
 export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false) {
-  const rawSession = (typeof sessionOrId === 'string'
+  let rawSession = (typeof sessionOrId === 'string'
     ? state.attendanceSessions.find(s => s.id === sessionOrId)
     : sessionOrId) || sessionOrId;
 
-  if (!rawSession) {
+  if (typeof sessionOrId === 'string' && (!rawSession || typeof rawSession === 'string')) {
+    try {
+      const snap = await getDoc(doc(db, 'attendance_sessions', sessionOrId));
+      if (snap.exists()) {
+        rawSession = { id: snap.id, ...snap.data() };
+      }
+    } catch (e) {
+      console.warn('Could not fetch session by ID:', e);
+    }
+  }
+
+  if (!rawSession || typeof rawSession === 'string') {
     toast('Session not found', 'error');
     return;
   }
@@ -23271,6 +23306,37 @@ if ('serviceWorker' in navigator) {
   } else {
     window.addEventListener('load', registerAppServiceWorker);
   }
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'NEW_PUSH_NOTIFICATION') {
+      const payload = event.data.payload || {};
+      const notif = payload.notification || (payload.data ? payload.data : payload);
+      const title = notif.title || payload.title || 'New Notification';
+      const body = notif.body || payload.body || payload.message || '';
+      const icon = notif.icon || payload.icon || 'bell';
+
+      showLiveNotificationToast({
+        title,
+        message: body,
+        icon
+      });
+
+      if (title || body) {
+        const tempNotif = normalizeNotification({
+          id: 'sw_' + Date.now(),
+          title,
+          body,
+          message: body,
+          icon,
+          read: false,
+          createdAt: new Date().toISOString()
+        });
+        state.notifications = [tempNotif, ...(state.notifications || []).filter(n => n.id !== tempNotif.id)];
+        updateNotificationBadges();
+        renderNotifications();
+      }
+    }
+  });
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!sessionStorage.getItem('sw_controller_reloaded')) {
