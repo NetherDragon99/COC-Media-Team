@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.5';
+export const APP_VERSION = '3.1.6';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -9273,8 +9273,7 @@ function setupAttendanceListeners() {
         state.attendanceLogs = state.myAttendanceLogs;
       }
       persistToLocalCache();
-      renderAttendanceView();
-      renderAttendanceLogs();
+      renderTodayCheckIns(state.myAttendanceLogs);
       renderProfileAttendance();
       updateUserTodayAttendanceBadge();
     }, (err) => {
@@ -9293,15 +9292,52 @@ function setupAttendanceListeners() {
       );
       const unsubAllLogs = onSnapshot(qAllLogs, (snapshot) => {
         state.attendanceLogs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-        renderAdminAttendanceLogs();
-        renderAttendanceLogs();
+        if (adminSessionsFilter === 'recent_logs') {
+          renderRecentLogs();
+        }
+        renderTodayCheckIns(state.attendanceLogs);
         updateUserTodayAttendanceBadge();
-        (state.attendanceSessions || []).forEach(s => {
-          hydrateSessionCardStats(s.id);
-        });
       }, (err) => console.warn('Admin attendance logs listener:', err));
       listeners.add('attendance_logs', unsubAllLogs);
     } catch (e) { console.warn('Error setting up admin attendance logs listener:', e); }
+  }
+
+  // Pure onSnapshot sync for attendance_records
+  try {
+    const qRecords = (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked)
+      ? query(collection(db, 'attendance_records'), orderBy('timestamp', 'desc'), limit(50))
+      : query(collection(db, 'attendance_records'), where('uid', '==', state.user.uid), limit(50));
+    const unsubRecords = onSnapshot(qRecords, (snapshot) => {
+      const records = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+      state.attendanceRecords = records;
+
+      const mergedMap = new Map((state.attendanceLogs || []).map(l => [l.id, l]));
+      records.forEach(r => mergedMap.set(r.id, { ...mergedMap.get(r.id), ...r }));
+      state.attendanceLogs = Array.from(mergedMap.values());
+
+      if (!isCurrentUserAdmin()) {
+        state.myAttendanceLogs = records;
+      }
+      renderTodayCheckIns(records);
+      if (adminSessionsFilter === 'recent_logs') {
+        renderRecentLogs();
+      }
+      updateUserTodayAttendanceBadge();
+    }, (err) => {
+      try {
+        const qFallback = query(collection(db, 'attendance_records'), limit(50));
+        const unsubFallback = onSnapshot(qFallback, (s) => {
+          const records = s.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+          state.attendanceRecords = records;
+          renderTodayCheckIns(records);
+          if (adminSessionsFilter === 'recent_logs') renderRecentLogs();
+        }, () => {});
+        listeners.add('attendance_records', unsubFallback);
+      } catch (_) {}
+    });
+    listeners.add('attendance_records', unsubRecords);
+  } catch (e) {
+    console.warn('Error setting up attendance_records listener:', e);
   }
 }
 
@@ -11345,8 +11381,17 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
       btnText = `Check In Late (${latePenaltyText})`;
     }
 
+    const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+    if (existingCard && existingCard.dataset.heroSessionId === target.session.id && existingCard.dataset.heroStatus === target.calc.status) {
+      const badgeWrap = existingCard.querySelector('.smart-hero-badge-container');
+      if (badgeWrap) badgeWrap.innerHTML = badgeHtml;
+      const btnSpan = existingCard.querySelector('.smart-hero-btn-text');
+      if (btnSpan) btnSpan.textContent = btnText;
+      return;
+    }
+
     heroContainer.innerHTML = `
-      <div class="smart-checkin-hero-card ${isLate ? 'hero-late' : 'hero-active'} space-y-4">
+      <div class="smart-checkin-hero-card ${isLate ? 'hero-late' : 'hero-active'} space-y-4" data-hero-session-id="${esc(target.session.id)}" data-hero-status="${esc(target.calc.status)}">
         <div class="space-y-1">
           <div class="flex items-center justify-center gap-2">
             <span class="w-2.5 h-2.5 rounded-full ${isLate ? 'bg-rose-500 animate-ping' : 'bg-emerald-500 animate-pulse'}"></span>
@@ -11360,7 +11405,7 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
           </p>
         </div>
 
-        <div class="flex items-center justify-center">
+        <div class="smart-hero-badge-container flex items-center justify-center">
           ${badgeHtml}
         </div>
 
@@ -11370,7 +11415,7 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
             <svg class="w-5 h-5 shrink-0 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24">
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
-            <span>${btnText}</span>
+            <span class="smart-hero-btn-text">${btnText}</span>
           </button>
         </div>
       </div>
@@ -11388,8 +11433,13 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
     const isWaiver = Boolean(completedSession.approvedWaiver);
     const log = completedSession.userLog;
 
+    const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+    if (existingCard && existingCard.dataset.heroSessionId === completedSession.session.id && existingCard.dataset.heroStatus === 'completed') {
+      return;
+    }
+
     heroContainer.innerHTML = `
-      <div class="smart-checkin-hero-card border-emerald-500/20 bg-emerald-500/[0.04] space-y-3">
+      <div class="smart-checkin-hero-card border-emerald-500/20 bg-emerald-500/[0.04] space-y-3" data-hero-session-id="${esc(completedSession.session.id)}" data-hero-status="completed">
         <div class="flex items-center justify-center gap-2">
           <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
           <span class="text-xs uppercase font-bold tracking-wider text-emerald-400 font-mono">${isWaiver ? 'Excuse Approved' : 'Checked In'}</span>
@@ -11416,12 +11466,19 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
     upcomingSessions.sort((a, b) => a.calc.opensAt - b.calc.opensAt);
     const nextItem = upcomingSessions[0];
 
+    const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+    if (existingCard && existingCard.dataset.heroSessionId === nextItem.session.id && existingCard.dataset.heroStatus === 'upcoming') {
+      const msgP = existingCard.querySelector('.smart-hero-upcoming-msg');
+      if (msgP) msgP.textContent = nextItem.calc.message || `Opens at ${formatDateTime(nextItem.calc.opensAt)}`;
+      return;
+    }
+
     heroContainer.innerHTML = `
-      <div class="smart-checkin-hero-card space-y-3">
+      <div class="smart-checkin-hero-card space-y-3" data-hero-session-id="${esc(nextItem.session.id)}" data-hero-status="upcoming">
         <div class="space-y-1">
           <span class="text-xs uppercase font-bold tracking-wider text-neutral-400 font-mono">Next Session</span>
           <h2 class="ios-title text-white text-xl font-bold truncate">${esc(nextItem.session.title)}</h2>
-          <p class="text-xs text-neutral-400">${nextItem.calc.message || `Opens at ${formatDateTime(nextItem.calc.opensAt)}`}</p>
+          <p class="smart-hero-upcoming-msg text-xs text-neutral-400">${nextItem.calc.message || `Opens at ${formatDateTime(nextItem.calc.opensAt)}`}</p>
         </div>
         <button type="button" class="smart-checkin-btn-massive" disabled>
           <svg class="w-5 h-5 text-neutral-400 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
@@ -11432,8 +11489,13 @@ function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
     return;
   }
 
+  const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+  if (existingCard && existingCard.dataset.heroStatus === 'none') {
+    return;
+  }
+
   heroContainer.innerHTML = `
-    <div class="smart-checkin-hero-card space-y-3">
+    <div class="smart-checkin-hero-card space-y-3" data-hero-status="none">
       <div class="space-y-1">
         <span class="text-xs uppercase font-bold tracking-wider text-neutral-500 font-mono">Attendance</span>
         <h2 class="ios-title text-neutral-300 text-lg font-bold">No active sessions right now</h2>
@@ -11759,19 +11821,22 @@ async function handleAttendanceCheckIn(sessionId) {
   const logId = `${session.id}_${occurrenceKey}_${state.user.uid}`;
 
   try {
-    const batch = writeBatch(db);
-    const logRef = doc(db, 'attendance_logs', logId);
+    const nowIso = new Date(nowMs).toISOString();
 
     const logPayload = {
+      id: logId,
       sessionId: session.id,
       sessionTitle: session.title,
       uid: state.user.uid,
+      userId: state.user.uid,
       userName: state.user.name || state.user.displayName || 'Member',
+      displayName: state.user.name || state.user.displayName || 'Member',
       userAvatar: state.user.avatarUrl || state.user.photoURL || '',
       occurrenceKey,
-      occurrenceStart: Timestamp.fromMillis(calc.occurrenceStart),
-      checkedInAt: serverTimestamp(),
-      checkInTimestamp: serverTimestamp(),
+      occurrenceStart: calc.occurrenceStart,
+      checkedInAt: nowIso,
+      checkInTimestamp: nowMs,
+      timestamp: nowIso,
       status: isEarly ? 'early' : calc.status,
       delaySeconds: calc.delaySeconds || 0,
       earlyMinutes: calc.earlyMinutes || 0,
@@ -11789,92 +11854,22 @@ async function handleAttendanceCheckIn(sessionId) {
       ledgerSynced: true
     };
 
-    batch.set(logRef, logPayload);
-    batch.set(doc(db, 'attendance_records', logId), logPayload);
-
-    const userRef = doc(db, 'users', state.user.uid);
-    const userDocData = usersMap.get(state.user.uid) || state.user || {};
-    const userUpdates = { lastOpId: logId, updatedAt: serverTimestamp() };
-
-    if (pointsDelta !== 0) {
-      Object.assign(userUpdates, buildPointsUpdate(userDocData, pointsDelta));
-    }
-    if (penaltyPts > 0) {
-      userUpdates.penalties = increment(penaltyPts);
-    }
-    if (egpDelta !== 0) {
-      const fineChange = -egpDelta;
-      userUpdates.finesDue = increment(fineChange);
-      userUpdates.fines = increment(fineChange);
-      batch.set(doc(db, 'users_private', state.user.uid), {
-        finesEGP: increment(fineChange),
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-    }
-    batch.update(userRef, userUpdates);
-
-    if (pointsDelta !== 0) {
-      const txPtsRef = doc(collection(db, 'users', state.user.uid, 'transactions'));
-      batch.set(txPtsRef, {
-        type: pointsDelta > 0 ? 'bonus' : 'penalty',
-        category: 'points',
-        amount: Math.abs(pointsDelta),
-        pointsDelta,
-        sessionId: session.id,
-        logId,
-        reason: pointsDelta > 0
-          ? `Early check-in bonus (${calc.earlyMinutes}m early): ${session.title}`
-          : `Late check-in penalty (${calc.lateMinutes}m ${calc.lateSeconds}s late): ${session.title}`,
-        createdAt: serverTimestamp()
-      });
-    }
-
-    if (egpDelta !== 0) {
-      const txEgpRef = doc(collection(db, 'users', state.user.uid, 'transactions'));
-      batch.set(txEgpRef, {
-        type: egpDelta > 0 ? 'bonus' : 'fine',
-        category: 'financial',
-        amount: Math.abs(egpDelta),
-        egpDelta,
-        sessionId: session.id,
-        logId,
-        reason: egpDelta > 0
-          ? `Early check-in bonus (${calc.earlyMinutes}m early): ${session.title}`
-          : `Late check-in fine (${calc.lateMinutes}m ${calc.lateSeconds}s late): ${session.title}`,
-        createdAt: serverTimestamp()
-      });
-    }
-
-    if (pointsDelta !== 0 || egpDelta !== 0) {
-      const adjRef = doc(collection(db, 'adjustments'), `att_${logId}`);
-      batch.set(adjRef, {
-        uid: state.user.uid,
-        targetUid: state.user.uid,
-        userName: state.user.name || state.user.displayName || 'Member',
-        type: (pointsDelta > 0 || egpDelta > 0) ? 'bonus' : 'penalty',
-        pointsDelta,
-        egpDelta,
-        amountEGP: egpDelta,
-        reason: (pointsDelta > 0 || egpDelta > 0)
-          ? `Early Check-In (${calc.earlyMinutes}m early): ${session.title}`
-          : `Late Check-In (${calc.lateMinutes}m ${calc.lateSeconds}s late): ${session.title}`,
-        source: 'attendance_checkin',
-        sessionId: session.id,
-        logId,
-        createdAt: serverTimestamp()
-      });
-    }
-
-    await batch.commit();
-
-    callGasBackend({
+    // FIX 4: Purely dispatch PROCESS_CHECKIN to GAS backend with Admin OAuth to avoid permission errors
+    await callGasBackend({
       action: 'PROCESS_CHECKIN',
       sessionId: session.id,
+      sessionTitle: session.title,
+      occurrenceKey,
+      sessionStartMs: calc.occurrenceStart,
+      checkInTimestamp: nowMs,
       uid: state.user.uid,
       userName: state.user.name || state.user.displayName || 'Member',
       userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-      nowMs
-    }).catch(() => {});
+      pointsDelta,
+      egpDelta,
+      nowMs,
+      logId
+    });
 
     const optLog = normalizeAttendanceLog({
       id: logId,
@@ -11882,7 +11877,7 @@ async function handleAttendanceCheckIn(sessionId) {
       checkedInAt: { toMillis: () => nowMs },
       checkInTimestamp: { toMillis: () => nowMs }
     });
-    state.myAttendanceLogs = [optLog, ...state.myAttendanceLogs.filter(l => l.id !== logId)];
+    state.myAttendanceLogs = [optLog, ...(state.myAttendanceLogs || []).filter(l => l.id !== logId)];
     state.attendanceLogs = [optLog, ...(state.attendanceLogs || []).filter(l => l.id !== logId)];
 
     if (pointsDelta !== 0) {
@@ -11895,8 +11890,8 @@ async function handleAttendanceCheckIn(sessionId) {
       state.user.penalties = (state.user.penalties || 0) + penaltyPts;
     }
     if (egpDelta !== 0) {
-      state.user.finesDue = (state.user.finesDue || 0) - egpDelta;
-      state.user.fines = (state.user.fines || 0) - egpDelta;
+      state.user.finesDue = Math.max(0, (state.user.finesDue || 0) - egpDelta);
+      state.user.fines = Math.max(0, (state.user.fines || 0) - egpDelta);
     }
     updateProfileUI();
     renderLeaderboard();
@@ -16369,8 +16364,15 @@ function openAdminSessionModal(sessionId = null) {
       const openTotalMins = (oHour || 0) * 60 + (oMin || 0);
       const closeTotalMins = (cHour || 0) * 60 + (cMin || 0);
 
-      const earlyCheckInMinutes = (startTotalMins - openTotalMins + 1440) % 1440;
-      const lateCutoffMinutes = (closeTotalMins - startTotalMins + 1440) % 1440;
+      // FIX 6: Strict time boundary validation in settings:
+      // checkInOpens <= startTime, checkInCloses >= startTime, and checkInOpens < checkInCloses
+      if (openTotalMins > startTotalMins || closeTotalMins < startTotalMins || openTotalMins >= closeTotalMins) {
+        toast('Invalid check-in window boundaries.', 'error');
+        return false;
+      }
+
+      const earlyCheckInMinutes = startTotalMins - openTotalMins;
+      const lateCutoffMinutes = closeTotalMins - startTotalMins;
 
       const dateParts = selectedDateStr.split('-').map(Number);
       const startDateTimeMs = zonedDateToMs(
@@ -16868,26 +16870,38 @@ function openAdminLogEditModal(log, session) {
   const deleteBtn = bodyEl.querySelector('#adm-log-btn-delete');
 
   deleteBtn.onclick = async () => {
-    const confirmed = await confirmSheet({
-      title: 'Delete Attendance Log?',
-      message: `Are you sure you want to delete this attendance log for ${prof.displayName}? This action cannot be undone.`,
-      confirmLabel: 'Delete Log',
-      destructive: true
-    });
-    if (!confirmed) return;
+    // FIX 3: Strict native browser prompt to avoid hidden dialog behind modals
+    if (!confirm('Delete log and reverse points?')) return;
 
     try {
-      const batch = writeBatch(db);
-      batch.delete(doc(db, 'attendance_logs', log.id));
-      logAdminAction(batch, {
-        action: 'attendance_log_deleted',
-        targetUid: log.uid,
-        details: { logId: log.id, sessionId: session?.id || log.sessionId }
+      const targetUid = log.uid || log.userId;
+      const ptsDelta = log.pointsDelta !== undefined ? log.pointsDelta : (log.status === 'early' ? (log.earlyBonusPoints || 0) : -(log.penalty || 0));
+      const fineDelta = log.egpDelta !== undefined ? log.egpDelta : (log.status === 'early' ? (log.earlyBonusEGP || 0) : -(log.fineEGP || 0));
+
+      await callGasBackend({
+        action: 'DELETE_LOG',
+        logId: log.id,
+        uid: targetUid,
+        pointsDelta: ptsDelta,
+        egpDelta: fineDelta
       });
-      await batch.commit();
-      toast('Attendance log deleted', 'success');
-      const cancelBtn = document.getElementById('shared-modal-cancel');
-      if (cancelBtn) cancelBtn.click();
+
+      await Promise.all([
+        deleteDoc(doc(db, 'attendance_logs', log.id)).catch(() => {}),
+        deleteDoc(doc(db, 'attendance_records', log.id)).catch(() => {})
+      ]);
+
+      state.attendanceLogs = (state.attendanceLogs || []).filter(l => l.id !== log.id);
+      state.myAttendanceLogs = (state.myAttendanceLogs || []).filter(l => l.id !== log.id);
+      if (state.attendanceRecords) {
+        state.attendanceRecords = state.attendanceRecords.filter(l => l.id !== log.id);
+      }
+
+      toast('Attendance log deleted and points reversed', 'success');
+      closeModal();
+      if (typeof renderRecentLogs === 'function') renderRecentLogs();
+      if (typeof renderAdminAttendanceLogs === 'function') renderAdminAttendanceLogs();
+      renderAdminSessions();
     } catch (err) {
       console.error('Delete log error:', err);
       toast(err.message || 'Failed to delete log', 'error');
@@ -17187,7 +17201,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
     bodyEl.innerHTML = `
       <div class="space-y-3.5">
         <div id="mount-admin-roster-segmented" class="w-full"></div>
-        <div id="admin-roster-tab-content" class="space-y-4"></div>
+        <div id="admin-roster-tab-content" class="flex flex-col gap-3 pb-6 w-full overflow-y-auto"></div>
       </div>
     `;
 
@@ -17517,7 +17531,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
         }
 
         tabContent.innerHTML = `
-          <div class="space-y-3">
+          <div class="history-occurrences-container flex flex-col gap-3 pb-6 w-full overflow-y-auto">
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
               <span>All Historical Occurrences (${sortedOccGroups.length})</span>
               <span class="text-[10px] text-neutral-400 font-normal">Click any occurrence to view or edit details</span>
@@ -17534,25 +17548,25 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
 
               return `
                 <div class="history-occurrence-card p-3 rounded-2xl bg-white/[0.02] border border-white/10 space-y-2.5 transition hover:bg-white/[0.04] cursor-pointer" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
-                  <div class="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
-                    <div>
+                  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-white/5 pb-2">
+                    <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-2">
-                        <span class="text-xs font-bold text-white">${formatOccurrenceLabel(grp.dateKey, grp.startMs)}</span>
-                        ${grp.dateKey === currDateKey ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Current</span>` : ''}
+                        <span class="text-xs font-bold text-white truncate">${formatOccurrenceLabel(grp.dateKey, grp.startMs)}</span>
+                        ${grp.dateKey === currDateKey ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">Current</span>` : ''}
                       </div>
-                      <span class="text-[10px] text-neutral-400 font-mono mt-0.5 block">
+                      <span class="text-[10px] text-neutral-400 font-mono mt-0.5 block truncate">
                         ${occAttended} attended • ${occLate} late • ${occAbsent} absent${occExcused > 0 ? ` • ${occExcused} excused` : ''}
                       </span>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
                       ${(totalPtsDed > 0 || totalFineDed > 0) ? `
-                        <span class="text-[10px] font-mono text-rose-400 px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20">
+                        <span class="text-[10px] font-mono text-rose-400 px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 whitespace-nowrap">
                           ${totalPtsDed > 0 ? `-${totalPtsDed} pts ` : ''}${totalFineDed > 0 ? `-${totalFineDed} EGP` : ''}
                         </span>
                       ` : ''}
-                      <button type="button" class="btn-load-occ-breakdown px-2.5 py-1 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] text-[11px] font-semibold border border-[#0A84FF]/30 transition flex items-center gap-1" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                      <button type="button" class="btn-load-occ-breakdown px-2.5 py-1 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] text-[11px] font-semibold border border-[#0A84FF]/30 transition flex items-center gap-1 shrink-0 whitespace-nowrap" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
                         <span>View Details</span>
-                        <svg class="w-3 h-3 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
                       </button>
                     </div>
                   </div>
@@ -17760,7 +17774,11 @@ export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false)
   return openAdminRosterModal(String(sid), null, null, isReadOnly);
 }
 
-async function renderAdminAttendanceLogs() {
+export function renderTodayCheckIns(records = []) {
+  renderAttendanceLogs();
+}
+
+export async function renderRecentLogs() {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tbody = document.getElementById('admin-attendance-logs-tbody');
@@ -17777,15 +17795,32 @@ async function renderAdminAttendanceLogs() {
   }
 
   try {
-    // FIX 2: Global query on attendance_records collection ordered by timestamp descending, limit 50, with fallback
-    const [recSnap, logSnap] = await Promise.all([
-      getDocs(query(collection(db, 'attendance_records'), orderBy('timestamp', 'desc'), limit(50)))
-        .catch(() => getDocs(query(collection(db, 'attendance_records'), limit(50))))
-        .catch(() => ({ docs: [] })),
-      getDocs(query(collection(db, 'attendance_logs'), orderBy('checkedInAt', 'desc'), limit(50)))
-        .catch(() => getDocs(query(collection(db, 'attendance_logs'), limit(50))))
-        .catch(() => ({ docs: [] }))
-    ]);
+    // FIX 1: Direct global query on attendance_records collection ordered by timestamp descending, limit 50, with robust fallback
+    let recDocs = [];
+    try {
+      const snap = await getDocs(query(collection(db, 'attendance_records'), orderBy('timestamp', 'desc'), limit(50)));
+      recDocs = snap.docs || [];
+    } catch (e1) {
+      try {
+        const snap = await getDocs(query(collection(db, 'attendance_records'), limit(50)));
+        recDocs = snap.docs || [];
+      } catch (e2) {
+        console.warn('Could not query attendance_records:', e2);
+      }
+    }
+
+    let logDocs = [];
+    try {
+      const snap = await getDocs(query(collection(db, 'attendance_logs'), orderBy('checkedInAt', 'desc'), limit(50)));
+      logDocs = snap.docs || [];
+    } catch (e3) {
+      try {
+        const snap = await getDocs(query(collection(db, 'attendance_logs'), limit(50)));
+        logDocs = snap.docs || [];
+      } catch (e4) {
+        console.warn('Could not query attendance_logs:', e4);
+      }
+    }
 
     const mergedLogsMap = new Map();
 
@@ -17802,8 +17837,9 @@ async function renderAdminAttendanceLogs() {
       }
     };
 
-    recSnap.docs.forEach(addLog);
-    logSnap.docs.forEach(addLog);
+    recDocs.forEach(addLog);
+    logDocs.forEach(addLog);
+    (state.attendanceRecords || []).forEach(addLog);
     (state.attendanceLogs || []).forEach(addLog);
 
     const getLogTime = (l) => {
@@ -17873,32 +17909,46 @@ async function renderAdminAttendanceLogs() {
     tbody.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
       btn.onclick = async (e) => {
         e.stopPropagation();
-        const confirm = await confirmSheet({
-          title: 'Delete Attendance Log',
-          message: 'Remove this check-in record? This cannot be undone.',
-          confirmLabel: 'Remove',
-          destructive: true
-        });
-        if (confirm) {
-          try {
-            await Promise.all([
-              deleteDoc(doc(db, 'attendance_logs', btn.dataset.logId)).catch(() => {}),
-              deleteDoc(doc(db, 'attendance_records', btn.dataset.logId)).catch(() => {})
-            ]);
-            toast('Log removed', 'info');
-            renderAdminAttendanceLogs();
-          } catch (err) {
-            console.error('Failed to delete log:', err);
-            toast('Failed to delete log', 'error');
+        // FIX 3: Strict native browser prompt: if(confirm('Delete log and reverse points?')) { ... }
+        if (!confirm('Delete log and reverse points?')) return;
+        const logId = btn.dataset.logId;
+        const targetLog = logs.find(l => l.id === logId) || {};
+        const memberUid = targetLog.userId || targetLog.uid;
+        try {
+          await callGasBackend({
+            action: 'DELETE_LOG',
+            logId,
+            uid: memberUid,
+            pointsDelta: targetLog.pointsDelta !== undefined ? targetLog.pointsDelta : (targetLog.status === 'early' ? (targetLog.earlyBonusPoints || 0) : -(targetLog.penalty || 0)),
+            egpDelta: targetLog.egpDelta !== undefined ? targetLog.egpDelta : (targetLog.status === 'early' ? (targetLog.earlyBonusEGP || 0) : -(targetLog.fineEGP || 0))
+          });
+
+          await Promise.all([
+            deleteDoc(doc(db, 'attendance_logs', logId)).catch(() => {}),
+            deleteDoc(doc(db, 'attendance_records', logId)).catch(() => {})
+          ]);
+
+          state.attendanceLogs = (state.attendanceLogs || []).filter(l => l.id !== logId);
+          state.myAttendanceLogs = (state.myAttendanceLogs || []).filter(l => l.id !== logId);
+          if (state.attendanceRecords) {
+            state.attendanceRecords = state.attendanceRecords.filter(l => l.id !== logId);
           }
+          toast('Log removed and points reversed', 'info');
+          renderRecentLogs();
+          renderAdminSessions();
+        } catch (err) {
+          console.error('Failed to delete log:', err);
+          toast('Failed to delete log', 'error');
         }
       };
     });
   } catch (err) {
-    console.error('Error rendering admin attendance logs:', err);
+    console.error('Error rendering recent attendance logs:', err);
     tbody.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load attendance logs: ${esc(err.message || err)}</div>`;
   }
 }
+
+export const renderAdminAttendanceLogs = renderRecentLogs;
 
 function getFilteredAdminSubmissions() {
   const queryText = (state.adminSubmissionsSearch || '').toLowerCase().trim();
@@ -23721,5 +23771,8 @@ if (typeof window !== 'undefined') {
   window.openSessionBreakdownModal = openSessionBreakdownModal;
   window.closeSessionBreakdownModal = closeSessionBreakdownModal;
   window.getLogExactTimeStr = getLogExactTimeStr;
+  window.renderRecentLogs = renderRecentLogs;
+  window.renderAdminAttendanceLogs = renderAdminAttendanceLogs;
+  window.renderTodayCheckIns = renderTodayCheckIns;
   window.hydrateSessionCardStats = hydrateSessionCardStats;
 }

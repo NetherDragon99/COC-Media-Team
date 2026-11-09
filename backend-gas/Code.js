@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.1.5)
+ * CoC Media Team - Dedicated Serverless Backend (v3.1.6)
  * Autonomous Attendance Watchdog, Bidirectional Brackets & Grace Period Engine, Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -18,7 +18,7 @@ const CONFIG = {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.1.5",
+    version: "3.1.6",
     system: "CoC Media Backend Watchdog & Push Engine",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -53,6 +53,15 @@ function doPost(e) {
       return jsonResponse({
         status: "success",
         message: "Check-in evaluated and member ledger synchronized.",
+        result: result
+      });
+    }
+
+    if (action === "DELETE_LOG" || action === "REVERSE_LOG") {
+      const result = deleteAttendanceLogAndReverse(payload);
+      return jsonResponse({
+        status: "success",
+        message: "Attendance log deleted and member ledger reversed.",
         result: result
       });
     }
@@ -372,6 +381,7 @@ function processCheckInAndSyncLedger(payload) {
 
   // Update attendance_logs/{logId} AND attendance_records/{logId} if logId provided
   const logPayload = {
+    id: logId,
     sessionId: sessionId,
     sessionTitle: session.title || payload.sessionTitle || "Attendance Session",
     occurrenceKey: payload.occurrenceKey || "",
@@ -392,20 +402,16 @@ function processCheckInAndSyncLedger(payload) {
     egpDelta: egpDelta,
     appliedTierLabel: evalResult.appliedTierLabel || "",
     ledgerSynced: true,
+    timestamp: nowIso,
+    checkedInAt: nowIso,
     checkInTimestamp: checkInMs,
     checkInTime: nowIso,
     updatedAt: nowIso
   };
-  const logMask = [
-    "status", "earlyMinutes", "lateMinutes", "lateSeconds",
-    "earlyBonusPoints", "earlyBonusEGP", "penalty", "fineEGP",
-    "pointsDelta", "egpDelta", "appliedTierLabel", "ledgerSynced",
-    "checkInTimestamp", "checkInTime", "updatedAt"
-  ];
 
   if (logId) {
-    firestorePatch(`attendance_logs/${logId}`, logPayload, logMask);
-    firestorePatch(`attendance_records/${logId}`, logPayload, logMask);
+    firestorePatch(`attendance_logs/${logId}`, logPayload);
+    firestorePatch(`attendance_records/${logId}`, logPayload);
   }
 
   // Force backend to write ledger sync to users/{uid}
@@ -490,6 +496,82 @@ function processCheckInAndSyncLedger(payload) {
     egpDelta: egpDelta,
     appliedTierLabel: evalResult.appliedTierLabel
   };
+}
+
+/**
+ * Deletes an attendance log/record and reverses any points/penalties/fines applied to the member.
+ */
+function deleteAttendanceLogAndReverse(payload) {
+  const logId = payload.logId;
+  if (!logId) throw new Error("Missing logId in DELETE_LOG");
+
+  let existingLog = firestoreGet(`attendance_logs/${logId}`);
+  if (!existingLog) {
+    existingLog = firestoreGet(`attendance_records/${logId}`);
+  }
+
+  const targetUid = payload.uid || existingLog?.uid || existingLog?.userId;
+  const pointsDelta = payload.pointsDelta !== undefined
+    ? Number(payload.pointsDelta)
+    : Number(existingLog?.pointsDelta || (existingLog?.status === 'early' ? existingLog?.earlyBonusPoints : -existingLog?.penalty) || 0);
+  const egpDelta = payload.egpDelta !== undefined
+    ? Number(payload.egpDelta)
+    : Number(existingLog?.egpDelta || (existingLog?.status === 'early' ? existingLog?.earlyBonusEGP : -existingLog?.fineEGP) || 0);
+
+  firestoreDelete(`attendance_logs/${logId}`);
+  firestoreDelete(`attendance_records/${logId}`);
+
+  if (targetUid && (pointsDelta !== 0 || egpDelta !== 0)) {
+    const userDoc = firestoreGet(`users/${targetUid}`);
+    if (userDoc) {
+      const nowIso = new Date().toISOString();
+      const curPts = Number(userDoc.points) || 0;
+      const curTotal = Number(userDoc.totalPoints != null ? userDoc.totalPoints : curPts);
+      const curPen = Number(userDoc.penalties) || 0;
+      const curFines = Number(userDoc.finesDue != null ? userDoc.finesDue : (userDoc.fines || 0));
+
+      const reversedPoints = curPts - pointsDelta;
+      const reversedTotal = curTotal - pointsDelta;
+      const reversedPen = pointsDelta < 0 ? Math.max(0, curPen - Math.abs(pointsDelta)) : curPen;
+      const reversedFines = egpDelta !== 0 ? Math.max(0, curFines + egpDelta) : curFines;
+
+      const userPatch = {
+        points: reversedPoints,
+        totalPoints: reversedTotal,
+        penalties: reversedPen,
+        fines: reversedFines,
+        finesDue: reversedFines,
+        updatedAt: nowIso
+      };
+      firestorePatch(`users/${targetUid}`, userPatch, ["points", "totalPoints", "penalties", "fines", "finesDue", "updatedAt"]);
+
+      if (egpDelta !== 0) {
+        firestorePatch(`users_private/${targetUid}`, {
+          finesEGP: reversedFines,
+          updatedAt: nowIso
+        }, ["finesEGP", "updatedAt"]);
+      }
+
+      firestorePost(`users/${targetUid}/transactions`, {
+        uid: targetUid,
+        userId: targetUid,
+        logId: logId,
+        bucket: pointsDelta > 0 ? "points" : "penalties",
+        direction: pointsDelta > 0 ? "deduct" : "add",
+        type: "attendance_reversal",
+        category: "attendance",
+        amount: Math.abs(pointsDelta || egpDelta),
+        pointsDelta: -pointsDelta,
+        egpDelta: -egpDelta,
+        reason: `Reversal of deleted attendance log ${logId}`,
+        status: "active",
+        createdAt: nowIso,
+        timestamp: nowIso
+      });
+    }
+  }
+
+  return { success: true, logId: logId, reversedUid: targetUid, reversedPoints: -pointsDelta, reversedEgp: -egpDelta };
 }
 
 // -------------------------------------------------------------
@@ -1088,6 +1170,21 @@ function firestorePatch(docPath, obj, fieldMaskArray = []) {
     return res.getResponseCode() >= 200 && res.getResponseCode() < 300;
   } catch (err) {
     console.error("firestorePatch error:", err);
+    return false;
+  }
+}
+
+function firestoreDelete(docPath) {
+  try {
+    const url = firestoreUrl(docPath);
+    const res = UrlFetchApp.fetch(url, {
+      method: "delete",
+      headers: getAuthHeader(),
+      muteHttpExceptions: true
+    });
+    return res.getResponseCode() >= 200 && res.getResponseCode() < 300;
+  } catch (err) {
+    console.error("firestoreDelete error:", err);
     return false;
   }
 }

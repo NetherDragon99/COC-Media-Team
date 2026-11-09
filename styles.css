@@ -3821,12 +3821,35 @@ input[type="search"],
 }
 
 .history-occurrence-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
   transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .history-occurrence-card:hover {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+#admin-roster-tab-content,
+.history-occurrences-container {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  overflow-y: auto !important;
+  padding-bottom: 24px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.history-occurrence-card .history-log-row {
+  position: relative !important;
+  box-sizing: border-box !important;
 }
 
 
