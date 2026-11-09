@@ -1028,8 +1028,14 @@
 
           <div id="admin-attendance-logs-section" class="inset-group hidden">
             <div class="p-3 border-b border-white/10 flex items-center justify-between">
-              <span class="text-xs font-bold text-white uppercase tracking-wider">Attendance Logs</span>
-              <span id="admin-attendance-log-count" class="text-xs font-mono text-neutral-400">0 logs</span>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Attendance Logs</span>
+                <span id="admin-attendance-log-count" class="text-xs font-mono text-neutral-400">0 logs</span>
+              </div>
+              <button type="button" id="btn-admin-add-manual-attendance" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-[#0A84FF] text-white flex items-center gap-1 shadow-sm whitespace-nowrap hover:bg-[#0A84FF]/80 transition">
+                <svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>Add Attendance</span>
+              </button>
             </div>
             <!-- Search & Filter Controls -->
             <div class="p-3 border-b border-white/5 space-y-2.5 bg-white/[0.02]">

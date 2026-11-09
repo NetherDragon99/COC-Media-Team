@@ -637,10 +637,12 @@ function updateAttendanceLogAndSyncLedger(payload) {
   const targetUid = payload.uid || existingLog?.uid || existingLog?.userId;
   const oldPenalty = Number(existingLog?.penalty || 0);
   const oldFine = Number(existingLog?.fineEGP || 0);
+  const oldPoints = Number(existingLog?.points !== undefined ? existingLog.points : (existingLog?.pointsDelta || (existingLog?.status === 'early' ? existingLog?.earlyBonusPoints : 0) || 0));
 
   const newStatus = payload.status || existingLog?.status || 'on_time';
   const newPenalty = payload.penalty !== undefined ? Math.max(0, Number(payload.penalty) || 0) : oldPenalty;
   const newFine = payload.fineEGP !== undefined ? Math.max(0, Number(payload.fineEGP) || 0) : oldFine;
+  const newPoints = payload.points !== undefined ? Math.max(0, Number(payload.points) || 0) : oldPoints;
   const newNote = payload.adminNote !== undefined ? payload.adminNote : (existingLog?.adminNote || '');
   const nowIso = new Date().toISOString();
 
@@ -648,36 +650,61 @@ function updateAttendanceLogAndSyncLedger(payload) {
     status: newStatus,
     penalty: newPenalty,
     fineEGP: newFine,
+    points: newPoints,
+    pointsDelta: newPoints,
     adminNote: newNote,
     updatedAt: nowIso
   };
 
-  firestorePatch(`attendance_logs/${logId}`, patchData, ["status", "penalty", "fineEGP", "adminNote", "updatedAt"]);
-  firestorePatch(`attendance_records/${logId}`, patchData, ["status", "penalty", "fineEGP", "adminNote", "updatedAt"]);
+  if (payload.checkedInAt) patchData.checkedInAt = payload.checkedInAt;
+  if (payload.timestamp) patchData.timestamp = payload.timestamp;
+  if (payload.occurrenceKey) patchData.occurrenceKey = payload.occurrenceKey;
+  if (payload.sessionId) patchData.sessionId = payload.sessionId;
+  if (payload.sessionTitle) patchData.sessionTitle = payload.sessionTitle;
+  if (payload.userName) patchData.userName = payload.userName;
+  if (payload.userAvatar) patchData.userAvatar = payload.userAvatar;
+  if (targetUid) {
+    patchData.uid = targetUid;
+    patchData.userId = targetUid;
+  }
 
-  // Calculate delta to adjust member ledger
+  if (!existingLog) {
+    patchData.id = logId;
+    patchData.createdAt = nowIso;
+    if (!patchData.checkedInAt) patchData.checkedInAt = nowIso;
+    if (!patchData.timestamp) patchData.timestamp = nowIso;
+  }
+
+  const mask = Object.keys(patchData);
+  firestorePatch(`attendance_logs/${logId}`, patchData, mask);
+  firestorePatch(`attendance_records/${logId}`, patchData, mask);
+
+  // Calculate deltas to adjust member ledger
   const penDiff = newPenalty - oldPenalty;
   const fineDiff = newFine - oldFine;
+  const ptsDiff = newPoints - oldPoints;
 
-  if (targetUid && (penDiff !== 0 || fineDiff !== 0)) {
+  if (targetUid && (penDiff !== 0 || fineDiff !== 0 || ptsDiff !== 0)) {
     const userDoc = firestoreGet(`users/${targetUid}`);
     if (userDoc) {
       const curPts = Number(userDoc.points) || 0;
       const curPen = Number(userDoc.penalties) || 0;
       const curFines = Number(userDoc.finesDue != null ? userDoc.finesDue : (userDoc.fines || 0));
 
+      const updatedPts = Math.max(0, curPts + ptsDiff);
       const updatedPen = Math.max(0, curPen + penDiff);
       const updatedFines = Math.max(0, curFines + fineDiff);
-      const updatedNet = Math.max(0, curPts - updatedPen);
+      const updatedNet = Math.max(0, updatedPts - updatedPen);
 
       const userPatch = {
+        points: updatedPts,
         penalties: updatedPen,
         fines: updatedFines,
         finesDue: updatedFines,
         netPts: updatedNet,
         updatedAt: nowIso
       };
-      firestorePatch(`users/${targetUid}`, userPatch, ["penalties", "fines", "finesDue", "netPts", "updatedAt"]);
+      firestorePatch(`users/${targetUid}`, userPatch, ["points", "penalties", "fines", "finesDue", "netPts", "updatedAt"]);
 
       if (fineDiff !== 0) {
         firestorePatch(`users_private/${targetUid}`, {
@@ -688,7 +715,7 @@ function updateAttendanceLogAndSyncLedger(payload) {
     }
   }
 
-  return { success: true, logId: logId, newStatus, newPenalty, newFine };
+  return { success: true, logId: logId, newStatus, newPenalty, newFine, newPoints };
 }
 
 // -------------------------------------------------------------
