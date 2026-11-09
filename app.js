@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.4';
+export const APP_VERSION = '3.1.5';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -11544,7 +11544,7 @@ export function renderUserSessionHistory() {
     card.onclick = () => {
       const sid = card.dataset.sessionId;
       const targetSession = state.attendanceSessions.find(s => s.id === sid);
-      if (targetSession) openSessionBreakdownModal(targetSession, true);
+      if (targetSession) openSessionBreakdownModal(String(targetSession.id), true);
     };
   });
 }
@@ -11675,7 +11675,7 @@ function renderAttendanceView() {
           card.onclick = () => {
             const sid = card.dataset.sessionCard;
             const sObj = state.attendanceSessions.find(x => x.id === sid);
-            if (sObj) openAdminRosterModal(sObj);
+            if (sObj) openAdminRosterModal(String(sObj.id));
           };
         });
       }
@@ -15642,7 +15642,7 @@ function renderAdminSessions() {
               <svg class="w-3.5 h-3.5 stroke-current fill-none text-[#0A84FF]" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
               <span>Tap card to view breakdown</span>
             </span>
-            <button type="button" class="btn-card-edit-session px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-200 text-xs font-semibold flex items-center justify-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
+            <button type="button" class="btn-card-edit-session btn-edit px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-200 text-xs font-semibold flex items-center justify-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
               <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
               <span>Edit</span>
             </button>
@@ -15654,7 +15654,7 @@ function renderAdminSessions() {
   }).join('');
 
   list.querySelectorAll('.bulk-select-card').forEach(card => {
-    const sessionId = card.dataset.sessionId;
+    const sessionId = String(card.dataset.sessionId || '');
     const sessionObj = (state.attendanceSessions || []).find(s => s.id === sessionId);
 
     hydrateSessionCardStats(sessionId);
@@ -15663,17 +15663,17 @@ function renderAdminSessions() {
       bulkType: 'sessions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
-        openAdminRosterModal(sessionId);
+        if (sessionId) openAdminRosterModal(sessionId);
       }
     });
 
     card.onclick = (e) => {
-      if (e.target.closest('button') || e.target.closest('[data-no-row-tap="true"]')) return;
+      if (e && e.target && (e.target.closest('.btn-edit') || e.target.closest('.btn-card-edit-session') || e.target.closest('button') || e.target.closest('[data-no-row-tap="true"]'))) return;
       if (selectionState.active && selectionState.type === 'sessions') return;
-      openAdminRosterModal(sessionId);
+      if (sessionId) openAdminRosterModal(sessionId);
     };
 
-    const btnEdit = card.querySelector('.btn-card-edit-session');
+    const btnEdit = card.querySelector('.btn-card-edit-session, .btn-edit');
     if (btnEdit) {
       btnEdit.onclick = (e) => {
         e.preventDefault();
@@ -16943,13 +16943,35 @@ function openAdminLogEditModal(log, session) {
 }
 
 export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = null, initialOccurrenceStart = null, isReadOnly = false) {
-  let rawSession = (typeof sessionOrId === 'string'
-    ? state.attendanceSessions.find(s => s.id === sessionOrId)
-    : sessionOrId) || sessionOrId;
+  let targetSessionId = null;
+  let rawSession = null;
 
-  if (typeof sessionOrId === 'string' && (!rawSession || typeof rawSession === 'string')) {
+  if (typeof sessionOrId === 'string' && sessionOrId.trim()) {
+    targetSessionId = sessionOrId.trim();
+    rawSession = state.attendanceSessions.find(s => s.id === targetSessionId);
+  } else if (sessionOrId && typeof sessionOrId === 'object') {
+    if (sessionOrId instanceof Event || sessionOrId.target || sessionOrId.nativeEvent || sessionOrId.pointerId !== undefined) {
+      const targetEl = sessionOrId.currentTarget || sessionOrId.target;
+      const card = targetEl?.closest?.('[data-session-id]');
+      targetSessionId = card?.dataset?.sessionId ? String(card.dataset.sessionId).trim() : null;
+      if (targetSessionId) {
+        rawSession = state.attendanceSessions.find(s => s.id === targetSessionId);
+      }
+    } else if (typeof sessionOrId.id === 'string' && sessionOrId.id.trim()) {
+      targetSessionId = sessionOrId.id.trim();
+      rawSession = sessionOrId;
+    }
+  }
+
+  if (!targetSessionId || typeof targetSessionId !== 'string') {
+    console.warn('[openAdminRosterModal] Invalid sessionId provided:', sessionOrId);
+    toast('Session not found', 'error');
+    return;
+  }
+
+  if (!rawSession) {
     try {
-      const snap = await getDoc(doc(db, 'attendance_sessions', sessionOrId));
+      const snap = await getDoc(doc(db, 'attendance_sessions', targetSessionId));
       if (snap.exists()) {
         rawSession = { id: snap.id, ...snap.data() };
       }
@@ -16958,11 +16980,12 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
     }
   }
 
-  if (!rawSession || typeof rawSession === 'string') {
+  if (!rawSession) {
     toast('Session not found', 'error');
     return;
   }
   const session = normalizeSession(rawSession);
+  session.id = targetSessionId;
 
   const getAssignedRosterMembers = () => {
     const allActiveMembers = (usersMap.size > 0
@@ -17060,7 +17083,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
   const addOrUpdateRecord = (raw) => {
     if (!raw) return;
     const log = normalizeAttendanceLog(raw);
-    const id = log.id || raw.id || `${session.id}_${log.occurrenceKey}_${log.uid}`;
+    const id = log.id || raw.id || `${targetSessionId}_${log.occurrenceKey}_${log.uid}`;
     if (mergedRecordsMap.has(id)) {
       mergedRecordsMap.set(id, { ...mergedRecordsMap.get(id), ...log });
     } else {
@@ -17069,22 +17092,46 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
   };
 
   try {
-    const [recSnap, logSnap, waiversSnap] = await Promise.all([
-      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', session.id), limit(500))).catch(() => ({ docs: [] })),
-      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', session.id), limit(500))).catch(() => ({ docs: [] })),
-      getDocs(query(collection(db, 'waiver_requests'), where('sessionId', '==', session.id), limit(300))).catch(() => ({ docs: [] }))
-    ]);
+    let recDocs = [];
+    let logDocs = [];
+    let waiverDocs = [];
 
-    waiversSnap.docs.forEach(d => {
+    if (targetSessionId && typeof targetSessionId === 'string') {
+      try {
+        const qRec = query(collection(db, 'attendance_records'), where('sessionId', '==', targetSessionId), limit(500));
+        const s = await getDocs(qRec);
+        recDocs = s.docs || [];
+      } catch (e) {
+        console.warn('Could not query attendance_records for session:', e);
+      }
+
+      try {
+        const qLog = query(collection(db, 'attendance_logs'), where('sessionId', '==', targetSessionId), limit(500));
+        const s = await getDocs(qLog);
+        logDocs = s.docs || [];
+      } catch (e) {
+        console.warn('Could not query attendance_logs for session:', e);
+      }
+
+      try {
+        const qWaivers = query(collection(db, 'waiver_requests'), where('sessionId', '==', targetSessionId), limit(300));
+        const s = await getDocs(qWaivers);
+        waiverDocs = s.docs || [];
+      } catch (e) {
+        console.warn('Could not query waiver_requests for session:', e);
+      }
+    }
+
+    waiverDocs.forEach(d => {
       const w = d.data();
       if (w.status === 'approved') {
         waiversMap.set(w.uid, { id: d.id, ...w });
       }
     });
 
-    recSnap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
-    logSnap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
-    (state.attendanceLogs || []).filter(l => l.sessionId === session.id).forEach(l => addOrUpdateRecord(l));
+    recDocs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
+    logDocs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
+    (state.attendanceLogs || []).filter(l => l.sessionId === targetSessionId).forEach(l => addOrUpdateRecord(l));
   } catch (err) {
     console.warn('[openAdminRosterModal] query error:', err);
   }
@@ -17687,10 +17734,17 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
   renderModal();
 
   // Listen to attendance_logs updates
-  unsubLogs = onSnapshot(query(collection(db, 'attendance_logs'), where('sessionId', '==', session.id), limit(300)), (snap) => {
-    snap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
-    renderModal();
-  }, (err) => console.warn('[openAdminRosterModal] logs listener:', err));
+  if (targetSessionId && typeof targetSessionId === 'string') {
+    try {
+      const qSnap = query(collection(db, 'attendance_logs'), where('sessionId', '==', targetSessionId), limit(300));
+      unsubLogs = onSnapshot(qSnap, (snap) => {
+        snap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
+        renderModal();
+      }, (err) => console.warn('[openAdminRosterModal] logs listener:', err));
+    } catch (e) {
+      console.warn('[openAdminRosterModal] logs listener setup error:', e);
+    }
+  }
 }
 
 export function closeSessionBreakdownModal() {
@@ -17698,60 +17752,152 @@ export function closeSessionBreakdownModal() {
 }
 
 export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false) {
-  return openAdminRosterModal(sessionOrId, null, null, isReadOnly);
+  const sid = (typeof sessionOrId === 'string' ? sessionOrId : sessionOrId?.id);
+  if (!sid) {
+    console.warn('[openSessionBreakdownModal] Missing sessionId:', sessionOrId);
+    return;
+  }
+  return openAdminRosterModal(String(sid), null, null, isReadOnly);
 }
 
-function renderAdminAttendanceLogs() {
+async function renderAdminAttendanceLogs() {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tbody = document.getElementById('admin-attendance-logs-tbody');
   const countEl = document.getElementById('admin-attendance-log-count');
   if (!tbody) return;
 
-  const logs = state.attendanceLogs || [];
-  if (countEl) countEl.textContent = `${logs.length} logs`;
-
-  if (logs.length === 0) {
-    tbody.innerHTML = '<div class="p-3 text-xs text-neutral-400 text-center">No recent check-in logs.</div>';
-    return;
-  }
-
-  tbody.innerHTML = logs.map(l => {
-    const prof = getUserProfile(l.uid, l.userName, l.userAvatar);
-    const exactTime = formatCheckInExactTime(l.checkedInAt || l.checkInTimestamp, true);
-    return `
-      <div class="inset-row flex items-center justify-between gap-2 py-2.5 text-xs">
-        <div class="flex items-center gap-2 min-w-0 flex-1">
-          ${renderAvatar(prof, 'w-7 h-7 shrink-0')}
-          <div class="min-w-0">
-            <div class="font-semibold text-white truncate">${esc(prof.displayName)}</div>
-            <div class="text-[10px] text-neutral-400 font-mono truncate">${esc(l.sessionTitle)} • ${esc(exactTime)}</div>
-          </div>
-        </div>
-        <div class="flex items-center gap-2 shrink-0">
-          ${renderCheckInMetricsPills(l)}
-          <button class="btn-delete-attendance-log text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-rose-500/10" data-log-id="${esc(l.id)}">
-            Remove
-          </button>
-        </div>
+  if (tbody.children.length === 0) {
+    tbody.innerHTML = `
+      <div class="p-6 text-center text-xs text-neutral-400 flex flex-col items-center justify-center gap-2">
+        <div class="w-5 h-5 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
+        <span>Loading attendance logs...</span>
       </div>
     `;
-  }).join('');
+  }
 
-  tbody.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
-    btn.onclick = async () => {
-      const confirm = await confirmSheet({
-        title: 'Delete Attendance Log',
-        message: 'Remove this check-in record? This cannot be undone.',
-        confirmLabel: 'Remove',
-        destructive: true
-      });
-      if (confirm) {
-        await deleteDoc(doc(db, 'attendance_logs', btn.dataset.logId));
-        toast('Log removed', 'info');
+  try {
+    // FIX 2: Global query on attendance_records collection ordered by timestamp descending, limit 50, with fallback
+    const [recSnap, logSnap] = await Promise.all([
+      getDocs(query(collection(db, 'attendance_records'), orderBy('timestamp', 'desc'), limit(50)))
+        .catch(() => getDocs(query(collection(db, 'attendance_records'), limit(50))))
+        .catch(() => ({ docs: [] })),
+      getDocs(query(collection(db, 'attendance_logs'), orderBy('checkedInAt', 'desc'), limit(50)))
+        .catch(() => getDocs(query(collection(db, 'attendance_logs'), limit(50))))
+        .catch(() => ({ docs: [] }))
+    ]);
+
+    const mergedLogsMap = new Map();
+
+    const addLog = (d) => {
+      if (!d) return;
+      const data = typeof d.data === 'function' ? d.data() : d;
+      const id = d.id || data.id;
+      if (!id) return;
+      const normalized = normalizeAttendanceLog({ id, ...data });
+      if (mergedLogsMap.has(id)) {
+        mergedLogsMap.set(id, { ...mergedLogsMap.get(id), ...normalized });
+      } else {
+        mergedLogsMap.set(id, normalized);
       }
     };
-  });
+
+    recSnap.docs.forEach(addLog);
+    logSnap.docs.forEach(addLog);
+    (state.attendanceLogs || []).forEach(addLog);
+
+    const getLogTime = (l) => {
+      return parseDateTimeToMs(l.timestamp) ||
+             parseDateTimeToMs(l.checkedInAt) ||
+             parseDateTimeToMs(l.checkInTimestamp) ||
+             parseDateTimeToMs(l.occurrenceStart) ||
+             parseDateTimeToMs(l.createdAt) ||
+             0;
+    };
+
+    const logs = Array.from(mergedLogsMap.values())
+      .sort((a, b) => getLogTime(b) - getLogTime(a))
+      .slice(0, 50);
+
+    if (countEl) countEl.textContent = `${logs.length} logs`;
+
+    if (logs.length === 0) {
+      tbody.innerHTML = '<div class="p-6 text-xs text-neutral-400 text-center">No recent check-in logs recorded yet.</div>';
+      return;
+    }
+
+    tbody.innerHTML = logs.map(l => {
+      const uid = l.userId || l.uid;
+      const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {};
+      const prof = getUserProfile(uid, l.userName || member.displayName || member.name, l.userAvatar || member.photoURL || member.avatarUrl);
+      const exactTime = formatCheckInExactTime(l.timestamp || l.checkedInAt || l.checkInTimestamp || l.createdAt, true);
+      const sessionTitle = l.sessionTitle || (state.attendanceSessions?.find(s => s.id === l.sessionId)?.title) || 'Attendance';
+
+      return `
+        <div class="roster-breakdown-row p-3 flex items-center justify-between gap-2.5 text-xs hover:bg-white/[0.04] transition rounded-xl cursor-pointer" data-log-id="${esc(l.id)}" data-session-id="${esc(l.sessionId || '')}">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+            <div class="min-w-0 flex-1">
+              <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
+                <span class="truncate">${esc(prof.displayName)}</span>
+                <span class="text-[10px] text-neutral-400 font-normal truncate">• ${esc(sessionTitle)}</span>
+              </div>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
+                ${l.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(l.appliedTierLabel)}</span>` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            ${renderCheckInMetricsPills(l)}
+            <button type="button" class="btn-delete-attendance-log text-rose-400 hover:text-rose-300 text-xs px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition" data-log-id="${esc(l.id)}">
+              Remove
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    tbody.querySelectorAll('.roster-breakdown-row').forEach(row => {
+      row.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        const logId = row.dataset.logId;
+        const targetLog = logs.find(l => l.id === logId);
+        if (targetLog) {
+          const sess = (state.attendanceSessions || []).find(s => s.id === targetLog.sessionId) || { id: targetLog.sessionId, title: targetLog.sessionTitle || 'Session' };
+          openAdminLogEditModal(targetLog, sess);
+        }
+      };
+    });
+
+    tbody.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const confirm = await confirmSheet({
+          title: 'Delete Attendance Log',
+          message: 'Remove this check-in record? This cannot be undone.',
+          confirmLabel: 'Remove',
+          destructive: true
+        });
+        if (confirm) {
+          try {
+            await Promise.all([
+              deleteDoc(doc(db, 'attendance_logs', btn.dataset.logId)).catch(() => {}),
+              deleteDoc(doc(db, 'attendance_records', btn.dataset.logId)).catch(() => {})
+            ]);
+            toast('Log removed', 'info');
+            renderAdminAttendanceLogs();
+          } catch (err) {
+            console.error('Failed to delete log:', err);
+            toast('Failed to delete log', 'error');
+          }
+        }
+      };
+    });
+  } catch (err) {
+    console.error('Error rendering admin attendance logs:', err);
+    tbody.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load attendance logs: ${esc(err.message || err)}</div>`;
+  }
 }
 
 function getFilteredAdminSubmissions() {

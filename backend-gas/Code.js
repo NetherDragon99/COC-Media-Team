@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.1.4)
+ * CoC Media Team - Dedicated Serverless Backend (v3.1.5)
  * Autonomous Attendance Watchdog, Bidirectional Brackets & Grace Period Engine, Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -18,7 +18,7 @@ const CONFIG = {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.1.4",
+    version: "3.1.5",
     system: "CoC Media Backend Watchdog & Push Engine",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
