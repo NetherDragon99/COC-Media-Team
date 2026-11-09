@@ -1,6 +1,6 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.1.1)
- * Autonomous Attendance Watchdog, Tiered Early Bonus Engine, Ledger Sync & FCM v1 Web Push
+ * CoC Media Team - Dedicated Serverless Backend (v3.1.3)
+ * Autonomous Attendance Watchdog, Bidirectional Brackets & Grace Period Engine, Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
 
@@ -18,7 +18,7 @@ const CONFIG = {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.1.1",
+    version: "3.1.3",
     system: "CoC Media Backend Watchdog & Push Engine",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -202,12 +202,23 @@ function notifySessionWindowOpened(session, occ, allUsers) {
 // -------------------------------------------------------------
 
 /**
- * Evaluates check-in timing against session's earlyBonusTiers & late penalty matrix.
+ * Evaluates check-in timing against session's custom timeBrackets (bidirectional) & retroactive grace period.
  */
 function evaluateCheckInTiming(session, checkInMs, startMs) {
   const S = Number(startMs) || (getSessionStartDate(session) ? getSessionStartDate(session).getTime() : checkInMs);
-  const graceMins = Number(session.graceMinutes != null ? session.graceMinutes : 15);
-  const G = S + graceMins * 60000;
+  const gracePeriodMins = Number(session.gracePeriodMins != null ? session.gracePeriodMins : (session.graceMinutes != null ? session.graceMinutes : 0));
+
+  const timeBrackets = Array.isArray(session.timeBrackets)
+    ? session.timeBrackets
+    : (Array.isArray(session.earlyBonusTiers)
+      ? session.earlyBonusTiers.map(t => ({
+          type: "before",
+          fromMins: Number(t.fromMinsBefore) || 0,
+          toMins: Number(t.toMinsBefore) || 0,
+          points: Number(t.bonusPoints) || 0,
+          egp: Number(t.bonusEgp != null ? t.bonusEgp : t.bonusEGP) || 0
+        }))
+      : []);
 
   if (checkInMs < S) {
     const earlySeconds = Math.max(0, Math.floor((S - checkInMs) / 1000));
@@ -216,17 +227,17 @@ function evaluateCheckInTiming(session, checkInMs, startMs) {
     let bonusEgp = 0;
     let appliedTierLabel = "";
 
-    const tiers = Array.isArray(session.earlyBonusTiers) ? session.earlyBonusTiers : [];
-    if (tiers.length > 0) {
+    const beforeBrackets = timeBrackets.filter(t => t.type !== "after");
+    if (beforeBrackets.length > 0) {
       let bestReward = -1;
-      tiers.forEach(t => {
-        const rawFrom = Number(t.fromMinsBefore) || 0;
-        const rawTo = Number(t.toMinsBefore) || 0;
+      beforeBrackets.forEach(t => {
+        const rawFrom = Number(t.fromMins != null ? t.fromMins : t.fromMinsBefore) || 0;
+        const rawTo = Number(t.toMins != null ? t.toMins : t.toMinsBefore) || 0;
         const upper = Math.max(rawFrom, rawTo);
         const lower = Math.min(rawFrom, rawTo);
         if (minsEarly <= upper && minsEarly >= lower) {
-          const pts = Math.max(0, Number(t.bonusPoints) || 0);
-          const egp = Math.max(0, Number(t.bonusEgp != null ? t.bonusEgp : t.bonusEGP) || 0);
+          const pts = Math.max(0, Number(t.points != null ? t.points : t.bonusPoints) || 0);
+          const egp = Math.max(0, Number(t.egp != null ? t.egp : (t.bonusEgp != null ? t.bonusEgp : t.bonusEGP)) || 0);
           const score = pts + egp;
           if (score > bestReward) {
             bestReward = score;
@@ -260,7 +271,13 @@ function evaluateCheckInTiming(session, checkInMs, startMs) {
     };
   }
 
-  if (checkInMs <= G) {
+  // Arrival is at or after start time S
+  const lateTotalSec = Math.max(0, Math.floor((checkInMs - S) / 1000));
+  const lateMinutes = Math.floor(lateTotalSec / 60);
+  const lateSeconds = lateTotalSec % 60;
+
+  // Retroactive Grace Period: If gracePeriodMins > 0 and arrival <= gracePeriodMins, 0 penalty, on_time
+  if (gracePeriodMins > 0 && lateMinutes <= gracePeriodMins) {
     return {
       status: "on_time",
       earlyMinutes: 0,
@@ -273,24 +290,44 @@ function evaluateCheckInTiming(session, checkInMs, startMs) {
       fineEGP: 0,
       pointsDelta: 0,
       egpDelta: 0,
-      appliedTierLabel: "On Time"
+      appliedTierLabel: `Grace Period (${lateMinutes}m)`
     };
   }
 
-  // Late arrival
-  const lateTotalSec = Math.max(1, Math.floor((checkInMs - G) / 1000));
-  const lateMinutes = Math.floor(lateTotalSec / 60);
-  const lateSeconds = lateTotalSec % 60;
-  const lateMinsForCalc = Math.max(1, Math.ceil((checkInMs - G) / 60000));
+  // Late arrival beyond grace period: Calculate penalty from ORIGINAL start time S (do NOT subtract grace period)
+  let penaltyPts = 0;
+  let fineEGP = 0;
+  let appliedTierLabel = `Late by ${lateMinutes}m ${lateSeconds}s`;
 
-  const intervalMins = Math.max(1, Number(session.lateIntervalMinutes) || 30);
-  const ptsPerInterval = Number(session.pointsPerInterval != null ? session.pointsPerInterval : 1);
-  const egpPerInterval = Number(session.finePerIntervalEGP != null ? session.finePerIntervalEGP : 5);
-  const maxPenaltyPts = Number(session.maxLatePenaltyPoints != null ? session.maxLatePenaltyPoints : (session.absencePenalty || 5));
+  const afterBrackets = timeBrackets.filter(t => t.type === "after");
+  let matchedAfterBracket = false;
+  if (afterBrackets.length > 0) {
+    for (let i = 0; i < afterBrackets.length; i++) {
+      const b = afterBrackets[i];
+      const rawFrom = Number(b.fromMins) || 0;
+      const rawTo = Number(b.toMins) || 0;
+      const lower = Math.min(rawFrom, rawTo);
+      const upper = Math.max(rawFrom, rawTo);
+      if (lateMinutes >= lower && lateMinutes <= upper) {
+        penaltyPts = Math.max(0, Number(b.points) || 0);
+        fineEGP = Math.max(0, Number(b.egp) || 0);
+        appliedTierLabel = `${lower}m–${upper}m Late Tier`;
+        matchedAfterBracket = true;
+        break;
+      }
+    }
+  }
 
-  const intervals = Math.ceil(lateMinsForCalc / intervalMins);
-  const penaltyPts = Math.min(maxPenaltyPts, intervals * ptsPerInterval);
-  const fineEGP = intervals * egpPerInterval;
+  if (!matchedAfterBracket) {
+    const intervalMins = Math.max(1, Number(session.lateIntervalMinutes) || (session.pointsPenalty && session.pointsPenalty.stepSize) || 30);
+    const ptsPerInterval = Number(session.pointsPerInterval != null ? session.pointsPerInterval : (session.pointsPenalty && session.pointsPenalty.perStep) || 1);
+    const egpPerInterval = Number(session.finePerIntervalEGP != null ? session.finePerIntervalEGP : (session.finePenalty && session.finePenalty.perStep) || 5);
+    const maxPenaltyPts = Number(session.maxLatePenaltyPoints != null ? session.maxLatePenaltyPoints : (session.pointsPenalty && session.pointsPenalty.max) || (session.absencePenalty || 5));
+
+    const intervals = Math.ceil(Math.max(1, lateMinutes) / intervalMins);
+    penaltyPts = Math.min(maxPenaltyPts, intervals * ptsPerInterval);
+    fineEGP = intervals * egpPerInterval;
+  }
 
   return {
     status: "late",
@@ -304,7 +341,7 @@ function evaluateCheckInTiming(session, checkInMs, startMs) {
     fineEGP: fineEGP,
     pointsDelta: -penaltyPts,
     egpDelta: -fineEGP,
-    appliedTierLabel: `Late by ${lateMinutes}m ${lateSeconds}s`
+    appliedTierLabel: appliedTierLabel
   };
 }
 

@@ -1653,6 +1653,55 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.strictEqual(calcLateDetailed.lateSeconds, 34);
   assert.ok(calcLateDetailed.pointsDelta < 0, 'Late check-in must produce negative pointsDelta');
   assert.ok(calcLateDetailed.egpDelta < 0, 'Late check-in must produce negative egpDelta');
+
+  // 15.6 Retroactive Grace Period & Bidirectional Time Brackets (v3.1.3)
+  const biStartMs = zonedDateToMs(2026, 5, 10, 11, 0, 0, 'Africa/Cairo');
+  const bidirectionalSession = normalizeSession({
+    id: 'sess-bi-tiers',
+    title: 'Bidirectional Session',
+    earlyCheckInMinutes: 60,
+    lateCutoffMinutes: 120,
+    gracePeriodMins: 10,
+    timeBrackets: [
+      { type: 'before', fromMins: 60, toMins: 30, points: 15, egp: 30 },
+      { type: 'before', fromMins: 29, toMins: 10, points: 8, egp: 15 },
+      { type: 'after', fromMins: 11, toMins: 25, points: 12, egp: 25 },
+      { type: 'after', fromMins: 26, toMins: 60, points: 20, egp: 50 }
+    ],
+    schedule: { type: 'once', startDateTime: biStartMs }
+  });
+
+  assert.strictEqual(bidirectionalSession.gracePeriodMins, 10, 'gracePeriodMins must normalize to 10');
+  assert.strictEqual(bidirectionalSession.timeBrackets.length, 4, 'Must hold 4 time brackets');
+
+  // Test 1: 40m early -> matches before bracket 60m-30m (+15 pts, +30 EGP)
+  const bEarly = computeAttendance(bidirectionalSession, biStartMs - 40 * 60000);
+  assert.strictEqual(bEarly.status, 'on_time');
+  assert.strictEqual(bEarly.isEarly, true);
+  assert.strictEqual(bEarly.earlyBonusPoints, 15);
+  assert.strictEqual(bEarly.earlyBonusEGP, 30);
+  assert.strictEqual(bEarly.pointsDelta, 15);
+  assert.strictEqual(bEarly.egpDelta, 30);
+
+  // Test 2: 7m late -> within 10m grace period -> 0 penalty, on_time
+  const bGrace = computeAttendance(bidirectionalSession, biStartMs + 7 * 60000);
+  assert.strictEqual(bGrace.status, 'on_time');
+  assert.strictEqual(bGrace.penalty, 0);
+  assert.strictEqual(bGrace.pointsPenalty, 0);
+  assert.strictEqual(bGrace.finePenalty, 0);
+  assert.strictEqual(bGrace.pointsDelta, 0);
+  assert.strictEqual(bGrace.egpDelta, 0);
+  assert.ok(bGrace.appliedTierLabel.includes('Grace Period'));
+
+  // Test 3: 15m late -> exceeds 10m grace period -> matches after bracket 11m-25m (-12 pts, -25 EGP) from original start time
+  const bLateTier = computeAttendance(bidirectionalSession, biStartMs + 15 * 60000);
+  assert.strictEqual(bLateTier.status, 'late');
+  assert.strictEqual(bLateTier.lateMinutes, 15);
+  assert.strictEqual(bLateTier.pointsPenalty, 12);
+  assert.strictEqual(bLateTier.finePenalty, 25);
+  assert.strictEqual(bLateTier.pointsDelta, -12);
+  assert.strictEqual(bLateTier.egpDelta, -25);
+  assert.ok(bLateTier.appliedTierLabel.includes('11m–25m Late Tier'));
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
