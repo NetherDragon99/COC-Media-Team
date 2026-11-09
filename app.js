@@ -17323,43 +17323,62 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
     return filtered.length > 0 ? filtered : allActiveMembers;
   };
 
-  const getLogOccurrenceDateKey = (log) => {
-    if (log.occurrenceDate && typeof log.occurrenceDate === 'string' && log.occurrenceDate.length >= 8) {
-      return log.occurrenceDate;
-    }
-    if (log.occurrenceKey && typeof log.occurrenceKey === 'string' && log.occurrenceKey !== 'once' && /^\d{4}-\d{2}-\d{2}/.test(log.occurrenceKey)) {
-      return log.occurrenceKey;
-    }
-    const ms = parseDateTimeToMs(log.occurrenceStart) ||
-               parseDateTimeToMs(log.checkedInAt) ||
-               parseDateTimeToMs(log.checkInTimestamp) ||
-               parseDateTimeToMs(log.createdAt) ||
-               parseDateTimeToMs(log.date);
-    if (ms) {
-      try {
-        const d = new Date(ms);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      } catch (_) {}
-    }
-    return log.occurrenceKey || 'once';
-  };
-
   const getLogTimestampMs = (log) => {
+    if (!log) return 0;
+    if (typeof log.occurrenceKey === 'string' && log.occurrenceKey.startsWith('occ_')) {
+      const parsed = parseInt(log.occurrenceKey.replace('occ_', ''), 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
     return parseDateTimeToMs(log.occurrenceStart) ||
            parseDateTimeToMs(log.checkedInAt) ||
            parseDateTimeToMs(log.checkInTimestamp) ||
+           (typeof log.checkInTimestamp === 'number' ? log.checkInTimestamp : 0) ||
+           parseDateTimeToMs(log.checkInTime) ||
            parseDateTimeToMs(log.createdAt) ||
+           parseDateTimeToMs(log.timestamp) ||
+           parseDateTimeToMs(log.excusedAt) ||
+           parseDateTimeToMs(log.sessionDate) ||
+           parseDateTimeToMs(log.date) ||
            0;
+  };
+
+  const getLogOccurrenceDateKey = (log) => {
+    if (!log) return 'once';
+    if (log.occurrenceDate && typeof log.occurrenceDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(log.occurrenceDate)) {
+      return log.occurrenceDate.slice(0, 10);
+    }
+    if (log.occurrenceKey && typeof log.occurrenceKey === 'string' && /^\d{4}-\d{2}-\d{2}/.test(log.occurrenceKey)) {
+      return log.occurrenceKey.slice(0, 10);
+    }
+    if (log.sessionDate && typeof log.sessionDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(log.sessionDate)) {
+      return log.sessionDate.slice(0, 10);
+    }
+    const ms = getLogTimestampMs(log);
+    if (ms && ms > 0) {
+      try {
+        return formatZonedDateKey(ms, APP_TIMEZONE);
+      } catch (_) {
+        const d = new Date(ms);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
+    }
+    return log.occurrenceKey || 'once';
   };
 
   const formatOccurrenceLabel = (dateKey, startMs) => {
     if (startMs && startMs > 0) {
       return formatDateTime(startMs, { hour: undefined, minute: undefined });
     }
-    if (dateKey && dateKey !== 'once' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    if (dateKey && dateKey !== 'once' && /^\d{4}-\d{2}-\d{2}/.test(dateKey)) {
       const [y, m, d] = dateKey.split('-').map(Number);
       const dt = new Date(y, m - 1, d);
       return formatDateTime(dt.getTime(), { hour: undefined, minute: undefined });
+    }
+    if (typeof dateKey === 'string' && dateKey.startsWith('occ_')) {
+      const parsed = parseInt(dateKey.replace('occ_', ''), 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        return formatDateTime(parsed, { hour: undefined, minute: undefined });
+      }
     }
     return dateKey || 'Session Occurrence';
   };
@@ -17447,9 +17466,25 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
       }
     });
 
+    const isMatchingLog = (l) => {
+      if (!l) return false;
+      if (l.sessionId && l.sessionId === targetSessionId) return true;
+      if (session.title && l.sessionTitle && l.sessionTitle.trim().toLowerCase() === session.title.trim().toLowerCase()) return true;
+      return false;
+    };
+
     recDocs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
     logDocs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
-    (state.attendanceLogs || []).filter(l => l.sessionId === targetSessionId).forEach(l => addOrUpdateRecord(l));
+    (state.attendanceLogs || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
+    (state.attendanceRecords || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
+
+    // Fetch from backend to ensure 100% attendance log retrieval
+    try {
+      const gasRes = await callGasBackend({ action: 'GET_ALL_ATTENDANCE_LOGS' });
+      if (gasRes?.logs && Array.isArray(gasRes.logs)) {
+        gasRes.logs.filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
+      }
+    } catch (_) {}
   } catch (err) {
     console.warn('[openAdminRosterModal] query error:', err);
   }
@@ -17487,6 +17522,46 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
         startMs: currStartMs,
         logs: []
       });
+    }
+
+    // Generate ALL historical scheduled occurrences since session creation / start date
+    const sched = normalizeScheduleObject(session.schedule || session);
+    let earliestStartMs = parseDateTimeToMs(sched.startDateTime || session.createdAt || session.date || session.startDate) || currStartMs;
+    allRecords.forEach(l => {
+      const lMs = getLogTimestampMs(l);
+      if (lMs > 0 && lMs < earliestStartMs) {
+        earliestStartMs = lMs;
+      }
+    });
+
+    if (sched.type !== 'once') {
+      try {
+        const historicalOccs = getOccurrences(sched, earliestStartMs, nowMs + 86400000);
+        historicalOccs.forEach(occMs => {
+          const occKey = formatZonedDateKey(occMs, APP_TIMEZONE);
+          if (!occGroups.has(occKey)) {
+            occGroups.set(occKey, {
+              dateKey: occKey,
+              startMs: occMs,
+              logs: []
+            });
+          } else {
+            const g = occGroups.get(occKey);
+            if (!g.startMs || g.startMs === 0) g.startMs = occMs;
+          }
+        });
+      } catch (err) {
+        console.warn('Error generating historical occurrences for session:', err);
+      }
+    } else {
+      const onceKey = sched.startDateTime ? formatZonedDateKey(earliestStartMs, APP_TIMEZONE) : 'once';
+      if (!occGroups.has(onceKey)) {
+        occGroups.set(onceKey, {
+          dateKey: onceKey,
+          startMs: earliestStartMs,
+          logs: []
+        });
+      }
     }
 
     const sortedOccGroups = Array.from(occGroups.values()).sort((a, b) => (b.startMs || 0) - (a.startMs || 0));
@@ -17842,16 +17917,76 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
             </div>
             ${sortedOccGroups.map(grp => {
               const logsForOcc = grp.logs;
-              const occAttended = logsForOcc.filter(l => l.status !== 'absent' && l.status !== 'excused').length;
-              const occLate = logsForOcc.filter(l => l.status === 'late' || Number(l.penalty) > 0 || Number(l.fineEGP) > 0).length;
-              const occAbsent = logsForOcc.filter(l => l.status === 'absent').length;
-              const occExcused = logsForOcc.filter(l => l.status === 'excused' || l.excused === true).length;
+              const occStartMs = grp.startMs || nowMs;
+              const occCutoffMs = occStartMs + (Number(session.lateCutoffMinutes) || 120) * 60000;
+              const isOccClosed = session.status === 'closed' || session.status === 'completed' || nowMs > occCutoffMs;
+
+              const attendedMap = new Map();
+              logsForOcc.forEach(l => {
+                const uid = l.uid || l.userId;
+                if (uid) attendedMap.set(uid, l);
+              });
+
+              const attendedMembersList = [];
+              const excusedMembersList = [];
+              const absentMembersList = [];
+              const handledUids = new Set();
+
+              attendedMap.forEach((log, uid) => {
+                handledUids.add(uid);
+                const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {
+                  uid,
+                  displayName: log.userName || log.displayName || 'Member',
+                  name: log.userName || log.displayName || 'Member',
+                  photoURL: log.userAvatar || '',
+                  avatarUrl: log.userAvatar || ''
+                };
+
+                if (log.status === 'excused' || log.excused === true || waiversMap.has(uid)) {
+                  excusedMembersList.push({ member, log });
+                } else if (log.status === 'absent') {
+                  absentMembersList.push({ member, log, isPenalized: true });
+                } else {
+                  attendedMembersList.push({ member, log });
+                }
+              });
+
+              assignedMembers.forEach(m => {
+                if (handledUids.has(m.uid)) return;
+                handledUids.add(m.uid);
+                if (waiversMap.has(m.uid)) {
+                  excusedMembersList.push({ member: m, waiver: waiversMap.get(m.uid) });
+                } else {
+                  absentMembersList.push({
+                    member: m,
+                    log: {
+                      uid: m.uid,
+                      status: 'absent',
+                      penalty: (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5,
+                      fineEGP: (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0
+                    },
+                    isPenalized: false,
+                    isUnprocessed: true
+                  });
+                }
+              });
+
+              const occPresent = attendedMembersList.filter(p => p.log.status === 'on_time' || p.log.status === 'early' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
+              const occLate = attendedMembersList.filter(p => p.log.status === 'late' || Number(p.log.penalty) > 0 || Number(p.log.fineEGP) > 0).length;
+              const occAbsent = absentMembersList.length;
+              const occExcused = excusedMembersList.length;
 
               const totalPtsDed = logsForOcc.reduce((acc, l) => acc + (Number(l.penalty) || 0), 0);
               const totalFineDed = logsForOcc.reduce((acc, l) => acc + (Number(l.fineEGP) || 0), 0);
 
+              const allMembersForOcc = [
+                ...attendedMembersList.map(a => ({ type: 'attended', member: a.member, log: a.log })),
+                ...excusedMembersList.map(e => ({ type: 'excused', member: e.member, log: e.log, waiver: e.waiver })),
+                ...absentMembersList.map(ab => ({ type: 'absent', member: ab.member, log: ab.log, isPenalized: ab.isPenalized, isUnprocessed: ab.isUnprocessed }))
+              ];
+
               return `
-                <div class="history-occurrence-card p-3 rounded-2xl bg-white/[0.02] border border-white/10 space-y-2.5 transition hover:bg-white/[0.04] cursor-pointer" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                <div class="history-occurrence-card p-3 rounded-2xl bg-white/[0.02] border border-white/10 space-y-2.5 transition hover:bg-white/[0.04]" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
                   <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-white/5 pb-2">
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-2">
@@ -17859,7 +17994,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
                         ${grp.dateKey === currDateKey ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">Current</span>` : ''}
                       </div>
                       <span class="text-[10px] text-neutral-400 font-mono mt-0.5 block truncate">
-                        ${Math.max(0, occAttended - occLate)} Present • ${occLate} Late • ${occAbsent} Absent • ${occExcused} Excused
+                        ${occPresent} Present • ${occLate} Late • ${occAbsent} Absent • ${occExcused} Excused
                       </span>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
@@ -17875,29 +18010,60 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
                     </div>
                   </div>
 
-                  <div class="divide-y divide-white/5 max-h-48 overflow-y-auto">
-                    ${logsForOcc.length === 0 ? `
-                      <div class="p-2 text-xs text-neutral-500 text-center">No individual check-ins recorded for this occurrence.</div>
-                    ` : logsForOcc.map(log => {
-                      const memberUid = log.uid || log.userId;
-                      const prof = getUserProfile(memberUid, log.userName || log.displayName || 'Member', log.userAvatar);
-                      const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
+                  <div class="divide-y divide-white/5 max-h-56 overflow-y-auto">
+                    ${allMembersForOcc.length === 0 ? `
+                      <div class="p-2 text-xs text-neutral-500 text-center">No assigned members or check-ins recorded for this occurrence.</div>
+                    ` : allMembersForOcc.map(item => {
+                      const memberUid = item.member.uid || item.member.id;
+                      const prof = getUserProfile(memberUid, item.member.displayName || item.member.name, item.member.photoURL || item.member.avatarUrl);
+                      const log = item.log || {};
+                      const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp || log.timestamp || grp.startMs, true);
                       const tierLabel = log.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(log.appliedTierLabel)}</span>` : '';
 
+                      let statusBadge = '';
+                      if (item.type === 'attended') {
+                        statusBadge = renderCheckInMetricsPills(log);
+                      } else if (item.type === 'excused') {
+                        statusBadge = `<span class="checkin-timing-pill pill-excused">Excused</span>`;
+                      } else {
+                        const pts = log.penalty || (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
+                        const egp = log.fineEGP || (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+                        if (item.isPenalized) {
+                          statusBadge = `
+                            <div class="flex items-center gap-1">
+                              <span class="checkin-timing-pill pill-absent">Absent</span>
+                              <span class="checkin-impact-pill impact-negative">-${pts} pts${egp > 0 ? ` | -${egp} EGP` : ''}</span>
+                            </div>
+                          `;
+                        } else {
+                          statusBadge = `
+                            <div class="flex items-center gap-1">
+                              <span class="checkin-timing-pill pill-absent text-amber-300 border-amber-500/30">Unprocessed</span>
+                              ${isAdminUser ? `
+                                <button type="button" class="btn-penalize-single-history px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 border border-rose-500/30 transition" data-uid="${esc(memberUid)}" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                                  Penalize
+                                </button>
+                              ` : ''}
+                            </div>
+                          `;
+                        }
+                      }
+
                       return `
-                        <div class="history-log-row p-2 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-lg" data-log-id="${esc(log.id)}" data-uid="${esc(memberUid)}">
+                        <div class="history-log-row p-2 flex items-center justify-between gap-2 text-xs ${isAdminUser && log.id ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-lg" data-log-id="${esc(log.id || '')}" data-uid="${esc(memberUid)}">
                           <div class="flex items-center gap-2 min-w-0 flex-1">
                             <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
                             <div class="min-w-0 flex-1">
                               <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
                               <div class="flex items-center gap-1.5 mt-0.5">
-                                <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
+                                <span class="exact-time text-[10px] text-neutral-400">${item.type === 'attended' ? esc(exactTime) : (item.type === 'excused' ? 'Approved Excuse' : 'Not checked in')}</span>
                                 ${tierLabel}
+                                ${log.adminNote ? `<span class="text-[10px] text-amber-300/80 italic truncate">(${esc(log.adminNote)})</span>` : ''}
                               </div>
                             </div>
                           </div>
                           <div class="text-right shrink-0">
-                            ${renderCheckInMetricsPills(log)}
+                            ${statusBadge}
                           </div>
                         </div>
                       `;
@@ -17911,7 +18077,7 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
 
         tabContent.querySelectorAll('.history-occurrence-card').forEach(card => {
           card.onclick = (e) => {
-            if (e.target.closest('.history-log-row')) return;
+            if (e.target.closest('.history-log-row') || e.target.closest('button')) return;
             selectedOccKey = card.dataset.dateKey;
             selectedOccStartMs = Number(card.dataset.startMs) || nowMs;
             activeTab = 'occurrence';
@@ -17929,9 +18095,25 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
           };
         });
 
+        tabContent.querySelectorAll('.btn-penalize-single-history').forEach(btn => {
+          btn.onclick = async (e) => {
+            e.stopPropagation();
+            const targetUid = btn.dataset.uid;
+            const targetMember = assignedMembers.find(m => m.uid === targetUid);
+            const dateKey = btn.dataset.dateKey;
+            if (targetMember) {
+              selectedOccKey = dateKey;
+              selectedOccStartMs = Number(btn.dataset.startMs) || nowMs;
+              await penalizeAbsentMembers([targetMember], btn);
+              renderModal();
+            }
+          };
+        });
+
         if (isAdminUser) {
           tabContent.querySelectorAll('.history-log-row').forEach(row => {
             row.onclick = (e) => {
+              if (e.target.closest('button')) return;
               e.stopPropagation();
               const logId = row.dataset.logId;
               const targetLog = allRecords.find(l => l.id === logId) || mergedRecordsMap.get(logId);
