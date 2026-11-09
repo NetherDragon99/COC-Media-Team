@@ -9473,11 +9473,13 @@ function setupAttendanceListeners() {
     try {
       const qAllLogs = query(
         collection(db, 'attendance_logs'),
-        orderBy('checkedInAt', 'desc'),
-        limit(100)
+        limit(500)
       );
       const unsubAllLogs = onSnapshot(qAllLogs, (snapshot) => {
-        state.attendanceLogs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+        const logs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+        const mergedMap = new Map((state.attendanceLogs || []).map(l => [l.id, l]));
+        logs.forEach(l => mergedMap.set(l.id, { ...(mergedMap.get(l.id) || {}), ...l }));
+        state.attendanceLogs = Array.from(mergedMap.values());
         if (adminSessionsFilter === 'recent_logs') {
           renderRecentLogs();
         }
@@ -9492,14 +9494,14 @@ function setupAttendanceListeners() {
   // Pure onSnapshot sync for attendance_records
   try {
     const qRecords = (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked)
-      ? query(collection(db, 'attendance_records'), orderBy('timestamp', 'desc'), limit(50))
+      ? query(collection(db, 'attendance_records'), limit(500))
       : query(collection(db, 'attendance_records'), where('uid', '==', state.user.uid), limit(50));
     const unsubRecords = onSnapshot(qRecords, (snapshot) => {
       const records = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
       state.attendanceRecords = records;
 
       const mergedMap = new Map((state.attendanceLogs || []).map(l => [l.id, l]));
-      records.forEach(r => mergedMap.set(r.id, { ...mergedMap.get(r.id), ...r }));
+      records.forEach(r => mergedMap.set(r.id, { ...(mergedMap.get(r.id) || {}), ...r }));
       state.attendanceLogs = Array.from(mergedMap.values());
 
       if (!isCurrentUserAdmin()) {
@@ -9512,7 +9514,7 @@ function setupAttendanceListeners() {
       updateUserTodayAttendanceBadge();
     }, (err) => {
       try {
-        const qFallback = query(collection(db, 'attendance_records'), limit(50));
+        const qFallback = query(collection(db, 'attendance_records'), limit(500));
         const unsubFallback = onSnapshot(qFallback, (s) => {
           const records = s.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
           state.attendanceRecords = records;
@@ -15527,7 +15529,7 @@ function setupAdminSessionsSegmented() {
     id: 'segmented-admin-attendance-tabs',
     options: [
       { value: 'sessions', label: 'Sessions' },
-      { value: 'recent_logs', label: 'Recent Logs' },
+      { value: 'recent_logs', label: 'Attendance Logs' },
       { value: 'archived', label: 'Archived' }
     ],
     value: currentTab,
@@ -17057,6 +17059,7 @@ function openAdminLogEditModal(log, session) {
       <label class="block text-xs font-semibold text-neutral-200">Attendance Status</label>
       <select id="adm-log-status" class="w-full ios-input text-xs">
         <option value="on_time" ${currentStatus === 'on_time' ? 'selected' : ''}>On Time</option>
+        <option value="early" ${currentStatus === 'early' ? 'selected' : ''}>Early</option>
         <option value="late" ${currentStatus === 'late' ? 'selected' : ''}>Late</option>
         <option value="excused" ${currentStatus === 'excused' ? 'selected' : ''}>Excused (Waiver)</option>
         <option value="absent" ${currentStatus === 'absent' ? 'selected' : ''}>Absent</option>
@@ -17148,66 +17151,103 @@ function openAdminLogEditModal(log, session) {
       const newPenalty = Math.max(0, parseInt(penaltyInp.value, 10) || 0);
       const newFine = Math.max(0, parseInt(fineInp.value, 10) || 0);
       const newNote = (noteInp.value || '').trim();
+      const targetUid = log.uid || log.userId;
 
       try {
-        const batch = writeBatch(db);
-        const logRef = doc(db, 'attendance_logs', log.id);
-        batch.update(logRef, {
+        // Backend synchronization for ledger liabilities and admin OAuth
+        await callGasBackend({
+          action: 'UPDATE_LOG',
+          logId: log.id,
+          uid: targetUid,
           status: newStatus,
           penalty: newPenalty,
           fineEGP: newFine,
-          adminNote: newNote,
-          updatedAt: serverTimestamp()
+          adminNote: newNote
         });
-        batch.set(doc(db, 'attendance_records', log.id), {
-          status: newStatus,
-          penalty: newPenalty,
-          fineEGP: newFine,
-          adminNote: newNote,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
 
-        const targetUid = log.uid || log.userId;
-        const penDiff = newPenalty - (Number(log.penalty) || 0);
-        const fineDiff = newFine - (Number(log.fineEGP) || 0);
+        // Direct Firestore update if permitted
+        try {
+          const batch = writeBatch(db);
+          const logRef = doc(db, 'attendance_logs', log.id);
+          batch.set(logRef, {
+            status: newStatus,
+            penalty: newPenalty,
+            fineEGP: newFine,
+            adminNote: newNote,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+          batch.set(doc(db, 'attendance_records', log.id), {
+            status: newStatus,
+            penalty: newPenalty,
+            fineEGP: newFine,
+            adminNote: newNote,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
 
-        if (targetUid && (penDiff !== 0 || fineDiff !== 0)) {
-          const uDocSnap = await getDoc(doc(db, 'users', targetUid));
-          if (uDocSnap.exists()) {
-            const uData = uDocSnap.data();
-            const curPen = Math.max(0, uData.penalties || 0);
-            const curFines = Math.max(0, uData.finesDue ?? uData.fines ?? uData.quotas ?? 0);
-            const curPts = Number(uData.points) || 0;
-            const nextPen = Math.max(0, curPen + penDiff);
-            const nextFines = Math.max(0, curFines + fineDiff);
-            const nextNet = Math.max(0, curPts - nextPen);
-            batch.update(doc(db, 'users', targetUid), {
-              penalties: nextPen,
-              finesDue: nextFines,
-              fines: nextFines,
-              netPts: nextNet,
-              updatedAt: serverTimestamp()
-            });
+          const penDiff = newPenalty - (Number(log.penalty) || 0);
+          const fineDiff = newFine - (Number(log.fineEGP) || 0);
+
+          if (targetUid && (penDiff !== 0 || fineDiff !== 0)) {
+            const uDocSnap = await getDoc(doc(db, 'users', targetUid));
+            if (uDocSnap.exists()) {
+              const uData = uDocSnap.data();
+              const curPen = Math.max(0, uData.penalties || 0);
+              const curFines = Math.max(0, uData.finesDue ?? uData.fines ?? uData.quotas ?? 0);
+              const curPts = Number(uData.points) || 0;
+              const nextPen = Math.max(0, curPen + penDiff);
+              const nextFines = Math.max(0, curFines + fineDiff);
+              const nextNet = Math.max(0, curPts - nextPen);
+              batch.update(doc(db, 'users', targetUid), {
+                penalties: nextPen,
+                finesDue: nextFines,
+                fines: nextFines,
+                netPts: nextNet,
+                updatedAt: serverTimestamp()
+              });
+            }
           }
+
+          logAdminAction(batch, {
+            action: 'attendance_log_updated',
+            targetUid: targetUid,
+            details: {
+              logId: log.id,
+              sessionId: session?.id || log.sessionId,
+              oldStatus: log.status,
+              newStatus,
+              oldPenalty: log.penalty,
+              newPenalty,
+              oldFine: log.fineEGP,
+              newFine
+            }
+          });
+
+          await batch.commit();
+        } catch (fsErr) {
+          console.warn('Firestore direct write ignored (backend already synced):', fsErr);
         }
 
-        logAdminAction(batch, {
-          action: 'attendance_log_updated',
-          targetUid: log.uid,
-          details: {
-            logId: log.id,
-            sessionId: session?.id || log.sessionId,
-            oldStatus: log.status,
-            newStatus,
-            oldPenalty: log.penalty,
-            newPenalty,
-            oldFine: log.fineEGP,
-            newFine
-          }
-        });
+        // Update in-memory objects
+        log.status = newStatus;
+        log.penalty = newPenalty;
+        log.fineEGP = newFine;
+        log.adminNote = newNote;
 
-        await batch.commit();
-        toast('Attendance log updated', 'success');
+        const updateInList = (list) => {
+          if (!Array.isArray(list)) return;
+          const idx = list.findIndex(l => l.id === log.id);
+          if (idx >= 0) {
+            list[idx] = { ...list[idx], status: newStatus, penalty: newPenalty, fineEGP: newFine, adminNote: newNote };
+          }
+        };
+        updateInList(state.attendanceLogs);
+        updateInList(state.attendanceRecords);
+        updateInList(state.myAttendanceLogs);
+
+        toast('Attendance log updated and ledger synchronized', 'success');
+        if (typeof renderRecentLogs === 'function') renderRecentLogs();
+        if (typeof renderAdminAttendanceLogs === 'function') renderAdminAttendanceLogs();
+        renderAdminSessions();
         return true;
       } catch (err) {
         console.error('Save log error:', err);
@@ -18044,50 +18084,236 @@ export function renderTodayCheckIns(records = []) {
   renderAttendanceLogs();
 }
 
+let adminAttendanceSearchQuery = '';
+let adminAttendanceStatusFilter = 'all';
+
 export async function renderRecentLogs() {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   clearFsListener('recent');
   const tbody = document.getElementById('admin-attendance-logs-tbody');
   const countEl = document.getElementById('admin-attendance-log-count');
+  const searchInput = document.getElementById('input-admin-search-attendance-logs');
+  const filterChips = document.getElementById('admin-attendance-logs-filter-chips');
   if (!tbody) return;
 
-  if (tbody.children.length === 0) {
+  if (tbody.children.length === 0 || tbody.querySelector('.animate-spin')) {
     tbody.innerHTML = `
       <div class="p-6 text-center text-xs text-neutral-400 flex flex-col items-center justify-center gap-2">
         <div class="w-5 h-5 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
-        <span>Loading attendance logs...</span>
+        <span>Loading all attendance logs...</span>
       </div>
     `;
   }
 
-  try {
-    // FIX 1: Direct global query on attendance_records collection ordered by timestamp descending, limit 50, with robust fallback
-    let recDocs = [];
-    try {
-      const snap = await getDocs(query(collection(db, 'attendance_records'), orderBy('timestamp', 'desc'), limit(50)));
-      recDocs = snap.docs || [];
-    } catch (e1) {
-      try {
-        const snap = await getDocs(query(collection(db, 'attendance_records'), limit(50)));
-        recDocs = snap.docs || [];
-      } catch (e2) {
-        console.warn('Could not query attendance_records:', e2);
+  // Setup search input and filter chips
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = 'true';
+    searchInput.value = adminAttendanceSearchQuery;
+    searchInput.addEventListener('input', (e) => {
+      adminAttendanceSearchQuery = (e.target.value || '').trim().toLowerCase();
+      renderFilteredAttendanceLogsList();
+    });
+  }
+
+  if (filterChips && !filterChips.dataset.bound) {
+    filterChips.dataset.bound = 'true';
+    filterChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.btn-att-log-filter');
+      if (!chip) return;
+      adminAttendanceStatusFilter = chip.dataset.status || 'all';
+      filterChips.querySelectorAll('.btn-att-log-filter').forEach(btn => {
+        if (btn.dataset.status === adminAttendanceStatusFilter) {
+          btn.className = 'btn-att-log-filter px-2.5 py-1 rounded-lg text-xs font-medium border border-white/10 transition bg-white/20 text-white';
+        } else {
+          btn.className = 'btn-att-log-filter px-2.5 py-1 rounded-lg text-xs font-medium border border-white/10 text-neutral-400 hover:text-white transition';
+        }
+      });
+      renderFilteredAttendanceLogsList();
+    });
+  }
+
+  function renderFilteredAttendanceLogsList() {
+    const tbodyEl = document.getElementById('admin-attendance-logs-tbody');
+    const cntEl = document.getElementById('admin-attendance-log-count');
+    if (!tbodyEl) return;
+
+    const allLogs = state.attendanceLogs || [];
+
+    const getLogTime = (l) => {
+      return parseDateTimeToMs(l.timestamp) ||
+             parseDateTimeToMs(l.checkedInAt) ||
+             parseDateTimeToMs(l.checkInTimestamp) ||
+             (typeof l.checkInTimestamp === 'number' ? l.checkInTimestamp : 0) ||
+             parseDateTimeToMs(l.occurrenceStart) ||
+             parseDateTimeToMs(l.createdAt) ||
+             parseDateTimeToMs(l.checkInTime) ||
+             0;
+    };
+
+    const filteredLogs = allLogs.filter(l => {
+      const status = (l.status || 'on_time').toLowerCase();
+      if (adminAttendanceStatusFilter !== 'all') {
+        if (adminAttendanceStatusFilter === 'on_time') {
+          if (status !== 'on_time' || Number(l.earlyMinutes) > 0 || Number(l.lateMinutes) > 0 || Number(l.delaySeconds) > 0 || Number(l.penalty) > 0) return false;
+        } else if (adminAttendanceStatusFilter === 'early') {
+          if (status !== 'early' && Number(l.earlyMinutes) <= 0 && Number(l.earlyBonusPoints) <= 0 && Number(l.earlyBonusEGP) <= 0) return false;
+        } else if (adminAttendanceStatusFilter === 'late') {
+          if (status !== 'late' && Number(l.lateMinutes) <= 0 && Number(l.delaySeconds) <= 0 && Number(l.penalty) <= 0) return false;
+        } else if (adminAttendanceStatusFilter === 'absent') {
+          if (status !== 'absent') return false;
+        } else if (adminAttendanceStatusFilter === 'excused') {
+          if (status !== 'excused' && !l.excused) return false;
+        }
+      }
+
+      if (adminAttendanceSearchQuery) {
+        const uid = l.userId || l.uid || '';
+        const member = (typeof usersMap !== 'undefined' ? usersMap.get(uid) : null) || state.members?.find(m => m.uid === uid) || {};
+        const memberName = (l.userName || l.displayName || member.displayName || member.name || '').toLowerCase();
+        const memberEmail = (l.userEmail || member.email || '').toLowerCase();
+        const sessionTitle = (l.sessionTitle || (state.attendanceSessions?.find(s => s.id === l.sessionId)?.title) || '').toLowerCase();
+        const dateStr = (l.sessionDate || l.occurrenceKey || '').toLowerCase();
+        const noteStr = (l.adminNote || l.note || '').toLowerCase();
+
+        if (!memberName.includes(adminAttendanceSearchQuery) &&
+            !memberEmail.includes(adminAttendanceSearchQuery) &&
+            !sessionTitle.includes(adminAttendanceSearchQuery) &&
+            !dateStr.includes(adminAttendanceSearchQuery) &&
+            !noteStr.includes(adminAttendanceSearchQuery)) {
+          return false;
+        }
+      }
+
+      return true;
+    }).sort((a, b) => getLogTime(b) - getLogTime(a));
+
+    if (cntEl) {
+      if (filteredLogs.length !== allLogs.length) {
+        cntEl.textContent = `${filteredLogs.length} of ${allLogs.length} logs`;
+      } else {
+        cntEl.textContent = `${allLogs.length} logs`;
       }
     }
 
-    let logDocs = [];
-    try {
-      const snap = await getDocs(query(collection(db, 'attendance_logs'), orderBy('checkedInAt', 'desc'), limit(50)));
-      logDocs = snap.docs || [];
-    } catch (e3) {
-      try {
-        const snap = await getDocs(query(collection(db, 'attendance_logs'), limit(50)));
-        logDocs = snap.docs || [];
-      } catch (e4) {
-        console.warn('Could not query attendance_logs:', e4);
-      }
+    if (filteredLogs.length === 0) {
+      tbodyEl.innerHTML = allLogs.length === 0
+        ? '<div class="p-6 text-xs text-neutral-400 text-center">No attendance logs recorded yet.</div>'
+        : '<div class="p-6 text-xs text-neutral-400 text-center">No attendance logs matching your filter.</div>';
+      return;
     }
+
+    tbodyEl.innerHTML = filteredLogs.map(l => {
+      const uid = l.userId || l.uid;
+      const member = (typeof usersMap !== 'undefined' ? usersMap.get(uid) : null) || state.members?.find(m => m.uid === uid) || {};
+      const prof = getUserProfile(uid, l.userName || l.displayName || member.displayName || member.name, l.userAvatar || member.photoURL || member.avatarUrl);
+      const logTimeVal = l.timestamp || l.checkedInAt || l.checkInTimestamp || l.createdAt || l.checkInTime;
+      const exactTime = formatCheckInExactTime(logTimeVal, true);
+      const sessionTitle = l.sessionTitle || (state.attendanceSessions?.find(s => s.id === l.sessionId)?.title) || 'Attendance';
+
+      return `
+        <div class="roster-breakdown-row p-3 flex items-center justify-between gap-2.5 text-xs hover:bg-white/[0.04] transition rounded-xl cursor-pointer" data-log-id="${esc(l.id)}" data-session-id="${esc(l.sessionId || '')}">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+            <div class="min-w-0 flex-1">
+              <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
+                <span class="truncate">${esc(prof.displayName)}</span>
+                <span class="text-[10px] text-neutral-400 font-normal truncate">• ${esc(sessionTitle)}</span>
+              </div>
+              <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
+                ${l.adminNote ? `<span class="text-[10px] text-amber-300/90 italic truncate">(${esc(l.adminNote)})</span>` : ''}
+                ${l.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(l.appliedTierLabel)}</span>` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            ${renderCheckInMetricsPills(l)}
+            <button type="button" class="btn-edit-attendance-log text-[#0A84FF] hover:text-[#0A84FF]/80 text-xs px-2.5 py-1 rounded bg-[#0A84FF]/10 hover:bg-[#0A84FF]/20 border border-[#0A84FF]/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
+              <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              <span>Edit</span>
+            </button>
+            <button type="button" class="btn-delete-attendance-log text-rose-400 hover:text-rose-300 text-xs px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
+              <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    tbodyEl.querySelectorAll('.roster-breakdown-row').forEach(row => {
+      row.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        const logId = row.dataset.logId;
+        const targetLog = allLogs.find(l => l.id === logId);
+        if (targetLog) {
+          const sess = (state.attendanceSessions || []).find(s => s.id === targetLog.sessionId) || { id: targetLog.sessionId, title: targetLog.sessionTitle || 'Session' };
+          openAdminLogEditModal(targetLog, sess);
+        }
+      };
+    });
+
+    tbodyEl.querySelectorAll('.btn-edit-attendance-log').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const logId = btn.dataset.logId;
+        const targetLog = allLogs.find(l => l.id === logId);
+        if (targetLog) {
+          const sess = (state.attendanceSessions || []).find(s => s.id === targetLog.sessionId) || { id: targetLog.sessionId, title: targetLog.sessionTitle || 'Session' };
+          openAdminLogEditModal(targetLog, sess);
+        }
+      };
+    });
+
+    tbodyEl.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const confirmed = await openDeleteConfirmModal({
+          title: 'Delete Attendance Record?',
+          message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
+          confirmText: 'Delete'
+        });
+        if (!confirmed) return;
+        const logId = btn.dataset.logId;
+        const targetLog = allLogs.find(l => l.id === logId) || {};
+        const memberUid = targetLog.userId || targetLog.uid;
+        try {
+          await callGasBackend({
+            action: 'DELETE_LOG',
+            logId,
+            uid: memberUid,
+            pointsDelta: targetLog.pointsDelta !== undefined ? targetLog.pointsDelta : (targetLog.status === 'early' ? (targetLog.earlyBonusPoints || 0) : -(targetLog.penalty || 0)),
+            egpDelta: targetLog.egpDelta !== undefined ? targetLog.egpDelta : (targetLog.status === 'early' ? (targetLog.earlyBonusEGP || 0) : -(targetLog.fineEGP || 0))
+          });
+
+          await Promise.allSettled([
+            deleteDoc(doc(db, 'attendance_logs', logId)),
+            deleteDoc(doc(db, 'attendance_records', logId))
+          ]);
+
+          state.attendanceLogs = (state.attendanceLogs || []).filter(l => l.id !== logId);
+          state.myAttendanceLogs = (state.myAttendanceLogs || []).filter(l => l.id !== logId);
+          if (state.attendanceRecords) {
+            state.attendanceRecords = state.attendanceRecords.filter(l => l.id !== logId);
+          }
+          toast('Log deleted and points reversed', 'info');
+          renderFilteredAttendanceLogsList();
+          renderAdminSessions();
+        } catch (err) {
+          console.error('Failed to delete log:', err);
+          toast('Failed to delete log', 'error');
+        }
+      };
+    });
+  }
+
+  try {
+    const [recSnap, logSnap, gasRes] = await Promise.allSettled([
+      getDocs(query(collection(db, 'attendance_records'), limit(1000))),
+      getDocs(query(collection(db, 'attendance_logs'), limit(1000))),
+      callGasBackend({ action: 'GET_ALL_ATTENDANCE_LOGS' })
+    ]);
 
     const mergedLogsMap = new Map();
 
@@ -18104,118 +18330,25 @@ export async function renderRecentLogs() {
       }
     };
 
-    recDocs.forEach(addLog);
-    logDocs.forEach(addLog);
+    if (recSnap.status === 'fulfilled' && recSnap.value?.docs) {
+      recSnap.value.docs.forEach(addLog);
+    }
+    if (logSnap.status === 'fulfilled' && logSnap.value?.docs) {
+      logSnap.value.docs.forEach(addLog);
+    }
+    if (gasRes.status === 'fulfilled' && Array.isArray(gasRes.value?.logs)) {
+      gasRes.value.logs.forEach(addLog);
+    }
     (state.attendanceRecords || []).forEach(addLog);
     (state.attendanceLogs || []).forEach(addLog);
 
-    const getLogTime = (l) => {
-      return parseDateTimeToMs(l.timestamp) ||
-             parseDateTimeToMs(l.checkedInAt) ||
-             parseDateTimeToMs(l.checkInTimestamp) ||
-             parseDateTimeToMs(l.occurrenceStart) ||
-             parseDateTimeToMs(l.createdAt) ||
-             0;
-    };
+    state.attendanceLogs = Array.from(mergedLogsMap.values());
+    state.attendanceRecords = state.attendanceLogs;
 
-    const logs = Array.from(mergedLogsMap.values())
-      .sort((a, b) => getLogTime(b) - getLogTime(a))
-      .slice(0, 50);
-
-    if (countEl) countEl.textContent = `${logs.length} logs`;
-
-    if (logs.length === 0) {
-      tbody.innerHTML = '<div class="p-6 text-xs text-neutral-400 text-center">No recent check-in logs recorded yet.</div>';
-      return;
-    }
-
-    tbody.innerHTML = logs.map(l => {
-      const uid = l.userId || l.uid;
-      const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {};
-      const prof = getUserProfile(uid, l.userName || member.displayName || member.name, l.userAvatar || member.photoURL || member.avatarUrl);
-      const exactTime = formatCheckInExactTime(l.timestamp || l.checkedInAt || l.checkInTimestamp || l.createdAt, true);
-      const sessionTitle = l.sessionTitle || (state.attendanceSessions?.find(s => s.id === l.sessionId)?.title) || 'Attendance';
-
-      return `
-        <div class="roster-breakdown-row p-3 flex items-center justify-between gap-2.5 text-xs hover:bg-white/[0.04] transition rounded-xl cursor-pointer" data-log-id="${esc(l.id)}" data-session-id="${esc(l.sessionId || '')}">
-          <div class="flex items-center gap-2.5 min-w-0 flex-1">
-            <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
-            <div class="min-w-0 flex-1">
-              <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
-                <span class="truncate">${esc(prof.displayName)}</span>
-                <span class="text-[10px] text-neutral-400 font-normal truncate">• ${esc(sessionTitle)}</span>
-              </div>
-              <div class="flex items-center gap-1.5 mt-0.5">
-                <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
-                ${l.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(l.appliedTierLabel)}</span>` : ''}
-              </div>
-            </div>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            ${renderCheckInMetricsPills(l)}
-            <button type="button" class="btn-delete-attendance-log text-rose-400 hover:text-rose-300 text-xs px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition" data-log-id="${esc(l.id)}">
-              Remove
-            </button>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    tbody.querySelectorAll('.roster-breakdown-row').forEach(row => {
-      row.onclick = (e) => {
-        if (e.target.closest('button')) return;
-        const logId = row.dataset.logId;
-        const targetLog = logs.find(l => l.id === logId);
-        if (targetLog) {
-          const sess = (state.attendanceSessions || []).find(s => s.id === targetLog.sessionId) || { id: targetLog.sessionId, title: targetLog.sessionTitle || 'Session' };
-          openAdminLogEditModal(targetLog, sess);
-        }
-      };
-    });
-
-    tbody.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
-      btn.onclick = async (e) => {
-        e.stopPropagation();
-        const confirmed = await openDeleteConfirmModal({
-          title: 'Delete Attendance Record?',
-          message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
-          confirmText: 'Delete'
-        });
-        if (!confirmed) return;
-        const logId = btn.dataset.logId;
-        const targetLog = logs.find(l => l.id === logId) || {};
-        const memberUid = targetLog.userId || targetLog.uid;
-        try {
-          await callGasBackend({
-            action: 'DELETE_LOG',
-            logId,
-            uid: memberUid,
-            pointsDelta: targetLog.pointsDelta !== undefined ? targetLog.pointsDelta : (targetLog.status === 'early' ? (targetLog.earlyBonusPoints || 0) : -(targetLog.penalty || 0)),
-            egpDelta: targetLog.egpDelta !== undefined ? targetLog.egpDelta : (targetLog.status === 'early' ? (targetLog.earlyBonusEGP || 0) : -(targetLog.fineEGP || 0))
-          });
-
-          await Promise.all([
-            deleteDoc(doc(db, 'attendance_logs', logId)).catch(() => {}),
-            deleteDoc(doc(db, 'attendance_records', logId)).catch(() => {})
-          ]);
-
-          state.attendanceLogs = (state.attendanceLogs || []).filter(l => l.id !== logId);
-          state.myAttendanceLogs = (state.myAttendanceLogs || []).filter(l => l.id !== logId);
-          if (state.attendanceRecords) {
-            state.attendanceRecords = state.attendanceRecords.filter(l => l.id !== logId);
-          }
-          toast('Log removed and points reversed', 'info');
-          renderRecentLogs();
-          renderAdminSessions();
-        } catch (err) {
-          console.error('Failed to delete log:', err);
-          toast('Failed to delete log', 'error');
-        }
-      };
-    });
+    renderFilteredAttendanceLogsList();
   } catch (err) {
-    console.error('Error rendering recent attendance logs:', err);
-    tbody.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load attendance logs: ${esc(err.message || err)}</div>`;
+    console.error('Error fetching attendance logs:', err);
+    renderFilteredAttendanceLogsList();
   }
 }
 

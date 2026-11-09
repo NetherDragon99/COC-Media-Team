@@ -84,6 +84,27 @@ function doPost(e) {
       });
     }
 
+    if (action === "GET_ALL_ATTENDANCE_LOGS" || action === "LIST_ALL_LOGS") {
+      const logs = firestoreList("attendance_logs", 1000);
+      const records = firestoreList("attendance_records", 1000);
+      const mergedMap = {};
+      records.forEach(r => { if (r && r.id) mergedMap[r.id] = r; });
+      logs.forEach(l => { if (l && l.id) mergedMap[l.id] = { ...(mergedMap[l.id] || {}), ...l }; });
+      return jsonResponse({
+        status: "success",
+        logs: Object.values(mergedMap)
+      });
+    }
+
+    if (action === "UPDATE_LOG") {
+      const result = updateAttendanceLogAndSyncLedger(payload);
+      return jsonResponse({
+        status: "success",
+        message: "Attendance log updated and member ledger synchronized.",
+        result: result
+      });
+    }
+
     return jsonResponse({
       status: "ignored",
       reason: "Unknown action: " + action
@@ -599,6 +620,75 @@ function deleteAttendanceLogAndReverse(payload) {
   }
 
   return { success: true, logId: logId, reversedUid: targetUid, reversedPoints: -pointsDelta, reversedEgp: -egpDelta };
+}
+
+/**
+ * Updates an attendance log/record and synchronizes member ledger liabilities.
+ */
+function updateAttendanceLogAndSyncLedger(payload) {
+  const logId = payload.logId;
+  if (!logId) throw new Error("Missing logId in UPDATE_LOG");
+
+  let existingLog = firestoreGet(`attendance_logs/${logId}`);
+  if (!existingLog) {
+    existingLog = firestoreGet(`attendance_records/${logId}`);
+  }
+
+  const targetUid = payload.uid || existingLog?.uid || existingLog?.userId;
+  const oldPenalty = Number(existingLog?.penalty || 0);
+  const oldFine = Number(existingLog?.fineEGP || 0);
+
+  const newStatus = payload.status || existingLog?.status || 'on_time';
+  const newPenalty = payload.penalty !== undefined ? Math.max(0, Number(payload.penalty) || 0) : oldPenalty;
+  const newFine = payload.fineEGP !== undefined ? Math.max(0, Number(payload.fineEGP) || 0) : oldFine;
+  const newNote = payload.adminNote !== undefined ? payload.adminNote : (existingLog?.adminNote || '');
+  const nowIso = new Date().toISOString();
+
+  const patchData = {
+    status: newStatus,
+    penalty: newPenalty,
+    fineEGP: newFine,
+    adminNote: newNote,
+    updatedAt: nowIso
+  };
+
+  firestorePatch(`attendance_logs/${logId}`, patchData, ["status", "penalty", "fineEGP", "adminNote", "updatedAt"]);
+  firestorePatch(`attendance_records/${logId}`, patchData, ["status", "penalty", "fineEGP", "adminNote", "updatedAt"]);
+
+  // Calculate delta to adjust member ledger
+  const penDiff = newPenalty - oldPenalty;
+  const fineDiff = newFine - oldFine;
+
+  if (targetUid && (penDiff !== 0 || fineDiff !== 0)) {
+    const userDoc = firestoreGet(`users/${targetUid}`);
+    if (userDoc) {
+      const curPts = Number(userDoc.points) || 0;
+      const curPen = Number(userDoc.penalties) || 0;
+      const curFines = Number(userDoc.finesDue != null ? userDoc.finesDue : (userDoc.fines || 0));
+
+      const updatedPen = Math.max(0, curPen + penDiff);
+      const updatedFines = Math.max(0, curFines + fineDiff);
+      const updatedNet = Math.max(0, curPts - updatedPen);
+
+      const userPatch = {
+        penalties: updatedPen,
+        fines: updatedFines,
+        finesDue: updatedFines,
+        netPts: updatedNet,
+        updatedAt: nowIso
+      };
+      firestorePatch(`users/${targetUid}`, userPatch, ["penalties", "fines", "finesDue", "netPts", "updatedAt"]);
+
+      if (fineDiff !== 0) {
+        firestorePatch(`users_private/${targetUid}`, {
+          finesEGP: updatedFines,
+          updatedAt: nowIso
+        }, ["finesEGP", "updatedAt"]);
+      }
+    }
+  }
+
+  return { success: true, logId: logId, newStatus, newPenalty, newFine };
 }
 
 // -------------------------------------------------------------
