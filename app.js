@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.0';
+export const APP_VERSION = '3.2.1';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -10260,7 +10260,7 @@ function setupBroadcastsListener() {
 }
 
 const FCM_VAPID_KEY = 'BHAllHVmcFAqchvINO9TY95yyGoeYKQ9aDgD31hhYXpI3jkG4CPOVsxU7mi0OQzGUZcKYx3l_FTGvpWEMcEz4yY';
-const FCM_SW_SCOPE = './firebase-cloud-messaging-push-scope';
+const FCM_SW_SCOPE = './';
 let messaging = null;
 let fcmRegistration = null;
 let isFCMSupported = false;
@@ -10393,11 +10393,16 @@ async function enablePushNotifications() {
 
     let token = null;
     try {
-      if (!messaging || !fcmRegistration) {
+      if (!fcmRegistration) {
         fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
           scope: FCM_SW_SCOPE
         });
+      }
+      if (!messaging) {
         messaging = getMessaging(app);
+      }
+      if (fcmRegistration && fcmRegistration.installing) {
+        await navigator.serviceWorker.ready.catch(() => {});
       }
 
       token = await getToken(messaging, {
@@ -11559,7 +11564,7 @@ export function getLogExactTimeStr(log, includeDate = true) {
   }
 }
 
-export function renderCheckInMetricsPills(log) {
+export function renderCheckInMetricsPills(log, opts = {}) {
   if (!log) return '';
   const status = log.status || 'on_time';
   const isAbsent = status === 'absent';
@@ -11596,14 +11601,15 @@ export function renderCheckInMetricsPills(log) {
     impactPill = `<span class="checkin-impact-pill impact-positive">${parts.join(' | ')}</span>`;
   } else if (ptsDelta < 0 || egpDelta < 0) {
     const parts = [];
-    if (ptsDelta < 0) parts.push(`${ptsDelta} pts`);
-    if (egpDelta < 0) parts.push(`${egpDelta} EGP`);
+    if (ptsDelta < 0) parts.push(`${Math.abs(ptsDelta)} Penalty Pts`);
+    if (egpDelta < 0) parts.push(`${Math.abs(egpDelta)} EGP`);
     impactPill = `<span class="checkin-impact-pill impact-negative">${parts.join(' | ')}</span>`;
   } else {
     impactPill = `<span class="checkin-impact-pill impact-neutral">0 pts</span>`;
   }
 
-  return `<div class="flex flex-wrap items-center justify-end gap-1">${timingPill}${impactPill}</div>`;
+  const justifyClass = opts.justifyStart ? 'justify-start' : 'justify-end';
+  return `<div class="flex flex-wrap items-center ${justifyClass} gap-1">${timingPill}${impactPill}</div>`;
 }
 
 function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
@@ -12128,7 +12134,7 @@ async function handleAttendanceCheckIn(sessionId) {
 
   if (!confirmed) return;
 
-  const logId = `${session.id}_${occurrenceKey}_${state.user.uid}`;
+  const logId = `${session.id}_${state.user.uid}_${occurrenceKey}`;
 
   try {
     // Dispatch PROCESS_CHECKIN to GAS backend for authoritative server-time evaluation & Firestore update.
@@ -19015,31 +19021,33 @@ export async function renderRecentLogs() {
       const sessionTitle = l.sessionTitle || (state.attendanceSessions?.find(s => s.id === l.sessionId)?.title) || 'Attendance';
 
       return `
-        <div class="roster-breakdown-row bulk-select-card p-3 flex items-center justify-between gap-2.5 text-xs hover:bg-white/[0.04] transition rounded-xl cursor-pointer" data-bulk-id="${esc(l.id)}" data-log-id="${esc(l.id)}" data-session-id="${esc(l.sessionId || '')}">
-          <div class="flex items-center gap-2.5 min-w-0 flex-1">
-            <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
-            <div class="min-w-0 flex-1">
-              <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
-                <span class="truncate">${esc(prof.displayName)}</span>
-                <span class="text-[10px] text-neutral-400 font-normal truncate">• ${esc(sessionTitle)}</span>
-              </div>
-              <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
-                ${l.adminNote ? `<span class="text-[10px] text-amber-300/90 italic truncate">(${esc(l.adminNote)})</span>` : ''}
-                ${l.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(l.appliedTierLabel)}</span>` : ''}
+        <div class="roster-breakdown-row bulk-select-card attendance-log-card text-xs hover:bg-white/[0.04] transition rounded-xl cursor-pointer" data-bulk-id="${esc(l.id)}" data-log-id="${esc(l.id)}" data-session-id="${esc(l.sessionId || '')}">
+          <div class="attendance-log-header">
+            <div class="shrink-0">${renderAvatar(prof, 'w-9 h-9')}</div>
+            <div class="attendance-log-info">
+              <div class="font-bold text-white text-sm truncate">${esc(prof.displayName)}</div>
+              <div class="text-xs text-neutral-400 truncate">${esc(sessionTitle)}</div>
+              <div class="flex items-center gap-1.5 flex-wrap mt-0.5">
+                <span class="exact-time text-[11px] text-neutral-500">${esc(exactTime)}</span>
+                ${l.adminNote ? `<span class="text-[11px] text-amber-300/90 italic truncate">(${esc(l.adminNote)})</span>` : ''}
+                ${l.appliedTierLabel ? `<span class="text-[11px] text-emerald-400/80 font-mono truncate">${esc(l.appliedTierLabel)}</span>` : ''}
               </div>
             </div>
           </div>
-          <div class="flex items-center gap-1.5 shrink-0">
-            ${renderCheckInMetricsPills(l)}
-            <button type="button" class="btn-edit-attendance-log text-[#0A84FF] hover:text-[#0A84FF]/80 text-xs px-2.5 py-1 rounded bg-[#0A84FF]/10 hover:bg-[#0A84FF]/20 border border-[#0A84FF]/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
-              <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-              <span>Edit</span>
-            </button>
-            <button type="button" class="btn-delete-attendance-log text-rose-400 hover:text-rose-300 text-xs px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
-              <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-              <span>Delete</span>
-            </button>
+          <div class="attendance-log-footer">
+            <div class="min-w-0 flex-1">
+              ${renderCheckInMetricsPills(l, { justifyStart: true })}
+            </div>
+            <div class="attendance-log-actions">
+              <button type="button" class="btn-edit-attendance-log attendance-log-action-btn text-[#0A84FF] hover:text-[#0A84FF]/80 rounded bg-[#0A84FF]/10 hover:bg-[#0A84FF]/20 border border-[#0A84FF]/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
+                <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                <span>Edit</span>
+              </button>
+              <button type="button" class="btn-delete-attendance-log attendance-log-action-btn text-rose-400 hover:text-rose-300 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
+                <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                <span>Delete</span>
+              </button>
+            </div>
           </div>
         </div>
       `;

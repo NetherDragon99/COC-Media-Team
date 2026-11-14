@@ -1932,5 +1932,195 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.strictEqual(tieredTask.missedPenalty.fineAmountEGP, 50, 'Missed fineAmountEGP preserved');
 }
 
+// ---------------------------------------------------------------------------
+// Backend GAS Watchdog: Checked-In Members Must NEVER Be Marked Absent
+// ---------------------------------------------------------------------------
+{
+  const gasCode = fs.readFileSync('backend-gas/Code.js', 'utf8');
+  const gasSandbox = {
+    console,
+    Intl,
+    Date,
+    Math,
+    String,
+    Number,
+    Boolean,
+    Array,
+    Object,
+    JSON,
+    RegExp,
+    Error,
+    Map,
+    Set,
+    parseInt,
+    parseFloat,
+    isNaN,
+    isFinite,
+    Utilities: {
+      formatDate: (d, tz, fmt) => {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+          timeZone: tz || 'Africa/Cairo',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        }).formatToParts(d);
+        const m = Object.fromEntries(parts.map(p => [p.type, p.value]));
+        if (fmt === 'yyyy-MM-dd') return `${m.year}-${m.month}-${m.day}`;
+        return `${m.year}-${m.month}-${m.day}T${m.hour}:${m.minute}:${m.second}`;
+      }
+    },
+    LockService: {
+      getScriptLock: () => ({
+        tryLock: () => true,
+        waitLock: () => {},
+        releaseLock: () => {}
+      })
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: () => '',
+        setProperty: () => {}
+      })
+    },
+    ScriptApp: {
+      getProjectTriggers: () => [],
+      newTrigger: () => ({ timeBased: () => ({ after: () => ({ create: () => {} }), everyMinutes: () => ({ create: () => {} }) }) }),
+      deleteTrigger: () => {}
+    },
+    UrlFetchApp: { fetch: () => ({ getResponseCode: () => 200, getContentText: () => '{}' }) },
+    Session: { getScriptTimeZone: () => 'Africa/Cairo' },
+    Logger: { log: () => {} }
+  };
+  vm.createContext(gasSandbox);
+  vm.runInContext(gasCode, gasSandbox);
+
+  // Mock Firestore store
+  const sessionId = 'sess_watchdog_no_false_absent';
+  const occKey = '2026-11-14';
+  const nowMs = Date.parse('2026-11-14T20:00:00Z'); // 22:00 Cairo (after 18:00-19:00 session)
+
+  const sessionDoc = {
+    id: sessionId,
+    title: 'Friday Shoot',
+    date: occKey,
+    startTime: '18:00',
+    endTime: '19:00',
+    graceMinutes: 10,
+    lateCutoffMinutes: 60,
+    status: 'active',
+    pointsOnTime: 5,
+    pointsEarly: 5,
+    earlyBonus: { enabled: true, points: 5, fineReductionEGP: 5 },
+    latePenalty: { enabled: true, points: 10, fineAmountEGP: 25 },
+    absentPenalty: { enabled: true, points: 20, fineAmountEGP: 50 },
+    targetUids: ['u_early', 'u_ontime', 'u_late', 'u_record', 'u_absent']
+  };
+
+  const users = [
+    { id: 'u_early', uid: 'u_early', name: 'Early Member', role: 'member', status: 'active', points: 100, walletBalance: 0, totalFines: 0 },
+    { id: 'u_ontime', uid: 'u_ontime', name: 'OnTime Member', role: 'member', status: 'active', points: 100, walletBalance: 0, totalFines: 0 },
+    { id: 'u_late', uid: 'u_late', name: 'Late Member', role: 'member', status: 'active', points: 100, walletBalance: 0, totalFines: 0 },
+    { id: 'u_record', uid: 'u_record', name: 'Record Member', role: 'member', status: 'active', points: 100, walletBalance: 0, totalFines: 0 },
+    { id: 'u_absent', uid: 'u_absent', name: 'Absent Member', role: 'member', status: 'active', points: 100, walletBalance: 0, totalFines: 0 }
+  ];
+
+  // Existing check-in logs:
+  // u_early, u_ontime, u_late in attendance_logs (even with legacy or differing doc IDs)
+  // u_record only in attendance_records
+  const attendanceLogs = [
+    {
+      id: `${sessionId}_u_early_${occKey}`,
+      sessionId,
+      uid: 'u_early',
+      occurrenceKey: occKey,
+      status: 'early',
+      timestamp: '2026-11-14T15:55:00.000Z'
+    },
+    {
+      id: `${sessionId}_${occKey}_u_ontime`, // legacy ID format
+      sessionId,
+      uid: 'u_ontime',
+      date: occKey,
+      status: 'on_time',
+      timestamp: '2026-11-14T16:02:00.000Z'
+    },
+    {
+      id: 'random_legacy_late_id',
+      sessionId,
+      uid: 'u_late',
+      status: 'late',
+      timestamp: '2026-11-14T16:25:00.000Z' // inside [opensAtMs, cutoffMs]
+    }
+  ];
+
+  const attendanceRecords = [
+    {
+      id: `${sessionId}_u_record_${occKey}`,
+      sessionId,
+      uid: 'u_record',
+      occurrenceKey: occKey,
+      status: 'present',
+      timestamp: '2026-11-14T16:00:00.000Z'
+    }
+  ];
+
+  const patchedDocs = [];
+  const createdDocs = [];
+
+  gasSandbox.firestoreList = (collection) => {
+    if (collection === 'users') return users;
+    if (collection === 'attendance_logs') return attendanceLogs;
+    if (collection === 'attendance_records') return attendanceRecords;
+    if (collection === 'waiver_requests' || collection === 'waivers') return [];
+    return [];
+  };
+  gasSandbox.firestoreGet = (path) => {
+    if (path === `attendance_sessions/${sessionId}`) return sessionDoc;
+    for (const l of attendanceLogs) {
+      if (path === `attendance_logs/${l.id}`) return l;
+    }
+    for (const r of attendanceRecords) {
+      if (path === `attendance_records/${r.id}`) return r;
+    }
+    const u = users.find(usr => path === `users/${usr.uid}`);
+    if (u) return u;
+    return null;
+  };
+  gasSandbox.firestorePatch = (path, data) => {
+    patchedDocs.push({ path, data });
+    return data;
+  };
+  gasSandbox.firestorePost = (collection, data, docId) => {
+    createdDocs.push({ collection, docId, data });
+    return data;
+  };
+  gasSandbox.sendFcmWebPush = () => {};
+  gasSandbox.dispatchNotification = () => {};
+  gasSandbox.sendUserNotification = () => {};
+  gasSandbox.logAuditEvent = () => {};
+
+  const closeRes = gasSandbox.closeSessionAndApplyPenalties(sessionId, sessionDoc, occKey);
+  assert.strictEqual(closeRes.closed, true, 'closeSessionAndApplyPenalties should succeed');
+
+  // Verify ONLY u_absent was marked absent
+  const absentPatches = patchedDocs.filter(p => p.path.startsWith('attendance_logs/') && p.data && p.data.status === 'absent');
+  const absentCreates = createdDocs.filter(c => c.collection === 'attendance_logs' && c.data && c.data.status === 'absent');
+  const allAbsentUids = [
+    ...absentPatches.map(p => p.data.uid),
+    ...absentCreates.map(c => c.data.uid)
+  ];
+
+  assert.deepStrictEqual(allAbsentUids, ['u_absent'], 'Only u_absent should be marked absent; checked-in members must NEVER be marked absent');
+
+  for (const checkedInUid of ['u_early', 'u_ontime', 'u_late', 'u_record']) {
+    const userPenaltyPatch = patchedDocs.find(p => p.path === `users/${checkedInUid}`);
+    assert.strictEqual(userPenaltyPatch, undefined, `Checked-in user ${checkedInUid} must not receive absent penalty patch`);
+  }
+}
+
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
 

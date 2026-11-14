@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.0)
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.1)
  * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -1640,11 +1640,13 @@ function handleProcessCheckIn(payload) {
   const occ = resolveSessionWindow(session, nowMs);
   const startMs = (isAdminOverride && payload.sessionStartMs)
     ? Number(payload.sessionStartMs)
-    : (occ ? occ.startMs : (getSessionStartDate(session) ? getSessionStartDate(session).getTime() : nowMs));
-  const effOccKey = payload.occurrenceKey || (occ ? occ.occurrenceKey : formatZonedDateKey(startMs, CONFIG.TIMEZONE));
-  const logId = payload.logId || `${sessionId}_${uid}_${effOccKey}`;
+    : (occ ? occ.startMs : (getSessionStartDate(session, nowMs) ? getSessionStartDate(session, nowMs).getTime() : nowMs));
+  const effOccKey = isAdminOverride
+    ? (payload.occurrenceKey || (occ ? occ.occurrenceKey : formatZonedDateKey(startMs, CONFIG.TIMEZONE)))
+    : (occ ? occ.occurrenceKey : formatZonedDateKey(startMs, CONFIG.TIMEZONE));
+  const logId = (isAdminOverride && payload.logId) ? payload.logId : `${sessionId}_${uid}_${effOccKey}`;
 
-  const existingLog = firestoreGet(`attendance_logs/${logId}`);
+  const existingLog = firestoreGet(`attendance_logs/${logId}`) || firestoreGet(`attendance_records/${logId}`);
   if (existingLog && existingLog.ledgerSynced === true && !isAdminOverride) {
     return {
       skipped: true,
@@ -1695,6 +1697,8 @@ function handleProcessCheckIn(payload) {
     sessionId: sessionId,
     sessionTitle: session.title || payload.sessionTitle || "Attendance Session",
     occurrenceKey: effOccKey,
+    date: effOccKey,
+    sessionDate: effOccKey,
     uid: uid,
     userId: uid,
     userName: payload.userName || "Member",
@@ -2004,7 +2008,7 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
     const nowIso = now.toISOString();
     const nowMs = now.getTime();
     const occ = resolveSessionWindow(session, nowMs);
-    const effOccKey = occurrenceKey || (occ ? occ.occurrenceKey : nowIso.slice(0, 10));
+    const effOccKey = occurrenceKey || (occ ? occ.occurrenceKey : formatZonedDateKey(nowMs, CONFIG.TIMEZONE));
     const isRecurring = session.recurrence === "weekly" || session.type === "recurring" || (session.schedule && session.schedule.type && session.schedule.type !== "once");
 
     // 1. Mark session closed in Firestore (or record lastAutoClosedKey for recurring sessions)
@@ -2026,23 +2030,12 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
     const allUsers = fetchApprovedUsers();
     const eligibleMembers = allUsers.filter(u => isUserEligibleForSession(session, u));
 
-    // 3. Fetch attendance logs for this session
+    // 3. Fetch BOTH attendance_logs AND attendance_records for this session
     const existingLogs = fetchAttendanceLogsForSession(sessionId);
-    const attendedUids = new Set(
-      existingLogs
-        .filter(l => !effOccKey || !l.occurrenceKey || l.occurrenceKey === effOccKey)
-        .map(l => l.uid || l.userId)
-        .filter(Boolean)
-    );
+    const existingRecords = fetchAttendanceRecordsForSession(sessionId);
 
     // 4. Fetch approved waivers for this session
     const approvedWaivers = fetchApprovedWaiversForSession(sessionId);
-    const waivedUids = new Set(
-      approvedWaivers
-        .filter(w => !effOccKey || !w.occurrenceKey || w.occurrenceKey === effOccKey)
-        .map(w => w.uid || w.userId)
-        .filter(Boolean)
-    );
 
     // 5. Calculate absence penalties
     const ptsAbsence = Number(session.pointsPenalty && session.pointsPenalty.absence) ||
@@ -2056,11 +2049,21 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
     eligibleMembers.forEach(member => {
       const uid = member.id || member.uid;
       if (!uid) return;
-      if (attendedUids.has(uid)) return;
-      if (waivedUids.has(uid)) return;
+      if (hasMemberAttendanceOrExcuseForWindow(uid, sessionId, occ, effOccKey, existingLogs, existingRecords, approvedWaivers)) {
+        return;
+      }
+
+      const logDocId = `${sessionId}_${uid}_${effOccKey}`;
+      const legacyDocId = `${sessionId}_${effOccKey}_${uid}`;
+      const directLog = firestoreGet(`attendance_logs/${logDocId}`) ||
+        firestoreGet(`attendance_records/${logDocId}`) ||
+        firestoreGet(`attendance_logs/${legacyDocId}`) ||
+        firestoreGet(`attendance_records/${legacyDocId}`);
+      if (directLog && String(directLog.status || "").toLowerCase() !== "absent") {
+        return;
+      }
 
       absentCount++;
-      const logDocId = `${sessionId}_${effOccKey}_${uid}`;
 
       // A. Create absent attendance log
       const absentLogData = {
@@ -2684,6 +2687,58 @@ function fetchApprovedUsers() {
 function fetchAttendanceLogsForSession(sessionId) {
   const logs = firestoreList("attendance_logs", 300);
   return logs.filter(l => l.sessionId === sessionId);
+}
+
+function fetchAttendanceRecordsForSession(sessionId) {
+  const records = firestoreList("attendance_records", 300);
+  return records.filter(r => r.sessionId === sessionId);
+}
+
+/**
+ * Exhaustive check-in & waiver lookup before marking a member absent.
+ * Returns true if the member has ANY check-in (early, on_time, late, present, excused)
+ * or approved waiver for the target occurrence window.
+ */
+function hasMemberAttendanceOrExcuseForWindow(uid, sessionId, win, effOccKey, logs, records, waivers) {
+  if (!uid || !sessionId) return false;
+  const activeStatuses = { early: true, on_time: true, late: true, present: true, excused: true };
+  const canonicalId = `${sessionId}_${uid}_${effOccKey}`;
+  const legacyId = `${sessionId}_${effOccKey}_${uid}`;
+
+  const waiverMatch = (waivers || []).some(w => {
+    const wUid = w.uid || w.userId;
+    if (wUid !== uid) return false;
+    return !effOccKey || !w.occurrenceKey || w.occurrenceKey === effOccKey;
+  });
+  if (waiverMatch) return true;
+
+  const combined = (logs || []).concat(records || []);
+  return combined.some(rec => {
+    if (!rec) return false;
+    const st = String(rec.status || "").toLowerCase();
+    if (st && st !== "absent" && !activeStatuses[st] && st !== "") {
+      // Unknown non-absent status still counts as present/handled if it's for this user
+    }
+    if (st === "absent") return false;
+
+    if (rec.id === canonicalId || rec.id === legacyId) return true;
+
+    const rUid = rec.uid || rec.userId;
+    if (rec.sessionId !== sessionId || rUid !== uid) return false;
+
+    if (effOccKey && (rec.occurrenceKey === effOccKey || rec.date === effOccKey || rec.sessionDate === effOccKey)) {
+      return true;
+    }
+
+    if (win && typeof win.openWindowMs === "number" && typeof win.cutoffMs === "number") {
+      const ts = Number(rec.checkInTimestamp) ||
+        parseDateTimeToMs(rec.checkedInAt || rec.checkInTime || rec.timestamp || rec.createdAt);
+      if (ts && ts >= win.openWindowMs && ts <= win.cutoffMs) {
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 function fetchSubmissionsForTask(taskId) {
