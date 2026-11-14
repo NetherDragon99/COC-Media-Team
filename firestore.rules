@@ -419,6 +419,10 @@ service cloud.firestore {
                              (request.resource.data.diff(resource.data).affectedKeys().hasAny(['penalties']) && request.resource.data.penalties - resource.data.get('penalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty) ||
                              (request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalPenalties']) && request.resource.data.totalPenalties - resource.data.get('totalPenalties', 0) == getAfter(/databases/$(database)/documents/attendance_logs/$(request.resource.data.lastOpId)).data.penalty)
                            )
+                         ) ||
+                         (
+                           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'points', 'penalties', 'totalPenalties', 'badges', 'badgeIds']) &&
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmTokens', 'fcmToken', 'fcmUpdatedAt', 'pushEnabled', 'updatedAt'])
                          )
                        )
                      );
@@ -451,7 +455,7 @@ service cloud.firestore {
                        isActive() &&
                        isOwner(uid) &&
                        !request.resource.data.keys().hasAny(['finesEGP']) &&
-                       request.resource.data.keys().hasOnly(['email', 'fcmTokens', 'createdAt', 'updatedAt', 'lastSeenAt']) &&
+                       request.resource.data.keys().hasOnly(['email', 'fcmTokens', 'fcmToken', 'fcmUpdatedAt', 'pushEnabled', 'createdAt', 'updatedAt', 'lastSeenAt']) &&
                        request.resource.data.get('lastSeenAt', request.time) == request.time
                      );
 
@@ -463,7 +467,7 @@ service cloud.firestore {
                        isOwner(uid) &&
                        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['finesEGP']) &&
                        (
-                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'fcmTokens', 'updatedAt']) ||
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'fcmTokens', 'fcmToken', 'fcmUpdatedAt', 'pushEnabled', 'updatedAt']) ||
                          (
                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeenAt']) &&
                            request.resource.data.lastSeenAt == request.time

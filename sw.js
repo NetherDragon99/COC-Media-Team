@@ -51,30 +51,44 @@ self.addEventListener('push', (event) => {
   if (event.data) {
     try {
       const parsed = event.data.json();
-      const notif = parsed.notification || (parsed.data ? parsed.data : parsed);
-      data = Object.assign(data, notif, parsed.data || {});
+      const webpushNotif = parsed.webpush && parsed.webpush.notification ? parsed.webpush.notification : {};
+      const notif = parsed.notification || {};
+      const payloadData = parsed.data || {};
+      data = Object.assign(
+        data,
+        typeof parsed === 'object' ? parsed : {},
+        notif,
+        webpushNotif,
+        payloadData
+      );
     } catch (e) {
       data.body = event.data.text();
     }
   }
 
+  const title = data.title || 'CoC Media Team';
+  const body = data.body || 'New update available';
+  const icon = data.icon || './pwa-192x192.png';
+  const badge = data.badge || './pwa-192x192.png';
+  const url = data.url || (data.fcm_options && data.fcm_options.link) || './';
+
   const notifyClients = clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
     clientList.forEach((client) => {
       client.postMessage({
         type: 'NEW_PUSH_NOTIFICATION',
-        payload: data
+        payload: { ...data, title, body, url }
       });
     });
   });
 
   event.waitUntil(
     Promise.all([
-      self.registration.showNotification(data.title || 'CoC Media Team', {
-        body: data.body || 'New update available',
-        icon: data.icon || './pwa-192x192.png',
-        badge: data.badge || './pwa-192x192.png',
+      self.registration.showNotification(title, {
+        body,
+        icon,
+        badge,
         vibrate: [200, 100, 200],
-        data: { url: data.url || './' }
+        data: { url }
       }),
       notifyClients
     ])
@@ -83,9 +97,16 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification && event.notification.data && event.notification.data.url) || './';
+  const rawUrl = (event.notification && event.notification.data && event.notification.data.url) || '/COC-Media-Team/';
+  const scopeBase = (self.registration && self.registration.scope) || (self.location.origin + '/COC-Media-Team/');
+  const targetUrl = new URL(rawUrl, scopeBase).href;
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if ('focus' in client && client.url && client.url.startsWith(scopeBase)) {
+          return client.focus();
+        }
+      }
       for (const client of windowClients) {
         if ('focus' in client) return client.focus();
       }

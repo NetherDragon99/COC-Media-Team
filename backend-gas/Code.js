@@ -142,6 +142,15 @@ function doPost(e) {
       });
     }
 
+    if (action === "TEST_FCM_PUSH") {
+      const result = handleTestFcmPush(payload);
+      return jsonResponse({
+        status: result.success ? "success" : "error",
+        ...result,
+        result: result
+      });
+    }
+
     if (action === "GET_ALL_ATTENDANCE_LOGS" || action === "LIST_ALL_LOGS") {
       const logs = firestoreList("attendance_logs", 250);
       const records = firestoreList("attendance_records", 250);
@@ -2323,34 +2332,67 @@ function handleRegisterPushToken(payload) {
 }
 
 /**
- * Extracts unique FCM tokens for a list of user documents.
+ * Extracts unique FCM tokens for a list of user documents, checking BOTH
+ * `users/{uid}` and `users_private/{uid}` (`fcmTokens` array and `fcmToken` string).
  */
 function collectFcmTokensForUsers(users) {
   const tokenSet = new Set();
-  (users || []).forEach(u => {
-    if (!u || u.pushEnabled === false) return;
-    if (Array.isArray(u.fcmTokens)) {
-      u.fcmTokens.forEach(t => {
+  const list = Array.isArray(users) ? users.filter(Boolean) : [];
+  if (list.length === 0) return [];
+
+  const privateByUid = {};
+  if (list.length === 1) {
+    const singleUid = list[0].id || list[0].uid;
+    if (singleUid) {
+      const privDoc = firestoreGet(`users_private/${singleUid}`);
+      if (privDoc) privateByUid[singleUid] = privDoc;
+    }
+  } else {
+    const privDocs = firestoreList("users_private", 300) || [];
+    privDocs.forEach(p => {
+      const pid = p && (p.id || p.uid);
+      if (pid) privateByUid[pid] = p;
+    });
+  }
+
+  const addTokensFromDoc = (docObj) => {
+    if (!docObj) return;
+    if (Array.isArray(docObj.fcmTokens)) {
+      docObj.fcmTokens.forEach(t => {
         if (t && typeof t === "string" && !t.startsWith("local-sw-")) {
           tokenSet.add(t);
         }
       });
     }
-    if (u.fcmToken && typeof u.fcmToken === "string" && !u.fcmToken.startsWith("local-sw-")) {
-      tokenSet.add(u.fcmToken);
+    if (docObj.fcmToken && typeof docObj.fcmToken === "string" && !docObj.fcmToken.startsWith("local-sw-")) {
+      tokenSet.add(docObj.fcmToken);
     }
+  };
+
+  list.forEach(u => {
+    const uid = u.id || u.uid;
+    const priv = uid ? privateByUid[uid] : null;
+    if (u.pushEnabled === false && (!priv || priv.pushEnabled !== true)) return;
+    if (priv && priv.pushEnabled === false && u.pushEnabled !== true) return;
+    addTokensFromDoc(u);
+    addTokensFromDoc(priv);
   });
+
   return Array.from(tokenSet);
 }
 
 /**
- * Sends Web Push notifications via Firebase Cloud Messaging HTTP v1 API.
+ * Sends Web Push notifications via Firebase Cloud Messaging HTTP v1 API and
+ * returns detailed delivery counts and error diagnostics.
  */
-function sendFcmWebPush(userTokens, title, body, clickTargetUrl) {
-  if (!Array.isArray(userTokens) || userTokens.length === 0) return 0;
+function sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl) {
+  if (!Array.isArray(userTokens) || userTokens.length === 0) {
+    return { sentCount: 0, fcmErrors: [] };
+  }
   const fcmEndpoint = `https://fcm.googleapis.com/v1/projects/${CONFIG.FIREBASE_PROJECT_ID}/messages:send`;
   const targetLink = clickTargetUrl || CONFIG.PWA_URL;
   let successCount = 0;
+  const fcmErrors = [];
   const staleTokens = new Set();
 
   userTokens.forEach(token => {
@@ -2398,12 +2440,15 @@ function sendFcmWebPush(userTokens, title, body, clickTargetUrl) {
           respText.indexOf("UNREGISTERED") !== -1 || respText.indexOf("NotRegistered") !== -1;
         if (isStale) {
           staleTokens.add(token);
+          fcmErrors.push(`HTTP ${statusCode} (stale token pruned)`);
         } else {
           console.warn(`[FCM] Token push non-200 (${statusCode}): ${respText}`);
+          fcmErrors.push(`HTTP ${statusCode}: ${respText.slice(0, 200)}`);
         }
       }
     } catch (err) {
       console.error("[FCM] sendFcmWebPush error:", err);
+      fcmErrors.push((err && err.message) || String(err));
     }
   });
 
@@ -2411,7 +2456,49 @@ function sendFcmWebPush(userTokens, title, body, clickTargetUrl) {
     pruneStaleFcmTokens(staleTokens);
   }
 
-  return successCount;
+  return { sentCount: successCount, fcmErrors: fcmErrors };
+}
+
+/**
+ * Sends Web Push notifications via Firebase Cloud Messaging HTTP v1 API.
+ */
+function sendFcmWebPush(userTokens, title, body, clickTargetUrl) {
+  return sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl).sentCount;
+}
+
+/**
+ * Sends an immediate diagnostic FCM Web Push test notification to all tokens
+ * registered for the given uid across users/{uid} and users_private/{uid}.
+ */
+function handleTestFcmPush(payload) {
+  const uid = String((payload && payload.uid) || "").trim();
+  if (!uid) {
+    return { success: false, tokenCount: 0, sentCount: 0, fcmErrors: ["Missing uid"] };
+  }
+
+  const userDoc = firestoreGet(`users/${uid}`) || { id: uid, uid: uid };
+  if (!userDoc.uid) userDoc.uid = uid;
+  const tokens = collectFcmTokensForUsers([userDoc]);
+
+  if (tokens.length === 0) {
+    return {
+      success: false,
+      tokenCount: 0,
+      sentCount: 0,
+      fcmErrors: ["No registered FCM tokens found in users or users_private for uid=" + uid]
+    };
+  }
+
+  const title = "CoC Media Push Test";
+  const body = "Web Push delivery is active on this device.";
+  const res = sendFcmWebPushDetailed(tokens, title, body, CONFIG.PWA_URL + "#notifications");
+
+  return {
+    success: res.sentCount > 0,
+    tokenCount: tokens.length,
+    sentCount: res.sentCount,
+    fcmErrors: res.fcmErrors
+  };
 }
 
 /**

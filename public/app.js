@@ -10269,6 +10269,7 @@ async function initFCM() {
   try {
     const supported = await isSupported().catch(() => false);
     if (!supported || !('serviceWorker' in navigator)) {
+      console.warn('[FCM] Web Push / Service Worker not supported in this browser.');
       isFCMSupported = false;
       updatePushNotificationUI();
       return;
@@ -10278,11 +10279,16 @@ async function initFCM() {
     messaging = getMessaging(app);
 
     try {
-      fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
-        scope: FCM_SW_SCOPE
-      });
+      const existingReg = await navigator.serviceWorker.getRegistration(FCM_SW_SCOPE);
+      if (!existingReg || !existingReg.active || !existingReg.active.scriptURL.endsWith('/sw.js')) {
+        await navigator.serviceWorker.register('./sw.js', {
+          scope: FCM_SW_SCOPE,
+          updateViaCache: 'none'
+        });
+      }
+      fcmRegistration = await navigator.serviceWorker.ready;
     } catch (swErr) {
-      console.warn('Could not register FCM Service Worker:', swErr);
+      console.warn('[FCM] Could not obtain ready Service Worker registration:', swErr);
     }
 
     onMessage(messaging, (payload) => {
@@ -10385,32 +10391,43 @@ async function enablePushNotifications() {
   try {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
+      console.warn('[FCM] Notification.permission is not granted:', permission);
       toast('Notification permission was ' + permission + '. Please allow notifications in your browser settings.', 'warning');
       updatePushNotificationUI();
       updateDrawerPushUI();
       return;
     }
 
+    if (!FCM_VAPID_KEY) {
+      console.warn('[FCM] Missing FCM_VAPID_KEY; cannot request Web Push token.');
+      toast('Missing VAPID key configuration for Web Push.', 'error');
+      return;
+    }
+
     let token = null;
     try {
-      if (!fcmRegistration) {
-        fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
-          scope: FCM_SW_SCOPE
+      const existingReg = await navigator.serviceWorker.getRegistration(FCM_SW_SCOPE);
+      if (!existingReg) {
+        await navigator.serviceWorker.register('./sw.js', {
+          scope: FCM_SW_SCOPE,
+          updateViaCache: 'none'
         });
       }
+      const swReg = await navigator.serviceWorker.ready;
+      fcmRegistration = swReg;
       if (!messaging) {
         messaging = getMessaging(app);
-      }
-      if (fcmRegistration && fcmRegistration.installing) {
-        await navigator.serviceWorker.ready.catch(() => {});
       }
 
       token = await getToken(messaging, {
         vapidKey: FCM_VAPID_KEY,
-        serviceWorkerRegistration: fcmRegistration
+        serviceWorkerRegistration: swReg
       });
+      if (!token) {
+        console.warn('[FCM] getToken() returned an empty token for scope:', swReg?.scope);
+      }
     } catch (fcmErr) {
-      console.warn('FCM token retrieval warning:', fcmErr);
+      console.warn('[FCM] getToken() failed:', fcmErr);
     }
 
     if (token) {
@@ -10430,16 +10447,24 @@ async function enablePushNotifications() {
       pushEnabled: true,
       updatedAt: serverTimestamp()
     };
-    if (token) privPayload.fcmTokens = arrayUnion(token);
+    if (token) {
+      privPayload.fcmTokens = arrayUnion(token);
+      privPayload.fcmToken = token;
+      privPayload.fcmUpdatedAt = serverTimestamp();
+    }
 
-    await setDoc(doc(db, 'users_private', state.user.uid), privPayload, { merge: true }).catch(e => console.warn('users_private push update:', e));
+    await setDoc(doc(db, 'users_private', state.user.uid), privPayload, { merge: true }).catch(e => console.warn('[FCM] users_private push update failed:', e));
 
     const pubPayload = {
       pushEnabled: true,
       updatedAt: serverTimestamp()
     };
-    if (token) pubPayload.fcmTokens = arrayUnion(token);
-    await setDoc(doc(db, 'users', state.user.uid), pubPayload, { merge: true }).catch(e => console.warn('users push update:', e));
+    if (token) {
+      pubPayload.fcmTokens = arrayUnion(token);
+      pubPayload.fcmToken = token;
+      pubPayload.fcmUpdatedAt = serverTimestamp();
+    }
+    await setDoc(doc(db, 'users', state.user.uid), pubPayload, { merge: true }).catch(e => console.warn('[FCM] users push update failed:', e));
 
     callGasBackend({
       action: 'REGISTER_PUSH_TOKEN',
@@ -23190,6 +23215,42 @@ export async function renderAdminNotifications() {
 
   if (refreshHistoryBtn) {
     refreshHistoryBtn.onclick = () => fetchHistory();
+  }
+
+  const testPushBtn = document.getElementById('btn-admin-test-push');
+  if (testPushBtn) {
+    testPushBtn.onclick = async () => {
+      if (!state.user?.uid) {
+        toast('Sign in as admin to test push notifications.', 'warning');
+        return;
+      }
+      const origHtml = testPushBtn.innerHTML;
+      testPushBtn.disabled = true;
+      testPushBtn.textContent = 'Sending...';
+      try {
+        const res = await callGasBackend({
+          action: 'TEST_FCM_PUSH',
+          uid: state.user.uid
+        });
+        const data = res?.result || res || {};
+        if (data.success && Number(data.sentCount) > 0) {
+          toast(`Sent to ${data.sentCount} device(s)`, 'success');
+        } else if (Number(data.tokenCount) === 0) {
+          toast('No FCM tokens registered for your account. Enable Push Notifications first.', 'warning');
+        } else {
+          const errDetail = Array.isArray(data.fcmErrors) && data.fcmErrors.length > 0
+            ? data.fcmErrors.join('; ')
+            : (data.error || res?.error || 'FCM delivery failed');
+          toast(`Push test failed (${data.sentCount || 0}/${data.tokenCount || 0}): ${errDetail}`, 'error');
+        }
+      } catch (err) {
+        console.error('[Test Push] Error:', err);
+        toast(`Test Push error: ${err?.message || err}`, 'error');
+      } finally {
+        testPushBtn.disabled = false;
+        testPushBtn.innerHTML = origHtml;
+      }
+    };
   }
 
   if (form) {
