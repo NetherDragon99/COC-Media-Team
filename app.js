@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.1.8';
+export const APP_VERSION = '3.2.0';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -714,12 +714,27 @@ function normalizeTask(raw) {
     gracePoints: 5
   };
 
+  const earlyBonus = raw.earlyBonus && typeof raw.earlyBonus === 'object' ? {
+    enabled: Boolean(raw.earlyBonus.enabled),
+    untilMinutes: Number(raw.earlyBonus.untilMinutes) || 0,
+    points: typeof raw.earlyBonus.points === 'number' ? raw.earlyBonus.points : (Number(raw.earlyBonus.points) || (typeof raw.points === 'number' ? raw.points : 5))
+  } : null;
+
+  const grace = raw.grace && typeof raw.grace === 'object' ? {
+    enabled: Boolean(raw.grace.enabled),
+    untilMinutes: Number(raw.grace.untilMinutes) || 0,
+    penaltyPoints: Math.max(0, Number(raw.grace.penaltyPoints) || 0),
+    fineAmountEGP: Math.max(0, Number(raw.grace.fineAmountEGP) || 0)
+  } : null;
+
   const missedPenalty = raw.missedPenalty ? {
     enabled: Boolean(raw.missedPenalty.enabled),
-    points: typeof raw.missedPenalty.points === 'number' ? raw.missedPenalty.points : (Number(raw.missedPenalty.points) || 5)
+    points: typeof raw.missedPenalty.points === 'number' ? raw.missedPenalty.points : (Number(raw.missedPenalty.points) || 5),
+    fineAmountEGP: Math.max(0, Number(raw.missedPenalty.fineAmountEGP) || 0)
   } : {
     enabled: false,
-    points: 5
+    points: 5,
+    fineAmountEGP: 0
   };
 
   const assignedUids = Array.isArray(raw.assignedUids) ? raw.assignedUids : [];
@@ -736,6 +751,8 @@ function normalizeTask(raw) {
     color: raw.color || '',
     points: typeof raw.points === 'number' ? raw.points : 5,
     tieredRewards,
+    ...(earlyBonus ? { earlyBonus } : {}),
+    ...(grace ? { grace } : {}),
     missedPenalty,
     claimPolicy,
     assignedUids,
@@ -841,6 +858,111 @@ export async function dispatchBackendSessionMutation(action, sessionId = null, e
   } catch (e) {
     console.warn('[Watchdog Dispatch] Error constructing payload:', e);
   }
+}
+
+export async function dispatchBackendTaskMutation(action, taskId = null, extraPayload = {}) {
+  try {
+    callGasBackend({
+      action: action || 'TASK_UPDATED',
+      taskId: taskId || null,
+      ...extraPayload
+    }).catch(err => {
+      console.warn('[Task Watchdog Dispatch] Async notification failed:', err);
+    });
+  } catch (e) {
+    console.warn('[Task Watchdog Dispatch] Error constructing payload:', e);
+  }
+}
+
+export async function submitTaskThroughBackend(task, answers = [], comment = '') {
+  if (!task || !state.user) {
+    throw new Error('Please sign in to submit tasks');
+  }
+  const currentWin = getTaskWindow(task, serverNow());
+  if (currentWin?.state !== 'open' && currentWin?.state !== 'grace') {
+    throw new Error('Submission closed: deadline and grace period have expired.');
+  }
+
+  const occurrenceKey = (task.schedule?.type === 'once') ? 'once' : (currentWin?.occurrenceKey || 'once');
+  const policy = task.claimPolicy || 'once_per_cycle';
+  let subId;
+  let fallbackPoints = currentWin.pointsForNow;
+
+  if (policy === 'milestone') {
+    const hasPriorSub = (state.submissions || []).some(s => s.taskId === task.id && s.uid === state.user.uid);
+    if (hasPriorSub) {
+      fallbackPoints = 0;
+    }
+    subId = `${task.id}_${state.user.uid}_milestone`;
+  } else if (policy === 'every_submission') {
+    subId = `${task.id}_${state.user.uid}_${Date.now()}`;
+  } else {
+    subId = `${task.id}_${state.user.uid}_${occurrenceKey}`;
+  }
+
+  const cleanComment = (comment || '').trim();
+  const gasRes = await callGasBackend({
+    action: 'PROCESS_TASK_SUBMISSION',
+    taskId: task.id,
+    taskTitle: task.title,
+    uid: state.user.uid,
+    userName: state.user.name || state.user.displayName || 'Member',
+    userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+    occurrenceKey,
+    subId,
+    answers,
+    comment: cleanComment
+  });
+
+  if (gasRes && gasRes.ok === false) {
+    throw new Error(gasRes.error || 'Task submission rejected by server.');
+  }
+
+  if (gasRes && gasRes.result) {
+    return gasRes.result;
+  }
+
+  // Fallback for offline/non-CORS environments where GAS response is opaque/skipped
+  if (db) {
+    const batch = writeBatch(db);
+    const subRef = doc(db, 'submissions', subId);
+    const userRef = doc(db, 'users', state.user.uid);
+
+    batch.set(subRef, {
+      taskId: task.id,
+      taskTitle: task.title,
+      uid: state.user.uid,
+      userName: state.user.name || state.user.displayName || 'Member',
+      userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+      occurrenceKey,
+      answers,
+      inGrace: Boolean(currentWin.inGrace),
+      comment: cleanComment,
+      pointsAwarded: fallbackPoints,
+      status: 'approved',
+      submittedAt: serverTimestamp()
+    });
+
+    const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, fallbackPoints, serverNow());
+    batch.update(userRef, {
+      ...pointsUpdate,
+      lastOpId: subId,
+      updatedAt: serverTimestamp()
+    });
+
+    await batch.commit();
+  }
+
+  return {
+    subId,
+    occurrenceKey,
+    status: currentWin.inGrace ? 'grace' : 'on_time',
+    pointsAwarded: fallbackPoints,
+    penaltyPts: Number(task.grace?.penaltyPoints) || 0,
+    fineEGP: Number(task.grace?.fineAmountEGP) || 0,
+    inGrace: Boolean(currentWin.inGrace),
+    inEarlyBonus: false
+  };
 }
 
 export function persistToLocalCache(immediate = false) {
@@ -1184,7 +1306,10 @@ export function normalizeUser(raw) {
   const uid = raw.uid || '';
   const isDefault = isDefaultEmailProfilePic(rawAvatar);
   const avatarUrl = isDefault ? getDeterministicPresetAvatar(uid || name) : rawAvatar;
-  const penalties = typeof raw.penalties === 'number' ? raw.penalties : (typeof raw.totalPenalties === 'number' ? raw.totalPenalties : 0);
+  const penalties = Math.max(0, typeof raw.penalties === 'number' ? raw.penalties : (typeof raw.totalPenalties === 'number' ? raw.totalPenalties : (typeof raw.penaltyPoints === 'number' ? raw.penaltyPoints : 0)));
+  const points = Math.max(0, typeof raw.points === 'number' ? raw.points : (typeof raw.totalPoints === 'number' ? raw.totalPoints : 0));
+  const finesDue = Math.max(0, Number(raw.finesDue ?? raw.fines ?? raw.quotas ?? 0) || 0);
+  const netPts = Math.max(0, typeof raw.netPts === 'number' ? raw.netPts : (points - penalties));
   const badges = Array.isArray(raw.badges) ? raw.badges : [];
   const badgeIds = Array.isArray(raw.badgeIds)
     ? raw.badgeIds
@@ -1198,9 +1323,15 @@ export function normalizeUser(raw) {
     photoURL: avatarUrl,
     role: raw.role || 'member',
     isAdmin: Boolean(raw.isAdmin || raw.role === 'admin'),
-    points: typeof raw.points === 'number' ? raw.points : 0,
+    points,
+    totalPoints: points,
+    totalEarned: Math.max(0, typeof raw.totalEarned === 'number' ? raw.totalEarned : points),
     penalties,
+    penaltyPoints: penalties,
     totalPenalties: penalties,
+    finesDue,
+    fines: finesDue,
+    netPts,
     monthBucket: raw.monthBucket || '',
     monthPoints: typeof raw.monthPoints === 'number' ? raw.monthPoints : 0,
     weekBucket: raw.weekBucket || '',
@@ -1570,34 +1701,40 @@ function normalizeTaskTiers(task) {
     }
   }
 
-  let grace = { enabled: false, untilMinutes: 0 };
+  let grace = { enabled: false, untilMinutes: 0, penaltyPoints: 0, fineAmountEGP: 0 };
   if (task.grace && typeof task.grace === 'object') {
     grace = {
       enabled: Boolean(task.grace.enabled),
-      untilMinutes: Number(task.grace.untilMinutes) || 0
+      untilMinutes: Number(task.grace.untilMinutes) || 0,
+      penaltyPoints: Math.max(0, Number(task.grace.penaltyPoints) || 0),
+      fineAmountEGP: Math.max(0, Number(task.grace.fineAmountEGP) || 0)
     };
   } else if (task.tieredRewards && task.tieredRewards.graceMinutes) {
     const gMin = Number(task.tieredRewards.graceMinutes) || 0;
     if (gMin > 0 && durationMinutes && (task.tieredRewards.enabled !== false)) {
       grace = {
         enabled: true,
-        untilMinutes: durationMinutes + gMin
+        untilMinutes: durationMinutes + gMin,
+        penaltyPoints: 0,
+        fineAmountEGP: 0
       };
     }
   }
 
-  let missedPenalty = { enabled: false, points: 0 };
+  let missedPenalty = { enabled: false, points: 0, fineAmountEGP: 0 };
   if (task.missedPenalty && typeof task.missedPenalty === 'object') {
     missedPenalty = {
       enabled: Boolean(task.missedPenalty.enabled),
-      points: Number(task.missedPenalty.points) || 0
+      points: Number(task.missedPenalty.points) || 0,
+      fineAmountEGP: Math.max(0, Number(task.missedPenalty.fineAmountEGP) || 0)
     };
   } else if (task.tieredRewards) {
     const p = Number(task.tieredRewards.missedPenaltyPoints || task.tieredRewards.missedPenalty?.penaltyPoints || task.tieredRewards.missedPenalty?.points) || 0;
     if (p > 0 && (task.tieredRewards.enabled !== false)) {
       missedPenalty = {
         enabled: true,
-        points: p
+        points: p,
+        fineAmountEGP: 0
       };
     }
   }
@@ -9353,7 +9490,7 @@ function setupSubmissionsListeners() {
       collection(db, 'submissions'),
       where('uid', '==', state.user.uid),
       orderBy('submittedAt', 'desc'),
-      limit(200)
+      limit(150)
     );
     const unsubMySubs = onSnapshot(qUserSubs, (snapshot) => {
       state.mySubmissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
@@ -9375,7 +9512,7 @@ function setupSubmissionsListeners() {
       const qAllSubs = query(
         collection(db, 'submissions'),
         orderBy('submittedAt', 'desc'),
-        limit(state.adminSubmissionsLimit || 50)
+        limit(state.adminSubmissionsLimit || 100)
       );
       const unsubAllSubs = onSnapshot(qAllSubs, (snapshot) => {
         state.submissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
@@ -9460,7 +9597,7 @@ function setupAttendanceListeners() {
     try {
       const qAllLogs = query(
         collection(db, 'attendance_logs'),
-        limit(500)
+        limit(150)
       );
       const unsubAllLogs = onSnapshot(qAllLogs, (snapshot) => {
         const logs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
@@ -9469,6 +9606,9 @@ function setupAttendanceListeners() {
         state.attendanceLogs = Array.from(mergedMap.values());
         if (adminSessionsFilter === 'recent_logs') {
           renderRecentLogs();
+        }
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          window.refreshCurrentRosterView();
         }
         renderTodayCheckIns(state.attendanceLogs);
         updateUserTodayAttendanceBadge();
@@ -9481,7 +9621,7 @@ function setupAttendanceListeners() {
   // Pure onSnapshot sync for attendance_records
   try {
     const qRecords = (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked)
-      ? query(collection(db, 'attendance_records'), limit(500))
+      ? query(collection(db, 'attendance_records'), limit(150))
       : query(collection(db, 'attendance_records'), where('uid', '==', state.user.uid), limit(50));
     const unsubRecords = onSnapshot(qRecords, (snapshot) => {
       const records = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
@@ -9498,15 +9638,21 @@ function setupAttendanceListeners() {
       if (adminSessionsFilter === 'recent_logs') {
         renderRecentLogs();
       }
+      if (typeof window.refreshCurrentRosterView === 'function') {
+        window.refreshCurrentRosterView();
+      }
       updateUserTodayAttendanceBadge();
     }, (err) => {
       try {
-        const qFallback = query(collection(db, 'attendance_records'), limit(500));
+        const qFallback = query(collection(db, 'attendance_records'), limit(150));
         const unsubFallback = onSnapshot(qFallback, (s) => {
           const records = s.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
           state.attendanceRecords = records;
           renderTodayCheckIns(records);
           if (adminSessionsFilter === 'recent_logs') renderRecentLogs();
+          if (typeof window.refreshCurrentRosterView === 'function') {
+            window.refreshCurrentRosterView();
+          }
         }, () => {});
         setFsListener('attendance_records_fallback', unsubFallback);
         listeners.add('attendance_records', unsubFallback);
@@ -9556,6 +9702,7 @@ function setupMembersListeners() {
             setupNotificationsListener();
             setupUsersPrivateListener();
             setupWaiverRequestsListener();
+            setupMissedPenaltiesListener();
           }
         }
       }
@@ -9575,26 +9722,11 @@ function invalidateEgpCache(uid) {
 }
 
 async function getMemberDerivedEgpBalance(uid, forceRefresh = false) {
-  if (!uid || !db) return 0;
+  if (!uid) return 0;
   const privDoc = usersPrivate.get(uid);
-  const adminAdj = (privDoc && typeof privDoc.finesEGP === 'number') ? privDoc.finesEGP : 0;
-
-  let cached = egpAggregateCache.get(uid);
-  if (forceRefresh || !cached || (Date.now() - cached.timestamp > 30000)) {
-    try {
-      const aggSnap = await getAggregateFromServer(
-        query(collection(db, 'attendance_logs'), where('uid', '==', uid)),
-        { total: sum('fineEGP') }
-      );
-      const fineSum = Number(aggSnap?.data()?.total) || 0;
-      cached = { fineSum, timestamp: Date.now() };
-      egpAggregateCache.set(uid, cached);
-    } catch (err) {
-      console.warn('Failed to fetch attendance fine aggregate for', uid, err);
-      cached = cached || { fineSum: 0, timestamp: Date.now() };
-    }
-  }
-  return adminAdj + (cached?.fineSum || 0);
+  const userDoc = usersMap.get(uid) || (state.user?.uid === uid ? state.user : null);
+  const authoritative = privDoc?.finesDue ?? privDoc?.finesEGP ?? privDoc?.fines ?? userDoc?.finesDue ?? userDoc?.fines ?? userDoc?.quotas ?? 0;
+  return Math.max(0, Number(authoritative) || 0);
 }
 
 function setupUsersPrivateListener() {
@@ -9719,9 +9851,47 @@ function setupWaiverRequestsListener() {
         const pendingCount = state.waiverRequests.filter(w => w.status === 'pending').length;
         updateWaiversBadge(pendingCount);
         if (typeof renderAdminWaivers === 'function') renderAdminWaivers();
+        if (typeof window.refreshCurrentRosterView === 'function') window.refreshCurrentRosterView();
       }, (err) => console.warn('Admin waiver requests listener:', err));
       listeners.add('waiver_requests', unsubAll);
     } catch (e) { console.warn('Error setting up admin waiver requests listener:', e); }
+  }
+}
+
+function setupMissedPenaltiesListener() {
+  if (!db || !state.user?.uid) {
+    listeners.clear('missed_penalties');
+    state.missedPenalties = [];
+    return;
+  }
+
+  const isAdmin = Boolean(
+    state.user.isAdmin ||
+    state.user.role === 'admin' ||
+    state.isAdminUnlocked ||
+    usersMap.get(state.user.uid)?.isAdmin ||
+    usersMap.get(state.user.uid)?.role === 'admin'
+  );
+
+  listeners.clear('missed_penalties');
+
+  if (isAdmin) {
+    try {
+      const qMissed = query(
+        collection(db, 'missed_penalties'),
+        limit(150)
+      );
+      const unsubMissed = onSnapshot(qMissed, (snapshot) => {
+        const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        state.missedPenalties = list;
+        if (!state.appliedMissedPenalties) state.appliedMissedPenalties = new Set();
+        list.forEach(item => {
+          if (item.id) state.appliedMissedPenalties.add(item.id);
+        });
+        if (typeof renderAdminMissedTasks === 'function') renderAdminMissedTasks();
+      }, (err) => console.warn('Admin missed_penalties listener:', err));
+      listeners.add('missed_penalties', unsubMissed);
+    } catch (e) { console.warn('Error setting up missed_penalties listener:', e); }
   }
 }
 
@@ -10839,6 +11009,7 @@ function initFirestoreListeners() {
   setupMembersListeners();
   setupUsersPrivateListener();
   setupWaiverRequestsListener();
+  setupMissedPenaltiesListener();
 
   setupNotificationsListener();
 
@@ -11284,58 +11455,18 @@ function openTaskDetailsModal(taskId) {
       if (hasError) return false;
 
       try {
-        const currentWin = getTaskWindow(task, serverNow());
-        if (currentWin?.state !== 'open' && currentWin?.state !== 'grace') {
-          toast('Submission closed: deadline and grace period have expired.', 'error');
-          return false;
-        }
-
-        const occurrenceKey = (task.schedule?.type === 'once') ? 'once' : (currentWin?.occurrenceKey || 'once');
-        const policy = task.claimPolicy || 'once_per_cycle';
-        let subId;
-        let pointsAwarded = currentWin.pointsForNow;
-
-        if (policy === 'milestone') {
-          const hasPriorSub = (state.submissions || []).some(s => s.taskId === task.id && s.uid === state.user.uid);
-          if (hasPriorSub) {
-            pointsAwarded = 0;
-          }
-          subId = `${task.id}_${state.user.uid}_milestone`;
-        } else if (policy === 'every_submission') {
-          subId = `${task.id}_${state.user.uid}_${Date.now()}`;
-        } else {
-          subId = `${task.id}_${state.user.uid}_${occurrenceKey}`;
-        }
         const comment = bodyEl.querySelector('#task-detail-comment')?.value || '';
-
-        const batch = writeBatch(db);
-        const subRef = doc(db, 'submissions', subId);
-        const userRef = doc(db, 'users', state.user.uid);
-
-        batch.set(subRef, {
-          taskId: task.id,
-          taskTitle: task.title,
-          uid: state.user.uid,
-          userName: state.user.name || state.user.displayName || 'Member',
-          userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-          occurrenceKey,
-          answers,
-          inGrace: Boolean(currentWin.inGrace),
-          comment: comment.trim(),
-          pointsAwarded,
-          submittedAt: serverTimestamp()
-        });
-
-        const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, pointsAwarded, serverNow());
-        batch.update(userRef, {
-          ...pointsUpdate,
-          lastOpId: subId,
-          updatedAt: serverTimestamp()
-        });
-
-        await batch.commit();
-        toast(`Task submitted! +${pointsAwarded} pts awarded${currentWin.inGrace ? ' (Grace Period)' : ''}`, 'success');
-        renderTasks();
+        const decision = await submitTaskThroughBackend(task, answers, comment);
+        const ptsAwarded = typeof decision?.pointsAwarded === 'number' ? decision.pointsAwarded : 0;
+        const penPts = Number(decision?.penaltyPts) || 0;
+        const fineAmt = Number(decision?.fineEGP) || 0;
+        const extraParts = [];
+        if (decision?.inEarlyBonus) extraParts.push('Early Bonus');
+        else if (decision?.inGrace) extraParts.push('Grace Period');
+        if (penPts > 0) extraParts.push(`-${penPts} penalty pts`);
+        if (fineAmt > 0) extraParts.push(`-${fineAmt} EGP fine`);
+        const suffix = extraParts.length > 0 ? ` (${extraParts.join(' • ')})` : '';
+        toast(`Task submitted! +${ptsAwarded} pts awarded${suffix}`, 'success');
         return true;
       } catch (err) {
         console.error('Submission error:', err);
@@ -12000,105 +12131,52 @@ async function handleAttendanceCheckIn(sessionId) {
   const logId = `${session.id}_${occurrenceKey}_${state.user.uid}`;
 
   try {
-    const nowIso = new Date(nowMs).toISOString();
-
-    const logPayload = {
-      id: logId,
-      sessionId: session.id,
-      sessionTitle: session.title,
-      uid: state.user.uid,
-      userId: state.user.uid,
-      userName: state.user.name || state.user.displayName || 'Member',
-      displayName: state.user.name || state.user.displayName || 'Member',
-      userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-      occurrenceKey,
-      occurrenceStart: calc.occurrenceStart,
-      checkedInAt: nowIso,
-      checkInTimestamp: nowMs,
-      timestamp: nowIso,
-      status: isEarly ? 'early' : calc.status,
-      delaySeconds: calc.delaySeconds || 0,
-      earlyMinutes: calc.earlyMinutes || 0,
-      lateMinutes: calc.lateMinutes || 0,
-      lateSeconds: calc.lateSeconds || 0,
-      penalty: penaltyPts,
-      fineEGP: fineEGP,
-      pointsDelta,
-      egpDelta,
-      appliedTierLabel: calc.appliedTierLabel || '',
-      penaltyUnit: session.penaltyUnit || 'minutes',
-      isEarly,
-      earlyBonusPoints,
-      earlyBonusEGP,
-      ledgerSynced: true
-    };
-
-    // FIX 4: Purely dispatch PROCESS_CHECKIN to GAS backend with Admin OAuth to avoid permission errors
-    await callGasBackend({
+    // Dispatch PROCESS_CHECKIN to GAS backend for authoritative server-time evaluation & Firestore update.
+    // All active UI sections and member balances update reactively via Firestore onSnapshot.
+    const gasRes = await callGasBackend({
       action: 'PROCESS_CHECKIN',
       sessionId: session.id,
       sessionTitle: session.title,
       occurrenceKey,
       sessionStartMs: calc.occurrenceStart,
-      checkInTimestamp: nowMs,
       uid: state.user.uid,
       userName: state.user.name || state.user.displayName || 'Member',
       userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+      logId,
+      isAdminOverride: false
+    });
+
+    if (gasRes && gasRes.ok === false) {
+      throw new Error(gasRes.error || 'Check-in rejected by server');
+    }
+
+    const decision = gasRes?.result || {
+      status: isEarly ? 'early' : calc.status,
       pointsDelta,
       egpDelta,
-      nowMs,
-      logId
-    });
+      penalty: penaltyPts,
+      fineEGP,
+      earlyBonusPoints,
+      earlyBonusEGP
+    };
 
-    const optLog = normalizeAttendanceLog({
-      id: logId,
-      ...logPayload,
-      checkedInAt: { toMillis: () => nowMs },
-      checkInTimestamp: { toMillis: () => nowMs }
-    });
-    state.myAttendanceLogs = [optLog, ...(state.myAttendanceLogs || []).filter(l => l.id !== logId)];
-    state.attendanceLogs = [optLog, ...(state.attendanceLogs || []).filter(l => l.id !== logId)];
-
-    const bonusPts = earlyBonusPoints > 0 ? earlyBonusPoints : (pointsDelta > 0 ? pointsDelta : 0);
-    const penaltyPointsVal = penaltyPts > 0 ? penaltyPts : (pointsDelta < 0 ? Math.abs(pointsDelta) : 0);
-    const bonusEGPVal = earlyBonusEGP > 0 ? earlyBonusEGP : (egpDelta > 0 ? egpDelta : 0);
-    const penaltyEGPVal = fineEGP > 0 ? fineEGP : (egpDelta < 0 ? Math.abs(egpDelta) : 0);
-
-    if (pointsDelta !== 0) {
-      state.user.points = (state.user.points || 0) + pointsDelta;
-      state.user.totalPoints = (state.user.totalPoints || 0) + pointsDelta;
-      state.user.monthPoints = (state.user.monthPoints || 0) + pointsDelta;
-      state.user.weekPoints = (state.user.weekPoints || 0) + pointsDelta;
-    }
-    // Non-Negotiable Math Rule: Bonus points NEVER reduce historical penalties!
-    state.user.penalties = Math.max(0, (state.user.penalties || 0) + penaltyPointsVal);
-    const curFines = Math.max(0, state.user.finesDue ?? state.user.fines ?? state.user.quotas ?? 0);
-    state.user.finesDue = Math.max(0, curFines - bonusEGPVal + penaltyEGPVal);
-    state.user.fines = state.user.finesDue;
-    state.user.netPts = Math.max(0, (state.user.points || 0) - (state.user.penalties || 0));
-    updateProfileUI();
-    renderLeaderboard();
-
-    persistToLocalCache(true);
-    renderAttendanceView();
-    renderAttendanceLogs();
-    renderProfileAttendance();
-    renderProfileTransactions();
-    updateUserTodayAttendanceBadge();
-
-    getMemberDerivedEgpBalance(state.user.uid, true).then(() => { updateProfileUI(); });
+    const decStatus = decision.status || (isEarly ? 'early' : calc.status);
+    const decEarlyPts = Number(decision.earlyBonusPoints ?? earlyBonusPoints) || 0;
+    const decEarlyEGP = Number(decision.earlyBonusEGP ?? earlyBonusEGP) || 0;
+    const decPenaltyPts = Number(decision.penalty ?? penaltyPts) || 0;
+    const decFineEGP = Number(decision.fineEGP ?? fineEGP) || 0;
 
     let successMsg = 'Checked in successfully! (On Time • 0 penalty)';
-    if (isEarly && (earlyBonusPoints > 0 || earlyBonusEGP > 0)) {
+    if (decStatus === 'early' && (decEarlyPts > 0 || decEarlyEGP > 0)) {
       const bParts = [];
-      if (earlyBonusPoints > 0) bParts.push(`+${earlyBonusPoints} pts`);
-      if (earlyBonusEGP > 0) bParts.push(`+${earlyBonusEGP} EGP`);
+      if (decEarlyPts > 0) bParts.push(`+${decEarlyPts} pts`);
+      if (decEarlyEGP > 0) bParts.push(`+${decEarlyEGP} EGP`);
       successMsg = `Checked in early! ${bParts.join(' | ')} awarded!`;
-    } else if (calc.status === 'late') {
+    } else if (decStatus === 'late') {
       const pParts = [];
-      if (penaltyPts > 0) pParts.push(`-${penaltyPts} pts`);
-      if (fineEGP > 0) pParts.push(`-${fineEGP} EGP`);
-      successMsg = `Checked in late. ${pParts.join(' | ')} applied.`;
+      if (decPenaltyPts > 0) pParts.push(`-${decPenaltyPts} pts`);
+      if (decFineEGP > 0) pParts.push(`-${decFineEGP} EGP`);
+      successMsg = `Checked in late. ${pParts.join(' | ') || '0 pts'} applied.`;
     }
     toast(successMsg, 'success');
   } catch (err) {
@@ -14388,6 +14466,7 @@ export function renderAdminTasks() {
           const nextArchived = !task?.archived;
           await updateDoc(doc(db, 'tasks', taskId), { archived: nextArchived, updatedAt: serverTimestamp() });
           if (task) task.archived = nextArchived;
+          dispatchBackendTaskMutation('TASK_UPDATED', taskId, { archived: nextArchived });
           renderAdminTasks();
           renderTasks();
           toast(nextArchived ? 'Task archived' : 'Task unarchived', 'success');
@@ -14401,6 +14480,7 @@ export function renderAdminTasks() {
         try {
           await deleteDoc(doc(db, 'tasks', taskId));
           state.tasks = (state.tasks || []).filter(t => t.id !== taskId);
+          dispatchBackendTaskMutation('TASK_UPDATED', taskId, { deleted: true });
           renderAdminTasks();
           renderTasks();
           toast('Task deleted', 'success');
@@ -14531,9 +14611,12 @@ function openAdminTaskModal(taskId = null) {
   const graceMins = normTiers.grace.untilMinutes > 0 ? normTiers.grace.untilMinutes : currentDurationMinutes + 1440;
   let graceDateStr = toDateStr(schedStartMs + graceMins * 60000);
   let graceTimeStr = toTimeStr(schedStartMs + graceMins * 60000);
+  let gracePenaltyPoints = normTiers.grace.penaltyPoints || 0;
+  let graceFineEGP = normTiers.grace.fineAmountEGP || 0;
 
   let missedPenaltyEnabled = Boolean(normTiers.missedPenalty.enabled);
   let missedPenaltyPoints = normTiers.missedPenalty.points || 5;
+  let missedPenaltyFineEGP = normTiers.missedPenalty.fineAmountEGP || 0;
 
   let weeklyDays = new Set(Array.isArray(sched.days) ? sched.days : ['Sat', 'Sun']);
   let monthlyDates = new Set(Array.isArray(sched.dates) ? sched.dates.map(Number).filter(n => n >= 1 && n <= 31) : [1]);
@@ -14665,6 +14748,16 @@ function openAdminTaskModal(taskId = null) {
             </div>
             <div id="adm-grace-container" class="${graceEnabled ? '' : 'hidden'} space-y-2.5 pt-2 border-t border-white/10">
               <div id="mount-adm-grace-field"></div>
+              <div class="grid grid-cols-2 gap-2.5 pt-1">
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Late Penalty Pts (Optional)</label>
+                  <input id="adm-task-grace-penalty-pts" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${gracePenaltyPoints}" placeholder="0" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Late Fine EGP (Optional)</label>
+                  <input id="adm-task-grace-fine-egp" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${graceFineEGP}" placeholder="0" />
+                </div>
+              </div>
               <div id="adm-grace-words" class="hidden"></div>
             </div>
           </div>
@@ -14678,9 +14771,17 @@ function openAdminTaskModal(taskId = null) {
               </div>
               <div id="mount-switch-missed"></div>
             </div>
-            <div id="adm-missed-container" class="${missedPenaltyEnabled ? '' : 'hidden'} pt-2 border-t border-white/10">
-              <label class="block text-[11px] text-neutral-300 mb-1">Penalty Points</label>
-              <input id="adm-task-missed-pts" type="number" inputmode="numeric" min="1" class="ios-input font-mono" value="${missedPenaltyPoints}" placeholder="5" />
+            <div id="adm-missed-container" class="${missedPenaltyEnabled ? '' : 'hidden'} pt-2 border-t border-white/10 space-y-2.5">
+              <div class="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Penalty Points</label>
+                  <input id="adm-task-missed-pts" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${missedPenaltyPoints}" placeholder="5" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Fine EGP (Optional)</label>
+                  <input id="adm-task-missed-fine-egp" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${missedPenaltyFineEGP}" placeholder="0" />
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -15034,8 +15135,14 @@ function openAdminTaskModal(taskId = null) {
 
     const earlyPtsInp = bodyEl.querySelector('#adm-early-pts');
     if (earlyPtsInp) earlyPtsInp.oninput = e => { earlyBonusPoints = Number(e.target.value) || 15; };
+    const gracePenInp = bodyEl.querySelector('#adm-task-grace-penalty-pts');
+    if (gracePenInp) gracePenInp.oninput = e => { gracePenaltyPoints = Math.max(0, Number(e.target.value) || 0); };
+    const graceFineInp = bodyEl.querySelector('#adm-task-grace-fine-egp');
+    if (graceFineInp) graceFineInp.oninput = e => { graceFineEGP = Math.max(0, Number(e.target.value) || 0); };
     const missedPtsInp = bodyEl.querySelector('#adm-task-missed-pts');
-    if (missedPtsInp) missedPtsInp.oninput = e => { missedPenaltyPoints = Number(e.target.value) || 5; };
+    if (missedPtsInp) missedPtsInp.oninput = e => { missedPenaltyPoints = Math.max(0, Number(e.target.value) || 0); };
+    const missedFineInp = bodyEl.querySelector('#adm-task-missed-fine-egp');
+    if (missedFineInp) missedFineInp.oninput = e => { missedPenaltyFineEGP = Math.max(0, Number(e.target.value) || 0); };
 
     renderSchedSubform();
     renderQuestionsList();
@@ -15389,7 +15496,7 @@ function openAdminTaskModal(taskId = null) {
         };
       }
 
-      let finalGrace = { enabled: false, untilMinutes: 0 };
+      let finalGrace = { enabled: false, untilMinutes: 0, penaltyPoints: 0, fineAmountEGP: 0 };
       if (!currentIsPermanent && graceEnabled) {
         const grMs = dtToMs(graceDateStr, graceTimeStr);
         const grUntilMinutes = Math.round((grMs - startDateTimeMs) / 60000);
@@ -15397,14 +15504,20 @@ function openAdminTaskModal(taskId = null) {
           toast('The grace cutoff must be after the deadline', 'error');
           return false;
         }
-        finalGrace = { enabled: true, untilMinutes: grUntilMinutes };
+        finalGrace = {
+          enabled: true,
+          untilMinutes: grUntilMinutes,
+          penaltyPoints: Math.max(0, Number(gracePenaltyPoints) || 0),
+          fineAmountEGP: Math.max(0, Number(graceFineEGP) || 0)
+        };
       }
 
-      let finalMissedPenalty = { enabled: false, points: 0 };
+      let finalMissedPenalty = { enabled: false, points: 0, fineAmountEGP: 0 };
       if (!currentIsPermanent && missedPenaltyEnabled) {
         finalMissedPenalty = {
           enabled: true,
-          points: Number(missedPenaltyPoints) || 5
+          points: Math.max(0, Number(missedPenaltyPoints) || 0),
+          fineAmountEGP: Math.max(0, Number(missedPenaltyFineEGP) || 0)
         };
       }
 
@@ -15479,6 +15592,7 @@ function openAdminTaskModal(taskId = null) {
       };
 
       try {
+        let savedTaskId = state.editingTaskId;
         if (state.editingTaskId) {
           await updateDoc(doc(db, 'tasks', state.editingTaskId), {
             ...payload,
@@ -15486,12 +15600,14 @@ function openAdminTaskModal(taskId = null) {
           });
           toast('Task updated', 'success');
         } else {
-          await addDoc(collection(db, 'tasks'), {
+          const docRef = await addDoc(collection(db, 'tasks'), {
             ...payload,
             createdAt: serverTimestamp()
           });
+          savedTaskId = docRef?.id || null;
           toast('Task created', 'success');
         }
+        dispatchBackendTaskMutation('TASK_UPDATED', savedTaskId);
         return true;
       } catch (err) {
         console.error('Task save error:', err);
@@ -17335,8 +17451,9 @@ export function openAdminLogEditModal(logOrMember, session = null, occKey = null
       const sTitle = session?.title || logOrMember.sessionTitle || 'Session';
 
       try {
-        await callGasBackend({
+        const gasRes = await callGasBackend({
           action: 'UPDATE_LOG',
+          isAdminOverride: true,
           logId: targetLogId,
           uid: memberUid,
           status: newStatus,
@@ -17353,108 +17470,74 @@ export function openAdminLogEditModal(logOrMember, session = null, occKey = null
           userAvatar: prof.photoURL
         });
 
-        // Firestore direct write
-        try {
-          const batch = writeBatch(db);
-          const logPayload = {
-            id: targetLogId,
-            sessionId: sessId,
-            sessionTitle: sTitle,
-            occurrenceKey: targetOccKey,
-            uid: memberUid,
-            userId: memberUid,
-            userName: prof.displayName,
-            userAvatar: prof.photoURL,
-            status: newStatus,
-            points: newPoints,
-            pointsDelta: newPoints,
-            penalty: newPenalty,
-            fineEGP: newFine,
-            adminNote: newNote,
-            checkedInAt: arrivalIso,
-            timestamp: arrivalIso,
-            updatedAt: serverTimestamp()
-          };
-
-          batch.set(doc(db, 'attendance_logs', targetLogId), logPayload, { merge: true });
-          batch.set(doc(db, 'attendance_records', targetLogId), logPayload, { merge: true });
-
-          const penDiff = newPenalty - currentPenalty;
-          const fineDiff = newFine - currentFineEGP;
-          const ptsDiff = newPoints - currentPoints;
-
-          if (memberUid && (penDiff !== 0 || fineDiff !== 0 || ptsDiff !== 0)) {
-            const uDocSnap = await getDoc(doc(db, 'users', memberUid));
-            if (uDocSnap.exists()) {
-              const uData = uDocSnap.data();
-              const curPts = Number(uData.points) || 0;
-              const curPen = Number(uData.penalties) || 0;
-              const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
-
-              const nextPts = Math.max(0, curPts + ptsDiff);
-              const nextPen = Math.max(0, curPen + penDiff);
-              const nextFines = Math.max(0, curFines + fineDiff);
-              const nextNet = Math.max(0, nextPts - nextPen);
-
-              batch.update(doc(db, 'users', memberUid), {
-                points: nextPts,
-                penalties: nextPen,
-                finesDue: nextFines,
-                fines: nextFines,
-                netPts: nextNet,
-                updatedAt: serverTimestamp()
-              });
-            }
-          }
-
-          await batch.commit();
-        } catch (fsErr) {
-          console.warn('Firestore direct write fallback ignored:', fsErr);
+        if (gasRes && gasRes.ok === false) {
+          throw new Error(gasRes.error || 'Failed to update attendance record');
         }
 
-        // Memory update
-        const updatedObj = {
-          id: targetLogId,
-          sessionId: sessId,
-          sessionTitle: sTitle,
-          occurrenceKey: targetOccKey,
-          uid: memberUid,
-          userId: memberUid,
-          userName: prof.displayName,
-          userAvatar: prof.photoURL,
-          status: newStatus,
-          points: newPoints,
-          pointsDelta: newPoints,
-          penalty: newPenalty,
-          fineEGP: newFine,
-          adminNote: newNote,
-          checkedInAt: arrivalIso,
-          timestamp: arrivalIso
-        };
+        // Only run client-side Firestore fallback when GAS is offline/opaque/skipped
+        if (gasRes?.sent_opaque || gasRes?.status === 'skipped' || gasRes?.status === 'sent_nonblocking') {
+          try {
+            const batch = writeBatch(db);
+            const logPayload = {
+              id: targetLogId,
+              sessionId: sessId,
+              sessionTitle: sTitle,
+              occurrenceKey: targetOccKey,
+              uid: memberUid,
+              userId: memberUid,
+              userName: prof.displayName,
+              userAvatar: prof.photoURL,
+              status: newStatus,
+              points: newPoints,
+              pointsDelta: newPoints,
+              penalty: newPenalty,
+              fineEGP: newFine,
+              adminNote: newNote,
+              checkedInAt: arrivalIso,
+              timestamp: arrivalIso,
+              updatedAt: serverTimestamp()
+            };
 
-        const upsertInList = (list) => {
-          if (!Array.isArray(list)) return;
-          const idx = list.findIndex(l => l.id === targetLogId);
-          if (idx >= 0) list[idx] = { ...list[idx], ...updatedObj };
-          else list.unshift(updatedObj);
-        };
-        upsertInList(state.attendanceLogs);
-        upsertInList(state.attendanceRecords);
-        upsertInList(state.myAttendanceLogs);
+            batch.set(doc(db, 'attendance_logs', targetLogId), logPayload, { merge: true });
+            batch.set(doc(db, 'attendance_records', targetLogId), logPayload, { merge: true });
 
-        const memObj = (state.members || []).find(m => m.uid === memberUid);
-        if (memObj) {
-          memObj.points = Math.max(0, (memObj.points || 0) + (newPoints - currentPoints));
-          memObj.penalties = Math.max(0, (memObj.penalties || 0) + (newPenalty - currentPenalty));
-          memObj.finesDue = Math.max(0, (memObj.finesDue || 0) + (newFine - currentFineEGP));
-          memObj.fines = memObj.finesDue;
-          memObj.netPts = Math.max(0, (memObj.points || 0) - (memObj.penalties || 0));
+            const penDiff = newPenalty - currentPenalty;
+            const fineDiff = newFine - currentFineEGP;
+            const ptsDiff = newPoints - currentPoints;
+
+            if (memberUid && (penDiff !== 0 || fineDiff !== 0 || ptsDiff !== 0)) {
+              const uData = usersMap.get(memberUid);
+              if (uData) {
+                const curPts = Number(uData.points) || 0;
+                const curPen = Number(uData.penalties) || 0;
+                const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
+
+                const nextPts = Math.max(0, curPts + ptsDiff);
+                const nextPen = Math.max(0, curPen + penDiff);
+                const nextFines = Math.max(0, curFines + fineDiff);
+                const nextNet = Math.max(0, nextPts - nextPen);
+
+                batch.update(doc(db, 'users', memberUid), {
+                  points: nextPts,
+                  totalPoints: nextPts,
+                  penalties: nextPen,
+                  penaltyPoints: nextPen,
+                  totalPenalties: nextPen,
+                  finesDue: nextFines,
+                  fines: nextFines,
+                  netPts: nextNet,
+                  updatedAt: serverTimestamp()
+                });
+              }
+            }
+
+            await batch.commit();
+          } catch (fsErr) {
+            console.warn('Firestore direct write fallback ignored:', fsErr);
+          }
         }
 
         toast('Attendance recorded and ledger synchronized', 'success');
-        if (typeof renderRecentLogs === 'function') renderRecentLogs();
-        if (typeof renderAdminAttendanceLogs === 'function') renderAdminAttendanceLogs();
-        renderAdminSessions();
         if (typeof window.refreshCurrentRosterView === 'function') {
           window.refreshCurrentRosterView();
         }
@@ -17634,8 +17717,9 @@ export function openManualAttendanceModal(defaultSessionId = null, defaultOccKey
       const logId = `manual_${sId}_${targetOccKey}_${memberUid}_${Date.now()}`;
 
       try {
-        await callGasBackend({
+        const gasRes = await callGasBackend({
           action: 'UPDATE_LOG',
+          isAdminOverride: true,
           logId,
           uid: memberUid,
           status: st,
@@ -17652,94 +17736,67 @@ export function openManualAttendanceModal(defaultSessionId = null, defaultOccKey
           userAvatar: prof.photoURL
         });
 
-        // Firestore direct write
-        try {
-          const batch = writeBatch(db);
-          const logData = {
-            id: logId,
-            sessionId: sId,
-            sessionTitle: sess.title,
-            occurrenceKey: targetOccKey,
-            uid: memberUid,
-            userId: memberUid,
-            userName: prof.displayName,
-            userAvatar: prof.photoURL,
-            status: st,
-            points: pts,
-            pointsDelta: pts,
-            penalty: pen,
-            fineEGP: fine,
-            adminNote: note,
-            checkedInAt: arrivalIso,
-            timestamp: arrivalIso,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          };
-          batch.set(doc(db, 'attendance_logs', logId), logData);
-          batch.set(doc(db, 'attendance_records', logId), logData);
-
-          const uDocSnap = await getDoc(doc(db, 'users', memberUid));
-          if (uDocSnap.exists()) {
-            const uData = uDocSnap.data();
-            const curPts = Number(uData.points) || 0;
-            const curPen = Number(uData.penalties) || 0;
-            const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
-
-            const nextPts = Math.max(0, curPts + pts);
-            const nextPen = Math.max(0, curPen + pen);
-            const nextFines = Math.max(0, curFines + fine);
-            const nextNet = Math.max(0, nextPts - nextPen);
-
-            batch.update(doc(db, 'users', memberUid), {
-              points: nextPts,
-              penalties: nextPen,
-              finesDue: nextFines,
-              fines: nextFines,
-              netPts: nextNet,
-              updatedAt: serverTimestamp()
-            });
-          }
-          await batch.commit();
-        } catch (fsErr) {
-          console.warn('Manual attendance Firestore direct write fallback ignored:', fsErr);
+        if (gasRes && gasRes.ok === false) {
+          throw new Error(gasRes.error || 'Failed to record manual attendance');
         }
 
-        // Memory update
-        const newRecord = {
-          id: logId,
-          sessionId: sId,
-          sessionTitle: sess.title,
-          occurrenceKey: targetOccKey,
-          uid: memberUid,
-          userId: memberUid,
-          userName: prof.displayName,
-          userAvatar: prof.photoURL,
-          status: st,
-          points: pts,
-          pointsDelta: pts,
-          penalty: pen,
-          fineEGP: fine,
-          adminNote: note,
-          checkedInAt: arrivalIso,
-          timestamp: arrivalIso
-        };
+        // Only run client-side Firestore fallback when GAS is offline/opaque/skipped
+        if (gasRes?.sent_opaque || gasRes?.status === 'skipped' || gasRes?.status === 'sent_nonblocking') {
+          try {
+            const batch = writeBatch(db);
+            const logData = {
+              id: logId,
+              sessionId: sId,
+              sessionTitle: sess.title,
+              occurrenceKey: targetOccKey,
+              uid: memberUid,
+              userId: memberUid,
+              userName: prof.displayName,
+              userAvatar: prof.photoURL,
+              status: st,
+              points: pts,
+              pointsDelta: pts,
+              penalty: pen,
+              fineEGP: fine,
+              adminNote: note,
+              checkedInAt: arrivalIso,
+              timestamp: arrivalIso,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            };
+            batch.set(doc(db, 'attendance_logs', logId), logData);
+            batch.set(doc(db, 'attendance_records', logId), logData);
 
-        if (state.attendanceLogs) state.attendanceLogs.unshift(newRecord);
-        if (state.attendanceRecords) state.attendanceRecords.unshift(newRecord);
-        if (state.myAttendanceLogs && state.user?.uid === memberUid) state.myAttendanceLogs.unshift(newRecord);
+            const uData = usersMap.get(memberUid);
+            if (uData) {
+              const curPts = Number(uData.points) || 0;
+              const curPen = Number(uData.penalties) || 0;
+              const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
 
-        if (mem) {
-          mem.points = Math.max(0, (mem.points || 0) + pts);
-          mem.penalties = Math.max(0, (mem.penalties || 0) + pen);
-          mem.finesDue = Math.max(0, (mem.finesDue || 0) + fine);
-          mem.fines = mem.finesDue;
-          mem.netPts = Math.max(0, (mem.points || 0) - (mem.penalties || 0));
+              const nextPts = Math.max(0, curPts + pts);
+              const nextPen = Math.max(0, curPen + pen);
+              const nextFines = Math.max(0, curFines + fine);
+              const nextNet = Math.max(0, nextPts - nextPen);
+
+              batch.update(doc(db, 'users', memberUid), {
+                points: nextPts,
+                totalPoints: nextPts,
+                penalties: nextPen,
+                penaltyPoints: nextPen,
+                totalPenalties: nextPen,
+                finesDue: nextFines,
+                fines: nextFines,
+                netPts: nextNet,
+                updatedAt: serverTimestamp()
+              });
+            }
+            await batch.commit();
+          } catch (fsErr) {
+            console.warn('Manual attendance Firestore direct write fallback ignored:', fsErr);
+          }
         }
 
         toast('Manual attendance recorded successfully', 'success');
-        if (typeof renderRecentLogs === 'function') renderRecentLogs();
-        if (typeof renderAdminAttendanceLogs === 'function') renderAdminAttendanceLogs();
-        renderAdminSessions();
         if (typeof window.refreshCurrentRosterView === 'function') {
           window.refreshCurrentRosterView();
         }
@@ -17924,66 +17981,26 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
     }
   };
 
-  try {
-    let recDocs = [];
-    let logDocs = [];
-    let waiverDocs = [];
+  const isMatchingLog = (l) => {
+    if (!l) return false;
+    if (l.sessionId && l.sessionId === targetSessionId) return true;
+    if (session.title && l.sessionTitle && l.sessionTitle.trim().toLowerCase() === session.title.trim().toLowerCase()) return true;
+    return false;
+  };
 
-    if (targetSessionId && typeof targetSessionId === 'string') {
-      try {
-        const qRec = query(collection(db, 'attendance_records'), where('sessionId', '==', targetSessionId), limit(500));
-        const s = await getDocs(qRec);
-        recDocs = s.docs || [];
-      } catch (e) {
-        console.warn('Could not query attendance_records for session:', e);
-      }
-
-      try {
-        const qLog = query(collection(db, 'attendance_logs'), where('sessionId', '==', targetSessionId), limit(500));
-        const s = await getDocs(qLog);
-        logDocs = s.docs || [];
-      } catch (e) {
-        console.warn('Could not query attendance_logs for session:', e);
-      }
-
-      try {
-        const qWaivers = query(collection(db, 'waiver_requests'), where('sessionId', '==', targetSessionId), limit(300));
-        const s = await getDocs(qWaivers);
-        waiverDocs = s.docs || [];
-      } catch (e) {
-        console.warn('Could not query waiver_requests for session:', e);
-      }
-    }
-
-    waiverDocs.forEach(d => {
-      const w = d.data();
-      if (w.status === 'approved') {
-        waiversMap.set(w.uid, { id: d.id, ...w });
+  const syncRosterFromState = () => {
+    mergedRecordsMap.clear();
+    waiversMap.clear();
+    (state.waiverRequests || []).forEach(w => {
+      if (w && w.sessionId === targetSessionId && w.status === 'approved') {
+        waiversMap.set(w.uid, w);
       }
     });
-
-    const isMatchingLog = (l) => {
-      if (!l) return false;
-      if (l.sessionId && l.sessionId === targetSessionId) return true;
-      if (session.title && l.sessionTitle && l.sessionTitle.trim().toLowerCase() === session.title.trim().toLowerCase()) return true;
-      return false;
-    };
-
-    recDocs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
-    logDocs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
     (state.attendanceLogs || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
     (state.attendanceRecords || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
+  };
 
-    // Fetch from backend to ensure 100% attendance log retrieval
-    try {
-      const gasRes = await callGasBackend({ action: 'GET_ALL_ATTENDANCE_LOGS' });
-      if (gasRes?.logs && Array.isArray(gasRes.logs)) {
-        gasRes.logs.filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
-      }
-    } catch (_) {}
-  } catch (err) {
-    console.warn('[openAdminRosterModal] query error:', err);
-  }
+  syncRosterFromState();
 
   const renderModal = () => {
     const allRecords = Array.from(mergedRecordsMap.values());
@@ -18723,7 +18740,10 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
       }
     };
 
-    window.refreshCurrentRosterView = () => renderModal();
+    window.refreshCurrentRosterView = () => {
+      syncRosterFromState();
+      renderModal();
+    };
     renderTabContent();
   };
 
@@ -18833,12 +18853,13 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
 
   renderModal();
 
-  // Listen to attendance_logs updates
+  // Listen to attendance_logs updates for this session (bounded limit)
   if (targetSessionId && typeof targetSessionId === 'string') {
     try {
       clearFsListener('roster');
-      const qSnap = query(collection(db, 'attendance_logs'), where('sessionId', '==', targetSessionId), limit(300));
+      const qSnap = query(collection(db, 'attendance_logs'), where('sessionId', '==', targetSessionId), limit(150));
       unsubLogs = onSnapshot(qSnap, (snap) => {
+        syncRosterFromState();
         snap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
         renderModal();
       }, (err) => console.warn('[openAdminRosterModal] logs listener:', err));
@@ -19112,48 +19133,23 @@ export async function renderRecentLogs() {
     });
   }
 
-  try {
-    const [recSnap, logSnap, gasRes] = await Promise.allSettled([
-      getDocs(query(collection(db, 'attendance_records'), limit(1000))),
-      getDocs(query(collection(db, 'attendance_logs'), limit(1000))),
-      callGasBackend({ action: 'GET_ALL_ATTENDANCE_LOGS' })
-    ]);
-
-    const mergedLogsMap = new Map();
-
-    const addLog = (d) => {
-      if (!d) return;
-      const data = typeof d.data === 'function' ? d.data() : d;
-      const id = d.id || data.id;
-      if (!id) return;
-      const normalized = normalizeAttendanceLog({ id, ...data });
-      if (mergedLogsMap.has(id)) {
-        mergedLogsMap.set(id, { ...mergedLogsMap.get(id), ...normalized });
-      } else {
-        mergedLogsMap.set(id, normalized);
-      }
-    };
-
-    if (recSnap.status === 'fulfilled' && recSnap.value?.docs) {
-      recSnap.value.docs.forEach(addLog);
+  const mergedLogsMap = new Map();
+  const addLog = (d) => {
+    if (!d) return;
+    const data = typeof d.data === 'function' ? d.data() : d;
+    const id = d.id || data.id;
+    if (!id) return;
+    const normalized = normalizeAttendanceLog({ id, ...data });
+    if (mergedLogsMap.has(id)) {
+      mergedLogsMap.set(id, { ...mergedLogsMap.get(id), ...normalized });
+    } else {
+      mergedLogsMap.set(id, normalized);
     }
-    if (logSnap.status === 'fulfilled' && logSnap.value?.docs) {
-      logSnap.value.docs.forEach(addLog);
-    }
-    if (gasRes.status === 'fulfilled' && Array.isArray(gasRes.value?.logs)) {
-      gasRes.value.logs.forEach(addLog);
-    }
-    (state.attendanceRecords || []).forEach(addLog);
-    (state.attendanceLogs || []).forEach(addLog);
-
-    state.attendanceLogs = Array.from(mergedLogsMap.values());
-    state.attendanceRecords = state.attendanceLogs;
-
-    renderFilteredAttendanceLogsList();
-  } catch (err) {
-    console.error('Error fetching attendance logs:', err);
-    renderFilteredAttendanceLogsList();
-  }
+  };
+  (state.attendanceRecords || []).forEach(addLog);
+  (state.attendanceLogs || []).forEach(addLog);
+  state.attendanceLogs = Array.from(mergedLogsMap.values());
+  renderFilteredAttendanceLogsList();
 }
 
 export const renderAdminAttendanceLogs = renderRecentLogs;
@@ -19284,76 +19280,89 @@ async function renderAdminMissedTasks() {
       btn.textContent = 'Applying penalties...';
 
       try {
-        const batch = writeBatch(db);
-        const processedDocIds = [];
+        const gasRes = await callGasBackend({
+          action: 'MANUAL_CLOSE_TASK',
+          taskId: targetItem.task.id,
+          occurrenceKey: targetItem.occurrenceKey
+        });
 
-        for (const member of targetItem.missedMembers) {
-          const lockDocId = `${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`;
+        if (gasRes && gasRes.ok === false) {
+          throw new Error(gasRes.error || 'Failed to apply missed task penalties');
+        }
 
-          const lockDocRef = doc(db, 'missed_penalties', lockDocId);
-          const lockSnap = await getDoc(lockDocRef);
-          if (lockSnap.exists()) {
-            state.appliedMissedPenalties.add(lockDocId);
-            continue;
+        if (gasRes?.sent_opaque || gasRes?.status === 'skipped' || gasRes?.status === 'sent_nonblocking') {
+          const batch = writeBatch(db);
+          const processedDocIds = [];
+
+          for (const member of targetItem.missedMembers) {
+            const lockDocId = `${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`;
+            if (state.appliedMissedPenalties?.has(lockDocId)) {
+              continue;
+            }
+
+            const lockDocRef = doc(db, 'missed_penalties', lockDocId);
+            batch.set(lockDocRef, {
+              taskId: targetItem.task.id,
+              occurrenceKey: targetItem.occurrenceKey,
+              uid: member.uid,
+              penaltyPoints: targetItem.penaltyPoints,
+              adminUid: state.user.uid,
+              createdAt: serverTimestamp()
+            });
+
+            const userRef = doc(db, 'users', member.uid);
+            batch.update(userRef, {
+              penalties: increment(targetItem.penaltyPoints),
+              penaltyPoints: increment(targetItem.penaltyPoints),
+              totalPenalties: increment(targetItem.penaltyPoints),
+              updatedAt: serverTimestamp()
+            });
+
+            const txRef = doc(collection(db, 'users', member.uid, 'transactions'));
+            batch.set(txRef, {
+              type: 'penalty',
+              category: 'penalty',
+              amount: targetItem.penaltyPoints,
+              reason: `Missed task penalty: ${targetItem.task.title}`,
+              adminUid: state.user.uid,
+              adminName: state.user.displayName || 'Admin',
+              createdAt: serverTimestamp()
+            });
+
+            createNotification(batch, {
+              uid: member.uid,
+              title: 'Missed Task Penalty',
+              message: `A penalty of ${targetItem.penaltyPoints} points was recorded for missing the task "${targetItem.task.title}".`,
+              type: 'task',
+              refId: lockDocId
+            });
+
+            logAdminAction(batch, {
+              action: 'apply_missed_task_penalty',
+              targetUid: member.uid,
+              details: {
+                taskId: targetItem.task.id,
+                taskTitle: targetItem.task.title,
+                occurrenceKey: targetItem.occurrenceKey,
+                penaltyPoints: targetItem.penaltyPoints,
+                lockDocId
+              }
+            });
+
+            processedDocIds.push(lockDocId);
           }
 
-          batch.set(lockDocRef, {
-            taskId: targetItem.task.id,
-            occurrenceKey: targetItem.occurrenceKey,
-            uid: member.uid,
-            penaltyPoints: targetItem.penaltyPoints,
-            adminUid: state.user.uid,
-            createdAt: serverTimestamp()
-          });
-
-          const userRef = doc(db, 'users', member.uid);
-          batch.update(userRef, {
-            penalties: increment(targetItem.penaltyPoints),
-            updatedAt: serverTimestamp()
-          });
-
-          const txRef = doc(collection(db, 'users', member.uid, 'transactions'));
-          batch.set(txRef, {
-            type: 'penalty',
-            category: 'penalty',
-            amount: targetItem.penaltyPoints,
-            reason: `Missed task penalty: ${targetItem.task.title}`,
-            adminUid: state.user.uid,
-            adminName: state.user.displayName || 'Admin',
-            createdAt: serverTimestamp()
-          });
-
-          createNotification(batch, {
-            uid: member.uid,
-            title: 'Missed Task Penalty',
-            message: `A penalty of ${targetItem.penaltyPoints} points was recorded for missing the task "${targetItem.task.title}".`,
-            type: 'task',
-            refId: lockDocId
-          });
-
-          logAdminAction(batch, {
-            action: 'apply_missed_task_penalty',
-            targetUid: member.uid,
-            details: {
-              taskId: targetItem.task.id,
-              taskTitle: targetItem.task.title,
-              occurrenceKey: targetItem.occurrenceKey,
-              penaltyPoints: targetItem.penaltyPoints,
-              lockDocId
-            }
-          });
-
-          processedDocIds.push(lockDocId);
-        }
-
-        if (processedDocIds.length > 0) {
-          await batch.commit();
-          processedDocIds.forEach(id => state.appliedMissedPenalties.add(id));
-          toast(`Penalties applied to ${processedDocIds.length} member(s)`, 'success');
+          if (processedDocIds.length > 0) {
+            await batch.commit();
+            processedDocIds.forEach(id => state.appliedMissedPenalties.add(id));
+          }
         } else {
-          toast('All missed penalties were already processed.', 'info');
+          targetItem.missedMembers.forEach(member => {
+            state.appliedMissedPenalties.add(`${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`);
+          });
         }
 
+        toast(`Penalties applied for "${targetItem.task.title}"`, 'success');
         renderAdminMissedTasks();
       } catch (err) {
         console.error('Error applying missed penalties:', err);
@@ -20464,7 +20473,8 @@ function renderAdminMembers() {
 }
 
 export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
-  if (!containerEl) return;
+  if (!containerEl || !uid || !db) return;
+  clearFsListener('member_ledger_tx');
   containerEl.innerHTML = `
     <div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
       <div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
@@ -20476,68 +20486,77 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
     const q = query(
       collection(db, 'users', uid, 'transactions'),
       orderBy('createdAt', 'desc'),
-      limit(50)
+      limit(100)
     );
-    const snap = await getDocs(q);
-    const txs = [];
-    snap.forEach(d => txs.push({ id: d.id, ...d.data() }));
+    const unsub = onSnapshot(q, (snap) => {
+      const txs = [];
+      snap.forEach(d => txs.push({ id: d.id, ...d.data() }));
 
-    if (countBadgeEl) {
-      countBadgeEl.textContent = txs.length;
-      if (txs.length > 0) countBadgeEl.classList.remove('hidden');
-    }
+      if (countBadgeEl) {
+        countBadgeEl.textContent = txs.length;
+        if (txs.length > 0) countBadgeEl.classList.remove('hidden');
+      }
 
-    if (txs.length === 0) {
+      if (txs.length === 0) {
+        containerEl.innerHTML = `
+          <div class="p-6 text-center text-xs text-neutral-400">
+            No transactions recorded yet.
+          </div>
+        `;
+        return;
+      }
+
       containerEl.innerHTML = `
-        <div class="p-6 text-center text-xs text-neutral-400">
-          No transactions recorded yet.
+        <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+          ${txs.map(tx => {
+            const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty';
+            let badgeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+            let sign = '+';
+            let unit = isPts ? 'pts' : 'EGP';
+
+            if (tx.type === 'penalty') {
+              badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+              sign = '-';
+            } else if (tx.type === 'fine') {
+              badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+              sign = '+';
+            } else if (tx.type === 'payment') {
+              badgeColor = 'text-blue-400 bg-blue-500/10 border-blue-500/20';
+              sign = '-';
+            } else if (tx.type === 'waive') {
+              badgeColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+              sign = 'Waived ';
+            }
+
+            const dateStr = tx.createdAt ? formatDateTime(tx.createdAt) : 'Just now';
+
+            return `
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
+                  <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
+                    ${sign}${tx.amount} ${unit}
+                  </span>
+                </div>
+                <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
+                <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
+                  <span>By ${esc(tx.adminName || 'Admin')}</span>
+                  <span>${dateStr}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
       `;
-      return;
-    }
-
-    containerEl.innerHTML = `
-      <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-        ${txs.map(tx => {
-          const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty';
-          let badgeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
-          let sign = '+';
-          let unit = isPts ? 'pts' : 'EGP';
-
-          if (tx.type === 'penalty') {
-            badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
-            sign = '-';
-          } else if (tx.type === 'fine') {
-            badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
-            sign = '+';
-          } else if (tx.type === 'payment') {
-            badgeColor = 'text-blue-400 bg-blue-500/10 border-blue-500/20';
-            sign = '-';
-          } else if (tx.type === 'waive') {
-            badgeColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-            sign = 'Waived ';
-          }
-
-          const dateStr = tx.createdAt ? formatDateTime(tx.createdAt) : 'Just now';
-
-          return `
-            <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
-              <div class="flex items-center justify-between gap-2">
-                <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
-                <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
-                  ${sign}${tx.amount} ${unit}
-                </span>
-              </div>
-              <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
-              <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
-                <span>By ${esc(tx.adminName || 'Admin')}</span>
-                <span>${dateStr}</span>
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `;
+    }, (err) => {
+      console.error('Error in transaction ledger listener:', err);
+      containerEl.innerHTML = `
+        <div class="p-4 text-center text-xs text-rose-400">
+          Failed to load ledger: ${esc(err.message)}
+        </div>
+      `;
+    });
+    setFsListener('member_ledger_tx', unsub);
   } catch (err) {
     console.error('Error loading transaction ledger:', err);
     containerEl.innerHTML = `
@@ -22559,28 +22578,26 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4 text-xs';
 
-  async function fetchMemberNotificationHistory(uid) {
+  function fetchMemberNotificationHistory(uid) {
+    clearFsListener('mnc_sub_notifs');
+    clearFsListener('mnc_root_notifs');
     if (!uid || !db) {
       historyItems = [];
+      renderHistorySection();
       return;
     }
     loadingHistory = true;
     renderHistorySection();
 
-    try {
+    let subDocs = [];
+    let rootDocs = [];
+    const rebuildHistory = () => {
       const mergedMap = new Map();
-
-      const [subSnap, rootSnap] = await Promise.all([
-        getDocs(query(collection(db, 'users', uid, 'notifications'), limit(100))).catch(() => ({ docs: [] })),
-        getDocs(query(collection(db, 'notifications'), where('uid', '==', uid), limit(100))).catch(() => ({ docs: [] }))
-      ]);
-
-      subSnap.docs.forEach(d => {
+      subDocs.forEach(d => {
         const norm = normalizeNotification({ id: d.id, uid, ...d.data() });
         if (norm) mergedMap.set(norm.id, norm);
       });
-
-      rootSnap.docs.forEach(d => {
+      rootDocs.forEach(d => {
         const norm = normalizeNotification({ id: d.id, uid, ...d.data() });
         if (norm) {
           const existing = mergedMap.get(norm.id);
@@ -22591,16 +22608,29 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
           }
         }
       });
-
       historyItems = Array.from(mergedMap.values()).sort((a, b) => {
         const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
         const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
         return tB - tA;
       });
+      loadingHistory = false;
+      renderHistorySection();
+    };
+
+    try {
+      const unsubSub = onSnapshot(query(collection(db, 'users', uid, 'notifications'), limit(100)), (snap) => {
+        subDocs = snap.docs || [];
+        rebuildHistory();
+      }, () => { rebuildHistory(); });
+      setFsListener('mnc_sub_notifs', unsubSub);
+
+      const unsubRoot = onSnapshot(query(collection(db, 'notifications'), where('uid', '==', uid), limit(100)), (snap) => {
+        rootDocs = snap.docs || [];
+        rebuildHistory();
+      }, () => { rebuildHistory(); });
+      setFsListener('mnc_root_notifs', unsubRoot);
     } catch (err) {
-      console.warn('Error fetching member notification history:', err);
-      historyItems = [];
-    } finally {
+      console.warn('Error setting up member notification history listeners:', err);
       loadingHistory = false;
       renderHistorySection();
     }
@@ -23056,40 +23086,64 @@ export async function renderAdminNotifications() {
     };
   }
 
-  async function fetchHistory() {
+  function fetchHistory() {
+    clearFsListener('adm_notif_hist_1');
+    clearFsListener('adm_notif_hist_2');
     if (!historyContainer || !db) return;
     _adminNotifLoadingHistory = true;
     renderHistory();
 
     try {
       if (_adminNotifSelectedTarget === 'all') {
-        const snap = await getDocs(query(collection(db, 'notifications_broadcast'), orderBy('createdAt', 'desc'), limit(20))).catch(() => ({ docs: [] }));
-        _adminNotifHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const qAll = query(collection(db, 'notifications_broadcast'), orderBy('createdAt', 'desc'), limit(100));
+        const unsubAll = onSnapshot(qAll, (snap) => {
+          _adminNotifHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          _adminNotifLoadingHistory = false;
+          renderHistory();
+        }, (err) => {
+          console.warn('Broadcast history listener:', err);
+          _adminNotifLoadingHistory = false;
+          renderHistory();
+        });
+        setFsListener('adm_notif_hist_1', unsubAll);
       } else {
         const uid = _adminNotifSelectedTarget;
-        const [subSnap, rootSnap] = await Promise.all([
-          getDocs(query(collection(db, 'users', uid, 'notifications'), limit(50))).catch(() => ({ docs: [] })),
-          getDocs(query(collection(db, 'notifications'), where('uid', '==', uid), limit(50))).catch(() => ({ docs: [] }))
-        ]);
-        const map = new Map();
-        subSnap.docs.forEach(d => {
-          const n = normalizeNotification({ id: d.id, uid, ...d.data() });
-          if (n) map.set(n.id, n);
-        });
-        rootSnap.docs.forEach(d => {
-          const n = normalizeNotification({ id: d.id, uid, ...d.data() });
-          if (n && !map.has(n.id)) map.set(n.id, n);
-        });
-        _adminNotifHistory = Array.from(map.values()).sort((a, b) => {
-          const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
-          const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
-          return tB - tA;
-        });
+        let subDocs = [];
+        let rootDocs = [];
+        const rebuildMemberHistory = () => {
+          const map = new Map();
+          subDocs.forEach(d => {
+            const n = normalizeNotification({ id: d.id, uid, ...d.data() });
+            if (n) map.set(n.id, n);
+          });
+          rootDocs.forEach(d => {
+            const n = normalizeNotification({ id: d.id, uid, ...d.data() });
+            if (n && !map.has(n.id)) map.set(n.id, n);
+          });
+          _adminNotifHistory = Array.from(map.values()).sort((a, b) => {
+            const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
+            const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
+            return tB - tA;
+          });
+          _adminNotifLoadingHistory = false;
+          renderHistory();
+        };
+
+        const unsubSub = onSnapshot(query(collection(db, 'users', uid, 'notifications'), limit(100)), (snap) => {
+          subDocs = snap.docs || [];
+          rebuildMemberHistory();
+        }, () => { rebuildMemberHistory(); });
+        setFsListener('adm_notif_hist_1', unsubSub);
+
+        const unsubRoot = onSnapshot(query(collection(db, 'notifications'), where('uid', '==', uid), limit(100)), (snap) => {
+          rootDocs = snap.docs || [];
+          rebuildMemberHistory();
+        }, () => { rebuildMemberHistory(); });
+        setFsListener('adm_notif_hist_2', unsubRoot);
       }
     } catch (err) {
       console.warn('Fetch admin notification history:', err);
       _adminNotifHistory = [];
-    } finally {
       _adminNotifLoadingHistory = false;
       renderHistory();
     }
@@ -23413,19 +23467,7 @@ export function checkAndShowAutoWhatsNew() {
       return;
     }
 
-    let liveData = state.whatsNew;
-    if (!liveData && db) {
-      try {
-        const snap = await getDoc(doc(db, 'settings', 'whats_new'));
-        if (snap.exists()) {
-          liveData = snap.data();
-          state.whatsNew = liveData;
-        }
-      } catch (e) {
-        console.warn('Auto whats-new fetch error:', e);
-      }
-    }
-
+    const liveData = state.whatsNew;
     const content = (liveData?.content || liveData?.notes || liveData?.body || '').trim();
     if (!liveData || !content) {
       return;
@@ -23447,18 +23489,7 @@ export function checkAndShowAutoWhatsNew() {
 }
 
 export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = null } = {}) {
-  let liveData = state.whatsNew || null;
-  if (db && !liveData) {
-    try {
-      const snap = await getDoc(doc(db, 'settings', 'whats_new'));
-      if (snap.exists()) {
-        liveData = snap.data();
-        state.whatsNew = liveData;
-      }
-    } catch (e) {
-      console.warn('Fetch settings/whats_new:', e);
-    }
-  }
+  const liveData = state.whatsNew || null;
 
   const currentFingerprint = fingerprint || getWhatsNewFingerprint(liveData) || `v${APP_VERSION}`;
   const displayVersion = liveData?.version || APP_VERSION;
@@ -23536,17 +23567,7 @@ export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = nul
 
 export async function openAdminWhatsNewEditorModal() {
   let activeTab = 'draft';
-  let liveData = state.whatsNew || null;
-
-  if (db) {
-    try {
-      const snap = await getDoc(doc(db, 'settings', 'whats_new'));
-      if (snap.exists()) {
-        liveData = snap.data();
-        state.whatsNew = liveData;
-      }
-    } catch (e) {  }
-  }
+  const liveData = state.whatsNew || null;
 
   let liveVersion = liveData?.version || APP_VERSION;
   let liveTitle = (liveData?.title || '').trim();
@@ -24078,47 +24099,15 @@ function attachEventHandlers() {
           toast('Saved offline, will sync', 'info');
         }
 
-        const batch = writeBatch(db);
-        const subRef = doc(db, 'submissions', subId);
-        const userRef = doc(db, 'users', state.user.uid);
-
         const answers = answer ? [{
           questionId: 'q_default',
           questionText: 'Proof Answer',
           answer
         }] : [];
 
-        const formPtsInfo = computeTieredTaskPoints(task, now);
-        if (!formPtsInfo.canSubmit) {
-          toast('Submission closed: deadline and grace period have expired.', 'error');
-          return;
-        }
-        const pointsAwarded = formPtsInfo.points;
-
-        batch.set(subRef, {
-          taskId: task.id,
-          taskTitle: task.title,
-          uid: state.user.uid,
-          userName: state.user.name || state.user.displayName || 'Member',
-          userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-          occurrenceKey,
-          answers,
-          comment: notes,
-          pointsAwarded,
-          submittedAt: serverTimestamp(),
-          status: 'approved'
-        });
-
-        const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, pointsAwarded);
-        batch.update(userRef, {
-          ...pointsUpdate,
-          lastOpId: subId,
-          updatedAt: serverTimestamp()
-        });
-
-        await batch.commit();
-
-        toast('Proof submitted! Points awarded.', 'success');
+        const decision = await submitTaskThroughBackend(task, answers, notes);
+        const ptsAwarded = typeof decision?.pointsAwarded === 'number' ? decision.pointsAwarded : 0;
+        toast(`Proof submitted! +${ptsAwarded} pts awarded.`, 'success');
         closeAllModals();
       } catch (err) {
         toast(err.message || 'Submission failed', 'error');
@@ -24735,8 +24724,9 @@ if ('serviceWorker' in navigator) {
 export async function fetchPublicLeaderboard() {
   if (!db) return;
   try {
-    const snap = await getDocs(query(collection(db, 'users'), where('status', '==', 'approved'), limit(250)));
-    state.members = snap.docs.map(d => normalizeUser({ uid: d.id, ...d.data() }));
+    if (!listeners.has('users')) {
+      setupMembersListeners();
+    }
     renderLeaderboard();
   } catch (err) {
     console.warn('fetchPublicLeaderboard error:', err);
@@ -24764,97 +24754,38 @@ export async function handleForceSyncData() {
   }
 
   try {
-    const syncOps = [];
+    initFirestoreListeners();
+    await initServerClock().catch(() => {});
 
-    syncOps.push(fetchPublicLeaderboard());
-
-    if (state.user?.uid) {
-      syncOps.push(
-        getDoc(doc(db, 'users', state.user.uid)).then(snap => {
-          if (snap.exists()) {
-            state.user = { ...state.user, ...snap.data() };
-            updateHeroStats();
-            renderProfileSubmissions();
-            renderProfileAttendance();
-            renderProfileTransactions();
-          }
-        }).catch(e => console.warn('User profile sync:', e))
-      );
-    }
-
-    syncOps.push(
-      getDocs(query(collection(db, 'tasks'), limit(200))).then(snap => {
-        state.tasks = snap.docs.map(d => normalizeTask({ id: d.id, ...d.data() }));
-        renderTasks();
-        renderAdminTasks();
-      }).catch(e => console.warn('Tasks sync:', e))
-    );
-    if (state.user?.uid) {
-      syncOps.push(
-        getDocs(query(collection(db, 'submissions'), where('uid', '==', state.user.uid), limit(200))).then(snap => {
-          state.mySubmissions = snap.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
-          if (!state.user?.isAdmin) state.submissions = state.mySubmissions;
-          renderTasks();
-          renderProfileSubmissions();
-        }).catch(e => console.warn('Submissions sync:', e))
-      );
-    }
-
-    syncOps.push(
-      getDocs(query(collection(db, 'attendance_sessions'), limit(50))).then(snap => {
-        state.attendanceSessions = snap.docs.map(d => normalizeSession({ id: d.id, ...d.data() }));
-        renderAttendanceView();
-        renderAdminSessions();
-      }).catch(e => console.warn('Sessions sync:', e))
-    );
-    if (state.user?.uid) {
-      syncOps.push(
-        getDocs(query(collection(db, 'attendance_logs'), where('uid', '==', state.user.uid), limit(100))).then(snap => {
-          state.myAttendanceLogs = snap.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-          renderAttendanceView();
-        }).catch(e => console.warn('Attendance logs sync:', e))
-      );
-    }
-
-    syncOps.push(
-      getDocs(query(collection(db, 'broadcasts'), limit(50))).then(snap => {
-        state.broadcasts = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(b => b.archived !== true);
-        renderHomeBroadcastBanner();
-        renderAdminBroadcasts();
-      }).catch(e => console.warn('Broadcasts sync:', e))
-    );
+    renderLeaderboard();
+    renderTasks();
+    renderAttendanceView();
+    renderHomeBroadcastBanner();
+    mergeAndRenderNotifications();
 
     if (state.user?.uid) {
-      syncOps.push(
-        getDocs(query(collection(db, 'notifications'), where('uid', '==', state.user.uid), limit(100))).then(snap => {
-          state.personalNotifications = snap.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
-          mergeAndRenderNotifications();
-        }).catch(e => console.warn('Notifications sync:', e))
-      );
-      syncOps.push(
-        getDocs(query(collection(db, 'users', state.user.uid, 'notifications'), limit(50))).then(snap => {
-          userNotifications = snap.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
-          mergeAndRenderNotifications();
-        }).catch(e => console.warn('User notifications sync:', e))
-      );
-    }
-    if (state.user?.isAdmin) {
-      syncOps.push(
-        getDocs(query(collection(db, 'waiver_requests'), limit(100))).then(snap => {
-          state.waiverRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          renderAdminWaivers();
-        }).catch(e => console.warn('Admin waivers sync:', e))
-      );
+      updateProfileUI();
+      updateHeroStats();
+      renderProfileSubmissions();
+      renderProfileAttendance();
+      renderProfileTransactions();
     }
 
-    await Promise.allSettled(syncOps);
+    if (isCurrentUserAdmin()) {
+      renderAdminTasks();
+      renderAdminSessions();
+      renderAdminBroadcasts();
+      renderAdminWaivers();
+      renderAdminMembers();
+      renderAdminMissedTasks();
+    }
 
     persistToLocalCache(true);
 
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistration().then(reg => reg?.update()).catch(() => {});
     }
-    toast('All data synced & up to date', 'success');
+    toast('All real-time listeners re-synchronized & up to date', 'success');
   } catch (err) {
     console.warn('Force sync error:', err);
     toast('Sync failed: ' + (err.message || 'Network error'), 'error');
@@ -24972,6 +24903,8 @@ if (typeof window !== 'undefined') {
   window.GAS_BACKEND_WEBHOOK_URL = GAS_BACKEND_WEBHOOK_URL;
   window.callGasBackend = callGasBackend;
   window.dispatchBackendSessionMutation = dispatchBackendSessionMutation;
+  window.dispatchBackendTaskMutation = dispatchBackendTaskMutation;
+  window.submitTaskThroughBackend = submitTaskThroughBackend;
   window.formatCheckInExactTime = formatCheckInExactTime;
   window.renderCheckInMetricsPills = renderCheckInMetricsPills;
   window.renderUserSessionHistory = renderUserSessionHistory;

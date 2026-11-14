@@ -1,4 +1,3 @@
-
 export function updateDockHeight() {
   const dock = document.getElementById('admin-dock') || document.getElementById('user-dock');
   const h = dock ? dock.offsetHeight : 76;
@@ -7,44 +6,8 @@ export function updateDockHeight() {
   }
 }
 
-/**
- * ============================================================================
- * COC Media Team - Production Web App (v2.2.0)
- * Static PWA for GitHub Pages - Vanilla JS ES Modules + Firebase v10.8.1 CDN
- * Designed & Developed by Steven Mario
- * ============================================================================
- * 
- * SETUP & ARCHITECTURE README:
- * 1. INITIAL ADMIN SETUP:
- *    The first administrator MUST be assigned manually in the Firebase Console:
- *    navigate to Firestore -> `users/{uid}` and set `role: "admin"`.
- *    There is strictly no in-app self-promotion to prevent unauthorized privilege escalation.
- * 
- * 2. DEPLOY RULES & INDEXES:
- *    Deploy security rules and database indexes via the Firebase CLI:
- *    `firebase deploy --only firestore:rules,firestore:indexes`
- * 
- * 3. FREE SPARK PLAN RESTRICTIONS:
- *    This project operates entirely on the free Firebase Spark plan. There are NO
- *    Cloud Functions, Blaze-only APIs, or server-side background runners used anywhere.
- *    All quota, streak, schedule, and attendance calculations occur client-side.
- * 
- * 4. FIREBASE AUTH & AUTHORIZED DOMAINS:
- *    Add your GitHub Pages custom domain or `username.github.io` in:
- *    Firebase Console -> Authentication -> Settings -> Authorized domains.
- *    `signInWithPopup` is our primary authentication strategy. In environments where
- *    popups are blocked or unsupported, the app seamlessly falls back to `signInWithRedirect`.
- *    (Note: redirect sign-in can fail in private tabs where third-party storage is blocked,
- *    so popup remains the primary mode).
- * ============================================================================
- */
+export const APP_VERSION = '3.2.0';
 
-// SINGLE SOURCE OF TRUTH FOR APP VERSION
-export const APP_VERSION = '2.2.7';
-
-/* ==========================================================================
-   GLOBAL PWA INSTALL PROMPT CAPTURE
-   ========================================================================== */
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
@@ -67,15 +30,12 @@ function isAppStandalone() {
   return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 }
 
-/* ==========================================================================
-   FIREBASE CDN MODULAR IMPORTS (v10.8.1)
-   ========================================================================== */
 import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
-import { 
-  getAuth, 
-  onAuthStateChanged, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
+import {
+  getAuth,
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
   signOut,
@@ -83,22 +43,22 @@ import {
   browserLocalPersistence,
   updateProfile
 } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js';
-import { 
+import {
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
-  getFirestore, 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  getDoc,
   getDocs,
   Timestamp,
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  onSnapshot, 
-  serverTimestamp, 
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  serverTimestamp,
   increment,
   getDocFromServer,
   getAggregateFromServer,
@@ -123,9 +83,6 @@ import {
   isSupported
 } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging.js';
 
-/* ==========================================================================
-   FIREBASE CONFIGURATION & INITIALIZATION
-   ========================================================================== */
 const firebaseConfig = {
   apiKey: "AIzaSyBgnWU2azejTgCr-zVtVPLQYYRMGNtfieQ",
   authDomain: "coc-media-team.firebaseapp.com",
@@ -143,7 +100,6 @@ try {
   googleProvider = new GoogleAuthProvider();
   googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-  // Initialize Firestore with robust multi-tab persistent cache
   try {
     db = initializeFirestore(app, {
       localCache: persistentLocalCache({
@@ -158,15 +114,11 @@ try {
   console.error("Firebase init failed:", e);
 }
 
-// Master password for emergency admin access
 const ADMIN_MASTER_PASSWORD = '$J@@s#COC1982';
 
-/* ==========================================================================
-   SHARED ADMIN HELPERS (Task 5)
-   ========================================================================== */
 export function createNotification(batch, { uid, title, message, body, type = 'system', icon = 'bell', targetAction = null, refId = null }) {
   const notifRef = doc(collection(db, 'notifications'));
-  batch.set(notifRef, {
+  const payload = {
     uid,
     title,
     message: message || body || '',
@@ -178,7 +130,12 @@ export function createNotification(batch, { uid, title, message, body, type = 's
     read: false,
     timestamp: serverTimestamp(),
     createdAt: serverTimestamp()
-  });
+  };
+  batch.set(notifRef, payload);
+  if (uid) {
+    const userSubRef = doc(db, 'users', uid, 'notifications', notifRef.id);
+    batch.set(userSubRef, payload);
+  }
   return notifRef;
 }
 
@@ -194,9 +151,6 @@ export function logAdminAction(batch, { action, targetUid = null, details = {} }
   return logRef;
 }
 
-/* ==========================================================================
-   FIRESTORE LISTENER MANAGER
-   ========================================================================== */
 export const listeners = {
   _map: new Map(),
   has(key) {
@@ -204,19 +158,102 @@ export const listeners = {
   },
   add(key, unsubscribe) {
     if (this._map.has(key)) {
-      try { this._map.get(key)(); } catch (e) { /* ignore */ }
+      try { this._map.get(key)(); } catch (e) {  }
     }
     this._map.set(key, unsubscribe);
   },
   clear(prefix = '') {
     for (const [key, unsub] of this._map.entries()) {
       if (!prefix || key.startsWith(prefix)) {
-        try { unsub(); } catch (e) { /* ignore */ }
+        try { unsub(); } catch (e) {  }
         this._map.delete(key);
       }
     }
   }
 };
+
+if (typeof window !== 'undefined') {
+  window.fsListeners = window.fsListeners || {};
+}
+
+export function clearFsListener(key) {
+  if (typeof window !== 'undefined' && window.fsListeners && window.fsListeners[key]) {
+    try {
+      window.fsListeners[key]();
+    } catch (e) {
+      console.warn(`[clearFsListener] Error clearing listener ${key}:`, e);
+    }
+    delete window.fsListeners[key];
+  }
+}
+
+export function setFsListener(key, unsub) {
+  clearFsListener(key);
+  if (typeof window !== 'undefined' && window.fsListeners) {
+    window.fsListeners[key] = unsub;
+  }
+}
+
+export function openDeleteConfirmModal({ title = 'Delete Attendance Record?', message = 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.', confirmText = 'Delete' } = {}) {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve(true);
+      return;
+    }
+    const modal = document.getElementById('modal-delete-confirm');
+    if (!modal) {
+      resolve(true);
+      return;
+    }
+
+    const titleEl = document.getElementById('delete-confirm-title');
+    const msgEl = document.getElementById('delete-confirm-message');
+    const btnCancel = document.getElementById('btn-delete-confirm-cancel');
+    const btnProceed = document.getElementById('btn-delete-confirm-proceed');
+
+    if (titleEl && title) titleEl.textContent = title;
+    if (msgEl && message) msgEl.textContent = message;
+    if (btnProceed && confirmText) btnProceed.textContent = confirmText;
+
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      modal.classList.remove('open');
+      modal.style.display = 'none';
+      btnCancel?.removeEventListener('click', onCancel);
+      btnProceed?.removeEventListener('click', onProceed);
+      modal.removeEventListener('click', onBackdrop);
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    const onProceed = () => {
+      cleanup();
+      resolve(true);
+    };
+
+    const onBackdrop = (e) => {
+      if (e.target === modal) {
+        cleanup();
+        resolve(false);
+      }
+    };
+
+    btnCancel?.addEventListener('click', onCancel);
+    btnProceed?.addEventListener('click', onProceed);
+    modal.addEventListener('click', onBackdrop);
+
+    modal.classList.remove('hidden');
+    modal.classList.add('open');
+    modal.style.display = 'flex';
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.openDeleteConfirmModal = openDeleteConfirmModal;
+}
 
 export const categoriesMap = new Map();
 export const badgesMap = new Map();
@@ -267,21 +304,15 @@ export function updateTaskModalCategoryIfOpen() {
   }
 }
 
-/* ==========================================================================
-   SAFE INITIALIZER RUNNER (Boot error isolation)
-   ========================================================================== */
 export function safeInit(name, fn) {
   try {
     if (typeof fn === 'function') fn();
   } catch (err) {
     console.error(`[init:${name}]`, err);
-    // Non-fatal: do NOT let one secondary component crash the whole app / trigger error boundary
+
   }
 }
 
-/* ==========================================================================
-   SHARED TICKER SERVICE (Task 2 - Performance & Overheating)
-   ========================================================================== */
 export const ticker = {
   _subscribers: new Map(),
   _timer: null,
@@ -361,10 +392,6 @@ export const ticker = {
 };
 ticker.initVisibility();
 
-
-/* ==========================================================================
-   SERVER CLOCK & OFFSET SYNCHRONIZATION
-   ========================================================================== */
 let serverOffsetMs = 0;
 let lastForegroundSync = Date.now();
 
@@ -377,7 +404,7 @@ export async function initServerClock() {
   try {
     const uid = auth.currentUser.uid;
     const privRef = doc(db, 'users_private', uid);
-    // Write lastSeenAt to private doc to eliminate public push storms
+
     await setDoc(privRef, { lastSeenAt: serverTimestamp() }, { merge: true });
     const snap = await getDocFromServer(privRef);
     if (snap.exists()) {
@@ -389,7 +416,6 @@ export async function initServerClock() {
   }
 }
 
-// Resync clock when returning to foreground after 30+ minutes
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && navigator.onLine) {
     if (Date.now() - lastForegroundSync > 30 * 60 * 1000) {
@@ -399,12 +425,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-/* ==========================================================================
-   APPLICATION STATE
-   ========================================================================== */
 const state = {
-  user: null, // { uid, name, avatarUrl, role:"member", points:0, penalties:0, lastOpId:null }
-  userPrivate: null, // { email:"", fcmTokens:[] }
+  user: null,
+  userPrivate: null,
   currentFcmToken: null,
   isAdminUnlocked: false,
   tasks: [],
@@ -462,9 +485,6 @@ const state = {
   }
 };
 
-/* ==========================================================================
-   MODULE-LEVEL ADMIN FILTER & EDITING STATE (Hoisted module scope)
-   ========================================================================== */
 export let adminTasksFilter = 'active';
 export let adminCatsFilter = 'active';
 export let adminCategoriesFilter = 'active';
@@ -484,9 +504,6 @@ export const waiverDraftNotes = new Map();
 export let unsubscribeUserNotifications = null;
 export let userNotifications = [];
 
-/* ==========================================================================
-   CATEGORY ICONS & COLOR SWATCHES
-   ========================================================================== */
 export const IOS_SYSTEM_COLORS = [
   { name: 'System Blue', hex: '#0A84FF' },
   { name: 'Green', hex: '#30D158' },
@@ -525,26 +542,22 @@ export function pushCustomColorHistory(hex) {
   if (!hex || typeof hex !== 'string') return getCustomColorHistory();
   const normalized = hex.trim().toUpperCase();
   if (!/^#[0-9A-F]{6}$/.test(normalized)) return getCustomColorHistory();
-  // Don't duplicate system presets in custom history
+
   if (CATEGORY_COLORS.some(c => c.toUpperCase() === normalized)) {
     return getCustomColorHistory();
   }
   const current = getCustomColorHistory().filter(c => c.toUpperCase() !== normalized);
   current.unshift(normalized);
-  // Keep max 10 items; the 11th item pushes the oldest out
+
   const trimmed = current.slice(0, 10);
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(CUSTOM_COLOR_HISTORY_KEY, JSON.stringify(trimmed));
     }
-  } catch (e) { /* ignore storage quota errors */ }
+  } catch (e) {  }
   return trimmed;
 }
 
-/**
- * Shared Unified Advanced Color Picker (FIX 6):
- * Renders 14 Apple HIG preset dots + custom color input trigger + 10-item FIFO custom hex history queue.
- */
 export function renderAdvancedColorPicker({ selectedColor = '#0A84FF', onChange }) {
   let current = (selectedColor || '#0A84FF').toUpperCase();
   const root = document.createElement('div');
@@ -664,10 +677,6 @@ export function formatDateTime(ts, options = {}) {
   }).format(new Date(ms));
 }
 
-/* ==========================================================================
-   LEGACY COMPATIBILITY NORMALIZERS
-   ========================================================================== */
-// Assumption: legacy docs may lack fields; assign default values client-side
 function normalizeCategory(raw) {
   if (!raw) return null;
   return {
@@ -677,6 +686,7 @@ function normalizeCategory(raw) {
     iconKey: raw.iconKey || raw.icon || 'film',
     icon: raw.iconKey || raw.icon || 'film',
     color: raw.color || '#0A84FF',
+    order: typeof raw.order === 'number' ? raw.order : 999999,
     archived: Boolean(raw.archived)
   };
 }
@@ -704,12 +714,27 @@ function normalizeTask(raw) {
     gracePoints: 5
   };
 
+  const earlyBonus = raw.earlyBonus && typeof raw.earlyBonus === 'object' ? {
+    enabled: Boolean(raw.earlyBonus.enabled),
+    untilMinutes: Number(raw.earlyBonus.untilMinutes) || 0,
+    points: typeof raw.earlyBonus.points === 'number' ? raw.earlyBonus.points : (Number(raw.earlyBonus.points) || (typeof raw.points === 'number' ? raw.points : 5))
+  } : null;
+
+  const grace = raw.grace && typeof raw.grace === 'object' ? {
+    enabled: Boolean(raw.grace.enabled),
+    untilMinutes: Number(raw.grace.untilMinutes) || 0,
+    penaltyPoints: Math.max(0, Number(raw.grace.penaltyPoints) || 0),
+    fineAmountEGP: Math.max(0, Number(raw.grace.fineAmountEGP) || 0)
+  } : null;
+
   const missedPenalty = raw.missedPenalty ? {
     enabled: Boolean(raw.missedPenalty.enabled),
-    points: typeof raw.missedPenalty.points === 'number' ? raw.missedPenalty.points : (Number(raw.missedPenalty.points) || 5)
+    points: typeof raw.missedPenalty.points === 'number' ? raw.missedPenalty.points : (Number(raw.missedPenalty.points) || 5),
+    fineAmountEGP: Math.max(0, Number(raw.missedPenalty.fineAmountEGP) || 0)
   } : {
     enabled: false,
-    points: 5
+    points: 5,
+    fineAmountEGP: 0
   };
 
   const assignedUids = Array.isArray(raw.assignedUids) ? raw.assignedUids : [];
@@ -726,6 +751,8 @@ function normalizeTask(raw) {
     color: raw.color || '',
     points: typeof raw.points === 'number' ? raw.points : 5,
     tieredRewards,
+    ...(earlyBonus ? { earlyBonus } : {}),
+    ...(grace ? { grace } : {}),
     missedPenalty,
     claimPolicy,
     assignedUids,
@@ -738,6 +765,7 @@ function normalizeTask(raw) {
     active: raw.active !== false && raw.status !== 'archived',
     archived: Boolean(raw.archived || raw.status === 'archived'),
     status: raw.status || (raw.archived ? 'archived' : 'active'),
+    order: typeof raw.order === 'number' ? raw.order : 999999,
     link: raw.link || '',
     createdAt: raw.createdAt || null,
     updatedAt: raw.updatedAt || null
@@ -764,27 +792,546 @@ export function isTaskVisibleToUser(task, uid) {
 export const usersMap = new Map();
 export const usersPrivate = new Map();
 
+export const OFFLINE_CACHE_KEY = 'coc_offline_cache_v3';
+let _persistTimer = null;
+let _isHandlingPopState = false;
+
+export function isCurrentUserAdmin() {
+  const currentUser = state.user || (state.user?.uid ? usersMap.get(state.user.uid) : null) || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin === true || state.isAdminUnlocked === true) {
+    return true;
+  }
+  return false;
+}
+
+export const GAS_BACKEND_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbxtwz2RIT49t1REl-o69IU8TLkqGUiOaDgOyIW8GFTY1_oZUII-1IyBb3DTSpfmtgEp/exec';
+
+export async function callGasBackend(payload = {}) {
+  const webhookUrl = state.settings?.backendWebhookUrl || GAS_BACKEND_WEBHOOK_URL;
+  if (!webhookUrl || typeof fetch !== 'function') return { ok: true, status: 'skipped' };
+
+  const bodyStr = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...payload
+  });
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: bodyStr
+    });
+    if (res && res.ok) {
+      const data = await res.json().catch(() => ({ status: 'success', ok: true }));
+      return { ok: true, status: 'success', ...data };
+    }
+  } catch (corsErr) {
+    try {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8'
+        },
+        body: bodyStr
+      });
+      return { ok: true, status: 'success', sent_opaque: true };
+    } catch (innerErr) {
+      console.warn('[GAS Backend] Request failed:', innerErr);
+      return { ok: true, status: 'sent_nonblocking' };
+    }
+  }
+  return { ok: true, status: 'success' };
+}
+
+export async function dispatchBackendSessionMutation(action, sessionId = null, extraPayload = {}) {
+  try {
+    callGasBackend({
+      action: action || 'SESSION_UPDATED',
+      sessionId: sessionId || null,
+      ...extraPayload
+    }).catch(err => {
+      console.warn('[Watchdog Dispatch] Async notification failed:', err);
+    });
+  } catch (e) {
+    console.warn('[Watchdog Dispatch] Error constructing payload:', e);
+  }
+}
+
+export async function dispatchBackendTaskMutation(action, taskId = null, extraPayload = {}) {
+  try {
+    callGasBackend({
+      action: action || 'TASK_UPDATED',
+      taskId: taskId || null,
+      ...extraPayload
+    }).catch(err => {
+      console.warn('[Task Watchdog Dispatch] Async notification failed:', err);
+    });
+  } catch (e) {
+    console.warn('[Task Watchdog Dispatch] Error constructing payload:', e);
+  }
+}
+
+export async function submitTaskThroughBackend(task, answers = [], comment = '') {
+  if (!task || !state.user) {
+    throw new Error('Please sign in to submit tasks');
+  }
+  const currentWin = getTaskWindow(task, serverNow());
+  if (currentWin?.state !== 'open' && currentWin?.state !== 'grace') {
+    throw new Error('Submission closed: deadline and grace period have expired.');
+  }
+
+  const occurrenceKey = (task.schedule?.type === 'once') ? 'once' : (currentWin?.occurrenceKey || 'once');
+  const policy = task.claimPolicy || 'once_per_cycle';
+  let subId;
+  let fallbackPoints = currentWin.pointsForNow;
+
+  if (policy === 'milestone') {
+    const hasPriorSub = (state.submissions || []).some(s => s.taskId === task.id && s.uid === state.user.uid);
+    if (hasPriorSub) {
+      fallbackPoints = 0;
+    }
+    subId = `${task.id}_${state.user.uid}_milestone`;
+  } else if (policy === 'every_submission') {
+    subId = `${task.id}_${state.user.uid}_${Date.now()}`;
+  } else {
+    subId = `${task.id}_${state.user.uid}_${occurrenceKey}`;
+  }
+
+  const cleanComment = (comment || '').trim();
+  const gasRes = await callGasBackend({
+    action: 'PROCESS_TASK_SUBMISSION',
+    taskId: task.id,
+    taskTitle: task.title,
+    uid: state.user.uid,
+    userName: state.user.name || state.user.displayName || 'Member',
+    userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+    occurrenceKey,
+    subId,
+    answers,
+    comment: cleanComment
+  });
+
+  if (gasRes && gasRes.ok === false) {
+    throw new Error(gasRes.error || 'Task submission rejected by server.');
+  }
+
+  if (gasRes && gasRes.result) {
+    return gasRes.result;
+  }
+
+  // Fallback for offline/non-CORS environments where GAS response is opaque/skipped
+  if (db) {
+    const batch = writeBatch(db);
+    const subRef = doc(db, 'submissions', subId);
+    const userRef = doc(db, 'users', state.user.uid);
+
+    batch.set(subRef, {
+      taskId: task.id,
+      taskTitle: task.title,
+      uid: state.user.uid,
+      userName: state.user.name || state.user.displayName || 'Member',
+      userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+      occurrenceKey,
+      answers,
+      inGrace: Boolean(currentWin.inGrace),
+      comment: cleanComment,
+      pointsAwarded: fallbackPoints,
+      status: 'approved',
+      submittedAt: serverTimestamp()
+    });
+
+    const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, fallbackPoints, serverNow());
+    batch.update(userRef, {
+      ...pointsUpdate,
+      lastOpId: subId,
+      updatedAt: serverTimestamp()
+    });
+
+    await batch.commit();
+  }
+
+  return {
+    subId,
+    occurrenceKey,
+    status: currentWin.inGrace ? 'grace' : 'on_time',
+    pointsAwarded: fallbackPoints,
+    penaltyPts: Number(task.grace?.penaltyPoints) || 0,
+    fineEGP: Number(task.grace?.fineAmountEGP) || 0,
+    inGrace: Boolean(currentWin.inGrace),
+    inEarlyBonus: false
+  };
+}
+
+export function persistToLocalCache(immediate = false) {
+  const writeCache = () => {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const payload = {
+        ts: Date.now(),
+        version: APP_VERSION,
+        user: state.user || null,
+        userPrivate: state.userPrivate || null,
+        members: Array.isArray(state.members) ? state.members.slice(0, 300) : [],
+        tasks: Array.isArray(state.tasks) ? state.tasks.slice(0, 200) : [],
+        categories: Array.isArray(state.categories) ? state.categories : [],
+        badges: Array.isArray(state.badges) ? state.badges : [],
+        broadcasts: Array.isArray(state.broadcasts) ? state.broadcasts.slice(0, 30) : [],
+        attendanceSessions: Array.isArray(state.attendanceSessions) ? state.attendanceSessions.slice(0, 50) : [],
+        mySubmissions: Array.isArray(state.mySubmissions) ? state.mySubmissions.slice(0, 200) : [],
+        myAttendanceLogs: Array.isArray(state.myAttendanceLogs) ? state.myAttendanceLogs.slice(0, 100) : [],
+        notifications: Array.isArray(state.notifications) ? state.notifications.slice(0, 100) : [],
+        personalNotifications: Array.isArray(state.personalNotifications) ? state.personalNotifications.slice(0, 100) : [],
+        broadcastNotificationsAll: Array.isArray(state.broadcastNotificationsAll) ? state.broadcastNotificationsAll.slice(0, 50) : [],
+        broadcastNotificationsBadge: Array.isArray(state.broadcastNotificationsBadge) ? state.broadcastNotificationsBadge.slice(0, 50) : [],
+        settings: state.settings || {},
+        whatsNew: state.whatsNew || null
+      };
+      localStorage.setItem(OFFLINE_CACHE_KEY, JSON.stringify(payload));
+    } catch (e) {}
+  };
+  if (immediate) {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    writeCache();
+  } else {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(writeCache, 120);
+  }
+}
+
+export function hydrateFromLocalCache() {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    const raw = localStorage.getItem(OFFLINE_CACHE_KEY);
+    if (!raw) return false;
+    const cached = JSON.parse(raw);
+    if (!cached || typeof cached !== 'object') return false;
+
+    if (cached.settings && typeof cached.settings === 'object') {
+      state.settings = { ...state.settings, ...cached.settings };
+    }
+    if (cached.whatsNew) {
+      state.whatsNew = cached.whatsNew;
+    }
+    if (cached.user && typeof cached.user === 'object') {
+      state.user = normalizeUser(cached.user);
+      if (state.user.role === 'admin' || state.user.isAdmin === true) {
+        state.isAdminUnlocked = true;
+      }
+    }
+    if (cached.userPrivate && typeof cached.userPrivate === 'object') {
+      state.userPrivate = cached.userPrivate;
+      if (state.user?.uid) {
+        usersPrivate.set(state.user.uid, cached.userPrivate);
+      }
+    }
+    if (Array.isArray(cached.categories) && cached.categories.length > 0) {
+      categoriesMap.clear();
+      state.categories = cached.categories.map(c => normalizeCategory(c)).filter(Boolean);
+      state.categories.forEach(c => categoriesMap.set(c.id, c));
+    }
+    if (Array.isArray(cached.badges) && cached.badges.length > 0) {
+      badgesMap.clear();
+      state.badges = cached.badges;
+      state.badges.forEach(b => badgesMap.set(b.id, b));
+    }
+    if (Array.isArray(cached.members) && cached.members.length > 0) {
+      usersMap.clear();
+      state.members = cached.members.map(m => normalizeUser(m));
+      state.members.forEach(m => {
+        if (m.uid) usersMap.set(m.uid, m);
+      });
+    }
+    if (Array.isArray(cached.tasks) && cached.tasks.length > 0) {
+      state.tasks = cached.tasks.map(t => normalizeTask(t)).filter(Boolean);
+    }
+    if (Array.isArray(cached.broadcasts) && cached.broadcasts.length > 0) {
+      state.broadcasts = cached.broadcasts.map(b => normalizeBroadcast(b));
+    }
+    if (Array.isArray(cached.attendanceSessions) && cached.attendanceSessions.length > 0) {
+      state.attendanceSessions = cached.attendanceSessions.map(s => normalizeSession(s));
+    }
+    if (Array.isArray(cached.mySubmissions)) {
+      state.mySubmissions = cached.mySubmissions.map(s => normalizeSubmission(s));
+      if (!isCurrentUserAdmin()) {
+        state.submissions = state.mySubmissions;
+      }
+    }
+    if (Array.isArray(cached.myAttendanceLogs)) {
+      state.myAttendanceLogs = cached.myAttendanceLogs.map(l => normalizeAttendanceLog(l));
+      if (!isCurrentUserAdmin()) {
+        state.attendanceLogs = state.myAttendanceLogs;
+      }
+    }
+    if (Array.isArray(cached.personalNotifications)) {
+      state.personalNotifications = cached.personalNotifications.map(n => normalizeNotification(n));
+    }
+    if (Array.isArray(cached.broadcastNotificationsAll)) {
+      state.broadcastNotificationsAll = cached.broadcastNotificationsAll.map(n => normalizeNotification(n));
+    }
+    if (Array.isArray(cached.broadcastNotificationsBadge)) {
+      state.broadcastNotificationsBadge = cached.broadcastNotificationsBadge.map(n => normalizeNotification(n));
+    }
+    if (Array.isArray(cached.notifications)) {
+      state.notifications = cached.notifications;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export function renderHydratedCacheUI() {
+  try { applySettings(); } catch (e) {}
+  try { populateCategoryFilters(); } catch (e) {}
+  try { renderTasks(); } catch (e) {}
+  try { renderLeaderboard(); } catch (e) {}
+  try { renderAttendanceView(); } catch (e) {}
+  try { renderAttendanceLogs(); } catch (e) {}
+  try { renderHomeBroadcastBanner(); } catch (e) {}
+  try { updateNotificationBadges(); } catch (e) {}
+  try { renderNotifications(); } catch (e) {}
+  try { updateProfileUI(); } catch (e) {}
+  try { updateUserTodayAttendanceBadge(); } catch (e) {}
+  try { checkAdminRoleUI(); } catch (e) {}
+}
+
+export function slugifyModalTitle(rawTitle) {
+  const clean = String(rawTitle || 'sheet')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return 'modal-' + (clean || 'sheet');
+}
+
+export function getQueryParam(key) {
+  try {
+    const search = String(window?.location?.search || '').replace(/^\?/, '');
+    if (!search) return null;
+    for (const part of search.split('&')) {
+      const [k, v] = part.split('=');
+      if (decodeURIComponent(k || '') === key) {
+        return decodeURIComponent(v || '');
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+export function getActiveTabRouteId() {
+  if (typeof userPagerInstance !== 'undefined' && userPagerInstance && typeof userPagerInstance.getActive === 'function') {
+    const act = userPagerInstance.getActive();
+    if (act) return act;
+  }
+  const tabParam = getQueryParam('tab');
+  if (tabParam) return tabParam;
+  const hashVal = String(window?.location?.hash || '').replace(/^#/, '');
+  if (['home', 'tasks', 'notifications', 'attendance', 'profile'].includes(hashVal)) {
+    return hashVal;
+  }
+  return 'home';
+}
+
+export function pushModalHistoryState(modalSlug, customUrl = null) {
+  if (_isHandlingPopState || typeof history === 'undefined' || typeof window === 'undefined') return;
+  try {
+    const slug = String(modalSlug || 'modal-sheet').replace(/^#/, '');
+    const activeTab = getActiveTabRouteId();
+    const curState = history.state || {};
+    if (curState.cocModal === slug) return;
+    const targetUrl = customUrl || (window.location.pathname + window.location.search + '#' + slug);
+    history.pushState({ cocTab: activeTab, cocModal: slug }, '', targetUrl);
+  } catch (e) {}
+}
+
+export function syncTabHistoryState(tabId, replace = false) {
+  if (_isHandlingPopState || typeof history === 'undefined' || typeof window === 'undefined') return;
+  try {
+    const cleanTab = String(tabId || 'home').replace(/^#/, '');
+    const targetUrl = `${window.location.pathname}?tab=${cleanTab}#${cleanTab}`;
+    const stateObj = { cocTab: cleanTab, cocModal: null };
+    if (replace) {
+      history.replaceState(stateObj, '', targetUrl);
+    } else if (history.state?.cocTab !== cleanTab || history.state?.cocModal) {
+      history.pushState(stateObj, '', targetUrl);
+    }
+  } catch (e) {}
+}
+
+export function closeTopmostLayerOnBack() {
+  const cropperOverlay = document.getElementById('avatarCropperOverlay');
+  if (cropperOverlay && !cropperOverlay.classList.contains('hidden')) {
+    const cancelBtn = document.getElementById('btnCancelCropper');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') cancelBtn.onclick();
+    else cropperOverlay.classList.add('hidden');
+    return true;
+  }
+
+  const iconPickerOverlay = document.getElementById('unifiedIconPickerOverlay');
+  if (iconPickerOverlay && !iconPickerOverlay.classList.contains('is-hidden')) {
+    closeUnifiedIconPicker();
+    return true;
+  }
+
+  const subModalOverlay = document.getElementById('subModalOverlay');
+  if (subModalOverlay && !subModalOverlay.classList.contains('is-hidden')) {
+    closeSubModal();
+    return true;
+  }
+
+  const confirmRoot = document.getElementById('shared-confirm-root');
+  if (confirmRoot && confirmRoot.classList.contains('open')) {
+    const cancelBtn = document.getElementById('shared-confirm-cancel');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') {
+      cancelBtn.onclick();
+    } else {
+      confirmRoot.classList.remove('open');
+      document.body.style.overflow = '';
+    }
+    return true;
+  }
+
+  const customPrompt = document.getElementById('modal-custom-prompt');
+  if (customPrompt && customPrompt.classList.contains('open')) {
+    const cancelBtn = document.getElementById('btn-custom-prompt-cancel');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') cancelBtn.onclick();
+    else customPrompt.classList.remove('open');
+    return true;
+  }
+
+  const customAlert = document.getElementById('modal-custom-alert');
+  if (customAlert && customAlert.classList.contains('open')) {
+    const okBtn = document.getElementById('btn-custom-alert-ok');
+    if (okBtn && typeof okBtn.onclick === 'function') okBtn.onclick();
+    else customAlert.classList.remove('open');
+    return true;
+  }
+
+  const sharedModalRoot = document.getElementById('shared-modal-root');
+  if (sharedModalRoot && sharedModalRoot.classList.contains('open')) {
+    const cancelBtn = document.getElementById('shared-modal-cancel');
+    if (cancelBtn && typeof cancelBtn.onclick === 'function') {
+      cancelBtn.onclick();
+    } else {
+      closeModal();
+    }
+    return true;
+  }
+
+  const openBackdrops = Array.from(document.querySelectorAll('.modal-backdrop.open'));
+  if (openBackdrops.length > 0) {
+    const topBackdrop = openBackdrops[openBackdrops.length - 1];
+    topBackdrop.classList.remove('open');
+    if (document.querySelectorAll('.modal-backdrop.open, .ios-modal-overlay.open').length === 0) {
+      document.body.style.overflow = '';
+    }
+    return true;
+  }
+
+  const drawer = document.getElementById('side-drawer');
+  if (drawer && (drawer.classList.contains('is-open') || drawer.classList.contains('drawer-open') || drawer.classList.contains('active'))) {
+    closeDrawer(false);
+    return true;
+  }
+
+  if (selectionState && selectionState.active) {
+    exitSelectionMode();
+    return true;
+  }
+
+  const adminOverlay = document.getElementById('modal-admin-dashboard');
+  if (adminOverlay && !adminOverlay.classList.contains('hidden')) {
+    closeAdminDashboard();
+    return true;
+  }
+
+  return false;
+}
+
+export function handleAppPopState(e) {
+  _isHandlingPopState = true;
+  try {
+    if (closeTopmostLayerOnBack()) {
+      return;
+    }
+
+    const queryTab = getQueryParam('tab');
+    const hashRaw = String(window?.location?.hash || '').replace(/^#/, '');
+    const stateTab = e?.state?.cocTab;
+    const targetTab = stateTab || queryTab || hashRaw || 'home';
+
+    if (hashRaw === 'menu' || e?.state?.cocModal === 'menu') {
+      openDrawer(false);
+      return;
+    }
+
+    if (targetTab === 'admin' || hashRaw.startsWith('admin-')) {
+      const adminSubPage = hashRaw.startsWith('admin-') ? hashRaw.replace('admin-', '') : 'overview';
+      if (isCurrentUserAdmin()) {
+        showAdminDashboard(adminSubPage);
+      } else {
+        openAdminPortal();
+      }
+      return;
+    }
+
+    const validTabs = ['home', 'tasks', 'notifications', 'attendance', 'profile'];
+    if (validTabs.includes(targetTab) && typeof userPagerInstance !== 'undefined' && userPagerInstance) {
+      userPagerInstance.goTo(targetTab);
+    }
+  } finally {
+    _isHandlingPopState = false;
+  }
+}
+
+export function isDefaultEmailProfilePic(url) {
+  if (!url || typeof url !== 'string') return true;
+  const clean = url.trim();
+  if (!clean || clean === './image_ad59c0.jpg') return true;
+  if (/default-user/i.test(clean)) return true;
+  if (/AAAAAAAAAAA/i.test(clean)) return true;
+  if (/ui-avatars\.com/i.test(clean)) return true;
+  if (/dicebear\.com.*\/initials/i.test(clean)) return true;
+  if (/gravatar\.com\/avatar\/.*[\?&]d=(?:identicon|retro|initials|mp|blank)/i.test(clean)) return true;
+  if (/placeholder/i.test(clean) && !clean.startsWith('data:image/svg')) return true;
+  return false;
+}
+
 export function normalizeUser(raw) {
   if (!raw) return null;
   const name = raw.name || raw.displayName || 'Team Member';
-  const avatarUrl = raw.avatarUrl || raw.photoURL || '';
-  const penalties = typeof raw.penalties === 'number' ? raw.penalties : (typeof raw.totalPenalties === 'number' ? raw.totalPenalties : 0);
+  const rawAvatar = raw.avatarUrl || raw.photoURL || '';
+  const uid = raw.uid || '';
+  const isDefault = isDefaultEmailProfilePic(rawAvatar);
+  const avatarUrl = isDefault ? getDeterministicPresetAvatar(uid || name) : rawAvatar;
+  const penalties = Math.max(0, typeof raw.penalties === 'number' ? raw.penalties : (typeof raw.totalPenalties === 'number' ? raw.totalPenalties : (typeof raw.penaltyPoints === 'number' ? raw.penaltyPoints : 0)));
+  const points = Math.max(0, typeof raw.points === 'number' ? raw.points : (typeof raw.totalPoints === 'number' ? raw.totalPoints : 0));
+  const finesDue = Math.max(0, Number(raw.finesDue ?? raw.fines ?? raw.quotas ?? 0) || 0);
+  const netPts = Math.max(0, typeof raw.netPts === 'number' ? raw.netPts : (points - penalties));
   const badges = Array.isArray(raw.badges) ? raw.badges : [];
   const badgeIds = Array.isArray(raw.badgeIds)
     ? raw.badgeIds
     : badges.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean);
 
   return {
-    uid: raw.uid || '',
+    uid,
     name,
     displayName: name,
     avatarUrl,
     photoURL: avatarUrl,
     role: raw.role || 'member',
     isAdmin: Boolean(raw.isAdmin || raw.role === 'admin'),
-    points: typeof raw.points === 'number' ? raw.points : 0,
+    points,
+    totalPoints: points,
+    totalEarned: Math.max(0, typeof raw.totalEarned === 'number' ? raw.totalEarned : points),
     penalties,
+    penaltyPoints: penalties,
     totalPenalties: penalties,
+    finesDue,
+    fines: finesDue,
+    netPts,
     monthBucket: raw.monthBucket || '',
     monthPoints: typeof raw.monthPoints === 'number' ? raw.monthPoints : 0,
     weekBucket: raw.weekBucket || '',
@@ -802,12 +1349,15 @@ export function normalizeUser(raw) {
 export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = '') {
   if (uid && usersMap.has(uid)) {
     const u = usersMap.get(uid);
+    const rawAvatar = u.avatarUrl || u.photoURL || fallbackAvatar;
+    const isDefault = isDefaultEmailProfilePic(rawAvatar);
+    const resolvedAvatar = !isDefault ? rawAvatar : getDeterministicPresetAvatar(u.uid || u.name || fallbackName);
     return {
       uid: u.uid,
       name: u.name || u.displayName || fallbackName,
       displayName: u.displayName || u.name || fallbackName,
-      avatarUrl: u.avatarUrl || u.photoURL || fallbackAvatar,
-      photoURL: u.photoURL || u.avatarUrl || fallbackAvatar,
+      avatarUrl: resolvedAvatar,
+      photoURL: resolvedAvatar,
       role: u.role || 'member',
       isAdmin: Boolean(u.isAdmin),
       points: u.points || 0,
@@ -820,12 +1370,14 @@ export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = ''
       badgeIds: u.badgeIds || []
     };
   }
+  const isDefault = isDefaultEmailProfilePic(fallbackAvatar);
+  const resolvedAvatar = !isDefault ? fallbackAvatar : getDeterministicPresetAvatar(uid || fallbackName);
   return {
     uid: uid || '',
     name: fallbackName,
     displayName: fallbackName,
-    avatarUrl: fallbackAvatar,
-    photoURL: fallbackAvatar,
+    avatarUrl: resolvedAvatar,
+    photoURL: resolvedAvatar,
     role: 'member',
     isAdmin: false,
     points: 0,
@@ -863,6 +1415,31 @@ function normalizeWaiverRequest(raw) {
 function normalizeAttendanceLog(raw) {
   if (!raw) return null;
   const uid = raw.uid || raw.userId || '';
+  const penalty = typeof raw.penalty === 'number'
+    ? raw.penalty
+    : (typeof raw.penaltyApplied === 'number' ? raw.penaltyApplied : (typeof raw.pointsPenalty === 'number' ? raw.pointsPenalty : 0));
+  const fineEGP = typeof raw.fineEGP === 'number'
+    ? raw.fineEGP
+    : (typeof raw.finePenalty === 'number' ? raw.finePenalty : 0);
+  const earlyBonusPoints = typeof raw.earlyBonusPoints === 'number'
+    ? raw.earlyBonusPoints
+    : (typeof raw.pointsEarned === 'number' ? raw.pointsEarned : 0);
+  const earlyBonusEGP = typeof raw.earlyBonusEGP === 'number' ? raw.earlyBonusEGP : 0;
+  const delaySeconds = typeof raw.delaySeconds === 'number'
+    ? raw.delaySeconds
+    : ((typeof raw.lateMinutes === 'number' ? raw.lateMinutes * 60 : 0) + (typeof raw.lateSeconds === 'number' ? raw.lateSeconds : 0));
+  const lateMinutes = typeof raw.lateMinutes === 'number' ? raw.lateMinutes : Math.floor(delaySeconds / 60);
+  const lateSeconds = typeof raw.lateSeconds === 'number' ? raw.lateSeconds : (delaySeconds % 60);
+  const earlyMinutes = typeof raw.earlyMinutes === 'number' ? raw.earlyMinutes : 0;
+  const isEarly = raw.status === 'early' || Boolean(raw.isEarly) || earlyMinutes > 0 || earlyBonusPoints > 0 || earlyBonusEGP > 0;
+  const status = raw.status || (raw.isLate ? 'late' : (isEarly ? 'early' : 'on_time'));
+  const pointsDelta = typeof raw.pointsDelta === 'number'
+    ? raw.pointsDelta
+    : (earlyBonusPoints > 0 ? earlyBonusPoints : (penalty > 0 ? -penalty : 0));
+  const egpDelta = typeof raw.egpDelta === 'number'
+    ? raw.egpDelta
+    : (earlyBonusEGP > 0 ? earlyBonusEGP : (fineEGP > 0 ? -fineEGP : 0));
+
   return {
     id: raw.id || '',
     sessionId: raw.sessionId || '',
@@ -874,16 +1451,28 @@ function normalizeAttendanceLog(raw) {
     userAvatar: raw.userAvatar || raw.avatarUrl || raw.photoURL || '',
     occurrenceKey: raw.occurrenceKey || 'once',
     occurrenceStart: raw.occurrenceStart || null,
-    checkedInAt: raw.checkedInAt || raw.timestamp || raw.createdAt || null,
-    timestamp: raw.checkedInAt || raw.timestamp || raw.createdAt || null,
-    status: raw.status || (raw.isLate ? 'late' : 'on_time'),
-    isLate: raw.status === 'late' || Boolean(raw.isLate),
-    delaySeconds: typeof raw.delaySeconds === 'number' ? raw.delaySeconds : 0,
-    penalty: typeof raw.penalty === 'number' ? raw.penalty : (typeof raw.penaltyApplied === 'number' ? raw.penaltyApplied : 0),
-    penaltyApplied: typeof raw.penalty === 'number' ? raw.penalty : (typeof raw.penaltyApplied === 'number' ? raw.penaltyApplied : 0),
-    fineEGP: typeof raw.fineEGP === 'number' ? raw.fineEGP : 0,
+    checkedInAt: raw.checkedInAt || raw.checkInTime || raw.timestamp || raw.createdAt || null,
+    checkInTimestamp: raw.checkInTimestamp || null,
+    timestamp: raw.checkedInAt || raw.checkInTime || raw.timestamp || raw.createdAt || null,
+    status,
+    isLate: status === 'late' || Boolean(raw.isLate),
+    isEarly,
+    earlyMinutes,
+    lateMinutes,
+    lateSeconds,
+    delaySeconds,
+    penalty,
+    penaltyApplied: penalty,
+    fineEGP,
+    earlyBonusPoints,
+    earlyBonusEGP,
+    pointsDelta,
+    egpDelta,
+    appliedTierLabel: raw.appliedTierLabel || '',
     penaltyUnit: raw.penaltyUnit || 'minutes',
-    pointsEarned: typeof raw.pointsEarned === 'number' ? raw.pointsEarned : 0
+    pointsEarned: earlyBonusPoints,
+    excused: Boolean(raw.excused || status === 'excused'),
+    adminNote: raw.adminNote || ''
   };
 }
 
@@ -926,7 +1515,8 @@ function normalizeNotification(raw) {
     isArchived,
     timestamp: raw.timestamp || raw.createdAt || null,
     createdAt: raw.createdAt || raw.timestamp || null,
-    read: Boolean(raw.read),
+    read: Boolean(raw.read || raw.isRead),
+    isRead: Boolean(raw.isRead || raw.read),
     readBy: Array.isArray(raw.readBy) ? raw.readBy : [],
     link: raw.link || ''
   };
@@ -934,10 +1524,10 @@ function normalizeNotification(raw) {
 
 export function getAllAvailableBadges() {
   if (badgesMap.size > 0) {
-    return Array.from(badgesMap.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
+    return Array.from(badgesMap.values()).sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
   }
   if (Array.isArray(state.badges) && state.badges.length > 0) {
-    return state.badges;
+    return [...state.badges].sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
   }
   return [];
 }
@@ -972,8 +1562,8 @@ export function normalizeBroadcast(raw) {
   };
 }
 
-// ==== ENGINE START
-// Editable application timezone constant
+const ENGINE_START_MARKER = 1;
+
 const APP_TIMEZONE = "Africa/Cairo";
 
 const ENGINE_WEEKDAYS = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -999,12 +1589,12 @@ function getZonedParts(dateOrMs, timeZone = APP_TIMEZONE) {
   }
   return {
     year: parseInt(map.year, 10),
-    month: parseInt(map.month, 10), // 1..12
-    day: parseInt(map.day, 10), // 1..31
+    month: parseInt(map.month, 10),
+    day: parseInt(map.day, 10),
     hour: parseInt(map.hour === '24' ? '0' : map.hour, 10),
     minute: parseInt(map.minute, 10),
     second: parseInt(map.second, 10),
-    weekday: map.weekday // 'Sat'..'Fri'
+    weekday: map.weekday
   };
 }
 
@@ -1093,7 +1683,6 @@ function normalizeTaskTiers(task) {
   const onTimePoints = typeof task.points === 'number' ? task.points : (typeof task.tieredRewards?.onTimePoints === 'number' ? task.tieredRewards.onTimePoints : 5);
   const durationMinutes = (typeof task.durationMinutes === 'number' && task.durationMinutes > 0) ? task.durationMinutes : null;
 
-  // Early Bonus: switch; picker defines when window ends (untilMinutes > 0 and < durationMinutes)
   let earlyBonus = { enabled: false, untilMinutes: 0, points: onTimePoints };
   if (task.earlyBonus && typeof task.earlyBonus === 'object') {
     earlyBonus = {
@@ -1112,36 +1701,40 @@ function normalizeTaskTiers(task) {
     }
   }
 
-  // Grace Period: switch; picker defines cutoff (untilMinutes > durationMinutes). NO grace points!
-  let grace = { enabled: false, untilMinutes: 0 };
+  let grace = { enabled: false, untilMinutes: 0, penaltyPoints: 0, fineAmountEGP: 0 };
   if (task.grace && typeof task.grace === 'object') {
     grace = {
       enabled: Boolean(task.grace.enabled),
-      untilMinutes: Number(task.grace.untilMinutes) || 0
+      untilMinutes: Number(task.grace.untilMinutes) || 0,
+      penaltyPoints: Math.max(0, Number(task.grace.penaltyPoints) || 0),
+      fineAmountEGP: Math.max(0, Number(task.grace.fineAmountEGP) || 0)
     };
   } else if (task.tieredRewards && task.tieredRewards.graceMinutes) {
     const gMin = Number(task.tieredRewards.graceMinutes) || 0;
     if (gMin > 0 && durationMinutes && (task.tieredRewards.enabled !== false)) {
       grace = {
         enabled: true,
-        untilMinutes: durationMinutes + gMin
+        untilMinutes: durationMinutes + gMin,
+        penaltyPoints: 0,
+        fineAmountEGP: 0
       };
     }
   }
 
-  // Missed Penalty: switch + missedPenalty: { enabled, points }
-  let missedPenalty = { enabled: false, points: 0 };
+  let missedPenalty = { enabled: false, points: 0, fineAmountEGP: 0 };
   if (task.missedPenalty && typeof task.missedPenalty === 'object') {
     missedPenalty = {
       enabled: Boolean(task.missedPenalty.enabled),
-      points: Number(task.missedPenalty.points) || 0
+      points: Number(task.missedPenalty.points) || 0,
+      fineAmountEGP: Math.max(0, Number(task.missedPenalty.fineAmountEGP) || 0)
     };
   } else if (task.tieredRewards) {
     const p = Number(task.tieredRewards.missedPenaltyPoints || task.tieredRewards.missedPenalty?.penaltyPoints || task.tieredRewards.missedPenalty?.points) || 0;
     if (p > 0 && (task.tieredRewards.enabled !== false)) {
       missedPenalty = {
         enabled: true,
-        points: p
+        points: p,
+        fineAmountEGP: 0
       };
     }
   }
@@ -1197,7 +1790,7 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof se
       update.monthPoints = delta;
     }
   } else {
-    // Negative delta (revoke / edit down / bulk delete of submission): use original submittedAt (atMs)
+
     if ((user.weekKey || user.weekBucket || '') === wk) {
       const curWk = Number(user.weekPoints) || 0;
       update.weekPoints = Math.max(0, curWk + delta);
@@ -1212,6 +1805,8 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof se
 }
 
 async function backfillWindowCounters() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   if (!state.user || (state.user.role !== 'admin' && !state.user.isAdmin)) return;
 
   const nowMs = serverNow();
@@ -1226,7 +1821,6 @@ async function backfillWindowCounters() {
       return;
     }
 
-    // Determine start of current month in UTC ms for Cairo (UTC+2)
     const parts = curMonthKey.split('-');
     const year = parseInt(parts[0], 10) || 2026;
     const month = (parseInt(parts[1], 10) || 1) - 1;
@@ -1303,13 +1897,11 @@ async function backfillWindowCounters() {
     }, { merge: true });
     await currentBatch.commit();
 
-    console.log(`[Window Backfill] Synced window counters for marker ${currentBackfillMarker}`);
     renderLeaderboard();
   } catch (err) {
     console.warn('[Window Backfill] Error:', err);
   }
 }
-
 
 function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serverNow === 'function' ? serverNow() : Date.now())) {
   if (!userObj) return 0;
@@ -1326,6 +1918,66 @@ function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serve
     return (userObj.weekKey === curWeekKey || userObj.weekBucket === curWeekKey) ? (userObj.weekPoints || 0) : 0;
   }
   return typeof userObj.points === 'number' ? userObj.points : 0;
+}
+
+function computeMemberRanks(membersList, period = 'all') {
+  const nowMs = typeof serverNow === 'function' ? serverNow() : Date.now();
+  const allMembers = Array.isArray(membersList) ? membersList : (usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state?.members || [])]);
+  const activeMembers = allMembers.filter(m => !m.disabled);
+
+  const mapped = activeMembers.map(m => {
+    const prof = typeof getUserProfile === 'function' ? getUserProfile(m.uid, m.displayName, m.photoURL) : {};
+    const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
+    const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
+    return { ...m, ...prof, periodPoints, penalties, points: periodPoints };
+  });
+
+  const ranked = mapped
+    .filter(m => Number(m.periodPoints || 0) > 0)
+    .sort((a, b) => {
+      const diff = Number(b.periodPoints || 0) - Number(a.periodPoints || 0);
+      if (diff !== 0) return diff;
+      const penDiff = (a.penalties || 0) - (b.penalties || 0);
+      if (penDiff !== 0) return penDiff;
+      return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
+    });
+
+  ranked.forEach((m, idx) => {
+    if (idx > 0 && m.periodPoints === ranked[idx - 1].periodPoints && m.penalties === ranked[idx - 1].penalties) {
+      m.rank = ranked[idx - 1].rank;
+    } else {
+      m.rank = idx + 1;
+    }
+  });
+
+  const unranked = mapped
+    .filter(m => Number(m.periodPoints || 0) <= 0)
+    .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+
+  unranked.forEach(m => {
+    m.rank = null;
+  });
+
+  const ranksByUid = new Map();
+  ranked.forEach(m => ranksByUid.set(m.uid, m.rank));
+  unranked.forEach(m => ranksByUid.set(m.uid, null));
+
+  return {
+    ranked,
+    unranked,
+    all: [...ranked, ...unranked],
+    ranksByUid,
+    rankedMembers: ranked,
+    unrankedMembers: unranked,
+    sorted: [...ranked, ...unranked]
+  };
+}
+
+function getUserRank(uid, period = 'all') {
+  if (!uid) return null;
+  const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state?.members || [])];
+  const { ranksByUid } = computeMemberRanks(allMembers, period);
+  return ranksByUid.get(uid) ?? null;
 }
 
 function daysInMonth(year, month) {
@@ -1617,8 +2269,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
   const nowMs = parseDateTimeToMs(nowInput);
   const { onTimePoints, durationMinutes, earlyBonus, grace } = normalizeTaskTiers(task);
 
-
-
   function evaluateOccurrence(occurrenceKey, start) {
     const closesAt = isPermanent ? null : (durationMinutes ? start + durationMinutes * 60000 : (() => {
       const p = getZonedParts(start, APP_TIMEZONE);
@@ -1654,7 +2304,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
       };
     }
 
-    // Before deadline
     if (nowMs < closesAt) {
       const isEarly = earlyBonus.enabled && earlyBonus.untilMinutes > 0 && nowMs < (start + earlyBonus.untilMinutes * 60000);
       return {
@@ -1669,7 +2318,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
       };
     }
 
-    // Grace window
     if (graceEndsAt && nowMs < graceEndsAt) {
       return {
         state: 'grace',
@@ -1682,7 +2330,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
       };
     }
 
-    // Closed
     return {
       state: 'closed',
       pointsForNow: 0,
@@ -1698,7 +2345,6 @@ function getTaskWindow(task, nowInput = (typeof serverNow === 'function' ? serve
     return evaluateOccurrence('once', startMs);
   }
 
-  // Recurring
   if (nowMs < startMs) {
     const occurrenceKey = formatZonedDateKey(startMs, APP_TIMEZONE);
     return evaluateOccurrence(occurrenceKey, startMs);
@@ -1760,8 +2406,6 @@ function resolveSessionOccurrence(session, nowInput = (typeof serverNow === 'fun
     };
   }
 
-  // Keep the most recent occurrence whose check-in window has opened;
-  // only advance to the next scheduled occurrence once its check-in window (o - earlyMs) opens.
   const pastOrOpen = occs.filter(o => (o - earlyMs) <= nowMs);
   if (pastOrOpen.length > 0) {
     const activeOcc = pastOrOpen[pastOrOpen.length - 1];
@@ -1838,15 +2482,60 @@ function normalizeSession(s) {
     };
   }
 
-  const targetType = s.targetType || (Array.isArray(s.assignedUids) && s.assignedUids.length > 0 ? 'custom' : (Array.isArray(s.badgeIds) && s.badgeIds.length > 0 ? 'badge' : 'all'));
+  const assignmentType = s.assignmentType || (s.targetType === 'custom' ? 'specific' : (s.targetType === 'badge' ? 'by_badge' : 'all'));
+  const targetType = s.targetType || (assignmentType === 'specific' ? 'custom' : (assignmentType === 'by_badge' ? 'badge' : 'all'));
+  const assignedMembers = Array.isArray(s.assignedMembers) ? s.assignedMembers : (Array.isArray(s.assignedUids) ? s.assignedUids : []);
+  const assignedUids = Array.isArray(s.assignedUids) ? s.assignedUids : assignedMembers;
+  const earlyBonusPoints = Math.max(0, Number(s.earlyBonusPoints) || Number(s.earlyCheckInBonusPoints) || 0);
+  const earlyBonusEGP = Math.max(0, Number(s.earlyBonusEGP) || Number(s.earlyCheckInBonusEGP) || 0);
+  const gracePeriodMins = Math.max(0, Number(s.gracePeriodMins ?? s.graceMinutes ?? 0));
+  const timeBrackets = Array.isArray(s.timeBrackets)
+    ? s.timeBrackets
+        .filter(t => t && typeof t === 'object')
+        .map(t => ({
+          type: t.type === 'after' ? 'after' : 'before',
+          fromMins: Math.max(0, Number(t.fromMins ?? t.fromMinsBefore) || 0),
+          toMins: Math.max(0, Number(t.toMins ?? t.toMinsBefore) || 0),
+          points: Math.max(0, Number(t.points ?? t.bonusPoints) || 0),
+          egp: Math.max(0, Number(t.egp ?? t.bonusEgp ?? t.bonusEGP) || 0)
+        }))
+    : (Array.isArray(s.earlyBonusTiers)
+      ? s.earlyBonusTiers
+          .filter(t => t && typeof t === 'object')
+          .map(t => ({
+            type: 'before',
+            fromMins: Math.max(0, Number(t.fromMinsBefore) || 0),
+            toMins: Math.max(0, Number(t.toMinsBefore) || 0),
+            points: Math.max(0, Number(t.bonusPoints) || 0),
+            egp: Math.max(0, Number(t.bonusEgp ?? t.bonusEGP) || 0)
+          }))
+      : []);
+
+  const earlyBonusTiers = timeBrackets
+    .filter(t => t.type !== 'after')
+    .map(t => ({
+      fromMinsBefore: t.fromMins,
+      toMinsBefore: t.toMins,
+      bonusPoints: t.points,
+      bonusEgp: t.egp
+    }));
+
   return {
     ...s,
     id: s.id || '',
     title: s.title || 'Attendance Session',
     schedule: s.schedule || { type: 'once', startDateTime: s.startTime || s.startDateTime || Date.now() },
+    assignmentType,
     targetType,
     badgeIds: Array.isArray(s.badgeIds) ? s.badgeIds : [],
-    assignedUids: Array.isArray(s.assignedUids) ? s.assignedUids : [],
+    assignedMembers,
+    assignedUids,
+    earlyBonusPoints,
+    earlyBonusEGP,
+    earlyBonusTiers,
+    timeBrackets,
+    gracePeriodMins,
+    graceMinutes: gracePeriodMins,
     active: s.active !== false && s.status !== 'closed' && s.status !== 'archived',
     archived: Boolean(s.archived || s.status === 'archived'),
     status: s.status || (s.archived ? 'archived' : (s.active === false ? 'inactive' : 'active')),
@@ -1857,6 +2546,33 @@ function normalizeSession(s) {
     earlyCheckInMinutes: typeof s.earlyCheckInMinutes === 'number' ? s.earlyCheckInMinutes : (typeof s.earlyWindowMinutes === 'number' ? s.earlyWindowMinutes : 30),
     lateCutoffMinutes: typeof s.lateCutoffMinutes === 'number' ? s.lateCutoffMinutes : 120
   };
+}
+
+function isUserEligibleForSession(session, user = state.user) {
+  if (!session || !user || !user.uid) return false;
+  const norm = normalizeSession(session);
+  const assignmentType = norm.assignmentType || (norm.targetType === 'custom' ? 'specific' : (norm.targetType === 'badge' ? 'by_badge' : 'all'));
+
+  if (assignmentType === 'all') return true;
+
+  if (assignmentType === 'specific') {
+    const list = Array.isArray(norm.assignedMembers) && norm.assignedMembers.length > 0
+      ? norm.assignedMembers
+      : (Array.isArray(norm.assignedUids) ? norm.assignedUids : []);
+    return list.includes(user.uid);
+  }
+
+  if (assignmentType === 'by_badge') {
+    const userBadgeIds = new Set([
+      ...(Array.isArray(user.badgeIds) ? user.badgeIds : []),
+      ...(Array.isArray(user.badges) ? user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : [])
+    ]);
+    const bIds = Array.isArray(norm.badgeIds) ? norm.badgeIds : [];
+    if (bIds.length === 0) return true;
+    return bIds.some(bid => userBadgeIds.has(bid));
+  }
+
+  return true;
 }
 
 function calculateSystemPenalty(sys, delaySeconds, isAbsent = false) {
@@ -1883,7 +2599,6 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   if (!session) return { status: 'blocked', reason: 'no_session', message: 'No session provided' };
   const norm = normalizeSession(session);
 
-  // Support explicit absent status calculation
   if (nowInput === 'absent' || (typeof nowInput === 'object' && nowInput !== null && nowInput.status === 'absent')) {
     const ptsAbsence = calculateSystemPenalty(norm.pointsPenalty, 0, true);
     const fineAbsence = calculateSystemPenalty(norm.finePenalty, 0, true);
@@ -1920,7 +2635,7 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
       opensAt,
       occurrenceKey,
       occurrenceStart: S,
-      message: `Check-in opens at ${hh}:${mm}`
+      message: `Check-in window is not open yet (opens at ${hh}:${mm})`
     };
   }
 
@@ -1936,8 +2651,61 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   }
 
   if (nowMs <= S) {
+    const isEarly = nowMs < S;
+    const earlySeconds = isEarly ? Math.max(0, Math.floor((S - nowMs) / 1000)) : 0;
+    const earlyMinutes = isEarly ? Math.ceil((S - nowMs) / 60000) : 0;
+    let earlyBonusPoints = 0;
+    let earlyBonusEGP = 0;
+    let appliedTierLabel = isEarly ? 'Early' : 'On Time';
+
+    if (isEarly) {
+      const beforeBrackets = (norm.timeBrackets || []).filter(t => t.type !== 'after');
+      if (beforeBrackets.length > 0) {
+        let bestReward = -1;
+        for (const t of beforeBrackets) {
+          const upper = Math.max(Number(t.fromMins) || 0, Number(t.toMins) || 0);
+          const lower = Math.min(Number(t.fromMins) || 0, Number(t.toMins) || 0);
+          if (earlyMinutes <= upper && earlyMinutes >= lower) {
+            const pts = Math.max(0, Number(t.points) || 0);
+            const egp = Math.max(0, Number(t.egp) || 0);
+            const score = pts + egp;
+            if (score > bestReward) {
+              bestReward = score;
+              earlyBonusPoints = pts;
+              earlyBonusEGP = egp;
+              appliedTierLabel = `${upper}m–${lower}m Early Tier`;
+            }
+          }
+        }
+      } else {
+        earlyBonusPoints = norm.earlyBonusPoints || 0;
+        earlyBonusEGP = norm.earlyBonusEGP || 0;
+        if (earlyBonusPoints > 0 || earlyBonusEGP > 0) {
+          appliedTierLabel = 'Early Arrival Bonus';
+        }
+      }
+    }
+
+    let message = 'On time (0 EGP penalty)';
+    if (isEarly && (earlyBonusPoints > 0 || earlyBonusEGP > 0)) {
+      const parts = [];
+      if (earlyBonusPoints > 0) parts.push(`+${earlyBonusPoints} Pts Early Bonus`);
+      if (earlyBonusEGP > 0) parts.push(`+${earlyBonusEGP} EGP`);
+      message = parts.join(', ');
+    }
+
     return {
       status: 'on_time',
+      isEarly,
+      earlyMinutes,
+      earlySeconds,
+      lateMinutes: 0,
+      lateSeconds: 0,
+      earlyBonusPoints,
+      earlyBonusEGP,
+      pointsDelta: earlyBonusPoints,
+      egpDelta: earlyBonusEGP,
+      appliedTierLabel,
       penalty: 0,
       pointsPenalty: 0,
       finePenalty: 0,
@@ -1945,15 +2713,68 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
       delaySeconds: 0,
       occurrenceKey,
       occurrenceStart: S,
-      message: 'On time (0 EGP penalty)'
+      message
     };
   }
 
-  const delaySeconds = Math.floor((nowMs - S) / 1000);
-  const pointsPenalty = calculateSystemPenalty(norm.pointsPenalty, delaySeconds, false);
-  const finePenalty = calculateSystemPenalty(norm.finePenalty, delaySeconds, false);
-  const m = Math.floor(delaySeconds / 60);
-  const s = delaySeconds % 60;
+  const delaySeconds = Math.max(0, Math.floor((nowMs - S) / 1000));
+  const lateMinutes = Math.floor(delaySeconds / 60);
+  const lateSeconds = delaySeconds % 60;
+
+  // Retroactive Grace Period: If gracePeriodMins > 0 and arrival <= gracePeriodMins, 0 penalty, on_time
+  const hasGrace = (norm.gracePeriodMins || 0) > 0;
+  if (hasGrace && lateMinutes <= norm.gracePeriodMins) {
+    return {
+      status: 'on_time',
+      isEarly: false,
+      earlyMinutes: 0,
+      earlySeconds: 0,
+      lateMinutes: 0,
+      lateSeconds: 0,
+      earlyBonusPoints: 0,
+      earlyBonusEGP: 0,
+      pointsDelta: 0,
+      egpDelta: 0,
+      appliedTierLabel: `Grace Period (${lateMinutes}m)`,
+      penalty: 0,
+      pointsPenalty: 0,
+      finePenalty: 0,
+      fineEGP: 0,
+      delaySeconds: 0,
+      occurrenceKey,
+      occurrenceStart: S,
+      message: `On time within ${norm.gracePeriodMins}m grace period`
+    };
+  }
+
+  // Late arrival beyond grace period: Calculate penalty from ORIGINAL start time S (do NOT subtract grace period)
+  let pointsPenalty = 0;
+  let finePenalty = 0;
+  let appliedTierLabel = `Late by ${lateMinutes}m ${lateSeconds}s`;
+
+  const afterBrackets = (norm.timeBrackets || []).filter(t => t.type === 'after');
+  let matchedAfterBracket = false;
+  if (afterBrackets.length > 0) {
+    for (const b of afterBrackets) {
+      const lower = Math.min(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+      const upper = Math.max(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+      if (lateMinutes >= lower && lateMinutes <= upper) {
+        pointsPenalty = Math.max(0, Number(b.points) || 0);
+        finePenalty = Math.max(0, Number(b.egp) || 0);
+        appliedTierLabel = `${lower}m–${upper}m Late Tier`;
+        matchedAfterBracket = true;
+        break;
+      }
+    }
+  }
+
+  if (!matchedAfterBracket) {
+    pointsPenalty = calculateSystemPenalty(norm.pointsPenalty, delaySeconds, false);
+    finePenalty = calculateSystemPenalty(norm.finePenalty, delaySeconds, false);
+  }
+
+  const m = lateMinutes;
+  const s = lateSeconds;
 
   let feeStr = '';
   if (finePenalty > 0 && pointsPenalty > 0) {
@@ -1961,7 +2782,6 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
   } else if (finePenalty > 0) {
     feeStr = ` (-${finePenalty} EGP)`;
   } else if (pointsPenalty > 0) {
-    // If it was a legacy session without explicit pointsPenalty, legacy message format was EGP
     if (!session.pointsPenalty && !session.finePenalty) {
       feeStr = ` (-${pointsPenalty} EGP)`;
     } else {
@@ -1973,6 +2793,16 @@ function computeAttendance(session, nowInput = (typeof serverNow === 'function' 
 
   return {
     status: 'late',
+    isEarly: false,
+    earlyMinutes: 0,
+    earlySeconds: 0,
+    lateMinutes: m,
+    lateSeconds: s,
+    earlyBonusPoints: 0,
+    earlyBonusEGP: 0,
+    pointsDelta: -pointsPenalty,
+    egpDelta: -finePenalty,
+    appliedTierLabel,
     penalty: pointsPenalty,
     pointsPenalty,
     finePenalty,
@@ -2024,6 +2854,71 @@ function addDaysZoned(dateOrMs, n = 0, tz = APP_TIMEZONE) {
   return zonedDateToMs(p.year, p.month, p.day + n, p.hour, p.minute, p.second, tz);
 }
 
+function validateSessionWindowAndBrackets({
+  openTotalMins,
+  startTotalMins,
+  closeTotalMins,
+  earlyCheckInMinutes,
+  lateCutoffMinutes,
+  gracePeriodMins = 0,
+  timeBrackets = []
+}) {
+  if (openTotalMins > startTotalMins) {
+    return { valid: false, error: 'Check-in opens must be at or before session start time.' };
+  }
+  if (closeTotalMins <= startTotalMins) {
+    return { valid: false, error: 'Check-in closes must be strictly after session start time.' };
+  }
+  if (openTotalMins >= closeTotalMins) {
+    return { valid: false, error: 'Check-in opens must be strictly before check-in closes.' };
+  }
+
+  const earlyBrackets = (timeBrackets || []).filter(t => t.type !== 'after');
+  for (let i = 0; i < earlyBrackets.length; i++) {
+    const b = earlyBrackets[i];
+    const bLow = Math.min(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    const bHigh = Math.max(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    if (bLow <= 0) {
+      return { valid: false, error: `Early bonus bracket (${b.fromMins}m–${b.toMins}m) must be strictly before start time (> 0m).` };
+    }
+    if (bHigh > earlyCheckInMinutes) {
+      return { valid: false, error: `Early bonus bracket (${bHigh}m) extends earlier than check-in opens (${earlyCheckInMinutes}m before start).` };
+    }
+    for (let j = i + 1; j < earlyBrackets.length; j++) {
+      const o = earlyBrackets[j];
+      const oLow = Math.min(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      const oHigh = Math.max(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      if (Math.max(bLow, oLow) <= Math.min(bHigh, oHigh)) {
+        return { valid: false, error: `Early bonus brackets conflict: [${bLow}m–${bHigh}m] overlaps with [${oLow}m–${oHigh}m].` };
+      }
+    }
+  }
+
+  const lateBrackets = (timeBrackets || []).filter(t => t.type === 'after');
+  const grace = Math.max(0, Number(gracePeriodMins) || 0);
+  for (let i = 0; i < lateBrackets.length; i++) {
+    const b = lateBrackets[i];
+    const bLow = Math.min(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    const bHigh = Math.max(Number(b.fromMins) || 0, Number(b.toMins) || 0);
+    if (bLow <= grace) {
+      return { valid: false, error: `Late penalty bracket starts at ${bLow}m, which conflicts with grace period (${grace}m).` };
+    }
+    if (bHigh > lateCutoffMinutes) {
+      return { valid: false, error: `Late penalty bracket (${bHigh}m) extends past check-in cutoff (${lateCutoffMinutes}m after start).` };
+    }
+    for (let j = i + 1; j < lateBrackets.length; j++) {
+      const o = lateBrackets[j];
+      const oLow = Math.min(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      const oHigh = Math.max(Number(o.fromMins) || 0, Number(o.toMins) || 0);
+      if (Math.max(bLow, oLow) <= Math.min(bHigh, oHigh)) {
+        return { valid: false, error: `Late penalty brackets conflict: [${bLow}m–${bHigh}m] overlaps with [${oLow}m–${oHigh}m].` };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 if (typeof globalThis !== 'undefined') {
   globalThis.APP_TIMEZONE = APP_TIMEZONE;
   globalThis.getOccurrences = getOccurrences;
@@ -2040,6 +2935,7 @@ if (typeof globalThis !== 'undefined') {
   globalThis.normalizeSession = normalizeSession;
   globalThis.calculateSystemPenalty = calculateSystemPenalty;
   globalThis.computeAttendance = computeAttendance;
+  globalThis.isUserEligibleForSession = isUserEligibleForSession;
   globalThis.weekKeyOf = weekKeyOf;
   globalThis.monthKeyOf = monthKeyOf;
   globalThis.getTimeBucketKeys = getTimeBucketKeys;
@@ -2050,13 +2946,11 @@ if (typeof globalThis !== 'undefined') {
   globalThis.zonedPartsToMs = zonedPartsToMs;
   globalThis.startOfZonedDay = startOfZonedDay;
   globalThis.addDaysZoned = addDaysZoned;
+  globalThis.validateSessionWindowAndBrackets = validateSessionWindowAndBrackets;
   if (typeof usersMap !== 'undefined') globalThis.usersMap = usersMap;
   if (typeof getUserProfile !== 'undefined') globalThis.getUserProfile = getUserProfile;
 }
 
-/**
- * Pure 1x cover-fit crop geometry calculation for live preview and canvas export.
- */
 function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, outSize, isLogo = false }) {
   const w = Math.max(1, Number(imgW) || 1);
   const h = Math.max(1, Number(imgH) || 1);
@@ -2140,10 +3034,6 @@ function computeCropRect({ imgW, imgH, viewport, zoom = 1, offsetX, offsetY, out
   };
 }
 
-/**
- * Pure, DOM-free row gesture factory.
- * Manages pointer gestures, long press, selection toggle, and tap invocation.
- */
 function defaultVibrate(ms) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) {
     try { navigator.vibrate(ms); } catch (_) {}
@@ -2241,11 +3131,6 @@ function createRowGesture(gestureOptions = {}) {
   return { down, move, up, cancel, click };
 }
 
-/**
- * Pure roster reconciliation engine.
- * Computes shown occurrence, active assigned members, matching logs/waivers,
- * and exact member attendance statuses.
- */
 function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (typeof serverNow === 'function' ? serverNow() : Date.now()) } = {}) {
   const norm = normalizeSession(session) || session;
   const now = parseDateTimeToMs(nowMs);
@@ -2256,7 +3141,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
   const earlyMs = earlyCheckInMinutes * 60000;
   const lateMs = lateCutoffMinutes * 60000;
 
-  // 1. Members normalization & active filtering (non-disabled, non-blocked)
   let memberList = [];
   if (Array.isArray(members)) {
     memberList = members;
@@ -2267,7 +3151,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
   }
   const activeMembers = memberList.filter(m => m && !m.disabled && !m.blocked);
 
-  // 2. Assigned calculation (NEVER 0 when active members exist)
   let assigned = [];
   if (norm?.targetType === 'badge' && Array.isArray(norm.badgeIds) && norm.badgeIds.length > 0) {
     assigned = activeMembers.filter(m => {
@@ -2283,9 +3166,8 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     assigned = [...activeMembers];
   }
 
-  // 3. Resolve shown occurrence
   let shownOccurrence = null;
-  let occState = 'upcoming'; // upcoming | open | closed
+  let occState = 'upcoming';
 
   if (sched.type === 'once') {
     const opensAt = startMs - earlyMs;
@@ -2349,7 +3231,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     }
   }
 
-  // 4. Match logs and waivers for shown occurrence
   const occLogs = (Array.isArray(logs) ? logs : []).filter(l => {
     if (!l) return false;
     const matchSession = (l.sessionId === norm.id || !l.sessionId || !norm.id);
@@ -2395,7 +3276,6 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     }
   });
 
-  // 5. Evaluate rows and counts
   let presentCount = 0;
   let onTimeCount = 0;
   let lateCount = 0;
@@ -2470,23 +3350,58 @@ function buildRoster({ session, logs = [], waivers = [], members = [], nowMs = (
     globalThis.createRowGesture = createRowGesture;
     globalThis.buildRoster = buildRoster;
   }
-// ==== ENGINE END
+const ENGINE_END_MARKER = 1;
 
-export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned };
+export { computeCropRect, createRowGesture, buildRoster, APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, computeMemberRanks, getUserRank, isUserEligibleForSession, validateSessionWindowAndBrackets };
 
-/* ==========================================================================
-   SHARED UI INFRASTRUCTURE (MANDATORY EXACT NAMES)
-   ========================================================================== */
+export function safeInsertBefore(parent, newNode, referenceNode) {
+  if (!parent || !newNode) return null;
+  try {
+    if (referenceNode && referenceNode.parentNode === parent) {
+      return parent.insertBefore(newNode, referenceNode);
+    } else {
+      return parent.appendChild(newNode);
+    }
+  } catch (err) {
+    console.warn('safeInsertBefore fallback:', err);
+    try {
+      return parent.appendChild(newNode);
+    } catch (e) {
+      return null;
+    }
+  }
+}
 
-/**
- * Escapes HTML characters safely.
- */
+export function safeRemoveChild(parent, childNode) {
+  if (!parent || !childNode) return null;
+  try {
+    if (childNode.parentNode === parent) {
+      return parent.removeChild(childNode);
+    }
+  } catch (err) {
+    console.warn('safeRemoveChild fallback:', err);
+  }
+  return null;
+}
 
-/* ==========================================================================
-   v2.1.0 SHARED iOS COMPONENTS (Task 1)
-   ========================================================================== */
+export function safeReplaceChild(parent, newChild, oldChild) {
+  if (!parent || !newChild || !oldChild) return null;
+  try {
+    if (oldChild.parentNode === parent) {
+      return parent.replaceChild(newChild, oldChild);
+    } else {
+      return parent.appendChild(newChild);
+    }
+  } catch (err) {
+    console.warn('safeReplaceChild fallback:', err);
+    try {
+      return parent.appendChild(newChild);
+    } catch (e) {
+      return null;
+    }
+  }
+}
 
-// Prototype getter/setter for .checked on <button role="switch">
 if (typeof HTMLButtonElement !== 'undefined' && !Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype, 'checked')) {
   Object.defineProperty(HTMLButtonElement.prototype, 'checked', {
     get() {
@@ -2506,7 +3421,6 @@ if (typeof HTMLButtonElement !== 'undefined' && !Object.getOwnPropertyDescriptor
   });
 }
 
-// Global delegated toggle for role="switch"
 if (typeof document !== 'undefined') {
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[role="switch"]');
@@ -2532,9 +3446,6 @@ if (typeof document !== 'undefined') {
   });
 }
 
-/**
- * Returns HTML string for an iOS Switch.
- */
 export function renderSwitchHTML({ id = '', checked = false, disabled = false, label = '', className = '' } = {}) {
   const isChecked = Boolean(checked);
   return `
@@ -2547,9 +3458,6 @@ export function renderSwitchHTML({ id = '', checked = false, disabled = false, l
   `.trim();
 }
 
-/**
- * DOM creator for iOS Switch.
- */
 export function renderSwitch({ checked = false, onChange = null, label = '', disabled = false, id = '', className = '' } = {}) {
   const wrapper = document.createElement('label');
   wrapper.className = `ios-switch-wrapper ${className}`.trim();
@@ -2602,9 +3510,6 @@ export function renderSwitch({ checked = false, onChange = null, label = '', dis
   return wrapper;
 }
 
-/**
- * Renders an iOS Segmented Control with sliding thumb.
- */
 export function renderSegmented({ options = [], value = '', onChange = null, className = '', id = '' } = {}) {
   const container = document.createElement('div');
   container.className = `ios-segmented ${className}`.trim();
@@ -2687,9 +3592,6 @@ export function renderSegmented({ options = [], value = '', onChange = null, cla
   return container;
 }
 
-/**
- * Renders an iOS Stepper with press-and-hold repeating.
- */
 export function renderStepper({ value = 0, min = 0, max = 9999, step = 1, unit = '', onChange = null, id = '', className = '' } = {}) {
   const container = document.createElement('div');
   container.className = `ios-stepper ${className}`.trim();
@@ -2773,16 +3675,11 @@ export function renderStepper({ value = 0, min = 0, max = 9999, step = 1, unit =
   return container;
 }
 
-/**
- * Open iOS Wheel Date/Time Picker bottom sheet.
- * Returns Promise<epochMs | minutesSinceMidnight | null>
- */
 export function openDateTimePicker({ title = 'Select Date & Time', valueMs = null, mode = 'datetime', minMs = null, maxMs = null } = {}) {
   return new Promise((resolve) => {
     const baseMs = valueMs ? parseDateTimeToMs(valueMs) : serverNow();
     const parts = msToZonedParts(baseMs, APP_TIMEZONE);
 
-    // Selected state
     let selYear = parts.year;
     let selMonth = parts.month;
     let selDay = parts.day;
@@ -2793,7 +3690,6 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
 
     let modalRef = null;
 
-    // Build wheel columns HTML
     let wheelsHtml = '';
 
     if (mode === 'datetime') {
@@ -2852,7 +3748,7 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
           </div>
         </div>
       `;
-    } else { // mode === 'time'
+    } else {
       wheelsHtml = `
         <div class="ios-wheel-container">
           <div class="ios-wheel-highlight"></div>
@@ -2901,7 +3797,6 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
       }
     });
 
-    // Wire wheel columns scroll and selection
     setTimeout(() => {
       const modalEl = document.getElementById('shared-modal');
       if (!modalEl) return;
@@ -2958,9 +3853,6 @@ export function openDateTimePicker({ title = 'Select Date & Time', valueMs = nul
   });
 }
 
-/**
- * Format timestamp into display string for date/time field chip.
- */
 function formatDateTimeDisplay(val, mode = 'datetime') {
   if (val === null || val === undefined || val === '') return 'Select';
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -2983,9 +3875,6 @@ function formatDateTimeDisplay(val, mode = 'datetime') {
   return `${p.weekday}, ${monthNames[p.month - 1]} ${p.day} - ${hr12}:${minPad} ${ampm}`;
 }
 
-/**
- * Renders an inset-grouped row for selecting Date/Time via the wheel picker.
- */
 export function renderDateTimeField({ label = 'Date & Time', valueMs = null, mode = 'datetime', onChange = null, placeholder = 'Select', id = '', className = '' } = {}) {
   const container = document.createElement('div');
   container.className = `ios-datetime-field ${className}`.trim();
@@ -3038,11 +3927,7 @@ export function renderDateTimeField({ label = 'Date & Time', valueMs = null, mod
   return container;
 }
 
-/**
- * Opens an iOS Item Picker Half-Sheet modal with optional search and icons.
- * Returns Promise<selectedId | null>
- */
-export function openItemPicker({ title = 'Select Item', items = [], selectedId = null, searchable = false, emptyText = 'No items found' } = {}) {
+export function openItemPicker({ title = 'Select Item', items = [], selectedId = null, searchable = false, emptyText = 'No items found', onSelect = null } = {}) {
   return new Promise((resolve) => {
     let curSel = selectedId;
     let filterQuery = '';
@@ -3056,19 +3941,30 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
       }
 
       return filtered.map((it) => {
-        const isSelected = it.id === curSel;
-        const iconSvg = it.iconKey && ICON_LIBRARY[it.iconKey] ? ICON_LIBRARY[it.iconKey] : '';
+        const isSelected = String(it.id) === String(curSel);
+        const colorDot = it.color ? `<span class="w-3 h-3 rounded-full shrink-0" style="background-color: ${esc(it.color)};"></span>` : '';
+        let iconSvg = '';
+        if (it.iconSvg) {
+          iconSvg = it.iconSvg;
+        } else if (it.iconKey) {
+          iconSvg = getCategorySvg(it.iconKey, 'w-4 h-4') || (ICON_LIBRARY[it.iconKey] || '');
+        } else if (it.icon) {
+          iconSvg = getCategorySvg(it.icon, 'w-4 h-4') || (ICON_LIBRARY[it.icon] || '');
+        }
+        const iconDisplay = iconSvg ? `<span class="w-7 h-7 rounded-lg bg-white/10 text-white flex items-center justify-center shrink-0">${iconSvg}</span>` : '';
+
         return `
-          <button type="button" class="item-picker-row w-full p-3 rounded-xl flex items-center justify-between text-left transition hover:bg-white/5 active:bg-white/10 ${isSelected ? 'bg-white/[0.08]' : ''}" data-id="${esc(it.id)}">
+          <button type="button" class="item-picker-row w-full p-3 rounded-xl flex items-center justify-between text-left transition hover:bg-white/5 active:bg-white/10 active:scale-[0.98] cursor-pointer select-none ${isSelected ? 'bg-white/[0.08]' : ''}" data-id="${esc(it.id)}">
             <div class="flex items-center gap-3 min-w-0 pr-2">
-              ${iconSvg ? `<span class="w-7 h-7 rounded-lg bg-white/10 text-[#0A84FF] flex items-center justify-center shrink-0">${iconSvg}</span>` : ''}
+              ${colorDot}
+              ${iconDisplay}
               <div class="min-w-0 flex-1 break-words">
                 <div class="text-sm font-semibold text-white break-words">${esc(it.label)}</div>
                 ${it.sublabel ? `<div class="text-xs text-neutral-400 break-words mt-0.5">${esc(it.sublabel)}</div>` : ''}
               </div>
             </div>
             ${isSelected ? `
-              <svg class="w-5 h-5 text-[#0A84FF] shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-[#0A84FF] shrink-0 ml-2" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
               </svg>
             ` : ''}
@@ -3101,18 +3997,24 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
     });
 
     setTimeout(() => {
-      const modalEl = document.getElementById('shared-modal');
+      const modalEl = document.getElementById('shared-modal-root') || document.body;
       if (!modalEl) return;
 
       const searchInp = modalEl.querySelector('#item-picker-search');
       const listEl = modalEl.querySelector('#item-picker-list');
+      if (!listEl) return;
 
       function wireRows() {
         listEl.querySelectorAll('.item-picker-row').forEach((row) => {
-          row.onclick = () => {
+          row.onclick = (e) => {
+            e.preventDefault();
             const id = row.dataset.id;
+            const foundItem = items.find(it => String(it.id) === String(id)) || { id };
+            if (typeof onSelect === 'function') {
+              try { onSelect(foundItem); } catch (err) { console.error('Picker onSelect error:', err); }
+            }
             modal.close();
-            resolve(id);
+            resolve(foundItem);
           };
         });
       }
@@ -3131,10 +4033,6 @@ export function openItemPicker({ title = 'Select Item', items = [], selectedId =
   });
 }
 
-/**
- * Pick image file, crop in interactive 280px sheet, compress to Base64 data URI.
- * Returns Promise<dataURI | null>
- */
 export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = false, maxChars = 32000, onDone, onCropped } = {}) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
@@ -3178,7 +4076,6 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
           });
         }
 
-        // Downscale source to max 1200px for mobile memory safety
         let srcW = bmp.width;
         let srcH = bmp.height;
         const maxDim = 1200;
@@ -3207,7 +4104,6 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
         let panX = undefined;
         let panY = undefined;
 
-        // Initial geometry computation for the 280x280 preview canvas (outSize = viewport)
         let geom = computeCropRect({ imgW: srcW, imgH: srcH, viewport, zoom, offsetX: panX, offsetY: panY, outSize: viewport, isLogo });
         panX = geom.clampedX;
         panY = geom.clampedY;
@@ -3408,7 +4304,6 @@ export function pickAndCropImage({ shape = 'circle', outSize = 160, isLogo = fal
       }
     };
 
-    // Synchronous click within user gesture
     input.click();
   });
 }
@@ -3424,16 +4319,13 @@ export function esc(value) {
 }
 export const escapeHtml = esc;
 
-/**
- * Apple-style top floating glass pill toast.
- */
 export function toast(message, type = 'info') {
   const container = document.getElementById('toast-container');
   if (!container) return;
 
   const toastEl = document.createElement('div');
   toastEl.className = `toast toast-${type}`;
-  
+
   let iconSvg = '';
   if (type === 'success') {
     iconSvg = '<svg class="w-4 h-4 text-emerald-400 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>';
@@ -3463,9 +4355,6 @@ function dismissToast(el) {
   setTimeout(() => el.remove(), 300);
 }
 
-/**
- * iOS Action Sheet confirmation returning Promise<boolean>.
- */
 export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', confirmLabel, confirmText, destructive = false, isDestructive = false }) {
   const actualConfirmLabel = confirmLabel || confirmText || 'Confirm';
   const isDest = Boolean(destructive || isDestructive);
@@ -3484,6 +4373,7 @@ export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', con
 
   document.body.style.overflow = 'hidden';
   root.classList.add('open');
+  pushModalHistoryState('modal-confirm');
 
   return new Promise((resolve) => {
     let resolved = false;
@@ -3514,9 +4404,6 @@ export function confirmSheet({ title = 'Confirm', message = 'Are you sure?', con
 }
 export const showCustomConfirm = (title, message) => confirmSheet({ title, message, confirmLabel: 'Confirm', destructive: true });
 
-/**
- * Reusable Bottom Sheet / Modal with validation, scroll lock, dirty check, and focus trap.
- */
 export const modalStack = [];
 
 function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel, cancelLabel, sheetClass = '', clearStack = false }) {
@@ -3535,7 +4422,6 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
     modalStack.length = 0;
   }
 
-  // Nested modal support: preserve parent modal state & DOM nodes cleanly
   if (root.classList.contains('open') && !clearStack) {
     const savedNodes = Array.from(bodyEl.childNodes);
     modalStack.push({
@@ -3554,7 +4440,6 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
     });
   }
 
-  // Reset interactive detent state & classes for the new sheet
   if (modalSheet) {
     modalSheet.className = 'modal-sheet';
     modalSheet.style.height = '';
@@ -3586,6 +4471,8 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
 
   document.body.style.overflow = 'hidden';
   root.classList.add('open');
+  root._currentOnClose = typeof onClose === 'function' ? onClose : null;
+  pushModalHistoryState(slugifyModalTitle(title));
 
   let isClosing = false;
   const onKeyDown = (e) => {
@@ -3613,10 +4500,10 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   const close = () => {
     if (isClosing) return;
     isClosing = true;
+    root._currentOnClose = null;
     window.removeEventListener('keydown', onKeyDown);
     if (typeof onClose === 'function') onClose();
 
-    // If a parent modal is stacked, pop and restore its exact nodes, handlers, and input states
     if (modalStack.length > 0) {
       const prev = modalStack.pop();
       titleEl.textContent = prev.title || '';
@@ -3688,24 +4575,23 @@ function openModal({ title, body, bodyHtml, onSave, onClose, isDirty, saveLabel,
   return { close, modalEl: root };
 }
 
-/* ==========================================================================
-   RELEASE v2.2.0: INTERACTIVE iOS SHEET DETENTS CONTROLLER
-   ========================================================================== */
 export function initSheetDragGestures() {
   let activeSheet = null;
   let startY = 0;
-  let startHeight = 0;
   let startTime = 0;
+  let initialSheetHeight = 0;
   let viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
   let isDragging = false;
+  let isGrabberDrag = false;
   let potentialContentDrag = false;
   let activeScrollEl = null;
+  let pointerCaptureTarget = null;
+  let pointerCaptureId = null;
 
   const onStart = (e) => {
     const target = e.target;
     if (!target) return;
 
-    // Ignore interactive elements
     if (target.closest('button, input, textarea, select, a, .sub-modal-text-btn, .modal-close-btn, #shared-modal-cancel, #shared-modal-save, .member-picker-item, .chip-remove-btn')) {
       return;
     }
@@ -3713,25 +4599,34 @@ export function initSheetDragGestures() {
     const sheet = target.closest('.modal-sheet, .sub-modal-sheet');
     if (!sheet) return;
 
-    // Check hit on grabber / header vs content
     const grabber = target.closest('.sheet-grabber, .sheet-grabber-hitarea, .modal-grabber, .modal-header, .sub-modal-toolbar');
     const scrollEl = target.closest('.modal-body, .sheet-scroll, .icon-grid-scrollable') || sheet;
 
     startY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
     startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    startHeight = sheet.getBoundingClientRect().height;
-    viewportH = window.innerHeight;
+    viewportH = (typeof window !== 'undefined' && window.innerHeight) || 800;
     activeSheet = sheet;
     activeScrollEl = scrollEl;
+    initialSheetHeight = sheet.getBoundingClientRect().height;
 
     if (grabber) {
       isDragging = true;
+      isGrabberDrag = true;
       potentialContentDrag = false;
       sheet.classList.add('is-dragging');
+      sheet.style.transition = 'none';
+
+      if (e.pointerId != null && typeof target.setPointerCapture === 'function') {
+        try {
+          target.setPointerCapture(e.pointerId);
+          pointerCaptureTarget = target;
+          pointerCaptureId = e.pointerId;
+        } catch (_) {}
+      }
     } else if (scrollEl && scrollEl.scrollTop <= 0) {
-      // At the top of content, eligible for pull-down dismiss
       potentialContentDrag = true;
       isDragging = false;
+      isGrabberDrag = false;
     }
   };
 
@@ -3742,10 +4637,12 @@ export function initSheetDragGestures() {
     const deltaY = currentY - startY;
 
     if (!isDragging && potentialContentDrag) {
-      if (deltaY > 10 && (!activeScrollEl || activeScrollEl.scrollTop <= 0)) {
+      if (deltaY > 8 && (!activeScrollEl || activeScrollEl.scrollTop <= 0)) {
         isDragging = true;
+        isGrabberDrag = false;
         potentialContentDrag = false;
         activeSheet.classList.add('is-dragging');
+        activeSheet.style.transition = 'none';
       } else if (deltaY < -5) {
         potentialContentDrag = false;
         return;
@@ -3753,25 +4650,35 @@ export function initSheetDragGestures() {
     }
 
     if (!isDragging) return;
+    if (e.cancelable) e.preventDefault();
 
-    const minH = 0.25 * viewportH;
-    const maxH = 0.95 * viewportH;
-    const targetHeight = startHeight - deltaY;
+    if (isGrabberDrag) {
+      const minHeight = Math.max(160, viewportH * 0.20);
+      const maxHeight = Math.min(viewportH - 12, viewportH * 0.96);
+      const calculatedHeight = initialSheetHeight - deltaY;
 
-    if (targetHeight >= minH) {
-      const clampedHeight = Math.min(maxH, targetHeight);
-      activeSheet.style.height = `${clampedHeight}px`;
-      activeSheet.style.maxHeight = `${clampedHeight}px`;
-      activeSheet.style.transform = 'translateY(0)';
+      if (calculatedHeight >= minHeight) {
+        const clampedH = Math.min(maxHeight, calculatedHeight);
+        activeSheet.style.height = `${clampedH}px`;
+        activeSheet.style.maxHeight = `${clampedH}px`;
+        activeSheet.style.transform = 'translateY(0)';
+      } else {
+        const overflowDown = minHeight - calculatedHeight;
+        activeSheet.style.height = `${minHeight}px`;
+        activeSheet.style.maxHeight = `${minHeight}px`;
+        activeSheet.style.transform = `translateY(${overflowDown}px)`;
+      }
     } else {
-      activeSheet.style.height = `${minH}px`;
-      activeSheet.style.maxHeight = `${minH}px`;
-      activeSheet.style.transform = `translateY(${minH - targetHeight}px)`;
+      if (deltaY > 0) {
+        activeSheet.style.transform = `translateY(${deltaY}px)`;
+      } else {
+        activeSheet.style.transform = `translateY(${deltaY * 0.25}px)`;
+      }
     }
 
     const backdrop = activeSheet.closest('.modal-backdrop, .sub-modal-overlay');
     if (backdrop) {
-      const progress = Math.max(0.2, Math.min(1, targetHeight / (0.75 * viewportH)));
+      const progress = Math.max(0.1, Math.min(1, 1 - (Math.max(0, deltaY) / (0.75 * viewportH))));
       backdrop.style.opacity = progress.toFixed(2);
     }
   };
@@ -3779,15 +4686,29 @@ export function initSheetDragGestures() {
   const onEnd = (e) => {
     if (!activeSheet) return;
 
+    if (pointerCaptureTarget && pointerCaptureId != null) {
+      try {
+        if (typeof pointerCaptureTarget.releasePointerCapture === 'function') {
+          pointerCaptureTarget.releasePointerCapture(pointerCaptureId);
+        }
+      } catch (_) {}
+      pointerCaptureTarget = null;
+      pointerCaptureId = null;
+    }
+
     const currentY = e.clientY ?? e.changedTouches?.[0]?.clientY ?? startY;
     const deltaY = currentY - startY;
     const nowTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const deltaTime = Math.max(1, nowTime - startTime);
-    const velocity = deltaY / deltaTime; // px/ms
+    const velocity = deltaY / deltaTime;
 
     const sheet = activeSheet;
     const wasDragging = isDragging;
+    const wasGrabber = isGrabberDrag;
+    const initialH = initialSheetHeight;
+
     isDragging = false;
+    isGrabberDrag = false;
     potentialContentDrag = false;
     activeSheet = null;
     activeScrollEl = null;
@@ -3801,31 +4722,53 @@ export function initSheetDragGestures() {
 
     if (!wasDragging) return;
 
-    const finalHeight = startHeight - deltaY;
-    const finalRatio = finalHeight / viewportH;
+    const minHeight = Math.max(160, viewportH * 0.20);
+    const maxHeight = Math.min(viewportH - 12, viewportH * 0.96);
 
-    // Dismiss Resolution: If released below 25% viewport height OR high downward velocity (>0.8 px/ms)
-    const shouldDismiss = (finalRatio < 0.25) || (velocity > 0.8 && deltaY > 30);
+    if (wasGrabber) {
+      const calculatedHeight = initialH - deltaY;
+      const shouldDismiss = (calculatedHeight < minHeight - 60) || (deltaY > 180 && velocity > 0.55);
 
-    if (shouldDismiss) {
-      sheet.style.transition = 'transform 0.24s cubic-bezier(0.32, 0.72, 0, 1)';
-      sheet.style.transform = 'translateY(100%)';
+      if (shouldDismiss) {
+        sheet.style.transition = 'transform 0.22s cubic-bezier(0.32, 0.72, 0, 1)';
+        sheet.style.transform = 'translateY(100%)';
+        setTimeout(() => {
+          sheet.style.transform = '';
+          sheet.style.transition = '';
+          sheet.style.height = '';
+          sheet.style.maxHeight = '';
+          dismissModalSheet(sheet);
+        }, 220);
+        return;
+      }
+
+      const finalHeight = Math.max(minHeight, Math.min(maxHeight, calculatedHeight));
+      sheet.style.transition = 'height 0.15s ease-out, max-height 0.15s ease-out, transform 0.15s ease-out';
+      sheet.style.height = `${finalHeight}px`;
+      sheet.style.maxHeight = `${finalHeight}px`;
+      sheet.style.transform = 'translateY(0)';
       setTimeout(() => {
-        sheet.style.transform = '';
-        sheet.style.height = '';
-        sheet.style.maxHeight = '';
-        dismissModalSheet(sheet);
-      }, 240);
+        sheet.style.transition = '';
+      }, 160);
       return;
     }
 
-    // Freeform Fluid Height Retention:
-    // Sheet stays at exact released height clamped between 25vh and 95vh
-    const clampedParkedHeight = Math.min(0.95 * viewportH, Math.max(0.25 * viewportH, finalHeight));
-    sheet.classList.remove('sheet-detent-large');
-    sheet.style.transition = 'height 0.18s ease, max-height 0.18s ease';
-    sheet.style.height = `${clampedParkedHeight}px`;
-    sheet.style.maxHeight = `${clampedParkedHeight}px`;
+    const shouldDismiss = (deltaY > 110) || (velocity > 0.45 && deltaY > 30);
+
+    if (shouldDismiss) {
+      sheet.style.transition = 'transform 0.22s cubic-bezier(0.32, 0.72, 0, 1)';
+      sheet.style.transform = 'translateY(100%)';
+      setTimeout(() => {
+        sheet.style.transform = '';
+        sheet.style.transition = '';
+        sheet.style.height = '';
+        sheet.style.maxHeight = '';
+        dismissModalSheet(sheet);
+      }, 220);
+      return;
+    }
+
+    sheet.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
     sheet.style.transform = 'translateY(0)';
     setTimeout(() => {
       sheet.style.transition = '';
@@ -3865,21 +4808,32 @@ export function initSheetDragGestures() {
     closeModal();
   }
 
-  // Pointer events (with touch fallbacks)
-  document.addEventListener('pointerdown', onStart, { passive: true });
-  document.addEventListener('pointermove', onMove, { passive: true });
-  document.addEventListener('pointerup', onEnd, { passive: true });
-  document.addEventListener('pointercancel', onEnd, { passive: true });
-
-  document.addEventListener('touchstart', onStart, { passive: true });
-  document.addEventListener('touchmove', onMove, { passive: true });
-  document.addEventListener('touchend', onEnd, { passive: true });
-  document.addEventListener('touchcancel', onEnd, { passive: true });
+  if (typeof window !== 'undefined' && 'PointerEvent' in window) {
+    document.addEventListener('pointerdown', onStart, { passive: true });
+    document.addEventListener('pointermove', onMove, { passive: false });
+    document.addEventListener('pointerup', onEnd, { passive: true });
+    document.addEventListener('pointercancel', onEnd, { passive: true });
+  } else {
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd, { passive: true });
+    document.addEventListener('touchcancel', onEnd, { passive: true });
+  }
 }
 
-/**
- * Deterministic avatar renderer with color hashed from uid and fallback initials.
- */
+export function getDeterministicPresetAvatar(uid) {
+  const presets = typeof getPresetAvatars === 'function' ? getPresetAvatars() : [];
+  if (!presets || presets.length === 0) return './image_ad59c0.jpg';
+  const str = String(uid || 'guest');
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % presets.length;
+  return presets[index]?.dataUrl || './image_ad59c0.jpg';
+}
+
 export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   if (typeof sizeClass === 'number') {
     sizeClass = sizeClass === 48 ? 'w-12 h-12' : `w-[${sizeClass}px] h-[${sizeClass}px]`;
@@ -3887,69 +4841,107 @@ export function renderAvatar(user, sizeClass = 'w-10 h-10') {
   const name = user?.name || user?.displayName || user?.userName || 'Team Member';
   const uid = user?.uid || user?.userId || 'guest';
   const photo = user?.avatarUrl || user?.photoURL || user?.userAvatar || '';
-  const isSafe = /^data:image\/(webp|jpeg|png);base64,/i.test(photo) || /^https?:\/\//i.test(photo);
-
-  const initials = name
-    .split(' ')
-    .filter(Boolean)
-    .slice(0, 2)
-    .map(p => p[0].toUpperCase())
-    .join('') || 'U';
-
-  const palette = ['#007AFF', '#34C759', '#FF9500', '#FF2D55', '#AF52DE', '#5856D6', '#00C7BE', '#32ADE6'];
-  let hash = 0;
-  for (let i = 0; i < uid.length; i++) {
-    hash = (hash << 5) - hash + uid.charCodeAt(i);
-    hash |= 0;
-  }
-  const color = palette[Math.abs(hash) % palette.length];
-
-  if (isSafe && photo) {
-    return `
-      <div class="${sizeClass} rounded-full overflow-hidden border border-white/20 flex-shrink-0 bg-white/5 relative">
-        <img src="${esc(photo)}" alt="${esc(name)}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
-        <div style="display:none; background-color:${color};" class="w-full h-full items-center justify-center font-bold text-white text-xs">
-          ${esc(initials)}
-        </div>
-      </div>
-    `;
-  }
+  const isSafe = /^data:image\/(webp|jpeg|png|svg\+xml);base64,/i.test(photo) || /^data:image\/svg\+xml/i.test(photo) || /^https?:\/\//i.test(photo);
+  const fallbackPreset = getDeterministicPresetAvatar(uid || name);
+  const isDefault = isDefaultEmailProfilePic(photo);
+  const effectivePhoto = (isSafe && !isDefault) ? photo : fallbackPreset;
 
   return `
-    <div class="${sizeClass} rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center font-bold text-white text-xs border border-white/20 shadow-sm" style="background-color: ${color};">
-      ${esc(initials)}
+    <div class="${sizeClass} rounded-full overflow-hidden border border-white/20 flex-shrink-0 bg-white/5 relative">
+      <img src="${esc(effectivePhoto)}" alt="${esc(name)}" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='${esc(fallbackPreset)}';" />
     </div>
   `;
 }
 
-/* ==========================================================================
-   DYNAMIC SPACE-AWARE BADGE ROW & MINI-PROFILE OVERHANGING SHEET (Task 4)
-   ========================================================================== */
-
 export function normalizeBadgeItem(b) {
   if (!b) return null;
   if (typeof b === 'string') {
-    return { id: b, label: b, icon: 'star', color: '#0A84FF', description: '' };
+    const fromMap = badgesMap.get(b) || (Array.isArray(state?.badges) ? state.badges.find(x => x.id === b) : null);
+    if (fromMap) {
+      return {
+        id: fromMap.id || b,
+        label: fromMap.name || fromMap.label || b,
+        name: fromMap.name || fromMap.label || b,
+        icon: fromMap.iconKey || fromMap.icon || 'star',
+        iconKey: fromMap.iconKey || fromMap.icon || 'star',
+        color: fromMap.color || '#0A84FF',
+        description: fromMap.description || '',
+        order: typeof fromMap.order === 'number' ? fromMap.order : 999999
+      };
+    }
+    return { id: b, label: b, name: b, icon: 'star', iconKey: 'star', color: '#0A84FF', description: '', order: 999999 };
   }
+  const id = b.id || b.label || b.name || 'badge';
+  const fromMap = badgesMap.get(id);
+  const label = fromMap?.name || fromMap?.label || b.label || b.name || id || 'Badge';
+  const icon = fromMap?.iconKey || fromMap?.icon || b.iconKey || b.icon || 'star';
+  const color = fromMap?.color || b.color || '#0A84FF';
+  const description = fromMap?.description || b.description || '';
+  const order = typeof b.order === 'number' ? b.order : (typeof fromMap?.order === 'number' ? fromMap.order : 999999);
   return {
-    id: b.id || b.label || 'badge',
-    label: b.label || b.name || b.id || 'Badge',
-    icon: b.icon || 'star',
-    color: b.color || '#0A84FF',
-    description: b.description || ''
+    id,
+    label,
+    name: label,
+    icon,
+    iconKey: icon,
+    color,
+    description,
+    order
   };
+}
+
+export function resolveOrderedUserBadges(badgesInput, member = null) {
+  const memberObj = (member && typeof member === 'object') ? member : (typeof member === 'string' ? usersMap.get(member) : null);
+  const rawBadgeIds = Array.isArray(memberObj?.badgeIds) && memberObj.badgeIds.length > 0
+    ? memberObj.badgeIds
+    : (Array.isArray(badgesInput) ? badgesInput.map(b => (typeof b === 'string' ? b : b?.id)).filter(Boolean) : []);
+  const fallbackArr = Array.isArray(badgesInput) ? badgesInput : (Array.isArray(memberObj?.badges) ? memberObj.badges : []);
+
+  const ordered = [];
+  const seen = new Set();
+
+  rawBadgeIds.forEach(bid => {
+    const id = typeof bid === 'string' ? bid : bid?.id;
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const live = badgesMap.get(id) || (Array.isArray(state?.badges) ? state.badges.find(x => x.id === id) : null);
+    if (live) {
+      ordered.push(normalizeBadgeItem(live));
+    } else {
+      const fb = fallbackArr.find(x => (typeof x === 'string' ? x : x?.id) === id);
+      ordered.push(normalizeBadgeItem(fb || id));
+    }
+  });
+
+  fallbackArr.forEach(item => {
+    const norm = normalizeBadgeItem(item);
+    if (norm && norm.id && !seen.has(norm.id)) {
+      seen.add(norm.id);
+      ordered.push(norm);
+    }
+  });
+
+  return ordered.filter(Boolean);
+}
+
+export function renderExpandedBadgesHtml(badgesInput, member = null) {
+  const ordered = resolveOrderedUserBadges(badgesInput, member);
+  if (ordered.length === 0) return '';
+  return ordered.map((b, idx) => `
+    <span class="badge-pill-expanded inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold leading-none shrink-0" data-badge-id="${esc(b.id)}" data-badge-index="${idx}" style="background: ${b.color}20; color: ${b.color}; border: 1px solid ${b.color}45;" title="${esc(b.description || b.label)}">
+      ${getCategorySvg(b.icon || 'star', 'w-3.5 h-3.5 shrink-0')}
+      <span>${esc(b.label)}</span>
+    </span>
+  `).join('');
 }
 
 const badgeRowObservers = new WeakMap();
 
-/**
- * Renders space-aware badge pills using ResizeObserver.
- * Strictly prioritizes member name and points metric remaining 100% visible and unclipped.
- */
 export function renderBadgeRow(container, badges, member) {
   if (!container) return;
-  const rawList = Array.isArray(badges) ? badges : (member?.badges && Array.isArray(member.badges) ? member.badges : []);
-  const normBadges = rawList.map(normalizeBadgeItem).filter(Boolean);
+  const normBadges = resolveOrderedUserBadges(badges, member);
+
+  container.classList.add('badge-strip-compact');
 
   if (normBadges.length === 0) {
     container.innerHTML = '';
@@ -3961,61 +4953,23 @@ export function renderBadgeRow(container, badges, member) {
     return;
   }
 
-  const memberUid = member?.uid || (typeof member === 'string' ? member : container.dataset.uid);
-
   const updateBadgesLayout = () => {
     const availableWidth = container.clientWidth;
-    if (availableWidth <= 0) return;
-
-    // Fast offscreen measurement to compute exact font/padding dimensions
-    const offscreen = document.createElement('div');
-    offscreen.className = 'flex items-center gap-1';
-    offscreen.style.cssText = 'position: absolute; visibility: hidden; pointer-events: none; left: -9999px; top: -9999px; white-space: nowrap; font-size: 10px;';
-
-    normBadges.forEach(b => {
-      const chip = document.createElement('span');
-      chip.className = 'badge-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none shrink-0';
-      chip.innerHTML = `${getCategorySvg(b.icon || 'star', 'w-2.5 h-2.5')}<span class="truncate max-w-[70px]">${esc(b.label)}</span>`;
-      offscreen.appendChild(chip);
-    });
-
-    const morePill = document.createElement('button');
-    morePill.className = 'badge-more-pill inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none shrink-0';
-    morePill.textContent = `+${normBadges.length}`;
-    offscreen.appendChild(morePill);
-
-    document.body.appendChild(offscreen);
-
-    const chipWidths = [];
-    for (let i = 0; i < normBadges.length; i++) {
-      chipWidths.push(offscreen.children[i].getBoundingClientRect().width);
-    }
-    const moreWidth = offscreen.children[normBadges.length].getBoundingClientRect().width;
-    document.body.removeChild(offscreen);
-
+    const iconSize = 22;
     const gap = 4;
-    let visibleCount = 0;
-    let hasMore = false;
 
-    // Check if ALL badges fit without +N
-    const totalAll = chipWidths.reduce((a, b) => a + b, 0) + (normBadges.length - 1) * gap;
-    if (totalAll <= availableWidth) {
-      visibleCount = normBadges.length;
-      hasMore = false;
-    } else {
-      // Find maximum k complete chips that fit cleanly with +N counter pill
-      for (let k = normBadges.length - 1; k >= 1; k--) {
-        const subSum = chipWidths.slice(0, k).reduce((a, b) => a + b, 0) + k * gap + moreWidth;
-        if (subSum <= availableWidth) {
-          visibleCount = k;
-          hasMore = true;
-          break;
-        }
-      }
-      if (visibleCount === 0) {
-        // Space only fits 1 chip (or less) -> render at most 1 chip + compact gray +N counter pill
-        visibleCount = 1;
-        hasMore = normBadges.length > 1;
+    let visibleCount = normBadges.length;
+    let hasOverflow = false;
+
+    if (availableWidth > 0) {
+      const maxFullFit = Math.floor((availableWidth + gap) / (iconSize + gap));
+      if (maxFullFit < normBadges.length) {
+        hasOverflow = true;
+
+        visibleCount = Math.max(0, maxFullFit - 1);
+      } else {
+        visibleCount = normBadges.length;
+        hasOverflow = false;
       }
     }
 
@@ -4023,31 +4977,39 @@ export function renderBadgeRow(container, badges, member) {
     for (let i = 0; i < visibleCount; i++) {
       const b = normBadges[i];
       htmlParts.push(`
-        <span class="badge-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none shrink-0" style="background:${b.color}20; color:${b.color}; border: 1px solid ${b.color}40;" title="${esc(b.label)}">
-          ${getCategorySvg(b.icon || 'star', 'w-2.5 h-2.5')}
-          <span class="truncate max-w-[70px]">${esc(b.label)}</span>
+        <span class="badge-icon-micro rounded-full inline-flex items-center justify-center shrink-0" data-badge-id="${esc(b.id)}" style="width:22px; height:22px; background:${b.color}22; color:${b.color}; border: 1px solid ${b.color}40;" title="${esc(b.label)}">
+          ${getCategorySvg(b.icon || 'star', 'w-3 h-3')}
         </span>
       `);
     }
 
-    if (hasMore && normBadges.length > visibleCount) {
-      const remaining = normBadges.length - visibleCount;
+    if (hasOverflow) {
+      const remainingCount = normBadges.length - visibleCount;
+      const remainingLabels = normBadges.slice(visibleCount).map(b => b.label).join(', ');
       htmlParts.push(`
-        <button type="button" class="badge-more-pill inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none shrink-0 cursor-pointer hover:bg-white/20 transition" style="background: rgba(142,142,147,0.24); color: #E5E5EA; border: 1px solid rgba(255,255,255,0.1);" title="${remaining} more badges" data-uid="${esc(memberUid || '')}">
-          +${remaining}
-        </button>
+        <span class="badge-overflow-pill shrink-0 flex items-center justify-center cursor-pointer" data-no-row-tap="true" data-member-uid="${esc(member?.uid || '')}" title="${remainingCount} more badges: ${esc(remainingLabels)}" style="width:22px; height:22px; min-width:22px;">
+          <svg class="w-3.5 h-3.5 text-white/70" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="2"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+            <circle cx="19" cy="12" r="2"></circle>
+          </svg>
+        </span>
       `);
     }
 
     container.innerHTML = htmlParts.join('');
 
-    const moreBtn = container.querySelector('.badge-more-pill');
-    if (moreBtn) {
-      moreBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (memberUid) openMiniProfileSheet(memberUid);
-      };
+    if (hasOverflow) {
+      const pill = container.querySelector('.badge-overflow-pill');
+      if (pill) {
+        pill.onclick = (e) => {
+          e.stopPropagation();
+          const targetUid = member?.uid || pill.dataset.memberUid;
+          if (targetUid && typeof openMiniProfileSheet === 'function') {
+            openMiniProfileSheet(targetUid);
+          }
+        };
+      }
     }
   };
 
@@ -4064,42 +5026,11 @@ export function renderBadgeRow(container, badges, member) {
   requestAnimationFrame(updateBadgesLayout);
 }
 
-/**
- * Opens read-only Mini-Profile Half-Sheet with overhanging avatar.
- * NEVER renders finesEGP to other members (only self or admin).
- */
 export function openMiniProfileSheet(uidOrMember) {
   const uid = typeof uidOrMember === 'string' ? uidOrMember : (uidOrMember?.uid || '');
   const userProf = getUserProfile(uid, uidOrMember?.displayName || uidOrMember?.name || 'Member', uidOrMember?.photoURL || uidOrMember?.avatarUrl || '');
 
-  // Resolve badges via live badgesMap (FIX 3)
-  const rawBadgeIds = Array.isArray(userProf.badgeIds) ? userProf.badgeIds : (
-    Array.isArray(userProf.badges) ? userProf.badges.map(b => typeof b === 'object' ? b?.id : b).filter(Boolean) : []
-  );
-
-  const resolvedBadges = [];
-  const seenIds = new Set();
-  rawBadgeIds.forEach(bid => {
-    if (seenIds.has(bid)) return;
-    seenIds.add(bid);
-    const fromMap = badgesMap.get(bid);
-    if (fromMap) {
-      resolvedBadges.push(fromMap);
-    } else if (Array.isArray(userProf.badges)) {
-      const fallback = userProf.badges.find(b => (typeof b === 'object' ? b?.id : b) === bid);
-      if (fallback && typeof fallback === 'object') {
-        resolvedBadges.push({
-          id: bid,
-          name: fallback.label || fallback.name || bid,
-          label: fallback.label || fallback.name || bid,
-          description: fallback.description || '',
-          iconKey: fallback.icon || 'star',
-          icon: fallback.icon || 'star',
-          color: fallback.color || '#FFD60A'
-        });
-      }
-    }
-  });
+  const resolvedBadges = resolveOrderedUserBadges(userProf.badges, userProf);
 
   const wrapperEl = document.createElement('div');
   wrapperEl.className = 'mini-profile-root relative w-full h-full';
@@ -4129,19 +5060,23 @@ export function openMiniProfileSheet(uidOrMember) {
           </div>
         </div>
 
-        <!-- Exactly 2-column grid: POINTS and PENALTIES -->
-        <div class="grid grid-cols-2 gap-3 pt-1">
-          <div class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+        <!-- 3-column grid: POINTS, PENALTIES, and SCORE -->
+        <div class="grid grid-cols-3 gap-2 pt-1">
+          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
             <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Points</span>
-            <span class="text-2xl font-bold text-white tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.points || 0}</span>
+            <span class="text-xl font-bold text-white tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.points || 0}</span>
           </div>
-          <div class="p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
             <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Penalties</span>
-            <span class="text-2xl font-bold text-rose-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.penalties || 0}</span>
+            <span class="text-xl font-bold text-rose-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.penalties || 0}</span>
+          </div>
+          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
+            <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Score</span>
+            <span class="text-xl font-bold text-emerald-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${Math.max(0, (userProf.points || 0) - (userProf.penalties || 0))}</span>
           </div>
         </div>
 
-        <!-- Badges resolved via live badgesMap -->
+        <!-- Expanded Mode (Discord-Style Pills) for Badges -->
         <div class="space-y-2 pt-1">
           <div class="flex items-center justify-between">
             <span class="text-xs font-bold text-white uppercase tracking-wider">Badges (${resolvedBadges.length})</span>
@@ -4151,18 +5086,8 @@ export function openMiniProfileSheet(uidOrMember) {
               No badges yet.
             </div>
           ` : `
-            <div class="grid grid-cols-1 gap-2">
-              ${resolvedBadges.map(b => `
-                <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 flex items-start gap-3">
-                  <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: ${b.color}20; color: ${b.color}; border: 1px solid ${b.color}40;">
-                    ${getCategorySvg(b.iconKey || b.icon || 'star', 'w-4 h-4')}
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="font-bold text-xs text-white truncate">${esc(b.name || b.label)}</div>
-                    <div class="text-[11px] text-neutral-400 mt-0.5 leading-snug">${esc(b.description || 'Verified Team Achievement')}</div>
-                  </div>
-                </div>
-              `).join('')}
+            <div class="badge-pills-expanded-wrap flex flex-wrap items-center gap-1.5 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+              ${renderExpandedBadgesHtml(resolvedBadges, userProf)}
             </div>
           `}
         </div>
@@ -4415,9 +5340,6 @@ export function openMemberPicker({ multi = false, includeAllOption = false, filt
   bindPickerEvents(modalInstance);
 }
 
-/**
- * Skeleton shimmer loading card generator.
- */
 export function renderSkeleton(type = 'card', count = 3) {
   let html = '';
   for (let i = 0; i < count; i++) {
@@ -4450,9 +5372,6 @@ export function renderSkeleton(type = 'card', count = 3) {
   return html;
 }
 
-/**
- * iOS-style empty state card helper.
- */
 export function renderEmptyState({ icon = 'clipboard-list', title = 'No items found', message = 'Check back later or adjust your filters.', actionLabel = '', onAction = null }) {
   return `
     <div class="glass-card p-10 text-center border border-dashed border-white/15 my-4">
@@ -4474,9 +5393,6 @@ export function renderEmptyState({ icon = 'clipboard-list', title = 'No items fo
   `;
 }
 
-/**
- * Offline status banner controller.
- */
 function initOfflineBanner() {
   const banner = document.getElementById('offline-banner');
   if (!banner) return;
@@ -4494,9 +5410,6 @@ function initOfflineBanner() {
   update();
 }
 
-/**
- * Global friendly English error boundary.
- */
 function initErrorBoundary() {
   const boundary = document.getElementById('global-error-boundary');
   const msgEl = document.getElementById('error-boundary-message');
@@ -4569,9 +5482,6 @@ function initErrorBoundary() {
   });
 }
 
-/**
- * Custom dialogs for backwards compatibility.
- */
 export function showCustomAlert(title, message, options = {}) {
   const modal = document.getElementById('modal-custom-alert');
   const titleEl = document.getElementById('custom-alert-title');
@@ -4599,6 +5509,7 @@ export function showCustomAlert(title, message, options = {}) {
 
   document.body.style.overflow = 'hidden';
   modal.classList.add('open');
+  pushModalHistoryState('modal-custom-alert');
 
   return new Promise((resolve) => {
     okBtn.onclick = () => {
@@ -4625,6 +5536,7 @@ export function showCustomPrompt(title, message, defaultValue = '') {
 
   document.body.style.overflow = 'hidden';
   modal.classList.add('open');
+  pushModalHistoryState('modal-custom-prompt');
   input.focus();
 
   return new Promise((resolve) => {
@@ -4643,12 +5555,9 @@ export function showCustomPrompt(title, message, defaultValue = '') {
   });
 }
 
-/* ==========================================================================
-   GLOBAL LONG-PRESS BULK SELECTION MODE CONTROLLER
-   ========================================================================== */
 export const selectionState = {
   active: false,
-  type: null, // 'tasks' | 'admin_tasks' | 'categories' | 'notifications' | 'members' | 'sessions' | 'submissions' | 'broadcasts'
+  type: null,
   selectedIds: new Set(),
   visibleIds: []
 };
@@ -4802,6 +5711,14 @@ function getVisibleCardsForType(type) {
   else if (type === 'broadcasts') container = document.getElementById('admin-broadcasts-list');
   else if (type === 'badges') container = document.getElementById('admin-badges-list');
   else if (type === 'waivers') container = document.getElementById('admin-waivers-list');
+  else if (type === 'attendance_logs') {
+    const modalContent = document.getElementById('admin-roster-tab-content');
+    if (modalContent && modalContent.offsetParent !== null) {
+      container = modalContent;
+    } else {
+      container = document.getElementById('admin-attendance-logs-tbody') || document.getElementById('admin-attendance-logs-section');
+    }
+  }
 
   if (!container) return [];
   return Array.from(container.querySelectorAll('.bulk-select-card[data-bulk-id]'));
@@ -4862,7 +5779,8 @@ export function getBulkActions(listType) {
 
   if (listType === 'notifications' || listType === 'updates') {
     return [
-      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: PRIMARY_CLS }
+      { id: 'btn-bulk-mark-read', label: 'Mark Read', type: 'mark_read', class: PRIMARY_CLS },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
@@ -4969,7 +5887,6 @@ export function updateSelectionUI() {
     selectAllBtn.textContent = allSelected ? 'Deselect All' : 'Select All';
     selectAllBtn.onclick = toggleSelectAll;
   }
-
 
   const actionsContainer = document.getElementById('bulk-actions-container');
   if (actionsContainer) {
@@ -5085,7 +6002,6 @@ export async function handleBulkArchive(isRestore = false) {
       }
     }
 
-    // In-memory update ONLY after DB successfully resolves
     if (type === 'tasks' || type === 'admin_tasks') {
       ids.forEach(id => {
         const t = state.tasks.find(x => x.id === id);
@@ -5106,6 +6022,7 @@ export async function handleBulkArchive(isRestore = false) {
       });
       renderAdminSessions();
       renderAttendanceView();
+      dispatchBackendSessionMutation('SESSION_UPDATED');
     } else if (type === 'broadcasts') {
       ids.forEach(id => {
         const b = state.broadcasts.find(x => x.id === id);
@@ -5219,11 +6136,9 @@ export async function permanentlyDeleteMember(uid) {
   const CHUNK_SIZE = 450;
   const refsToDelete = [];
 
-  // 1. users and users_private
   refsToDelete.push(doc(db, 'users', uid));
   refsToDelete.push(doc(db, 'users_private', uid));
 
-  // 2. Submissions
   try {
     const q1 = query(collection(db, 'submissions'), where('uid', '==', uid));
     const snap1 = await getDocs(q1);
@@ -5239,7 +6154,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Submissions userId query:', err);
   }
 
-  // 3. Attendance logs
   try {
     const qAtt = query(collection(db, 'attendance_logs'), where('uid', '==', uid));
     const snapAtt = await getDocs(qAtt);
@@ -5248,7 +6162,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Attendance logs query:', err);
   }
 
-  // 4. Waiver requests
   try {
     const qWaiver = query(collection(db, 'waiver_requests'), where('uid', '==', uid));
     const snapWaiver = await getDocs(qWaiver);
@@ -5257,7 +6170,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Waiver requests query:', err);
   }
 
-  // 5. Notifications
   try {
     const qNotif = query(collection(db, 'notifications'), where('targetUid', '==', uid));
     const snapNotif = await getDocs(qNotif);
@@ -5273,7 +6185,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Notifications uid query:', err);
   }
 
-  // 6. Transactions
   try {
     const qTx = query(collection(db, 'transactions'), where('uid', '==', uid));
     const snapTx = await getDocs(qTx);
@@ -5282,7 +6193,6 @@ export async function permanentlyDeleteMember(uid) {
     console.warn('Transactions query:', err);
   }
 
-  // De-duplicate refs
   const uniqueRefsMap = new Map();
   refsToDelete.forEach(r => uniqueRefsMap.set(r.path, r));
   const uniqueRefs = Array.from(uniqueRefsMap.values());
@@ -5458,55 +6368,41 @@ export async function handleBulkDelete() {
       state.submissions = state.submissions.filter(s => !selectionState.selectedIds.has(s.id));
       renderSubmissionsInspector();
     } else if (type === 'attendance_logs') {
-      const logMap = new Map();
-      ids.forEach(id => {
-        const l = state.attendanceLogs.find(log => log.id === id) || state.myAttendanceLogs.find(log => log.id === id);
-        if (l) {
-          const uid = l.uid;
-          if (uid) {
-            if (!logMap.has(uid)) logMap.set(uid, { totalPenalty: 0, logs: [] });
-            const entry = logMap.get(uid);
-            entry.totalPenalty += (Number(l.penalty) || 0);
-            entry.logs.push(l);
-          }
+      const bulkDeleteBtn = document.getElementById('btn-bulk-delete');
+      if (bulkDeleteBtn) {
+        bulkDeleteBtn.disabled = true;
+        bulkDeleteBtn.innerHTML = `<div class="w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin shrink-0"></div><span>Deleting (${count})...</span>`;
+      }
+      try {
+        for (const logId of ids) {
+          await deleteAttendanceRecordAndReverseLedger(logId);
         }
-      });
-
-      for (const [uid, entry] of logMap.entries()) {
-        const memberUser = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-        const batch = writeBatch(db);
-
-        entry.logs.forEach(l => {
-          batch.delete(doc(db, 'attendance_logs', l.id));
-        });
-
-        if (memberUser && entry.totalPenalty > 0) {
-          batch.update(doc(db, 'users', uid), {
-            penalties: increment(-entry.totalPenalty),
-            updatedAt: serverTimestamp()
-          });
-        }
-        await batch.commit();
-
-        invalidateEgpCache(uid);
-        if (memberUser && entry.totalPenalty > 0) {
-          memberUser.penalties = Math.max(0, (memberUser.penalties || 0) - entry.totalPenalty);
-          if (state.user && state.user.uid === uid) {
-            state.user.penalties = memberUser.penalties;
-            updateProfileUI();
-          }
+        toast(`Deleted ${count} attendance record(s) and reversed ledger`, 'success');
+      } catch (bulkErr) {
+        console.error('Bulk attendance delete error:', bulkErr);
+        toast('Error deleting some attendance records', 'error');
+      } finally {
+        exitSelectionMode();
+        if (typeof renderRecentLogs === 'function') renderRecentLogs();
+        if (typeof renderAdminAttendanceLogs === 'function') renderAdminAttendanceLogs();
+        renderAdminSessions();
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          window.refreshCurrentRosterView();
         }
       }
-
-      state.attendanceLogs = state.attendanceLogs.filter(l => !selectionState.selectedIds.has(l.id));
-      state.myAttendanceLogs = state.myAttendanceLogs.filter(l => !selectionState.selectedIds.has(l.id));
-      renderAttendanceLogs();
+    } else if (type === 'notifications' || type === 'updates' || type === 'notifications_admin') {
+      const targetUid = state.user?.uid;
+      await Promise.all(ids.map(id => deleteSingleNotificationFromFirestore(id, targetUid)));
+      state.notifications = state.notifications.filter(n => !selectionState.selectedIds.has(n.id));
+      state.personalNotifications = (state.personalNotifications || []).filter(n => !selectionState.selectedIds.has(n.id));
+      userNotifications = (userNotifications || []).filter(n => !selectionState.selectedIds.has(n.id));
+      updateNotificationBadges();
+      renderNotifications();
     } else {
       let colName = 'tasks';
       if (type === 'categories') colName = 'categories';
       else if (type === 'sessions') colName = 'attendance_sessions';
       else if (type === 'broadcasts') colName = 'broadcasts';
-      else if (type === 'notifications' || type === 'notifications_admin') colName = 'notifications';
       else if (type === 'waivers') colName = 'waiver_requests';
       else if (type === 'badges') colName = 'badges';
 
@@ -5673,58 +6569,120 @@ export function handleBulkBadge(isAdd = true) {
   });
 }
 
+export async function markSingleNotificationReadInFirestore(notifOrId, uid = state.user?.uid, readState = true) {
+  const id = typeof notifOrId === 'object' ? notifOrId?.id : notifOrId;
+  if (!id) return;
+  const notif = typeof notifOrId === 'object' ? notifOrId : state.notifications.find(n => n.id === id);
+
+  if (notif) {
+    notif.read = readState;
+    notif.isRead = readState;
+  }
+  const pItem = (state.personalNotifications || []).find(n => n.id === id);
+  if (pItem) {
+    pItem.read = readState;
+    pItem.isRead = readState;
+  }
+  const uItem = (userNotifications || []).find(n => n.id === id);
+  if (uItem) {
+    uItem.read = readState;
+    uItem.isRead = readState;
+  }
+
+  persistToLocalCache(true);
+
+  if (!db || !uid) return;
+
+  if (notif?.isBroadcast) {
+    try {
+      await updateDoc(doc(db, 'notifications_broadcast', id), {
+        readBy: readState ? arrayUnion(uid) : arrayRemove(uid)
+      });
+    } catch (err) {
+      console.warn('Broadcast read sync warning:', err);
+    }
+    return;
+  }
+
+  const targetUid = notif?.uid || uid;
+  const ops = [];
+  if (targetUid) {
+    ops.push(updateDoc(doc(db, 'users', targetUid, 'notifications', id), { read: readState, isRead: readState }).catch(err => {
+      console.warn('User notification read update error:', err);
+    }));
+  }
+  ops.push(updateDoc(doc(db, 'notifications', id), { read: readState, isRead: readState }).catch(err => {
+    console.warn('Notification read update error:', err);
+  }));
+  await Promise.all(ops);
+}
+
+export async function deleteSingleNotificationFromFirestore(notifOrId, uid = state.user?.uid) {
+  const id = typeof notifOrId === 'object' ? notifOrId?.id : notifOrId;
+  if (!id) return;
+  const notif = typeof notifOrId === 'object' ? notifOrId : state.notifications.find(n => n.id === id);
+
+  state.notifications = (state.notifications || []).filter(n => n.id !== id);
+  state.personalNotifications = (state.personalNotifications || []).filter(n => n.id !== id);
+  userNotifications = (userNotifications || []).filter(n => n.id !== id);
+  state.broadcastNotificationsAll = (state.broadcastNotificationsAll || []).filter(n => n.id !== id);
+  state.broadcastNotificationsBadge = (state.broadcastNotificationsBadge || []).filter(n => n.id !== id);
+
+  persistToLocalCache(true);
+
+  if (!db) return;
+  const targetUid = notif?.uid || uid;
+  const ops = [];
+  if (targetUid) {
+    ops.push(deleteDoc(doc(db, 'users', targetUid, 'notifications', id)).catch(() => {}));
+  }
+  ops.push(deleteDoc(doc(db, 'notifications', id)).catch(() => {}));
+  await Promise.all(ops);
+}
+
 export async function handleBulkMarkRead() {
   const ids = Array.from(selectionState.selectedIds);
   const count = ids.length;
   if (count === 0) return;
 
-  try {
-    const CHUNK_SIZE = 450;
-    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-
-      chunk.forEach(id => {
-        const notif = state.notifications.find(n => n.id === id);
-        if (notif?.isBroadcast) {
-          batch.update(doc(db, 'notifications_broadcast', id), {
-            readBy: arrayUnion(state.user.uid)
-          });
-        } else {
-          batch.update(doc(db, 'notifications', id), {
-            read: true
-          });
-        }
-      });
-      await batch.commit();
+  const uid = state.user?.uid;
+  ids.forEach(id => {
+    const notif = state.notifications.find(n => n.id === id);
+    if (notif) {
+      notif.read = true;
+      notif.isRead = true;
     }
+    const pItem = (state.personalNotifications || []).find(n => n.id === id);
+    if (pItem) {
+      pItem.read = true;
+      pItem.isRead = true;
+    }
+    const uItem = (userNotifications || []).find(n => n.id === id);
+    if (uItem) {
+      uItem.read = true;
+      uItem.isRead = true;
+    }
+  });
 
-    ids.forEach(id => {
-      const notif = state.notifications.find(n => n.id === id);
-      if (notif) notif.read = true;
-    });
+  persistToLocalCache(true);
+  updateNotificationBadges();
+  renderNotifications();
+  exitSelectionMode();
 
-    renderNotifications();
-    toast(`Marked ${count} notification(s) as read`, 'success');
-    exitSelectionMode();
+  try {
+    await Promise.all(ids.map(id => markSingleNotificationReadInFirestore(id, uid, true)));
   } catch (err) {
-    console.error('Bulk mark read error:', err);
-    toast('Failed to mark notifications as read: ' + err.message, 'error');
+    console.warn('Mark read sync warning:', err);
   }
 }
 
-/* ==========================================================================
-   NAVIGATION: SWIPE PAGER + GLASS DOCK
-   ========================================================================== */
-/* ==========================================================================
-   TOUCH GESTURE DISAMBIGUATION (Card Swipes vs. Page Pager)
-   ========================================================================== */
 export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) {
   if (!cardEl) return () => {};
 
   let startX = 0;
   let startY = 0;
   let isCardSwiping = false;
+  let isTracking = false;
   const pagerEl = cardEl.closest('.pager-container') || document.getElementById('user-pager');
 
   const origOverflowX = pagerEl ? pagerEl.style.overflowX : '';
@@ -5734,25 +6692,41 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
     if (selectionState.active) return;
     if (e.touches.length !== 1) return;
     const touch = e.touches[0];
-    startX = touch.clientX;
-    startY = touch.clientY;
-    isCardSwiping = false;
+    const clientX = touch.clientX;
+    const rect = cardEl.getBoundingClientRect();
+    const cardWidth = rect.width;
+    if (cardWidth <= 0) return;
 
-    // Screen edge navigation zones: reserve 24px bezel at viewport edges for pager swipe
-    if (startX < 24 || startX > window.innerWidth - 24) {
+    const relX = clientX - rect.left;
+    const edgeThreshold = cardWidth * 0.20;
+    const isLeftEdge = (relX >= 0 && relX <= edgeThreshold);
+    const isRightEdge = (relX >= cardWidth - edgeThreshold && relX <= cardWidth);
+
+    if (!isLeftEdge && !isRightEdge) {
+      isTracking = false;
+      isCardSwiping = false;
       return;
     }
+
+    startX = clientX;
+    startY = touch.clientY;
+    isTracking = true;
+    isCardSwiping = false;
   };
 
   const onTouchMove = (e) => {
+    if (!isTracking) return;
     if (e.touches.length !== 1) return;
-    if (startX < 24 || startX > window.innerWidth - 24) return;
 
     const touch = e.touches[0];
     const deltaX = touch.clientX - startX;
     const deltaY = touch.clientY - startY;
 
     if (!isCardSwiping) {
+      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) >= Math.abs(deltaX)) {
+        isTracking = false;
+        return;
+      }
       if (Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
         isCardSwiping = true;
         if (pagerEl) {
@@ -5763,6 +6737,7 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
     }
 
     if (isCardSwiping) {
+      if (e.cancelable) e.preventDefault();
       e.stopPropagation();
       cardEl.style.transform = `translateX(${deltaX}px)`;
       cardEl.style.transition = 'none';
@@ -5783,6 +6758,7 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
       }
     }
 
+    isTracking = false;
     isCardSwiping = false;
     if (pagerEl) {
       pagerEl.style.overflowX = origOverflowX;
@@ -5803,9 +6779,588 @@ export function enableSwipeableCard(cardEl, { onSwipeLeft, onSwipeRight } = {}) 
   };
 }
 
-/* ==========================================================================
-   PAGE NAVIGATION PAGER CONTROLLER
-   ========================================================================== */
+let activeSnackbarTimer = null;
+let activeSnackbarCountdownTimer = null;
+let activeSnackbarEl = null;
+
+export function showUndoSnackbar(message, onUndo, onExpire = null, duration = 5000) {
+  if (activeSnackbarEl) {
+    if (activeSnackbarTimer) clearTimeout(activeSnackbarTimer);
+    if (activeSnackbarCountdownTimer) clearInterval(activeSnackbarCountdownTimer);
+    activeSnackbarEl.classList.remove('show');
+    const oldExpire = activeSnackbarEl._onExpire;
+    if (typeof oldExpire === 'function') oldExpire();
+    activeSnackbarEl.remove();
+    activeSnackbarEl = null;
+  }
+
+  const baseMessage = String(message || '').replace(/\s*-\s*\d+s$/, '');
+  let secondsLeft = Math.max(1, Math.ceil(duration / 1000));
+
+  const container = document.createElement('div');
+  container.className = 'undo-snackbar-container';
+  container.innerHTML = `
+    <span class="undo-snackbar-message">${esc(baseMessage)} - <span class="undo-snackbar-secs font-mono font-bold">${secondsLeft}s</span></span>
+    <button type="button" class="undo-btn">UNDO</button>
+    <div class="undo-snackbar-progress">
+      <div class="undo-snackbar-progress-bar"></div>
+    </div>
+  `;
+
+  document.body.appendChild(container);
+  activeSnackbarEl = container;
+  container._onExpire = onExpire;
+
+  const secsEl = container.querySelector('.undo-snackbar-secs');
+  activeSnackbarCountdownTimer = setInterval(() => {
+    secondsLeft--;
+    if (secondsLeft >= 1 && secsEl) {
+      secsEl.textContent = `${secondsLeft}s`;
+    } else {
+      clearInterval(activeSnackbarCountdownTimer);
+      activeSnackbarCountdownTimer = null;
+    }
+  }, 1000);
+
+  requestAnimationFrame(() => {
+    container.classList.add('show');
+    const bar = container.querySelector('.undo-snackbar-progress-bar');
+    if (bar) {
+      bar.style.width = '100%';
+      bar.style.transition = `width ${duration}ms linear`;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          bar.style.width = '0%';
+        });
+      });
+    }
+  });
+
+  let undone = false;
+  const undoBtn = container.querySelector('.undo-btn');
+  if (undoBtn) {
+    undoBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (undone) return;
+      undone = true;
+      if (activeSnackbarTimer) clearTimeout(activeSnackbarTimer);
+      if (activeSnackbarCountdownTimer) clearInterval(activeSnackbarCountdownTimer);
+      container.classList.remove('show');
+      setTimeout(() => container.remove(), 250);
+      activeSnackbarEl = null;
+      if (typeof onUndo === 'function') onUndo();
+    };
+  }
+
+  activeSnackbarTimer = setTimeout(() => {
+    if (undone) return;
+    if (activeSnackbarCountdownTimer) clearInterval(activeSnackbarCountdownTimer);
+    container.classList.remove('show');
+    setTimeout(() => container.remove(), 250);
+    activeSnackbarEl = null;
+    if (typeof onExpire === 'function') onExpire();
+  }, duration);
+}
+
+export function attachUniversalSwipeActions(wrapperEl, {
+  archiveLabel = 'Archive',
+  archiveIcon = 'archive',
+  onArchive = null,
+  deleteLabel = 'Delete',
+  deleteIcon = 'trash',
+  onDelete = null,
+  entityName = 'Item'
+} = {}) {
+  if (!wrapperEl) return () => {};
+
+  wrapperEl.classList.add('universal-swipe-wrapper');
+  wrapperEl.setAttribute('data-swipe-card', 'true');
+
+  const oldBg = wrapperEl.querySelector('.notif-swipe-bg');
+  if (oldBg) oldBg.remove();
+
+  let contentCard = null;
+  for (const child of wrapperEl.children) {
+    if (child.classList.contains('universal-swipe-card-content') ||
+        child.classList.contains('notification-card') ||
+        child.classList.contains('bulk-select-card') ||
+        child.classList.contains('bulk-card-content')) {
+      contentCard = child;
+      break;
+    }
+  }
+  if (!contentCard) {
+    const candidate = wrapperEl.querySelector('.universal-swipe-card-content') ||
+                      wrapperEl.querySelector('.notification-card') ||
+                      wrapperEl.querySelector('.bulk-card-content') ||
+                      wrapperEl.querySelector('.bulk-select-card');
+    if (candidate) {
+      let cur = candidate;
+      while (cur && cur.parentElement && cur.parentElement !== wrapperEl) {
+        cur = cur.parentElement;
+      }
+      if (cur && cur.parentElement === wrapperEl) {
+        contentCard = cur;
+      }
+    }
+  }
+  if (!contentCard) {
+    contentCard = wrapperEl.firstElementChild;
+  }
+  if (!contentCard) return () => {};
+  contentCard.classList.add('universal-swipe-card-content');
+
+  let bgArchive = wrapperEl.querySelector('.universal-swipe-bg-archive');
+  if (!bgArchive && onArchive) {
+    bgArchive = document.createElement('div');
+    bgArchive.className = 'universal-swipe-bg universal-swipe-bg-archive';
+    bgArchive.style.display = 'none';
+    bgArchive.innerHTML = `
+      <div class="universal-swipe-icon-container flex items-center gap-2">
+        <svg class="universal-swipe-icon w-6 h-6 text-white shrink-0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+          <path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/>
+        </svg>
+        <span class="universal-swipe-label text-xs font-bold text-white tracking-wide uppercase">${esc(archiveLabel)}</span>
+      </div>
+    `;
+    safeInsertBefore(wrapperEl, bgArchive, contentCard);
+  }
+
+  let bgDelete = wrapperEl.querySelector('.universal-swipe-bg-delete');
+  if (!bgDelete && onDelete) {
+    bgDelete = document.createElement('div');
+    bgDelete.className = 'universal-swipe-bg universal-swipe-bg-delete';
+    bgDelete.style.display = 'none';
+    bgDelete.innerHTML = `
+      <div class="universal-swipe-icon-container flex items-center gap-2">
+        <span class="universal-swipe-label text-xs font-bold text-white tracking-wide uppercase">${esc(deleteLabel)}</span>
+        <svg class="universal-swipe-icon w-6 h-6 text-white shrink-0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <line x1="10" y1="11" x2="10" y2="17"></line>
+          <line x1="14" y1="11" x2="14" y2="17"></line>
+        </svg>
+      </div>
+    `;
+    safeInsertBefore(wrapperEl, bgDelete, contentCard);
+  }
+
+  let startX = 0;
+  let startY = 0;
+  let startTime = 0;
+  let isTracking = false;
+  let isSwiping = false;
+  let initialEdge = null;
+  let cardRect = null;
+
+  const canArchive = typeof onArchive === 'function';
+  const canDelete = typeof onDelete === 'function';
+
+  const pagerEl = wrapperEl.closest('.pager-container') || document.getElementById('user-pager');
+
+  const startDrag = (clientX, clientY, e) => {
+    if (selectionState && selectionState.active) return false;
+
+    cardRect = (contentCard || wrapperEl).getBoundingClientRect();
+    const cardWidth = cardRect.width;
+    if (cardWidth <= 0) return false;
+
+    const relX = clientX - cardRect.left;
+    const edgeThreshold = cardWidth * 0.20;
+
+    const isLeftEdge = (relX >= 0 && relX <= edgeThreshold);
+    const isRightEdge = (relX >= cardWidth - edgeThreshold && relX <= cardWidth);
+
+    const isLeftHit = isLeftEdge && canArchive;
+    const isRightHit = isRightEdge && canDelete;
+
+    if (!isLeftHit && !isRightHit) {
+      isTracking = false;
+      isSwiping = false;
+      initialEdge = null;
+      return false;
+    }
+
+    isTracking = true;
+    isSwiping = false;
+    startX = clientX;
+    startY = clientY;
+    startTime = Date.now();
+    initialEdge = isLeftHit ? 'left' : 'right';
+
+    if (e && typeof e.stopPropagation === 'function') {
+      e.stopPropagation();
+    }
+    return true;
+  };
+
+  const moveDrag = (clientX, clientY, e) => {
+    if (!isTracking) return;
+
+    const dx = clientX - startX;
+    const dy = clientY - startY;
+
+    if (!isSwiping) {
+
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
+        isTracking = false;
+        return;
+      }
+
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        if (initialEdge === 'left' && dx > 0 && canArchive) {
+          isSwiping = true;
+        } else if (initialEdge === 'right' && dx < 0 && canDelete) {
+          isSwiping = true;
+        } else {
+          return;
+        }
+
+        if (pagerEl) {
+          pagerEl.style.overflowX = 'hidden';
+          pagerEl.style.touchAction = 'pan-y';
+        }
+      }
+    }
+
+    if (isSwiping) {
+      if (e && e.cancelable && typeof e.preventDefault === 'function') {
+        e.preventDefault();
+      }
+      if (e && typeof e.stopPropagation === 'function') {
+        e.stopPropagation();
+      }
+
+      const cardWidth = (cardRect && cardRect.width) || wrapperEl.offsetWidth || 300;
+      const threshold = Math.max(80, cardWidth * 0.35);
+
+      let clampedDx = dx;
+      if (dx > 0) {
+        clampedDx = dx > cardWidth * 0.5 ? cardWidth * 0.5 + (dx - cardWidth * 0.5) * 0.25 : dx;
+      } else {
+        clampedDx = dx < -cardWidth * 0.5 ? -cardWidth * 0.5 + (dx + cardWidth * 0.5) * 0.25 : dx;
+      }
+
+      const progress = Math.min(1, Math.max(0, Math.abs(clampedDx) / threshold));
+
+      contentCard.style.transform = `translateX(${clampedDx}px)`;
+      contentCard.style.transition = 'none';
+
+      if (dx < 0 && canDelete) {
+
+        if (bgArchive) bgArchive.style.display = 'none';
+        if (bgDelete) {
+          bgDelete.style.display = 'flex';
+          bgDelete.style.transition = 'none';
+
+          const r = Math.round(140 + (220 - 140) * progress);
+          const g = Math.round(20 + (38 - 20) * progress);
+          const b = Math.round(20 + (38 - 20) * progress);
+          const a = Math.min(1, Math.max(0, 0.15 + 0.85 * progress)).toFixed(3);
+          bgDelete.style.backgroundColor = progress >= 1 ? '#DC2626' : `rgba(${r}, ${g}, ${b}, ${a})`;
+
+          const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+          if (ic) {
+            ic.style.transition = 'none';
+            const scale = (0.5 + 0.5 * Math.min(1.15, progress)).toFixed(3);
+            const opacity = Math.min(1, Math.max(0, progress * 1.1)).toFixed(3);
+            ic.style.transform = `scale(${scale})`;
+            ic.style.opacity = opacity;
+            ic.style.transformOrigin = 'right center';
+          }
+        }
+      } else if (dx > 0 && canArchive) {
+
+        if (bgDelete) bgDelete.style.display = 'none';
+        if (bgArchive) {
+          bgArchive.style.display = 'flex';
+          bgArchive.style.transition = 'none';
+
+          const r = Math.round(160 + (245 - 160) * progress);
+          const g = Math.round(90 + (158 - 90) * progress);
+          const b = Math.round(10 + (11 - 10) * progress);
+          const a = Math.min(1, Math.max(0, 0.15 + 0.85 * progress)).toFixed(3);
+          bgArchive.style.backgroundColor = progress >= 1 ? '#F59E0B' : `rgba(${r}, ${g}, ${b}, ${a})`;
+
+          const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+          if (ic) {
+            ic.style.transition = 'none';
+            const scale = (0.5 + 0.5 * Math.min(1.15, progress)).toFixed(3);
+            const opacity = Math.min(1, Math.max(0, progress * 1.1)).toFixed(3);
+            ic.style.transform = `scale(${scale})`;
+            ic.style.opacity = opacity;
+            ic.style.transformOrigin = 'left center';
+          }
+        }
+      }
+    }
+  };
+
+  const endDrag = (clientX, e) => {
+    if (!isTracking && !isSwiping) return;
+
+    if (!isSwiping) {
+      isTracking = false;
+      return;
+    }
+
+    const dx = clientX - startX;
+    const dt = Math.max(1, Date.now() - startTime);
+    const velocity = Math.abs(dx) / dt;
+    const cardWidth = (cardRect && cardRect.width) || wrapperEl.offsetWidth || 300;
+    const threshold = Math.max(80, cardWidth * 0.35);
+
+    isSwiping = false;
+    isTracking = false;
+
+    if (pagerEl) {
+      pagerEl.style.overflowX = '';
+      pagerEl.style.touchAction = '';
+    }
+
+    const isLtrTriggered = canArchive && initialEdge === 'left' && dx > 0 && (dx >= threshold || (dx > 40 && velocity > 0.45));
+    const isRtlTriggered = canDelete && initialEdge === 'right' && dx < 0 && (Math.abs(dx) >= threshold || (Math.abs(dx) > 40 && velocity > 0.45));
+
+    if (isLtrTriggered) {
+
+      if (bgArchive) {
+        bgArchive.style.transition = 'background-color 0.15s ease';
+        bgArchive.style.backgroundColor = '#F59E0B';
+        const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+        if (ic) {
+          ic.style.transition = 'transform 0.15s ease, opacity 0.15s ease';
+          ic.style.transform = 'scale(1)';
+          ic.style.opacity = '1';
+        }
+      }
+      contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = `translateX(${cardWidth + 40}px)`;
+      setTimeout(() => {
+        executeCollapseAndAction('archive');
+      }, 180);
+    } else if (isRtlTriggered) {
+
+      if (bgDelete) {
+        bgDelete.style.transition = 'background-color 0.15s ease';
+        bgDelete.style.backgroundColor = '#DC2626';
+        const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+        if (ic) {
+          ic.style.transition = 'transform 0.15s ease, opacity 0.15s ease';
+          ic.style.transform = 'scale(1)';
+          ic.style.opacity = '1';
+        }
+      }
+      contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = `translateX(-${cardWidth + 40}px)`;
+      setTimeout(() => {
+        executeCollapseAndAction('delete');
+      }, 180);
+    } else {
+
+      contentCard.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = '';
+
+      const activeBg = (dx > 0) ? bgArchive : bgDelete;
+      if (activeBg) {
+        activeBg.style.transition = 'background-color 0.25s ease, opacity 0.25s ease';
+        activeBg.style.backgroundColor = 'transparent';
+        const ic = activeBg.querySelector('.universal-swipe-icon-container');
+        if (ic) {
+          ic.style.transition = 'transform 0.25s ease, opacity 0.25s ease';
+          ic.style.transform = 'scale(0.5)';
+          ic.style.opacity = '0';
+        }
+      }
+
+      setTimeout(() => {
+        if (bgArchive) {
+          bgArchive.style.display = 'none';
+          bgArchive.style.transition = '';
+          bgArchive.style.backgroundColor = '';
+          const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+          if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+        }
+        if (bgDelete) {
+          bgDelete.style.display = 'none';
+          bgDelete.style.transition = '';
+          bgDelete.style.backgroundColor = '';
+          const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+          if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+        }
+      }, 250);
+    }
+  };
+
+  const executeCollapseAndAction = (actionType) => {
+    const parentNode = wrapperEl.parentNode;
+    const nextSibling = wrapperEl.nextSibling;
+
+    if (actionType === 'archive' && archiveLabel === 'Mark Read') {
+      contentCard.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      contentCard.style.transform = '';
+      if (bgArchive) {
+        bgArchive.style.display = 'none';
+        bgArchive.style.backgroundColor = '';
+      }
+      const unreadDot = contentCard.querySelector('.unread-dot') || contentCard.querySelector('.w-1\\.5.h-1\\.5.rounded-full');
+      if (unreadDot) unreadDot.style.display = 'none';
+      contentCard.classList.remove('unread', 'border-l-4', 'border-l-[#0A84FF]');
+      contentCard.classList.add('read', 'opacity-75');
+
+      if (typeof onArchive === 'function') {
+        onArchive(wrapperEl);
+      }
+
+      showUndoSnackbar(`${entityName} marked as read`, () => {
+        if (unreadDot) unreadDot.style.display = '';
+        contentCard.classList.remove('read', 'opacity-75');
+        contentCard.classList.add('unread', 'border-l-4', 'border-l-[#0A84FF]');
+        if (typeof wrapperEl._onUndoRead === 'function') {
+          wrapperEl._onUndoRead();
+        }
+      }, null, 5000);
+      return;
+    }
+
+    const origHeight = wrapperEl.offsetHeight || 80;
+    if (bgDelete) bgDelete.style.display = 'none';
+    if (bgArchive) bgArchive.style.display = 'none';
+
+    wrapperEl.style.height = `${origHeight}px`;
+    wrapperEl.style.overflow = 'hidden';
+    wrapperEl.style.transition = 'height 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), margin 0.2s ease, opacity 0.2s ease, padding 0.2s ease';
+    requestAnimationFrame(() => {
+      wrapperEl.style.height = '0px';
+      wrapperEl.style.marginTop = '0px';
+      wrapperEl.style.marginBottom = '0px';
+      wrapperEl.style.paddingTop = '0px';
+      wrapperEl.style.paddingBottom = '0px';
+      wrapperEl.style.opacity = '0';
+      wrapperEl.style.pointerEvents = 'none';
+    });
+
+    const detachTimer = setTimeout(() => {
+      if (wrapperEl.parentNode) {
+        wrapperEl.remove();
+      }
+    }, 200);
+
+    let isRestored = false;
+    const restoreDOM = () => {
+      if (isRestored) return;
+      isRestored = true;
+      clearTimeout(detachTimer);
+      if (parentNode && !parentNode.contains(wrapperEl)) {
+        safeInsertBefore(parentNode, wrapperEl, nextSibling);
+      }
+      wrapperEl.style.display = '';
+      wrapperEl.style.height = '0px';
+      wrapperEl.style.opacity = '0';
+      wrapperEl.style.pointerEvents = '';
+      contentCard.style.transition = 'transform 0.25s ease';
+      contentCard.style.transform = '';
+      if (bgArchive) {
+        bgArchive.style.display = 'none';
+        bgArchive.style.backgroundColor = '';
+        bgArchive.style.transition = '';
+        const ic = bgArchive.querySelector('.universal-swipe-icon-container');
+        if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+      }
+      if (bgDelete) {
+        bgDelete.style.display = 'none';
+        bgDelete.style.backgroundColor = '';
+        bgDelete.style.transition = '';
+        const ic = bgDelete.querySelector('.universal-swipe-icon-container');
+        if (ic) { ic.style.transition = ''; ic.style.transform = ''; ic.style.opacity = ''; }
+      }
+      requestAnimationFrame(() => {
+        wrapperEl.style.transition = 'height 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), margin 0.2s ease, opacity 0.2s ease, padding 0.2s ease';
+        wrapperEl.style.height = `${origHeight}px`;
+        wrapperEl.style.opacity = '1';
+        wrapperEl.style.marginTop = '';
+        wrapperEl.style.marginBottom = '';
+        wrapperEl.style.paddingTop = '';
+        wrapperEl.style.paddingBottom = '';
+        setTimeout(() => {
+          wrapperEl.style.height = '';
+          wrapperEl.style.overflow = '';
+          wrapperEl.style.transition = '';
+        }, 220);
+      });
+    };
+
+    if (actionType === 'archive' && typeof onArchive === 'function') {
+      showUndoSnackbar(`${entityName} ${archiveLabel.toLowerCase()}d`, () => {
+        restoreDOM();
+      }, () => {
+        onArchive(wrapperEl);
+      }, 5000);
+    } else if (actionType === 'delete' && typeof onDelete === 'function') {
+      showUndoSnackbar(`${entityName} deleted`, () => {
+        restoreDOM();
+      }, () => {
+        onDelete(wrapperEl);
+      }, 5000);
+    }
+  };
+
+  const onTouchStart = (e) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    startDrag(touch.clientX, touch.clientY, e);
+  };
+
+  const onTouchMove = (e) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    moveDrag(touch.clientX, touch.clientY, e);
+  };
+
+  const onTouchEnd = (e) => {
+    const touch = e.changedTouches ? e.changedTouches[0] : null;
+    endDrag(touch ? touch.clientX : startX, e);
+  };
+
+  const onPointerDown = (e) => {
+    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    startDrag(e.clientX, e.clientY, e);
+  };
+
+  const onPointerMove = (e) => {
+    if (!isTracking) return;
+    if (e.pointerType === 'touch') return;
+    moveDrag(e.clientX, e.clientY, e);
+  };
+
+  const onPointerUp = (e) => {
+    if (!isTracking && !isSwiping) return;
+    if (e.pointerType === 'touch') return;
+    endDrag(e.clientX, e);
+  };
+
+  wrapperEl.addEventListener('touchstart', onTouchStart, { passive: true });
+  wrapperEl.addEventListener('touchmove', onTouchMove, { passive: false });
+  wrapperEl.addEventListener('touchend', onTouchEnd, { passive: true });
+  wrapperEl.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+  wrapperEl.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+
+  return () => {
+    wrapperEl.removeEventListener('touchstart', onTouchStart);
+    wrapperEl.removeEventListener('touchmove', onTouchMove);
+    wrapperEl.removeEventListener('touchend', onTouchEnd);
+    wrapperEl.removeEventListener('touchcancel', onTouchEnd);
+
+    wrapperEl.removeEventListener('pointerdown', onPointerDown);
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+  };
+}
 function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChange = null) {
   if (!pagerEl || !dockEl || !Array.isArray(pages) || pages.length === 0) {
     return { goTo: () => {}, getActive: () => '', destroy: () => {} };
@@ -5814,9 +7369,11 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   const thumbEl = dockEl.querySelector('.dock-thumb');
   const dockItems = dockEl.querySelectorAll('.dock-item');
 
-  // Determine initial target page from hash or defaultPageId
+  const queryTab = getQueryParam('tab');
   const initialHash = window.location.hash;
-  const matchedIdx = pages.findIndex(p => p.hash === initialHash);
+  const matchedByQueryIdx = queryTab ? pages.findIndex(p => p.id === queryTab) : -1;
+  const matchedByHashIdx = pages.findIndex(p => p.hash === initialHash);
+  const matchedIdx = matchedByQueryIdx !== -1 ? matchedByQueryIdx : matchedByHashIdx;
   const defaultIdx = pages.findIndex(p => p.id === defaultPageId);
   const fallbackIdx = defaultIdx !== -1 ? defaultIdx : 0;
   let activeIndex = matchedIdx !== -1 ? matchedIdx : fallbackIdx;
@@ -5824,7 +7381,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   let programmaticTimeout = null;
   let scrollTimeout = null;
 
-  // Swipe gesture tracking state
   let isTracking = false;
   let startX = 0;
   let startY = 0;
@@ -5832,7 +7388,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   let currentY = 0;
   let startScrollLeft = 0;
   let startTime = 0;
-  let swipeDirection = null; // 'horizontal' | 'vertical' | null
+  let swipeDirection = null;
   let isPointerDragging = false;
 
   function updateDockThumb(index, immediate = false) {
@@ -5857,7 +7413,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
         thumbEl.style.transition = 'none';
         thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
         thumbEl.style.width = `${width}px`;
-        void thumbEl.offsetWidth; // Force layout reflow
+        void thumbEl.offsetWidth;
         thumbEl.style.transition = prevTransition;
       } else {
         thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
@@ -5870,9 +7426,19 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       });
     }
 
-    const currentHash = pages[index]?.hash;
-    if (currentHash && window.location.hash !== currentHash) {
-      history.replaceState(null, '', currentHash);
+    const currentPageObj = pages[index];
+    const currentHash = currentPageObj?.hash;
+    if (currentHash && !_isHandlingPopState) {
+      if (pagerEl.id === 'user-pager' && currentPageObj?.id) {
+        const nextUrl = `${window.location.pathname}?tab=${currentPageObj.id}${currentHash}`;
+        if (immediate) {
+          history.replaceState({ cocTab: currentPageObj.id, cocModal: null }, '', nextUrl);
+        } else if (window.location.hash !== currentHash || history.state?.cocTab !== currentPageObj.id) {
+          history.pushState({ cocTab: currentPageObj.id, cocModal: null }, '', nextUrl);
+        }
+      } else if (window.location.hash !== currentHash) {
+        history.replaceState({ ...(history.state || {}), cocAdminTab: currentPageObj?.id }, '', currentHash);
+      }
     }
     if (typeof onPageChange === 'function') {
       try { onPageChange(pages[index]?.id, index); } catch (e) { console.warn(e); }
@@ -5911,7 +7477,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     };
   });
 
-  // Touch Swipe Gesture Handlers
   function getTouchCoords(e) {
     if (e.touches && e.touches.length > 0) {
       return { x: e.touches[0].clientX, y: e.touches[0].clientY };
@@ -5924,7 +7489,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
 
   function onTouchStart(e) {
     if (e.touches && e.touches.length > 1) return;
-    if (e.target && e.target.closest && e.target.closest('#category-filter-chips, input, textarea, select')) {
+    if (e.target && e.target.closest && e.target.closest('#category-filter-chips, input, textarea, select, .drag-reorder-handle')) {
       return;
     }
 
@@ -6040,11 +7605,10 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     swipeDirection = null;
   }
 
-  // Pointer / Mouse Drag Fallback for Desktop
   function onPointerDown(e) {
     if (e.pointerType === 'touch') return;
     if (e.button !== 0) return;
-    if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, #category-filter-chips, .interactive')) {
+    if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, #category-filter-chips, .interactive, .drag-reorder-handle')) {
       return;
     }
 
@@ -6136,7 +7700,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     swipeDirection = null;
   }
 
-  // Native scroll handler for trackpad gestures
   const onScroll = () => {
     if (isProgrammatic || isTracking || isPointerDragging) {
       if (isProgrammatic) {
@@ -6252,7 +7815,6 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   };
   window.addEventListener('resize', onResize);
 
-  // Position immediately on boot before first paint to prevent flash
   const initialTargetEl = pagerEl.children[activeIndex];
   if (initialTargetEl) {
     pagerEl.scrollTo({
@@ -6302,11 +7864,6 @@ export const PAGE_ORDER = [
   { id: 'attendance', label: 'Attendance', hash: '#attendance', sectionId: 'page-attendance' },
   { id: 'profile', label: 'Profile', hash: '#profile', sectionId: 'page-profile' }
 ];
-
-
-/* ==========================================================================
-   RELEASE v2.2.1: CENTRALIZED 3-BUCKET ADJUST HUB & ATOMIC ADJUSTMENT ENGINE
-   ========================================================================== */
 
 export async function applyAccountAdjustment(opts) {
   if (!opts || !opts.targetUid) {
@@ -6377,7 +7934,6 @@ export async function applyAccountAdjustment(opts) {
       t.update(userDocRef, userUpdates);
     }
 
-    // Write transaction ledger entry under user's transactions subcollection
     const txDocRef = doc(collection(db, 'users', targetUid, 'transactions'));
     const txData = {
       uid: targetUid,
@@ -6397,8 +7953,8 @@ export async function applyAccountAdjustment(opts) {
     };
     t.set(txDocRef, txData);
 
-    // Send notification to top-level notifications collection
     const notifDocRef = doc(collection(db, 'notifications'));
+    const userNotifDocRef = doc(db, 'users', targetUid, 'notifications', notifDocRef.id);
     const notifUnit = bucket === 'fines' ? 'EGP' : 'pts';
     const notifAction = direction === 'add' ? 'added to' : 'deducted from';
     const notifType = direction === 'add' ? (bucket === 'penalties' ? 'penalty' : 'bonus') : (bucket === 'penalties' ? 'bonus' : 'warning');
@@ -6416,9 +7972,9 @@ export async function applyAccountAdjustment(opts) {
       createdAtMs: nowMs
     };
     t.set(notifDocRef, notifData);
+    t.set(userNotifDocRef, notifData);
   });
 
-  // Update local memory
   const localMem = usersMap.get(targetUid) || (state.members || []).find(m => m.uid === targetUid);
   if (localMem) {
     if (newPoints !== undefined) localMem.points = newPoints;
@@ -6446,7 +8002,6 @@ let currentHubSelectedMember = null;
 let currentHubBucket = 'points';
 let currentHubDirection = 'add';
 
-// Persistent state for Adjustments Hub across tab switches and keystrokes
 const adjustHubState = {
   selectedUids: new Set(),
   bucket: 'points',
@@ -6456,6 +8011,8 @@ const adjustHubState = {
 };
 
 export function renderAdminAdjustments() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const panel = document.getElementById('admin-panel-adjustments');
   if (!panel) return;
 
@@ -6590,7 +8147,6 @@ export function renderAdminAdjustments() {
     }
   }
 
-  // Bind bucket selection buttons
   if (bucketSegmented && !bucketSegmented._hasBound) {
     bucketSegmented._hasBound = true;
     bucketSegmented.querySelectorAll('.hub-bucket-btn').forEach(btn => {
@@ -6601,7 +8157,6 @@ export function renderAdminAdjustments() {
     });
   }
 
-  // Bind direction selection buttons
   if (directionSegmented && !directionSegmented._hasBound) {
     directionSegmented._hasBound = true;
     directionSegmented.querySelectorAll('.hub-dir-btn').forEach(btn => {
@@ -6612,7 +8167,6 @@ export function renderAdminAdjustments() {
     });
   }
 
-  // Bind amount input (persistent state without form re-rendering)
   if (amountInput && !amountInput._hasBound) {
     amountInput._hasBound = true;
     amountInput.oninput = () => {
@@ -6621,7 +8175,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind reason input (persistent state without form re-rendering)
   if (reasonInput && !reasonInput._hasBound) {
     reasonInput._hasBound = true;
     reasonInput.oninput = () => {
@@ -6629,7 +8182,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind open member picker button
   if (openPickerBtn && !openPickerBtn._hasBound) {
     openPickerBtn._hasBound = true;
     openPickerBtn.onclick = () => {
@@ -6637,7 +8189,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind clear recipients button
   if (clearRecipientsBtn && !clearRecipientsBtn._hasBound) {
     clearRecipientsBtn._hasBound = true;
     clearRecipientsBtn.onclick = () => {
@@ -6646,7 +8197,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Bind submit adjustment button
   if (submitBtn && !submitBtn._hasBound) {
     submitBtn._hasBound = true;
     submitBtn.onclick = async () => {
@@ -6654,7 +8204,6 @@ export function renderAdminAdjustments() {
     };
   }
 
-  // Sync current form state
   if (amountInput) amountInput.value = adjustHubState.amount || '';
   if (reasonInput) reasonInput.value = adjustHubState.reason || '';
 
@@ -6663,10 +8212,6 @@ export function renderAdminAdjustments() {
   updateRecipientsUI();
 }
 
-/**
- * Dedicated popup member picker half-sheet for Adjustments Hub (FIX 5).
- * Edits a draft selection set and commits on 'Done'.
- */
 function openAdjustmentsMemberPickerSheet() {
   const activeMembers = (usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members])
     .filter(m => m && !m.disabled && !m.blocked);
@@ -6890,7 +8435,6 @@ export async function submitHubAdjustment() {
           invalidateEgpCache(targetUid);
         }
 
-        // Ledger audit record under user's transactions subcollection (matches firestore.rules & loadTransactionLedger)
         const ledgerRef = doc(collection(db, 'users', targetUid, 'transactions'));
         batch.set(ledgerRef, {
           uid: targetUid,
@@ -6911,7 +8455,6 @@ export async function submitHubAdjustment() {
           createdAtMs: now
         });
 
-        // Push notification in top-level notifications collection
         const notifRef = doc(collection(db, 'notifications'));
         const dirWord = direction === 'add' ? 'added' : 'deducted';
         const notifUnit = bucket === 'fines' ? 'EGP' : (bucket === 'penalties' ? 'penalties' : 'pts');
@@ -6950,7 +8493,6 @@ export async function submitHubAdjustment() {
 
     toast(`Successfully applied adjustment to ${targetUids.length} member${targetUids.length > 1 ? 's' : ''}`, 'success');
 
-    // Reset recipients, amount, reason while preserving bucket and direction (FIX 5)
     adjustHubState.selectedUids.clear();
     adjustHubState.amount = '';
     adjustHubState.reason = '';
@@ -7045,7 +8587,6 @@ export function openAvatarCropper(imageSrc, onDone) {
     container.onpointerup = endDrag;
     container.onpointercancel = endDrag;
 
-    // Pinch-to-zoom support
     container.ontouchstart = (e) => {
       if (e.touches.length === 2) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -7184,7 +8725,8 @@ function initNavigation() {
     { id: 'waivers', hash: '#admin-waivers' },
     { id: 'members', hash: '#admin-members' },
     { id: 'adjustments', hash: '#admin-adjustments' },
-    { id: 'broadcasts', hash: '#admin-broadcasts' }
+    { id: 'broadcasts', hash: '#admin-broadcasts' },
+    { id: 'notifications', hash: '#admin-notifications' }
   ];
 
   if (adminPagerEl && adminDockEl) {
@@ -7195,11 +8737,24 @@ function initNavigation() {
       else if (pageId === 'members') renderAdminMembers();
       else if (pageId === 'adjustments') renderAdminAdjustments();
       else if (pageId === 'broadcasts') renderAdminBroadcasts();
+      else if (pageId === 'notifications') renderAdminNotifications();
     });
   }
 
+  window.addEventListener('popstate', handleAppPopState);
+
   window.addEventListener('hashchange', () => {
+    if (_isHandlingPopState) return;
     const hash = window.location.hash;
+    if (hash === '#menu') {
+      openDrawer(false);
+      return;
+    } else {
+      const drawer = document.getElementById('side-drawer');
+      if (drawer && (drawer.classList.contains('active') || drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open'))) {
+        closeDrawer(false);
+      }
+    }
     const userMatch = userPages.find(p => p.hash === hash);
     if (userMatch && userPagerInstance) {
       userPagerInstance.goTo(userMatch.id);
@@ -7207,27 +8762,46 @@ function initNavigation() {
     }
     const adminMatch = adminPages.find(p => p.hash === hash);
     if (adminMatch) {
-      if (state.user?.isAdmin || state.isAdminUnlocked) {
+      if (isCurrentUserAdmin()) {
         showAdminDashboard(adminMatch.id);
       } else {
         openAdminPortal();
       }
     }
   });
+
+  // On app boot, ensure the default URL hash/state does NOT trigger the side menu to open unless explicitly requested by a deep link
+  const initialHash = window.location.hash;
+  if (initialHash === '#menu') {
+    openDrawer(false);
+  } else {
+    closeDrawer(false);
+  }
+
+  const initTabParam = getQueryParam('tab');
+  if (initTabParam === 'admin') {
+    setTimeout(() => {
+      if (isCurrentUserAdmin()) showAdminDashboard('overview');
+      else openAdminPortal();
+    }, 50);
+  }
 }
 
-/* ==========================================================================
-   SIDE DRAWER CONTROLLER
-   ========================================================================== */
 export function updateDrawerPushUI() {
   const statusEl = document.getElementById('drawer-push-status');
   const switchContainer = document.getElementById('drawer-push-switch-container');
   if (!switchContainer) return;
 
-  const supported = ('Notification' in window) && Boolean(isFCMSupported);
+  const supported = ('Notification' in window) && ('serviceWorker' in navigator);
   const permission = supported ? Notification.permission : 'unsupported';
-  const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
-  const isPushActive = supported && permission === 'granted' && hasToken;
+  const hasTokenOrFlag = Boolean(
+    state.user?.pushEnabled ||
+    state.userPrivate?.pushEnabled ||
+    state.currentFcmToken ||
+    (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0) ||
+    (state.user?.fcmTokens && state.user.fcmTokens.length > 0)
+  );
+  const isPushActive = supported && permission === 'granted' && hasTokenOrFlag;
 
   if (statusEl) {
     if (!supported) statusEl.textContent = 'Not Supported';
@@ -7323,46 +8897,80 @@ export function renderSettingsDrawer() {
   updateDrawerProfile();
 }
 
-export function openDrawer() {
+export function openDrawer(updateHistory = true) {
   const drawer = document.getElementById('side-drawer');
   const backdrop = document.getElementById('side-drawer-backdrop');
   if (drawer && backdrop) {
-    drawer.classList.add('drawer-open', 'is-open');
-    backdrop.classList.add('drawer-open', 'is-open');
+    drawer.classList.add('drawer-open', 'is-open', 'active');
+    backdrop.classList.add('drawer-open', 'is-open', 'active');
+    drawer.setAttribute('aria-hidden', 'false');
+    backdrop.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      try {
+        window.lucide.createIcons();
+      } catch (_) {}
+    }
     updateDrawerProfile();
+    if (updateHistory && !_isHandlingPopState) {
+      pushModalHistoryState('menu', `${window.location.pathname}${window.location.search}#menu`);
+    }
   }
 }
 
-export function closeDrawer() {
+export function closeDrawer(updateHistory = true) {
   const drawer = document.getElementById('side-drawer');
   const backdrop = document.getElementById('side-drawer-backdrop');
-  if (drawer && backdrop) {
-    drawer.classList.remove('drawer-open', 'is-open');
-    backdrop.classList.remove('drawer-open', 'is-open');
+  if (drawer) {
+    drawer.classList.remove('drawer-open', 'is-open', 'active');
+    drawer.style.transform = '';
+    drawer.setAttribute('aria-hidden', 'true');
+  }
+  if (backdrop) {
+    backdrop.classList.remove('drawer-open', 'is-open', 'active');
+    backdrop.setAttribute('aria-hidden', 'true');
+  }
+  document.body.style.overflow = '';
+
+  if (updateHistory && !_isHandlingPopState && typeof history !== 'undefined' && typeof window !== 'undefined') {
+    const curHash = window.location.hash;
+    if (curHash === '#menu' || curHash === '#modal-drawer' || curHash === '#settings') {
+      const activeTab = getActiveTabRouteId() || 'home';
+      const cleanUrl = `${window.location.pathname}?tab=${activeTab}#${activeTab}`;
+      const nextState = { ...(history.state || {}), cocTab: activeTab, cocModal: null };
+      try {
+        history.replaceState(nextState, '', cleanUrl);
+      } catch (_) {}
+    }
   }
 }
 
 export function toggleDrawer() {
   const drawer = document.getElementById('side-drawer');
   if (!drawer) return;
-  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open')) {
+  if (drawer.classList.contains('drawer-open') || drawer.classList.contains('is-open') || drawer.classList.contains('active')) {
     closeDrawer();
   } else {
     openDrawer();
   }
 }
 
-/* ==========================================================================
-   ADMIN DASHBOARD OVERLAY CONTROLLER
-   ========================================================================== */
+if (typeof window !== 'undefined') {
+  window.openDrawer = openDrawer;
+  window.closeDrawer = closeDrawer;
+  window.toggleDrawer = toggleDrawer;
+}
+
 function openAdminPortal() {
-  if (state.user?.isAdmin || state.isAdminUnlocked) {
+  const currentUser = state.user || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
     showAdminDashboard();
   } else {
     const modal = document.getElementById('modal-admin-auth');
     if (modal) {
       document.body.style.overflow = 'hidden';
       modal.classList.add('open');
+      pushModalHistoryState('modal-admin-auth');
       const input = document.getElementById('input-admin-password');
       if (input) input.focus();
     }
@@ -7370,10 +8978,17 @@ function openAdminPortal() {
 }
 
 export function showAdminDashboard(targetPage = 'overview') {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) {
+    openAdminPortal();
+    return;
+  }
   const overlay = document.getElementById('modal-admin-dashboard');
   if (overlay) {
+    overlay.style.display = '';
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    pushModalHistoryState('admin-' + targetPage, `${window.location.pathname}?tab=admin#admin-${targetPage}`);
     const backBtn = document.getElementById('adminHubBackBtn') || document.getElementById('btn-exit-admin');
     if (backBtn) {
       backBtn.onclick = (e) => {
@@ -7381,17 +8996,26 @@ export function showAdminDashboard(targetPage = 'overview') {
         closeAdminDashboard();
       };
     }
+    initAdminPushConsole();
+    setupSubmissionsListeners();
+    setupAttendanceListeners();
+    setupUsersPrivateListener();
+    setupWaiverRequestsListener();
+    renderAdminCategories();
+    renderAdminTasks();
+    renderAdminSessions();
+    renderAdminBadges();
+    renderAdminMembers();
+    renderAdminSubmissions();
+    renderAdminBroadcasts();
+    renderAdminNotifications();
+    updateAdminOverviewStats();
     if (adminPagerInstance) {
       adminPagerInstance.goTo(targetPage);
     }
-    // Re-attach admin-only listeners if authorized
-    if (state.user?.isAdmin || state.isAdminUnlocked) {
-      setupSubmissionsListeners();
-      setupAttendanceListeners();
-    }
-    updateAdminOverviewStats();
     if (targetPage === 'waivers') renderAdminWaivers();
     else if (targetPage === 'adjustments') renderAdminAdjustments();
+    else if (targetPage === 'notifications') renderAdminNotifications();
   }
 }
 
@@ -7400,11 +9024,14 @@ export function closeAdminDashboard() {
   const overlay = document.getElementById('modal-admin-dashboard');
   if (overlay) {
     overlay.classList.add('hidden');
+    overlay.style.display = 'none';
     document.body.style.overflow = '';
-    if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.currentPage) {
-      userPagerInstance.goTo(userPagerInstance.currentPage);
+    const activeTab = getActiveTabRouteId();
+    const returnTab = (activeTab && activeTab !== 'admin') ? activeTab : 'home';
+    syncTabHistoryState(returnTab, true);
+    if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.goTo) {
+      userPagerInstance.goTo(returnTab);
     }
-    // Clean up admin-only listeners on close to preserve bandwidth/reads
     listeners.clear('submissions');
     listeners.clear('attendance_logs');
     state.submissions = state.mySubmissions || [];
@@ -7415,13 +9042,18 @@ export function closeAdminDashboard() {
 let isFetchingOverviewStats = false;
 
 async function updateAdminOverviewStats() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tEl = document.getElementById('admin-overview-tasks');
   const mEl = document.getElementById('admin-overview-members');
   const sEl = document.getElementById('admin-overview-submissions');
   const pEl = document.getElementById('admin-overview-penalties');
   const sesEl = document.getElementById('admin-overview-sessions');
+  const finesDueEl = document.getElementById('admin-overview-fines-due-val');
 
-  // Optimistic initial values from memory
+  const totalFinesLocal = (state.members || []).reduce((sum, m) => sum + Math.max(0, m.finesDue ?? m.fines ?? m.quotas ?? 0), 0);
+  if (finesDueEl) finesDueEl.textContent = `${totalFinesLocal} EGP`;
+
   if (tEl && !tEl.textContent) tEl.textContent = state.tasks.filter(t => t.active).length;
   if (mEl && !mEl.textContent) mEl.textContent = state.members.length;
   if (sEl && !sEl.textContent) sEl.textContent = state.submissions.length;
@@ -7431,14 +9063,12 @@ async function updateAdminOverviewStats() {
   isFetchingOverviewStats = true;
 
   try {
-    // 1. Members count: getCountFromServer(users)
+
     const membersSnapPromise = getCountFromServer(collection(db, 'users')).catch(() => null);
 
-    // 2. Active tasks: getCountFromServer(query(tasks, where('active', '==', true)))
     const activeTasksQuery = query(collection(db, 'tasks'), where('active', '==', true));
     const activeTasksPromise = getCountFromServer(activeTasksQuery).catch(() => null);
 
-    // 3. Submissions today: APP_TIMEZONE day start
     const now = serverNow();
     const todayDateStr = new Intl.DateTimeFormat('en-CA', {
       timeZone: APP_TIMEZONE,
@@ -7456,7 +9086,6 @@ async function updateAdminOverviewStats() {
     );
     const todaySubsPromise = getCountFromServer(todaySubsQuery).catch(() => null);
 
-    // 4. Penalties issued: getAggregateFromServer(attendance_logs, sum('penalty'))
     const penaltiesPromise = getAggregateFromServer(collection(db, 'attendance_logs'), {
       totalPenalty: sum('penalty')
     }).catch(() => null);
@@ -7475,8 +9104,11 @@ async function updateAdminOverviewStats() {
       const pen = penaltiesSnap.data().totalPenalty || 0;
       pEl.textContent = `${pen} EGP`;
     }
+    if (finesDueEl) {
+      const totalFines = (state.members || []).reduce((sum, m) => sum + Math.max(0, m.finesDue ?? m.fines ?? m.quotas ?? 0), 0);
+      finesDueEl.textContent = `${totalFines} EGP`;
+    }
 
-    // 5. Render 7-day submissions bar chart
     renderSubmissionsTrendChart();
   } catch (err) {
     console.warn('Error fetching aggregate overview stats:', err);
@@ -7486,6 +9118,8 @@ async function updateAdminOverviewStats() {
 }
 
 async function renderSubmissionsTrendChart() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const chartContainer = document.getElementById('admin-overview-chart');
   const totalCountEl = document.getElementById('admin-chart-total-count');
   if (!chartContainer) return;
@@ -7526,7 +9160,7 @@ async function renderSubmissionsTrendChart() {
         const snap = await getCountFromServer(q);
         return snap.data().count;
       } catch (e) {
-        // Fallback to in-memory filter if network/index fails
+
         const sCount = state.submissions.filter(s => {
           if (!s.submittedAt) return false;
           const ts = s.submittedAt.seconds ? s.submittedAt.seconds * 1000 : new Date(s.submittedAt).getTime();
@@ -7584,9 +9218,6 @@ async function renderSubmissionsTrendChart() {
   `;
 }
 
-/* ==========================================================================
-   AUTH & USER DATA SPLIT CONTROLLER
-   ========================================================================== */
 let initialAuthResolved = false;
 
 async function setupAuthLifecycle() {
@@ -7596,22 +9227,22 @@ async function setupAuthLifecycle() {
     return;
   }
 
-  // Ensure browserLocalPersistence BEFORE any sign-in flow
   try {
     await setPersistence(auth, browserLocalPersistence);
   } catch (err) {
     console.warn('Local persistence setting failed:', err);
   }
 
-  // Cold-start fail-safe: dismiss splash after 500ms so cached UI is immediately usable
   setTimeout(() => {
     if (!initialAuthResolved) {
       initialAuthResolved = true;
       dismissLoader();
+      if (typeof checkAndShowAutoWhatsNew === 'function') {
+        checkAndShowAutoWhatsNew();
+      }
     }
   }, 500);
 
-  // Handle redirect result if user returned from signInWithRedirect
   try {
     const redirectResult = await getRedirectResult(auth);
     if (redirectResult?.user) {
@@ -7634,10 +9265,12 @@ async function setupAuthLifecycle() {
         if (userSnap.exists()) {
           state.user = normalizeUser({ uid: firebaseUser.uid, ...userSnap.data() });
         } else {
-          // New users ALWAYS initialize with role: "member", points: 0, penalties: 0
+
+          const rawPhoto = firebaseUser.photoURL || '';
+          const initialAvatar = isDefaultEmailProfilePic(rawPhoto) ? getDeterministicPresetAvatar(firebaseUser.uid) : rawPhoto;
           const initialUser = {
             name: firebaseUser.displayName || 'Team Member',
-            avatarUrl: firebaseUser.photoURL || '',
+            avatarUrl: initialAvatar,
             role: 'member',
             points: 0,
             penalties: 0,
@@ -7649,7 +9282,6 @@ async function setupAuthLifecycle() {
           state.user = normalizeUser({ uid: firebaseUser.uid, ...initialUser });
         }
 
-        // Split data: Manage users_private collection
         const privSnap = await getDoc(privRef).catch(() => null);
         if (!privSnap || !privSnap.exists()) {
           const initialPrivate = {
@@ -7660,7 +9292,7 @@ async function setupAuthLifecycle() {
           state.userPrivate = initialPrivate;
         } else {
           state.userPrivate = privSnap.data();
-          // For existing users, copy email into users_private if missing
+
           if (!privSnap.data()?.email && firebaseUser.email) {
             await updateDoc(privRef, { email: firebaseUser.email }).catch(console.warn);
             state.userPrivate.email = firebaseUser.email;
@@ -7675,14 +9307,13 @@ async function setupAuthLifecycle() {
         });
       }
 
-      if (state.user?.isAdmin) {
+      if (state.user?.isAdmin || state.user?.role === 'admin') {
         state.isAdminUnlocked = true;
       }
+      persistToLocalCache(true);
 
-      // Initialize server clock sync on login
       initServerClock();
 
-      // Start authenticated Firestore listeners
       initFirestoreListeners();
       if (state.user?.isAdmin || state.user?.role === 'admin') {
         backfillWindowCounters();
@@ -7692,7 +9323,6 @@ async function setupAuthLifecycle() {
       state.userPrivate = null;
       state.isAdminUnlocked = false;
 
-      // Clear only private & personal auth-dependent listeners
       listeners.clear('users_private');
       listeners.clear('notifications_personal');
       listeners.clear('my_attendance_logs');
@@ -7705,7 +9335,6 @@ async function setupAuthLifecycle() {
       state.personalNotifications = [];
       state.broadcastNotificationsBadge = [];
 
-      // Ensure public member listener remains active for Guest/Visitor leaderboard
       if (!listeners.has('users')) {
         setupMembersListeners();
       }
@@ -7716,21 +9345,25 @@ async function setupAuthLifecycle() {
     updateUserTodayAttendanceBadge();
     checkAdminRoleUI();
 
-    // RENDER UI ONLY AFTER FIRST onAuthStateChanged RESOLVES (branded splash until then)
     if (!initialAuthResolved) {
       initialAuthResolved = true;
       dismissLoader();
+      if (typeof checkAndShowAutoWhatsNew === 'function') {
+        checkAndShowAutoWhatsNew();
+      }
     }
   });
 }
 
-async function handleGoogleSignIn() {
+async function handleGoogleSignIn(e) {
+  if (e && typeof e.preventDefault === 'function') e.preventDefault();
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+
   if (!auth || !googleProvider) {
     toast('Authentication unavailable', 'error');
     return;
   }
 
-  // Ensure persistence before signing in
   try {
     await setPersistence(auth, browserLocalPersistence);
   } catch (e) {
@@ -7738,13 +9371,13 @@ async function handleGoogleSignIn() {
   }
 
   try {
-    // Primary mode: signInWithPopup
+
     await signInWithPopup(auth, googleProvider);
     toast('Signed in successfully!', 'success');
     closeAllModals();
   } catch (err) {
-    console.warn('Popup sign in failed, attempting redirect fallback:', err);
-    if (err.code === 'auth/popup-blocked' || err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+    console.warn('Popup sign in status:', err);
+    if (err.code === 'auth/popup-blocked') {
       try {
         await signInWithRedirect(auth, googleProvider);
       } catch (redirectErr) {
@@ -7754,6 +9387,9 @@ async function handleGoogleSignIn() {
           toast(redirectErr.message || 'Sign in failed', 'error');
         }
       }
+    } else if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+
+      return;
     } else if (err.code === 'auth/unauthorized-domain') {
       showDomainModal();
     } else {
@@ -7769,6 +9405,7 @@ function showDomainModal() {
   if (modal) {
     document.body.style.overflow = 'hidden';
     modal.classList.add('open');
+    pushModalHistoryState('modal-unauthorized-domain');
   }
 }
 
@@ -7781,7 +9418,7 @@ async function handleSignOut() {
   });
 
   if (confirmed && auth) {
-    // Unsubscribe all active listeners before sign out to prevent permission errors
+
     listeners.clear();
     usersPrivate.clear();
     usersMap.clear();
@@ -7816,6 +9453,12 @@ function checkAdminRoleUI() {
 }
 
 function closeAllModals() {
+  const root = document.getElementById('shared-modal-root');
+  if (root && typeof root._currentOnClose === 'function') {
+    const fn = root._currentOnClose;
+    root._currentOnClose = null;
+    try { fn(); } catch (e) { console.warn(e); }
+  }
   if (typeof modalStack !== 'undefined') modalStack.length = 0;
   document.querySelectorAll('.modal-backdrop').forEach(m => {
     m.classList.remove('open');
@@ -7842,19 +9485,19 @@ function setupSubmissionsListeners() {
     return;
   }
 
-  // 1. User's own live submissions: where uid == me, ordered by submittedAt desc, limit 200
   try {
     const qUserSubs = query(
       collection(db, 'submissions'),
       where('uid', '==', state.user.uid),
       orderBy('submittedAt', 'desc'),
-      limit(200)
+      limit(150)
     );
     const unsubMySubs = onSnapshot(qUserSubs, (snapshot) => {
       state.mySubmissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
-      if (!state.user?.isAdmin) {
+      if (!isCurrentUserAdmin()) {
         state.submissions = state.mySubmissions;
       }
+      persistToLocalCache();
       renderTasks();
       renderProfileSubmissions();
       updateHeroStats();
@@ -7862,14 +9505,14 @@ function setupSubmissionsListeners() {
     listeners.add('my_submissions', unsubMySubs);
   } catch (e) { console.warn('Error setting up user submissions listener:', e); }
 
-  // 2. Admin submissions listener (only if admin)
-  if (state.user?.isAdmin || state.isAdminUnlocked) {
+  const currentUser = state.user || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
     try {
       listeners.clear('submissions');
       const qAllSubs = query(
         collection(db, 'submissions'),
         orderBy('submittedAt', 'desc'),
-        limit(state.adminSubmissionsLimit || 50)
+        limit(state.adminSubmissionsLimit || 100)
       );
       const unsubAllSubs = onSnapshot(qAllSubs, (snapshot) => {
         state.submissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
@@ -7886,9 +9529,16 @@ function setupSubmissionsListeners() {
 
 function setupAttendanceListeners() {
   if (!db) return;
+  clearFsListener('my_attendance_logs');
+  clearFsListener('my_attendance_logs_fallback');
+  clearFsListener('attendance_logs');
+  clearFsListener('attendance_records');
+  clearFsListener('attendance_records_fallback');
+
   if (!state.user) {
     listeners.clear('my_attendance_logs');
     listeners.clear('attendance_logs');
+    listeners.clear('attendance_records');
     state.myAttendanceLogs = [];
     state.attendanceLogs = [];
     renderAttendanceView();
@@ -7898,7 +9548,6 @@ function setupAttendanceListeners() {
     return;
   }
 
-  // 1. Current user's attendance logs: where uid == me, ordered by checkedInAt desc, limit 50
   try {
     const qMyLogs = query(
       collection(db, 'attendance_logs'),
@@ -7908,35 +9557,111 @@ function setupAttendanceListeners() {
     );
     const unsubMyLogs = onSnapshot(qMyLogs, (snapshot) => {
       state.myAttendanceLogs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-      if (!state.user?.isAdmin && !state.isAdminUnlocked) {
+      if (!isCurrentUserAdmin()) {
         state.attendanceLogs = state.myAttendanceLogs;
       }
-      renderAttendanceView();
-      renderAttendanceLogs();
+      persistToLocalCache();
+      renderTodayCheckIns(state.myAttendanceLogs);
       renderProfileAttendance();
       updateUserTodayAttendanceBadge();
     }, (err) => {
       console.warn('My attendance logs listener:', err);
+      try {
+        const qMyFallback = query(
+          collection(db, 'attendance_logs'),
+          where('uid', '==', state.user.uid),
+          limit(50)
+        );
+        const unsubFallback = onSnapshot(qMyFallback, (snapshot) => {
+          const list = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+          list.sort((a, b) => (parseDateTimeToMs(b.checkedInAt || b.timestamp) - parseDateTimeToMs(a.checkedInAt || a.timestamp)));
+          state.myAttendanceLogs = list;
+          if (!isCurrentUserAdmin()) {
+            state.attendanceLogs = state.myAttendanceLogs;
+          }
+          persistToLocalCache();
+          renderTodayCheckIns(state.myAttendanceLogs);
+          renderProfileAttendance();
+          updateUserTodayAttendanceBadge();
+        }, () => {});
+        setFsListener('my_attendance_logs_fallback', unsubFallback);
+        listeners.add('my_attendance_logs', unsubFallback);
+      } catch (_) {}
     });
+    setFsListener('my_attendance_logs', unsubMyLogs);
     listeners.add('my_attendance_logs', unsubMyLogs);
   } catch (e) { console.warn('Error setting up my attendance logs listener:', e); }
 
-  // 2. Admin attendance logs listener (only if admin)
-  if (state.user?.isAdmin || state.isAdminUnlocked) {
+  const currentUser = state.user || {};
+  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
     try {
       const qAllLogs = query(
         collection(db, 'attendance_logs'),
-        orderBy('checkedInAt', 'desc'),
-        limit(100)
+        limit(150)
       );
       const unsubAllLogs = onSnapshot(qAllLogs, (snapshot) => {
-        state.attendanceLogs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-        renderAdminAttendanceLogs();
-        renderAttendanceLogs();
+        const logs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+        const mergedMap = new Map((state.attendanceLogs || []).map(l => [l.id, l]));
+        logs.forEach(l => mergedMap.set(l.id, { ...(mergedMap.get(l.id) || {}), ...l }));
+        state.attendanceLogs = Array.from(mergedMap.values());
+        if (adminSessionsFilter === 'recent_logs') {
+          renderRecentLogs();
+        }
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          window.refreshCurrentRosterView();
+        }
+        renderTodayCheckIns(state.attendanceLogs);
         updateUserTodayAttendanceBadge();
       }, (err) => console.warn('Admin attendance logs listener:', err));
+      setFsListener('attendance_logs', unsubAllLogs);
       listeners.add('attendance_logs', unsubAllLogs);
     } catch (e) { console.warn('Error setting up admin attendance logs listener:', e); }
+  }
+
+  // Pure onSnapshot sync for attendance_records
+  try {
+    const qRecords = (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked)
+      ? query(collection(db, 'attendance_records'), limit(150))
+      : query(collection(db, 'attendance_records'), where('uid', '==', state.user.uid), limit(50));
+    const unsubRecords = onSnapshot(qRecords, (snapshot) => {
+      const records = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+      state.attendanceRecords = records;
+
+      const mergedMap = new Map((state.attendanceLogs || []).map(l => [l.id, l]));
+      records.forEach(r => mergedMap.set(r.id, { ...(mergedMap.get(r.id) || {}), ...r }));
+      state.attendanceLogs = Array.from(mergedMap.values());
+
+      if (!isCurrentUserAdmin()) {
+        state.myAttendanceLogs = records;
+      }
+      renderTodayCheckIns(records);
+      if (adminSessionsFilter === 'recent_logs') {
+        renderRecentLogs();
+      }
+      if (typeof window.refreshCurrentRosterView === 'function') {
+        window.refreshCurrentRosterView();
+      }
+      updateUserTodayAttendanceBadge();
+    }, (err) => {
+      try {
+        const qFallback = query(collection(db, 'attendance_records'), limit(150));
+        const unsubFallback = onSnapshot(qFallback, (s) => {
+          const records = s.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
+          state.attendanceRecords = records;
+          renderTodayCheckIns(records);
+          if (adminSessionsFilter === 'recent_logs') renderRecentLogs();
+          if (typeof window.refreshCurrentRosterView === 'function') {
+            window.refreshCurrentRosterView();
+          }
+        }, () => {});
+        setFsListener('attendance_records_fallback', unsubFallback);
+        listeners.add('attendance_records', unsubFallback);
+      } catch (_) {}
+    });
+    setFsListener('attendance_records', unsubRecords);
+    listeners.add('attendance_records', unsubRecords);
+  } catch (e) {
+    console.warn('Error setting up attendance_records listener:', e);
   }
 }
 
@@ -7953,13 +9678,17 @@ function setupMembersListeners() {
       });
       state.members = Array.from(usersMap.values());
       state.hasMoreMembers = false;
+      persistToLocalCache();
       renderLeaderboard();
-      renderAdminMembers();
-      updateAdminOverviewStats();
-      updateAdminPushTargets();
       renderTasks();
       renderAttendanceView();
-      if (typeof renderAdminSubmissions === 'function') renderAdminSubmissions();
+      const currentUser = state.user || {};
+      if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
+        renderAdminMembers();
+        updateAdminOverviewStats();
+        updateAdminPushTargets();
+        if (typeof renderAdminSubmissions === 'function') renderAdminSubmissions();
+      }
       if (state.user) {
         const found = usersMap.get(state.user.uid);
         if (found) {
@@ -7973,6 +9702,7 @@ function setupMembersListeners() {
             setupNotificationsListener();
             setupUsersPrivateListener();
             setupWaiverRequestsListener();
+            setupMissedPenaltiesListener();
           }
         }
       }
@@ -7981,14 +9711,7 @@ function setupMembersListeners() {
   } catch (e) { console.warn('Error setting up members listener:', e); }
 }
 
-/**
- * Initializes users_private real-time listeners (Task 5).
- * Regular members listen to their own users_private/{uid} document.
- * Admins listen to collection('users_private') limit(500) so email and finesEGP are always live.
- */
-
-
-const egpAggregateCache = new Map(); // uid -> { fineSum, timestamp }
+const egpAggregateCache = new Map();
 
 function invalidateEgpCache(uid) {
   if (uid) {
@@ -7999,26 +9722,11 @@ function invalidateEgpCache(uid) {
 }
 
 async function getMemberDerivedEgpBalance(uid, forceRefresh = false) {
-  if (!uid || !db) return 0;
+  if (!uid) return 0;
   const privDoc = usersPrivate.get(uid);
-  const adminAdj = (privDoc && typeof privDoc.finesEGP === 'number') ? privDoc.finesEGP : 0;
-
-  let cached = egpAggregateCache.get(uid);
-  if (forceRefresh || !cached || (Date.now() - cached.timestamp > 30000)) {
-    try {
-      const aggSnap = await getAggregateFromServer(
-        query(collection(db, 'attendance_logs'), where('uid', '==', uid)),
-        { total: sum('fineEGP') }
-      );
-      const fineSum = Number(aggSnap?.data()?.total) || 0;
-      cached = { fineSum, timestamp: Date.now() };
-      egpAggregateCache.set(uid, cached);
-    } catch (err) {
-      console.warn('Failed to fetch attendance fine aggregate for', uid, err);
-      cached = cached || { fineSum: 0, timestamp: Date.now() };
-    }
-  }
-  return adminAdj + (cached?.fineSum || 0);
+  const userDoc = usersMap.get(uid) || (state.user?.uid === uid ? state.user : null);
+  const authoritative = privDoc?.finesDue ?? privDoc?.finesEGP ?? privDoc?.fines ?? userDoc?.finesDue ?? userDoc?.fines ?? userDoc?.quotas ?? 0;
+  return Math.max(0, Number(authoritative) || 0);
 }
 
 function setupUsersPrivateListener() {
@@ -8030,9 +9738,9 @@ function setupUsersPrivateListener() {
 
   const uid = state.user.uid;
   const isAdmin = Boolean(
-    state.user.isAdmin || 
-    state.user.role === 'admin' || 
-    usersMap.get(uid)?.isAdmin || 
+    state.user.isAdmin ||
+    state.user.role === 'admin' ||
+    usersMap.get(uid)?.isAdmin ||
     usersMap.get(uid)?.role === 'admin'
   );
 
@@ -8097,11 +9805,6 @@ function setupUsersPrivateListener() {
   }
 }
 
-/**
- * Initializes waiver_requests real-time listeners (Task 6).
- * Regular members listen to their own waiver requests.
- * Admins listen to all waiver requests to approve/reject excuses.
- */
 function setupWaiverRequestsListener() {
   if (!db || !state.user?.uid) {
     listeners.clear('my_waiver_requests');
@@ -8112,17 +9815,16 @@ function setupWaiverRequestsListener() {
   }
 
   const isAdmin = Boolean(
-    state.user.isAdmin || 
-    state.user.role === 'admin' || 
+    state.user.isAdmin ||
+    state.user.role === 'admin' ||
     state.isAdminUnlocked ||
-    usersMap.get(state.user.uid)?.isAdmin || 
+    usersMap.get(state.user.uid)?.isAdmin ||
     usersMap.get(state.user.uid)?.role === 'admin'
   );
 
   listeners.clear('my_waiver_requests');
   listeners.clear('waiver_requests');
 
-  // 1. My waiver requests
   try {
     const qMy = query(
       collection(db, 'waiver_requests'),
@@ -8137,7 +9839,6 @@ function setupWaiverRequestsListener() {
     listeners.add('my_waiver_requests', unsubMy);
   } catch (e) { console.warn('Error setting up my waiver requests listener:', e); }
 
-  // 2. Admin all waiver requests
   if (isAdmin) {
     try {
       const qAll = query(
@@ -8150,14 +9851,53 @@ function setupWaiverRequestsListener() {
         const pendingCount = state.waiverRequests.filter(w => w.status === 'pending').length;
         updateWaiversBadge(pendingCount);
         if (typeof renderAdminWaivers === 'function') renderAdminWaivers();
+        if (typeof window.refreshCurrentRosterView === 'function') window.refreshCurrentRosterView();
       }, (err) => console.warn('Admin waiver requests listener:', err));
       listeners.add('waiver_requests', unsubAll);
     } catch (e) { console.warn('Error setting up admin waiver requests listener:', e); }
   }
 }
 
+function setupMissedPenaltiesListener() {
+  if (!db || !state.user?.uid) {
+    listeners.clear('missed_penalties');
+    state.missedPenalties = [];
+    return;
+  }
+
+  const isAdmin = Boolean(
+    state.user.isAdmin ||
+    state.user.role === 'admin' ||
+    state.isAdminUnlocked ||
+    usersMap.get(state.user.uid)?.isAdmin ||
+    usersMap.get(state.user.uid)?.role === 'admin'
+  );
+
+  listeners.clear('missed_penalties');
+
+  if (isAdmin) {
+    try {
+      const qMissed = query(
+        collection(db, 'missed_penalties'),
+        limit(150)
+      );
+      const unsubMissed = onSnapshot(qMissed, (snapshot) => {
+        const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        state.missedPenalties = list;
+        if (!state.appliedMissedPenalties) state.appliedMissedPenalties = new Set();
+        list.forEach(item => {
+          if (item.id) state.appliedMissedPenalties.add(item.id);
+        });
+        if (typeof renderAdminMissedTasks === 'function') renderAdminMissedTasks();
+      }, (err) => console.warn('Admin missed_penalties listener:', err));
+      listeners.add('missed_penalties', unsubMissed);
+    } catch (e) { console.warn('Error setting up missed_penalties listener:', e); }
+  }
+}
+
 function mergeAndRenderNotifications() {
   const personal = state.personalNotifications || [];
+  const targetNotifs = state.targetNotifications || [];
   const userSubs = userNotifications || [];
   const bAll = state.broadcastNotificationsAll || [];
   const bBadge = state.broadcastNotificationsBadge || [];
@@ -8167,16 +9907,32 @@ function mergeAndRenderNotifications() {
   personal.forEach(n => {
     combinedMap.set(n.id, {
       ...n,
+      _inRoot: true,
       isBroadcast: false,
       read: Boolean(n.read)
     });
   });
 
+  targetNotifs.forEach(n => {
+    if (!combinedMap.has(n.id)) {
+      combinedMap.set(n.id, {
+        ...n,
+        _inRoot: true,
+        isBroadcast: false,
+        read: Boolean(n.read)
+      });
+    }
+  });
+
   userSubs.forEach(n => {
+    const existing = combinedMap.get(n.id);
     combinedMap.set(n.id, {
+      ...(existing || {}),
       ...n,
+      _inRoot: Boolean(existing?._inRoot),
+      _inUserSub: true,
       isBroadcast: false,
-      read: Boolean(n.read)
+      read: Boolean(existing?.read || n.read)
     });
   });
 
@@ -8204,14 +9960,11 @@ function mergeAndRenderNotifications() {
   });
 
   state.notifications = combined;
+  persistToLocalCache();
   updateNotificationBadges();
   renderNotifications();
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.0: REAL-TIME iOS BANNER NOTIFICATION TOAST
-   ========================================================================== */
 export function showNotificationToast(title, body) {
   const toastEl = document.getElementById('live-notification-toast');
   if (!toastEl) return;
@@ -8341,7 +10094,6 @@ function setupNotificationsListener() {
     return;
   }
 
-  // 0. Dedicated Real-Time Listener on users/{uid}/notifications
   try {
     listeners.clear('notifications_user_subcollection');
     if (unsubscribeUserNotifications) {
@@ -8351,7 +10103,6 @@ function setupNotificationsListener() {
     isUserNotificationsInitialLoad = true;
     const qUserNotifs = query(
       collection(db, 'users', state.user.uid, 'notifications'),
-      orderBy('timestamp', 'desc'),
       limit(50)
     );
     unsubscribeUserNotifications = onSnapshot(qUserNotifs, (snapshot) => {
@@ -8374,13 +10125,11 @@ function setupNotificationsListener() {
     console.warn('User subcollection notifications listener error:', err);
   }
 
-  // 1. Personal Notifications
   try {
     listeners.clear('notifications_personal');
     const qPersonal = query(
       collection(db, 'notifications'),
       where('uid', '==', state.user.uid),
-      orderBy('createdAt', 'desc'),
       limit(100)
     );
     const unsubPersonal = onSnapshot(qPersonal, (snapshot) => {
@@ -8405,13 +10154,27 @@ function setupNotificationsListener() {
     console.warn('Personal notifications listener error:', e);
   }
 
-  // 2. Broadcast Notifications: targetType == "all"
+  try {
+    listeners.clear('notifications_target');
+    const qTarget = query(
+      collection(db, 'notifications'),
+      where('targetUid', '==', state.user.uid),
+      limit(100)
+    );
+    const unsubTarget = onSnapshot(qTarget, (snapshot) => {
+      state.targetNotifications = snapshot.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
+      mergeAndRenderNotifications();
+    }, (err) => console.warn('Target notifications listener:', err));
+    listeners.add('notifications_target', unsubTarget);
+  } catch (e) {
+    console.warn('Target notifications listener error:', e);
+  }
+
   try {
     listeners.clear('notifications_broadcast_all');
     const qBroadcastAll = query(
       collection(db, 'notifications_broadcast'),
       where('targetType', '==', 'all'),
-      orderBy('createdAt', 'desc'),
       limit(50)
     );
     const unsubBroadcastAll = onSnapshot(qBroadcastAll, (snapshot) => {
@@ -8438,7 +10201,6 @@ function setupNotificationsListener() {
     console.warn('Broadcast all notifications listener error:', e);
   }
 
-  // 3. Broadcast Notifications: targetType == "badge"
   const userBadges = Array.isArray(state.user?.badgeIds) ? state.user.badgeIds.slice(0, 10) : [];
   if (userBadges.length > 0) {
     try {
@@ -8447,7 +10209,6 @@ function setupNotificationsListener() {
         collection(db, 'notifications_broadcast'),
         where('targetType', '==', 'badge'),
         where('badgeId', 'in', userBadges),
-        orderBy('createdAt', 'desc'),
         limit(50)
       );
       const unsubBroadcastBadge = onSnapshot(qBroadcastBadge, (snapshot) => {
@@ -8487,8 +10248,9 @@ function setupBroadcastsListener() {
     );
     const unsubBroadcasts = onSnapshot(qBroadcasts, (snapshot) => {
       state.broadcasts = snapshot.docs.map(d => normalizeBroadcast({ id: d.id, ...d.data() }));
+      persistToLocalCache();
       renderHomeBroadcastBanner();
-      renderAdminBroadcasts();
+      if (isCurrentUserAdmin()) renderAdminBroadcasts();
       mergeAndRenderNotifications();
     }, (err) => console.warn('Broadcasts listener:', err));
     listeners.add('broadcasts', unsubBroadcasts);
@@ -8497,9 +10259,6 @@ function setupBroadcastsListener() {
   }
 }
 
-/* ==========================================================================
-   FIREBASE CLOUD MESSAGING (CLIENT-SIDE PUSH PIPELINE)
-   ========================================================================== */
 const FCM_VAPID_KEY = 'BHAllHVmcFAqchvINO9TY95yyGoeYKQ9aDgD31hhYXpI3jkG4CPOVsxU7mi0OQzGUZcKYx3l_FTGvpWEMcEz4yY';
 const FCM_SW_SCOPE = './firebase-cloud-messaging-push-scope';
 let messaging = null;
@@ -8518,7 +10277,6 @@ async function initFCM() {
     isFCMSupported = true;
     messaging = getMessaging(app);
 
-    // Register dedicated SW for FCM with scope ./firebase-cloud-messaging-push-scope
     try {
       fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
         scope: FCM_SW_SCOPE
@@ -8527,7 +10285,6 @@ async function initFCM() {
       console.warn('Could not register FCM Service Worker:', swErr);
     }
 
-    // Foreground listener: in-app toast & refresh badge (no duplicate system notification)
     onMessage(messaging, (payload) => {
       const title = payload.notification?.title || payload.data?.title || 'Team Update';
       const body = payload.notification?.body || payload.data?.body || '';
@@ -8549,7 +10306,6 @@ function updatePushNotificationUI() {
   const btnLabelEl = document.getElementById('btn-toggle-push-label');
   const iosNoteEl = document.getElementById('push-ios-note');
 
-  // iOS check: iOS 16.4+ requires Web App added to Home Screen
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
   if (iosNoteEl) {
     if (isIOS) iosNoteEl.classList.remove('hidden');
@@ -8580,8 +10336,13 @@ function updatePushNotificationUI() {
     return;
   }
 
-  // Check if active user has an FCM token stored
-  const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
+  const hasToken = Boolean(
+    state.user?.pushEnabled ||
+    state.userPrivate?.pushEnabled ||
+    state.currentFcmToken ||
+    (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0) ||
+    (state.user?.fcmTokens && state.user.fcmTokens.length > 0)
+  );
 
   if (permission === 'granted' && hasToken) {
     badgeEl.textContent = 'On';
@@ -8606,7 +10367,12 @@ async function handleTogglePushNotifications() {
     return;
   }
 
-  const hasToken = Boolean(state.currentFcmToken || (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0));
+  const hasToken = Boolean(
+    state.user?.pushEnabled ||
+    state.userPrivate?.pushEnabled ||
+    state.currentFcmToken ||
+    (state.userPrivate?.fcmTokens && state.userPrivate.fcmTokens.length > 0)
+  );
   if (Notification.permission === 'granted' && hasToken) {
     await disablePushNotifications();
   } else {
@@ -8619,86 +10385,143 @@ async function enablePushNotifications() {
   try {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
-      toast('Notification permission was ' + permission, 'warning');
+      toast('Notification permission was ' + permission + '. Please allow notifications in your browser settings.', 'warning');
       updatePushNotificationUI();
+      updateDrawerPushUI();
       return;
     }
 
-    if (!messaging || !fcmRegistration) {
-      fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
-        scope: FCM_SW_SCOPE
-      });
-      messaging = getMessaging(app);
-    }
+    let token = null;
+    try {
+      if (!messaging || !fcmRegistration) {
+        fcmRegistration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {
+          scope: FCM_SW_SCOPE
+        });
+        messaging = getMessaging(app);
+      }
 
-    const token = await getToken(messaging, {
-      vapidKey: FCM_VAPID_KEY,
-      serviceWorkerRegistration: fcmRegistration
-    });
+      token = await getToken(messaging, {
+        vapidKey: FCM_VAPID_KEY,
+        serviceWorkerRegistration: fcmRegistration
+      });
+    } catch (fcmErr) {
+      console.warn('FCM token retrieval warning:', fcmErr);
+    }
 
     if (token) {
       state.currentFcmToken = token;
-      const privRef = doc(db, 'users_private', state.user.uid);
-      await setDoc(privRef, {
-        email: state.userPrivate?.email || state.user?.email || '',
-        fcmTokens: arrayUnion(token)
-      }, { merge: true });
-
-      if (!state.userPrivate) state.userPrivate = {};
-      if (!state.userPrivate.fcmTokens) state.userPrivate.fcmTokens = [];
-      if (!state.userPrivate.fcmTokens.includes(token)) {
-        state.userPrivate.fcmTokens.push(token);
-      }
-
-      toast('Push notifications enabled!', 'success');
-    } else {
-      toast('Could not retrieve push token', 'warning');
     }
+
+    state.user.pushEnabled = true;
+    if (!state.userPrivate) state.userPrivate = {};
+    state.userPrivate.pushEnabled = true;
+    if (!state.userPrivate.fcmTokens) state.userPrivate.fcmTokens = [];
+    if (token && !state.userPrivate.fcmTokens.includes(token)) {
+      state.userPrivate.fcmTokens.push(token);
+    }
+
+    const privPayload = {
+      email: state.userPrivate?.email || state.user?.email || '',
+      pushEnabled: true,
+      updatedAt: serverTimestamp()
+    };
+    if (token) privPayload.fcmTokens = arrayUnion(token);
+
+    await setDoc(doc(db, 'users_private', state.user.uid), privPayload, { merge: true }).catch(e => console.warn('users_private push update:', e));
+
+    const pubPayload = {
+      pushEnabled: true,
+      updatedAt: serverTimestamp()
+    };
+    if (token) pubPayload.fcmTokens = arrayUnion(token);
+    await setDoc(doc(db, 'users', state.user.uid), pubPayload, { merge: true }).catch(e => console.warn('users push update:', e));
+
+    callGasBackend({
+      action: 'REGISTER_PUSH_TOKEN',
+      uid: state.user.uid,
+      pushEnabled: true,
+      token: token || ''
+    }).catch(() => {});
+
+    try {
+      const swReg = (await navigator.serviceWorker.getRegistration('./sw.js')) || (await navigator.serviceWorker.ready) || fcmRegistration;
+      if (swReg && typeof swReg.showNotification === 'function') {
+        await swReg.showNotification('Push Notifications Active 🔔', {
+          body: 'You will now receive live CoC Media alerts directly from Chrome.',
+          icon: './pwa-192x192.png',
+          badge: './pwa-192x192.png',
+          data: { url: './index.html#home' }
+        });
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Push Notifications Active 🔔', {
+          body: 'You will now receive live CoC Media alerts directly from Chrome.',
+          icon: './pwa-192x192.png'
+        });
+      }
+    } catch (notifErr) {
+      console.warn('Immediate confirmation notification warning:', notifErr);
+    }
+
+    toast('Push notifications enabled!', 'success');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   } catch (err) {
     console.error('enablePushNotifications error:', err);
     toast('Failed to enable push: ' + (err.message || err), 'error');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   }
 }
 
 async function disablePushNotifications() {
   if (!state.user) return;
   try {
-    const tokenToRemove = state.currentFcmToken || state.userPrivate?.fcmTokens?.[0];
+    const tokenToRemove = state.currentFcmToken || state.userPrivate?.fcmTokens?.[0] || state.user?.fcmTokens?.[0];
+    const privUpdate = { pushEnabled: false, updatedAt: serverTimestamp() };
+    const pubUpdate = { pushEnabled: false, updatedAt: serverTimestamp() };
     if (tokenToRemove) {
-      const privRef = doc(db, 'users_private', state.user.uid);
-      await updateDoc(privRef, {
-        fcmTokens: arrayRemove(tokenToRemove)
-      }).catch(() => {});
+      privUpdate.fcmTokens = arrayRemove(tokenToRemove);
+      pubUpdate.fcmTokens = arrayRemove(tokenToRemove);
     }
+
+    await setDoc(doc(db, 'users_private', state.user.uid), privUpdate, { merge: true }).catch(() => {});
+    await setDoc(doc(db, 'users', state.user.uid), pubUpdate, { merge: true }).catch(() => {});
 
     if (messaging) {
       await deleteToken(messaging).catch(() => {});
     }
 
     state.currentFcmToken = null;
-    if (state.userPrivate?.fcmTokens) {
+    if (state.user) state.user.pushEnabled = false;
+    if (state.userPrivate) {
+      state.userPrivate.pushEnabled = false;
       state.userPrivate.fcmTokens = [];
     }
 
+    callGasBackend({
+      action: 'REGISTER_PUSH_TOKEN',
+      uid: state.user.uid,
+      pushEnabled: false,
+      removeToken: tokenToRemove || ''
+    }).catch(() => {});
+
     toast('Push notifications disabled', 'info');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   } catch (err) {
     console.error('disablePushNotifications error:', err);
     toast('Failed to disable push: ' + (err.message || err), 'error');
     updatePushNotificationUI();
+    updateDrawerPushUI();
   }
 }
 
-/* ==========================================================================
-   ADMIN PUSH SENDER CONSOLE
-   ========================================================================== */
 export function initAdminPushConsole() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const form = document.getElementById('form-admin-send-push');
   if (!form) return;
 
-  // Ensure hidden inputs exist
   let targetInput = document.getElementById('select-push-target');
   if (!targetInput) {
     targetInput = document.createElement('input');
@@ -8726,7 +10549,6 @@ export function initAdminPushConsole() {
     form.appendChild(itemIdInput);
   }
 
-  // 1. Audience Segmented Control
   const audienceContainer = document.getElementById('push-audience-segmented-container');
   const detailsContainer = document.getElementById('push-audience-details-container');
   if (audienceContainer && detailsContainer && !audienceContainer.dataset.initialized) {
@@ -8809,7 +10631,7 @@ export function initAdminPushConsole() {
         }
       }
     });
-    // Initial display
+
     detailsContainer.innerHTML = `
       <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 flex items-center gap-2">
         <div class="w-7 h-7 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center shrink-0">
@@ -8820,7 +10642,6 @@ export function initAdminPushConsole() {
     `;
   }
 
-  // 2. Category Picker Button
   const catBtn = document.getElementById('btn-push-category-picker');
   const catInput = document.getElementById('input-push-type') || document.getElementById('select-push-type');
   const catLabel = document.getElementById('push-category-label');
@@ -8846,7 +10667,6 @@ export function initAdminPushConsole() {
     };
   }
 
-  // 3. Deep Link Action Picker Button
   const actionBtn = document.getElementById('btn-push-action-picker');
   const actionLabel = document.getElementById('push-action-label');
   const subPickerContainer = document.getElementById('push-sub-picker-container');
@@ -8920,7 +10740,6 @@ export function initAdminPushConsole() {
     }
   }
 
-  // Ensure icon preview is initialized
   const iconInput = document.getElementById('input-push-icon');
   const iconPreview = document.getElementById('push-icon-preview');
   const iconLabel = document.getElementById('push-icon-label');
@@ -8932,6 +10751,8 @@ export function initAdminPushConsole() {
 }
 
 export function updateAdminPushTargets() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const hiddenInput = document.getElementById('select-push-target');
   const currentVal = hiddenInput?.value || 'all';
   updatePushTargetPickerDisplay(currentVal);
@@ -9009,7 +10830,7 @@ async function handleAdminSendPush(e) {
   const targetAction = route ? { route, itemId } : null;
 
   try {
-    // 1. Write to push_queue for client FCM listeners
+
     addDoc(collection(db, 'push_queue'), {
       title,
       body,
@@ -9022,7 +10843,6 @@ async function handleAdminSendPush(e) {
       status: 'queued'
     }).catch(e => console.warn('push_queue write error:', e));
 
-    // 2. Hybrid Firestore Notification Delivery
     if (target === 'all') {
       await addDoc(collection(db, 'notifications_broadcast'), {
         title,
@@ -9053,8 +10873,9 @@ async function handleAdminSendPush(e) {
       });
       toast(`Notification broadcast to badge group "${badgeId}"!`, 'success');
     } else {
-      // Direct personal notification
-      await addDoc(collection(db, 'notifications'), {
+
+      const directBatch = writeBatch(db);
+      createNotification(directBatch, {
         uid: target,
         title,
         message: body,
@@ -9062,10 +10883,9 @@ async function handleAdminSendPush(e) {
         type,
         icon,
         targetAction,
-        refId: null,
-        read: false,
-        createdAt: serverTimestamp()
+        refId: null
       });
+      await directBatch.commit();
       toast('Personal notification sent!', 'success');
     }
 
@@ -9076,7 +10896,6 @@ async function handleAdminSendPush(e) {
     });
     await batchLog.commit();
 
-    // Reset inputs
     if (titleInput) titleInput.value = '';
     if (bodyInput) bodyInput.value = '';
     if (itemIdInput) itemIdInput.value = '';
@@ -9097,50 +10916,58 @@ async function handleAdminSendPush(e) {
   }
 }
 
-/* ==========================================================================
-   FIRESTORE REAL-TIME LISTENERS (MANAGED & LIMITED)
-   ========================================================================== */
 function initFirestoreListeners() {
   if (!db) {
     console.warn('Firestore database unavailable.');
     return;
   }
 
-  // 1. Categories (limit 100)
   try {
     const unsubCats = onSnapshot(query(collection(db, 'categories'), limit(100)), (snapshot) => {
-      state.categories = snapshot.docs.map(d => normalizeCategory({ id: d.id, ...d.data() }));
+      categoriesMap.clear();
+      state.categories = snapshot.docs
+        .map(d => normalizeCategory({ id: d.id, ...d.data() }))
+        .filter(Boolean)
+        .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      state.categories.forEach(c => categoriesMap.set(c.id, c));
+      persistToLocalCache();
       populateCategoryFilters();
-      renderAdminCategories();
+      if (isCurrentUserAdmin()) renderAdminCategories();
       renderTasks();
     }, (err) => console.warn('Categories listener:', err));
     listeners.add('categories', unsubCats);
   } catch (e) { console.warn(e); }
 
-  // 2. Tasks (limit 200)
   try {
     const unsubTasks = onSnapshot(query(collection(db, 'tasks'), limit(200)), (snapshot) => {
-      state.tasks = snapshot.docs.map(d => normalizeTask({ id: d.id, ...d.data() }));
+      state.tasks = snapshot.docs
+        .map(d => normalizeTask({ id: d.id, ...d.data() }))
+        .filter(Boolean)
+        .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      persistToLocalCache();
       renderTasks();
-      renderAdminTasks();
       updateHeroStats();
-      updateAdminOverviewStats();
+      if (isCurrentUserAdmin()) {
+        renderAdminTasks();
+        updateAdminOverviewStats();
+      }
     }, (err) => console.warn('Tasks listener:', err));
     listeners.add('tasks', unsubTasks);
   } catch (e) { console.warn(e); }
 
-  // 3. Attendance Sessions
   try {
     const unsubSessions = onSnapshot(query(collection(db, 'attendance_sessions'), limit(50)), (snapshot) => {
       state.attendanceSessions = snapshot.docs.map(d => normalizeSession({ id: d.id, ...d.data() }));
+      persistToLocalCache();
       renderAttendanceView();
-      renderAdminSessions();
-      updateAdminOverviewStats();
+      if (isCurrentUserAdmin()) {
+        renderAdminSessions();
+        updateAdminOverviewStats();
+      }
     }, (err) => console.warn('Attendance sessions listener:', err));
     listeners.add('attendance_sessions', unsubSessions);
   } catch (e) { console.warn(e); }
 
-  // Badges Realtime Listener (FIX 3)
   try {
     const unsubBadges = onSnapshot(collection(db, 'badges'), (snapshot) => {
       badgesMap.clear();
@@ -9154,47 +10981,45 @@ function initFirestoreListeners() {
           iconKey: data.iconKey || data.icon || 'star',
           icon: data.iconKey || data.icon || 'star',
           color: data.color || '#FFD60A',
-          order: typeof data.order === 'number' ? data.order : 0
+          order: typeof data.order === 'number' ? data.order : 999999
         };
-        badgesMap.set(d.id, badgeObj);
         return badgeObj;
-      });
+      }).sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
-      renderAdminBadges();
+      state.badges.forEach(b => badgesMap.set(b.id, b));
+      persistToLocalCache();
       renderLeaderboard();
       updateProfileUI();
-      if (typeof renderAdminMembers === 'function') renderAdminMembers();
+      if (isCurrentUserAdmin()) {
+        renderAdminBadges();
+        if (typeof renderAdminMembers === 'function') renderAdminMembers();
+      }
     }, (err) => console.warn('Badges listener:', err));
     listeners.add('badges', unsubBadges);
 
-    // One-time deterministic badges seed check (admin only)
     if (state.user && (state.user.isAdmin || state.user.role === 'admin')) {
       checkAndSeedBadgesOnce();
     }
   } catch (e) { console.warn(e); }
 
-  // 4. Attendance Logs (User live attendance & Admin oversight)
   setupAttendanceListeners();
 
-  // 5. Submissions (User live submissions & Admin oversight)
   setupSubmissionsListeners();
 
-  // 6. Registered Members & Private User Profiles
   setupMembersListeners();
   setupUsersPrivateListener();
   setupWaiverRequestsListener();
+  setupMissedPenaltiesListener();
 
-  // 7. Notifications (User real-time sync)
   setupNotificationsListener();
 
-  // 8. Broadcasts (Live carousel & Banner)
   setupBroadcastsListener();
 
-  // 9. Settings (app_config & general)
   try {
     const unsubSettings = onSnapshot(doc(db, 'settings', 'app_config'), (docSnap) => {
       if (docSnap.exists()) {
         state.settings = { ...state.settings, ...docSnap.data() };
+        persistToLocalCache();
         applySettings();
       }
     }, (err) => console.warn('Settings listener:', err));
@@ -9214,17 +11039,23 @@ function initFirestoreListeners() {
       }
     }, (err) => console.warn('Settings general listener:', err));
     listeners.add('settings_general', unsubSettingsGeneral);
+
+    const unsubWhatsNew = onSnapshot(doc(db, 'settings', 'whats_new'), (docSnap) => {
+      if (docSnap.exists()) {
+        state.whatsNew = docSnap.data();
+        if (initialAuthResolved && typeof checkAndShowAutoWhatsNew === 'function') {
+          checkAndShowAutoWhatsNew();
+        }
+      }
+    }, (err) => console.warn('Whats new listener:', err));
+    listeners.add('settings_whats_new', unsubWhatsNew);
   } catch (e) { console.warn(e); }
 }
 
-/* ==========================================================================
-   UI RENDERING: TASKS
-   ========================================================================== */
 function populateCategoryFilters() {
   const container = document.getElementById('category-filter-chips');
   if (!container) return;
 
-  // Count active tasks per category for current member view
   const activeTasks = (state.tasks || []).filter(t => !t.archived && t.active !== false && isTaskVisibleToUser(t, state.user?.uid));
   const activeCatIds = new Set();
   activeTasks.forEach(t => {
@@ -9232,7 +11063,6 @@ function populateCategoryFilters() {
     if (cId) activeCatIds.add(cId);
   });
 
-  // If selectedCategory is no longer active or was archived, fall back to 'all'
   if (state.selectedCategory !== 'all') {
     const cat = state.categories.find(c => c.id === state.selectedCategory);
     if (!cat || cat.archived || !activeCatIds.has(cat.id)) {
@@ -9247,8 +11077,8 @@ function populateCategoryFilters() {
     </button>
   `;
 
-  // Only render categories that have active tasks > 0
-  state.categories.filter(c => !c.archived && activeCatIds.has(c.id)).forEach(cat => {
+  const orderedCats = [...state.categories].sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+  orderedCats.filter(c => !c.archived && activeCatIds.has(c.id)).forEach(cat => {
     const isSelected = current === cat.id;
     html += `
       <button type="button" data-category="${esc(cat.id)}" class="cat-filter-btn inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${isSelected ? 'text-white' : 'bg-white/10 text-neutral-300'}" style="${isSelected ? `background-color: ${cat.color || '#0A84FF'};` : ''}">
@@ -9291,7 +11121,7 @@ function renderTasks() {
       if (state.statusFilter === 'pending' && isCompleted) return false;
     }
     return true;
-  });
+  }).sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
   if (filtered.length === 0) {
     container.innerHTML = '';
@@ -9362,7 +11192,6 @@ function renderTasks() {
     `;
   }).join('');
 
-  // Tapping ANY card opens the Task Details & Submission modal (or toggles selection if in selection mode)
   container.querySelectorAll('.task-card').forEach(card => {
     card.onclick = (e) => {
       if (selectionState.active && selectionState.type === 'tasks') {
@@ -9481,7 +11310,6 @@ function openTaskDetailsModal(taskId) {
           `;
         }
 
-        // Default: short text
         return `
           <div class="task-q-card space-y-1.5" data-q-id="${esc(q.id)}" data-q-type="short" data-is-required="${isReq}">
             <label class="block text-xs font-semibold text-neutral-200">
@@ -9495,7 +11323,6 @@ function openTaskDetailsModal(taskId) {
     </div>
   ` : '';
 
-  // Banner status with countdown
   let bannerHtml = '';
   if (isDone) {
     bannerHtml = '<div class="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium text-center flex items-center justify-center gap-2"><svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg> You have completed this occurrence.</div>';
@@ -9543,7 +11370,6 @@ function openTaskDetailsModal(taskId) {
     ${commentHtml}
   `;
 
-  // Wire MCQ Other toggle
   bodyEl.querySelectorAll('.task-q-card[data-q-type="mcq"]').forEach(card => {
     const radios = card.querySelectorAll('input[type="radio"]');
     const otherInp = card.querySelector('.mcq-other-input');
@@ -9629,58 +11455,18 @@ function openTaskDetailsModal(taskId) {
       if (hasError) return false;
 
       try {
-        const currentWin = getTaskWindow(task, serverNow());
-        if (currentWin?.state !== 'open' && currentWin?.state !== 'grace') {
-          toast('Submission closed: deadline and grace period have expired.', 'error');
-          return false;
-        }
-
-        const occurrenceKey = (task.schedule?.type === 'once') ? 'once' : (currentWin?.occurrenceKey || 'once');
-        const policy = task.claimPolicy || 'once_per_cycle';
-        let subId;
-        let pointsAwarded = currentWin.pointsForNow;
-
-        if (policy === 'milestone') {
-          const hasPriorSub = (state.submissions || []).some(s => s.taskId === task.id && s.uid === state.user.uid);
-          if (hasPriorSub) {
-            pointsAwarded = 0;
-          }
-          subId = `${task.id}_${state.user.uid}_milestone`;
-        } else if (policy === 'every_submission') {
-          subId = `${task.id}_${state.user.uid}_${Date.now()}`;
-        } else {
-          subId = `${task.id}_${state.user.uid}_${occurrenceKey}`;
-        }
         const comment = bodyEl.querySelector('#task-detail-comment')?.value || '';
-
-        const batch = writeBatch(db);
-        const subRef = doc(db, 'submissions', subId);
-        const userRef = doc(db, 'users', state.user.uid);
-
-        batch.set(subRef, {
-          taskId: task.id,
-          taskTitle: task.title,
-          uid: state.user.uid,
-          userName: state.user.name || state.user.displayName || 'Member',
-          userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-          occurrenceKey,
-          answers,
-          inGrace: Boolean(currentWin.inGrace),
-          comment: comment.trim(),
-          pointsAwarded,
-          submittedAt: serverTimestamp()
-        });
-
-        const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, pointsAwarded, serverNow());
-        batch.update(userRef, {
-          ...pointsUpdate,
-          lastOpId: subId,
-          updatedAt: serverTimestamp()
-        });
-
-        await batch.commit();
-        toast(`Task submitted! +${pointsAwarded} pts awarded${currentWin.inGrace ? ' (Grace Period)' : ''}`, 'success');
-        renderTasks();
+        const decision = await submitTaskThroughBackend(task, answers, comment);
+        const ptsAwarded = typeof decision?.pointsAwarded === 'number' ? decision.pointsAwarded : 0;
+        const penPts = Number(decision?.penaltyPts) || 0;
+        const fineAmt = Number(decision?.fineEGP) || 0;
+        const extraParts = [];
+        if (decision?.inEarlyBonus) extraParts.push('Early Bonus');
+        else if (decision?.inGrace) extraParts.push('Grace Period');
+        if (penPts > 0) extraParts.push(`-${penPts} penalty pts`);
+        if (fineAmt > 0) extraParts.push(`-${fineAmt} EGP fine`);
+        const suffix = extraParts.length > 0 ? ` (${extraParts.join(' • ')})` : '';
+        toast(`Task submitted! +${ptsAwarded} pts awarded${suffix}`, 'success');
         return true;
       } catch (err) {
         console.error('Submission error:', err);
@@ -9742,265 +11528,536 @@ function openTaskCompetitionModal(taskId) {
   });
 }
 
-/* ==========================================================================
-   UI RENDERING: ATTENDANCE
-   ========================================================================== */
 let attendanceTickerInterval = null;
+let userAttendanceActiveTab = 'active';
+
+export function formatCheckInExactTime(ts, includeDate = true) {
+  const ms = parseDateTimeToMs(ts);
+  if (!ms) return '—';
+  try {
+    const opts = includeDate
+      ? { timeZone: APP_TIMEZONE, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }
+      : { timeZone: APP_TIMEZONE, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+    return new Intl.DateTimeFormat('en-US', opts).format(new Date(ms));
+  } catch (e) {
+    return formatDateTime(ms);
+  }
+}
+
+export function getLogExactTimeStr(log, includeDate = true) {
+  if (!log) return 'N/A';
+  const raw = log.checkInTimestamp || log.checkedInAt || log.timestamp || log.checkInTime || log.createdAt;
+  const ms = parseDateTimeToMs(raw);
+  if (!ms) return 'N/A';
+  try {
+    const opts = includeDate
+      ? { timeZone: APP_TIMEZONE, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }
+      : { timeZone: APP_TIMEZONE, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+    return new Intl.DateTimeFormat('en-US', opts).format(new Date(ms));
+  } catch (e) {
+    return new Date(ms).toLocaleTimeString();
+  }
+}
+
+export function renderCheckInMetricsPills(log) {
+  if (!log) return '';
+  const status = log.status || 'on_time';
+  const isAbsent = status === 'absent';
+  const isExcused = status === 'excused' || log.excused === true;
+  const isEarly = status === 'early' || log.isEarly || (Number(log.earlyMinutes) > 0 && status !== 'late' && !isAbsent);
+  const isLate = status === 'late' || (!isAbsent && !isEarly && (Number(log.delaySeconds) > 0 || Number(log.lateMinutes) > 0 || Number(log.penalty) > 0));
+
+  let timingPill = '';
+  if (isAbsent) {
+    timingPill = `<span class="checkin-timing-pill pill-absent">Absent</span>`;
+  } else if (isExcused) {
+    timingPill = `<span class="checkin-timing-pill pill-excused">Excused</span>`;
+  } else if (isEarly && Number(log.earlyMinutes) > 0) {
+    timingPill = `<span class="checkin-timing-pill pill-early">Early ${Number(log.earlyMinutes)}m</span>`;
+  } else if (isLate) {
+    const lMins = Number(log.lateMinutes) || Math.floor((Number(log.delaySeconds) || 0) / 60);
+    timingPill = `<span class="checkin-timing-pill pill-late">Late ${lMins}m</span>`;
+  } else {
+    timingPill = `<span class="checkin-timing-pill pill-ontime">On Time</span>`;
+  }
+
+  const ptsDelta = (log.pointsDelta !== undefined && log.pointsDelta !== null && log.pointsDelta !== 0)
+    ? Number(log.pointsDelta)
+    : (Number(log.earlyBonusPoints) > 0 ? Number(log.earlyBonusPoints) : (Number(log.penalty) > 0 ? -Number(log.penalty) : 0));
+  const egpDelta = (log.egpDelta !== undefined && log.egpDelta !== null && log.egpDelta !== 0)
+    ? Number(log.egpDelta)
+    : (Number(log.earlyBonusEGP) > 0 ? Number(log.earlyBonusEGP) : (Number(log.fineEGP) > 0 ? -Number(log.fineEGP) : 0));
+
+  let impactPill = '';
+  if (ptsDelta > 0 || egpDelta > 0) {
+    const parts = [];
+    if (ptsDelta > 0) parts.push(`+${ptsDelta} pts`);
+    if (egpDelta > 0) parts.push(`+${egpDelta} EGP`);
+    impactPill = `<span class="checkin-impact-pill impact-positive">${parts.join(' | ')}</span>`;
+  } else if (ptsDelta < 0 || egpDelta < 0) {
+    const parts = [];
+    if (ptsDelta < 0) parts.push(`${ptsDelta} pts`);
+    if (egpDelta < 0) parts.push(`${egpDelta} EGP`);
+    impactPill = `<span class="checkin-impact-pill impact-negative">${parts.join(' | ')}</span>`;
+  } else {
+    impactPill = `<span class="checkin-impact-pill impact-neutral">0 pts</span>`;
+  }
+
+  return `<div class="flex flex-wrap items-center justify-end gap-1">${timingPill}${impactPill}</div>`;
+}
+
+function renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin) {
+  if (!heroContainer) return;
+
+  if (!state.user) {
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card space-y-3">
+        <div class="space-y-1">
+          <span class="text-xs uppercase font-bold tracking-wider text-neutral-400 font-mono">Attendance</span>
+          <h2 class="ios-title text-white text-lg font-bold">Sign In Required</h2>
+          <p class="text-xs text-neutral-400">Sign in to check in to your rostered attendance sessions.</p>
+        </div>
+        <button type="button" id="btn-smart-hero-login" class="smart-checkin-btn-massive bg-[#0A84FF] hover:bg-[#0070E0] text-white">
+          <span>Sign In to Check In</span>
+        </button>
+      </div>
+    `;
+    const btn = heroContainer.querySelector('#btn-smart-hero-login');
+    if (btn) btn.onclick = handleGoogleSignIn;
+    return;
+  }
+
+  const nowMs = serverNow();
+
+  const evaluated = eligibleSessions.map(session => {
+    const calc = computeAttendance(session, nowMs);
+    const occurrenceKey = calc.occurrenceKey;
+    const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
+    const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
+    const isOpen = (calc.status === 'on_time' || calc.status === 'late');
+    return { session, calc, occurrenceKey, userLog, approvedWaiver, isOpen };
+  });
+
+  const openUnchecked = evaluated.filter(item => item.isOpen && !item.userLog && !item.approvedWaiver);
+
+  if (openUnchecked.length > 0) {
+    openUnchecked.sort((a, b) => Math.abs(a.calc.occurrenceStart - nowMs) - Math.abs(b.calc.occurrenceStart - nowMs));
+    const target = openUnchecked[0];
+    const isLate = target.calc.status === 'late';
+    const isEarlyWithBonus = target.calc.isEarly && (target.calc.earlyBonusPoints > 0 || target.calc.earlyBonusEGP > 0);
+
+    const bonusParts = [];
+    if (target.calc.earlyBonusPoints > 0) bonusParts.push(`+${target.calc.earlyBonusPoints} pts`);
+    if (target.calc.earlyBonusEGP > 0) bonusParts.push(`+${target.calc.earlyBonusEGP} EGP`);
+    const bonusRewardText = bonusParts.join(' | ');
+
+    const penParts = [];
+    if (target.calc.pointsDelta < 0) penParts.push(`${target.calc.pointsDelta} pts`);
+    if (target.calc.egpDelta < 0) penParts.push(`${target.calc.egpDelta} EGP`);
+    if (penParts.length === 0 && target.calc.penalty > 0) {
+      penParts.push(`-${target.calc.penalty} ${target.session.penaltyFinesEnabled ? 'EGP' : 'pts'}`);
+    }
+    const latePenaltyText = penParts.join(' | ');
+
+    let badgeHtml = '';
+    if (isEarlyWithBonus) {
+      badgeHtml = `
+        <div class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono shadow-sm">
+          <svg class="w-3.5 h-3.5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+          <span>Early Bonus (${bonusRewardText})${target.calc.appliedTierLabel ? ` &bull; ${esc(target.calc.appliedTierLabel)}` : ''}</span>
+        </div>
+      `;
+    } else if (!isLate) {
+      badgeHtml = `
+        <div class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono">
+          <svg class="w-3.5 h-3.5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <span>On Time${target.calc.earlyMinutes > 0 ? ` (Early by ${target.calc.earlyMinutes}m)` : ''} &bull; 0 Penalty</span>
+        </div>
+      `;
+    } else {
+      badgeHtml = `
+        <div class="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 font-mono animate-pulse">
+          <svg class="w-3.5 h-3.5 text-rose-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          <span>Late by ${target.calc.lateMinutes || 0}m ${target.calc.lateSeconds || 0}s (${latePenaltyText})</span>
+        </div>
+      `;
+    }
+
+    let btnText = 'Check In Now';
+    if (isEarlyWithBonus) {
+      btnText = `Check In Early (${bonusRewardText})`;
+    } else if (isLate) {
+      btnText = `Check In Late (${latePenaltyText})`;
+    }
+
+    const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+    if (existingCard && existingCard.dataset.heroSessionId === target.session.id && existingCard.dataset.heroStatus === target.calc.status) {
+      const badgeWrap = existingCard.querySelector('.smart-hero-badge-container');
+      if (badgeWrap) badgeWrap.innerHTML = badgeHtml;
+      const btnSpan = existingCard.querySelector('.smart-hero-btn-text');
+      if (btnSpan) btnSpan.textContent = btnText;
+      return;
+    }
+
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card ${isLate ? 'hero-late' : 'hero-active'} space-y-4" data-hero-session-id="${esc(target.session.id)}" data-hero-status="${esc(target.calc.status)}">
+        <div class="space-y-1">
+          <div class="flex items-center justify-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full ${isLate ? 'bg-rose-500 animate-ping' : 'bg-emerald-500 animate-pulse'}"></span>
+            <span class="text-xs uppercase font-bold tracking-wider ${isLate ? 'text-rose-400' : 'text-emerald-400'} font-mono">
+              ${isLate ? 'Late Window Open' : (isEarlyWithBonus ? 'Early Check-In Open' : 'Check-In Open')}
+            </span>
+          </div>
+          <h2 class="ios-title text-white text-xl font-bold truncate">${esc(target.session.title)}</h2>
+          <p class="text-xs text-neutral-300">
+            Scheduled: ${formatDateTime(target.calc.occurrenceStart)} (Cairo)
+          </p>
+        </div>
+
+        <div class="smart-hero-badge-container flex items-center justify-center">
+          ${badgeHtml}
+        </div>
+
+        <div class="relative">
+          <div class="smart-checkin-pulse-ring"></div>
+          <button type="button" id="btn-smart-hero-checkin" data-session-id="${esc(target.session.id)}" class="smart-checkin-btn-massive ${isLate ? 'bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-lg shadow-rose-900/30' : 'bg-gradient-to-r from-emerald-600 to-emerald-500 text-white shadow-lg shadow-emerald-900/30'}">
+            <svg class="w-5 h-5 shrink-0 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span class="smart-hero-btn-text">${btnText}</span>
+          </button>
+        </div>
+      </div>
+    `;
+
+    const btn = heroContainer.querySelector('#btn-smart-hero-checkin');
+    if (btn) {
+      btn.onclick = () => handleAttendanceCheckIn(target.session.id);
+    }
+    return;
+  }
+
+  const completedSession = evaluated.find(item => item.userLog || item.approvedWaiver);
+  if (completedSession) {
+    const isWaiver = Boolean(completedSession.approvedWaiver);
+    const log = completedSession.userLog;
+
+    const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+    if (existingCard && existingCard.dataset.heroSessionId === completedSession.session.id && existingCard.dataset.heroStatus === 'completed') {
+      return;
+    }
+
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card border-emerald-500/20 bg-emerald-500/[0.04] space-y-3" data-hero-session-id="${esc(completedSession.session.id)}" data-hero-status="completed">
+        <div class="flex items-center justify-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+          <span class="text-xs uppercase font-bold tracking-wider text-emerald-400 font-mono">${isWaiver ? 'Excuse Approved' : 'Checked In'}</span>
+        </div>
+        <h2 class="ios-title text-white text-xl font-bold truncate">${esc(completedSession.session.title)}</h2>
+        <div class="text-xs text-neutral-300 space-y-1.5">
+          ${isWaiver
+            ? `<p>Waiver granted: "${esc(completedSession.approvedWaiver.reason)}"</p>`
+            : `<p>Recorded at ${formatCheckInExactTime(log?.checkedInAt || log?.checkInTimestamp)}</p>
+               <div class="flex justify-center">${renderCheckInMetricsPills(log)}</div>`
+          }
+        </div>
+        <button type="button" class="smart-checkin-btn-massive" disabled>
+          <svg class="w-5 h-5 text-emerald-400 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <span>Already Checked In</span>
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  const upcomingSessions = evaluated.filter(item => item.calc.status === 'blocked' && item.calc.reason === 'early');
+  if (upcomingSessions.length > 0) {
+    upcomingSessions.sort((a, b) => a.calc.opensAt - b.calc.opensAt);
+    const nextItem = upcomingSessions[0];
+
+    const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+    if (existingCard && existingCard.dataset.heroSessionId === nextItem.session.id && existingCard.dataset.heroStatus === 'upcoming') {
+      const msgP = existingCard.querySelector('.smart-hero-upcoming-msg');
+      if (msgP) msgP.textContent = nextItem.calc.message || `Opens at ${formatDateTime(nextItem.calc.opensAt)}`;
+      return;
+    }
+
+    heroContainer.innerHTML = `
+      <div class="smart-checkin-hero-card space-y-3" data-hero-session-id="${esc(nextItem.session.id)}" data-hero-status="upcoming">
+        <div class="space-y-1">
+          <span class="text-xs uppercase font-bold tracking-wider text-neutral-400 font-mono">Next Session</span>
+          <h2 class="ios-title text-white text-xl font-bold truncate">${esc(nextItem.session.title)}</h2>
+          <p class="smart-hero-upcoming-msg text-xs text-neutral-400">${nextItem.calc.message || `Opens at ${formatDateTime(nextItem.calc.opensAt)}`}</p>
+        </div>
+        <button type="button" class="smart-checkin-btn-massive" disabled>
+          <svg class="w-5 h-5 text-neutral-400 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          <span>${nextItem.calc.message || 'Check-in Opens Soon'}</span>
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  const existingCard = heroContainer.querySelector('.smart-checkin-hero-card');
+  if (existingCard && existingCard.dataset.heroStatus === 'none') {
+    return;
+  }
+
+  heroContainer.innerHTML = `
+    <div class="smart-checkin-hero-card space-y-3" data-hero-status="none">
+      <div class="space-y-1">
+        <span class="text-xs uppercase font-bold tracking-wider text-neutral-500 font-mono">Attendance</span>
+        <h2 class="ios-title text-neutral-300 text-lg font-bold">No active sessions right now</h2>
+        <p class="text-xs text-neutral-500">You are not currently rostered for an active check-in.</p>
+      </div>
+      <button type="button" class="smart-checkin-btn-massive" disabled>
+        <span>No Active Sessions Right Now</span>
+      </button>
+    </div>
+  `;
+}
+
+export function renderUserSessionHistory() {
+  const container = document.getElementById('attendance-history-container');
+  const countBadge = document.getElementById('attendance-history-count');
+  if (!container) return;
+
+  const nowMs = serverNow();
+  const allSessions = (state.attendanceSessions || []).map(s => normalizeSession(s));
+  const allLogs = [...(state.attendanceLogs || []), ...(state.myAttendanceLogs || [])];
+  const uniqueLogsMap = new Map();
+  allLogs.forEach(l => {
+    if (l && l.id) uniqueLogsMap.set(l.id, l);
+  });
+  const combinedLogs = Array.from(uniqueLogsMap.values());
+
+  const historyItems = [];
+  allSessions.forEach(session => {
+    const calc = computeAttendance(session, nowMs);
+    const occStart = calc.occurrenceStart || parseDateTimeToMs(session.schedule?.startDateTime) || 0;
+    const cutoffMs = occStart + (Number(session.lateCutoffMinutes) || 120) * 60000;
+    const sessionLogs = combinedLogs.filter(l => l.sessionId === session.id);
+    const isPastOrClosed =
+      session.status === 'closed' ||
+      session.status === 'completed' ||
+      session.archived === true ||
+      session.active === false ||
+      (occStart > 0 && nowMs > cutoffMs) ||
+      sessionLogs.length > 0;
+
+    if (isPastOrClosed) {
+      const presentCount = sessionLogs.filter(l => l.status === 'early' || l.status === 'on_time' || (!l.penalty && l.status !== 'late' && l.status !== 'absent')).length;
+      const lateCount = sessionLogs.filter(l => l.status === 'late' || (l.penalty > 0 && l.status !== 'absent')).length;
+      const absentCount = sessionLogs.filter(l => l.status === 'absent').length;
+      historyItems.push({
+        session,
+        occStart,
+        isClosed: session.status === 'closed' || session.archived || (occStart > 0 && nowMs > cutoffMs),
+        presentCount,
+        lateCount,
+        absentCount,
+        totalLogs: sessionLogs.length
+      });
+    }
+  });
+
+  historyItems.sort((a, b) => (b.occStart || 0) - (a.occStart || 0));
+
+  if (countBadge) {
+    countBadge.textContent = `${historyItems.length} Sessions`;
+  }
+
+  if (historyItems.length === 0) {
+    container.innerHTML = `
+      <div class="glass-card p-6 text-center border border-dashed border-white/10">
+        <p class="ios-footnote text-neutral-400">No past or completed attendance sessions yet.</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = historyItems.map(item => {
+    const s = item.session;
+    const statusText = item.isClosed ? 'Closed' : 'Completed';
+    const statusClass = item.isClosed
+      ? 'bg-neutral-500/20 text-neutral-300 border border-neutral-500/30'
+      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+
+    return `
+      <div class="glass-card p-4 space-y-3 border border-white/10 cursor-pointer hover:bg-white/[0.04] transition rounded-2xl history-session-card" data-session-id="${esc(s.id)}">
+        <div class="flex items-start justify-between gap-2">
+          <div>
+            <h3 class="ios-headline text-white font-bold">${esc(s.title)}</h3>
+            <p class="text-[11px] text-neutral-400 mt-0.5">${formatDateTime(item.occStart)} (Cairo)</p>
+          </div>
+          <span class="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-semibold ${statusClass}">${statusText}</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 pt-1 text-center text-[11px]">
+          <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-mono">
+            <strong class="text-emerald-400">${item.presentCount}</strong> Present
+          </div>
+          <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono">
+            <strong class="text-amber-400">${item.lateCount}</strong> Late
+          </div>
+          <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 font-mono">
+            <strong class="text-rose-400">${item.absentCount}</strong> Absent
+          </div>
+        </div>
+        <div class="flex items-center justify-between pt-2 border-t border-white/5 text-[11px] text-neutral-400">
+          <span>Tap to view full attendee breakdown</span>
+          <span class="text-[#0A84FF] font-semibold">View Details &rarr;</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.history-session-card').forEach(card => {
+    card.onclick = () => {
+      const sid = card.dataset.sessionId;
+      const targetSession = state.attendanceSessions.find(s => s.id === sid);
+      if (targetSession) openSessionBreakdownModal(String(targetSession.id), true);
+    };
+  });
+}
 
 function renderAttendanceView() {
+  const heroContainer = document.getElementById('smart-checkin-hero-container');
+  const sessionsWrap = document.getElementById('attendance-sessions-wrap');
   const container = document.getElementById('attendance-sessions-container');
-  if (!container) return;
+  const btnTabActive = document.getElementById('btn-att-tab-active');
+  const btnTabHistory = document.getElementById('btn-att-tab-history');
+  const activeSection = document.getElementById('attendance-active-section');
+  const historySection = document.getElementById('attendance-history-section');
+
+  if (btnTabActive && btnTabHistory && activeSection && historySection) {
+    const syncTabsUI = () => {
+      if (userAttendanceActiveTab === 'history') {
+        btnTabActive.classList.remove('active');
+        btnTabActive.setAttribute('aria-selected', 'false');
+        btnTabHistory.classList.add('active');
+        btnTabHistory.setAttribute('aria-selected', 'true');
+        activeSection.classList.add('hidden');
+        historySection.classList.remove('hidden');
+        renderUserSessionHistory();
+      } else {
+        btnTabHistory.classList.remove('active');
+        btnTabHistory.setAttribute('aria-selected', 'false');
+        btnTabActive.classList.add('active');
+        btnTabActive.setAttribute('aria-selected', 'true');
+        historySection.classList.add('hidden');
+        activeSection.classList.remove('hidden');
+      }
+    };
+    btnTabActive.onclick = () => {
+      userAttendanceActiveTab = 'active';
+      syncTabsUI();
+    };
+    btnTabHistory.onclick = () => {
+      userAttendanceActiveTab = 'history';
+      syncTabsUI();
+    };
+    syncTabsUI();
+  }
 
   if (attendanceTickerInterval) {
     clearInterval(attendanceTickerInterval);
     attendanceTickerInterval = null;
   }
 
-  const userUid = state.user?.uid;
   const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin' || state.isAdminUnlocked);
-  const userBadgeIds = new Set([
-    ...(Array.isArray(state.user?.badgeIds) ? state.user.badgeIds : []),
-    ...(Array.isArray(state.user?.badges) ? state.user.badges.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean) : [])
-  ]);
 
-  const activeSessions = (state.attendanceSessions || []).filter(s => {
-    if (!s.active || s.archived) return false;
-    if (isAdmin) return true;
-    if (!userUid) return false;
-
-    const targetType = s.targetType || (Array.isArray(s.assignedUids) && s.assignedUids.length > 0 ? 'custom' : (Array.isArray(s.badgeIds) && s.badgeIds.length > 0 ? 'badge' : 'all'));
-    if (targetType === 'all') return true;
-    if (targetType === 'badge') {
-      const bIds = Array.isArray(s.badgeIds) ? s.badgeIds : [];
-      if (bIds.length === 0) return true;
-      return bIds.some(bid => userBadgeIds.has(bid));
-    }
-    if (targetType === 'custom') {
-      const uids = Array.isArray(s.assignedUids) ? s.assignedUids : [];
-      return uids.includes(userUid);
-    }
-    return true;
-  });
-
-  if (activeSessions.length === 0) {
-    container.innerHTML = `
-      <div class="glass-card p-6 text-center border border-dashed border-white/10">
-        <p class="ios-footnote text-neutral-400">No active attendance sessions currently open for you.</p>
-      </div>
-    `;
-    return;
+  if (sessionsWrap) {
+    sessionsWrap.classList.remove('hidden');
   }
 
-  const nowMs = serverNow();
+  const allActiveSessions = (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived && s.status !== 'archived');
+  const eligibleSessions = state.user ? allActiveSessions.filter(s => s.status !== 'closed' && isUserEligibleForSession(s, state.user)) : [];
 
-  container.innerHTML = activeSessions.map(session => {
-    const calc = computeAttendance(session, nowMs);
-    const occurrenceKey = calc.occurrenceKey;
+  if (heroContainer) {
+    renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
+  }
 
-    // Has user checked in for this occurrence?
-    const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
-
-    // Has user an approved waiver for this occurrence?
-    const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
-
-    const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
-    const startFormatted = formatDateTime(S);
-
-    if (userLog) {
-      const isLate = userLog.status === 'late' || (userLog.penalty > 0);
-      const isAbsent = userLog.status === 'absent';
-      return `
-        <div class="glass-card p-4 space-y-3 ${isAbsent ? 'border-rose-500/20 bg-rose-500/[0.03]' : 'border-emerald-500/20 bg-emerald-500/[0.03]'}">
-          <div class="flex items-center justify-between">
-            <div>
-              <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-              <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
-            </div>
-            <span class="px-2.5 py-1 rounded-full text-xs font-semibold ${isAbsent ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'} flex items-center gap-1">
-              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-                ${isAbsent ? '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>' : '<polyline points="20 6 9 17 4 12"></polyline>'}
-              </svg>
-              <span>${isAbsent ? 'Recorded Absent' : 'Checked In'}</span>
-            </span>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-white/[0.03] text-xs">
-            <div>
-              <span class="text-[10px] text-neutral-400 block">${isAbsent ? 'Record Time' : 'Time Checked In'}</span>
-              <span class="text-white font-medium">${formatDateTime(userLog.checkedInAt)}</span>
-            </div>
-            <div>
-              <span class="text-[10px] text-neutral-400 block">Status &amp; Deductions</span>
-              <span class="font-semibold ${isLate || isAbsent ? 'text-rose-400' : 'text-emerald-400'} font-mono">
-                ${isAbsent ? `Absent (-${userLog.penalty} pts${userLog.fineEGP > 0 ? ' -' + userLog.fineEGP + ' EGP' : ''})` : (isLate ? `Late (-${userLog.penalty} pts${userLog.fineEGP > 0 ? ' -' + userLog.fineEGP + ' EGP' : ''})` : 'On Time (0 penalty)')}
-              </span>
-            </div>
-          </div>
-          ${userLog.delaySeconds > 0 ? `
-            <div class="text-[11px] text-neutral-400">
-              Recorded delay: ${Math.floor(userLog.delaySeconds / 60)}m ${userLog.delaySeconds % 60}s
-            </div>
-          ` : ''}
+  if (container) {
+    const nowMs = serverNow();
+    if (allActiveSessions.length === 0) {
+      container.innerHTML = `
+        <div class="glass-card p-6 text-center border border-dashed border-white/10">
+          <p class="ios-footnote text-neutral-400">No active attendance sessions right now.</p>
         </div>
       `;
-    }
-
-    if (approvedWaiver) {
-      return `
-        <div class="glass-card p-4 space-y-3 border-blue-500/20 bg-blue-500/[0.03]">
-          <div class="flex items-center justify-between">
-            <div>
-              <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-              <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
-            </div>
-            <span class="badge-waived px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 font-mono">
-              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              <span>Excuse Approved</span>
-            </span>
-          </div>
-          <div class="p-2.5 rounded-xl bg-white/[0.03] text-xs space-y-1">
-            <span class="text-[10px] text-neutral-400 block font-semibold">Exempted from attendance penalty</span>
-            <p class="text-neutral-300 italic text-[11px]">"${esc(approvedWaiver.reason)}"</p>
-            ${approvedWaiver.adminNote ? `<div class="text-[10px] text-blue-300">Admin note: ${esc(approvedWaiver.adminNote)}</div>` : ''}
-          </div>
-        </div>
-      `;
-    }
-
-    // Not checked in yet
-    const isBlocked = calc.status === 'blocked';
-    const isLate = calc.status === 'late';
-    const isOnTime = calc.status === 'on_time';
-
-    let statusPill = '';
-    let previewBox = '';
-    let btnText = '';
-    let btnDisabled = false;
-
-    if (isBlocked) {
-      btnDisabled = true;
-      if (calc.reason === 'early') {
-        statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`;
-        previewBox = `
-          <div class="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-2">
-            <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            <span id="preview-text-${esc(session.id)}">${calc.message}</span>
-          </div>
-        `;
-        btnText = `Check-in Opens Soon`;
-      } else {
-        statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Closed</span>`;
-        previewBox = `
-          <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
-            <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
-            <span id="preview-text-${esc(session.id)}">${calc.message}</span>
-          </div>
-        `;
-        btnText = `Check-in Closed`;
-      }
-    } else if (isOnTime) {
-      statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Open (On Time)</span>`;
-      previewBox = `
-        <div class="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            <span id="preview-text-${esc(session.id)}">On time check-in window</span>
-          </div>
-          <span class="font-bold font-mono text-emerald-400">0 penalty</span>
-        </div>
-      `;
-      btnText = `Check In Now (0 Penalty)`;
     } else {
-      // Late
-      statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">Late Window</span>`;
-      previewBox = `
-        <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
-          <div class="flex items-center justify-between font-semibold">
-            <span id="preview-text-${esc(session.id)}">${calc.message}</span>
-            <span id="preview-penalty-${esc(session.id)}" class="font-bold font-mono text-rose-400">-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'}</span>
+      container.innerHTML = allActiveSessions.map(session => {
+        const calc = computeAttendance(session, nowMs);
+        const occurrenceKey = calc.occurrenceKey;
+        const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
+        const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
+        const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
+        const startFormatted = formatDateTime(S);
+
+        const isClosed = session.status === 'closed';
+        const isBlocked = calc.status === 'blocked';
+        const isLate = calc.status === 'late';
+        const isOnTime = calc.status === 'on_time';
+        const isEarlyBonus = calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0);
+
+        let statusPill = '';
+        if (isClosed) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-neutral-800 text-neutral-400 border border-neutral-700/50 flex items-center gap-1"><i class="fa-solid fa-lock text-[9px]"></i> Closed</span>`;
+        } else if (userLog) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Checked In</span>`;
+        } else if (approvedWaiver) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">Waived</span>`;
+        } else if (isBlocked) {
+          statusPill = calc.reason === 'early'
+            ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Opens Soon</span>`
+            : `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-neutral-800 text-neutral-400 border border-neutral-700/50 flex items-center gap-1"><i class="fa-solid fa-lock text-[9px]"></i> Closed</span>`;
+        } else if (isEarlyBonus) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Early Window (+${calc.earlyBonusPoints} pts${calc.earlyBonusEGP > 0 ? ` | +${calc.earlyBonusEGP} EGP` : ''})</span>`;
+        } else if (isOnTime) {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Open (On Time)</span>`;
+        } else {
+          statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">Late Window</span>`;
+        }
+
+        return `
+          <div class="glass-card p-4 space-y-2 border-white/10 cursor-pointer hover:bg-white/[0.04] transition" data-session-card="${esc(session.id)}">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <h3 class="ios-headline text-white">${esc(session.title)}</h3>
+                <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
+              </div>
+              ${statusPill}
+            </div>
+            <div class="text-[11px] text-neutral-400 flex items-center justify-between">
+              <span>Rostered: ${session.targetType === 'all' ? 'All Members' : (session.targetType === 'badge' ? `${(session.badgeIds || []).length} Badges` : `${(session.assignedMembers || session.assignedUids || []).length} Members`)}</span>
+              ${(session.earlyBonusTiers && session.earlyBonusTiers.length > 0)
+                ? `<span class="text-emerald-400 font-semibold">${session.earlyBonusTiers.length} Early Bonus Tiers</span>`
+                : (session.earlyBonusPoints > 0 ? `<span class="text-emerald-400 font-semibold">+${session.earlyBonusPoints} Pts Early</span>` : '')}
+            </div>
           </div>
-          <div class="text-[10px] text-rose-300/70">
-            Deduction step: +${session.penaltyPerStep} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'} every ${session.stepDuration} ${session.penaltyUnit}
-          </div>
-        </div>
-      `;
-      btnText = `Check In Now (-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'})`;
+        `;
+      }).join('');
+
+      container.querySelectorAll('[data-session-card]').forEach(card => {
+        card.onclick = () => {
+          const sid = card.dataset.sessionCard;
+          const sObj = state.attendanceSessions.find(x => x.id === sid);
+          if (sObj) {
+            if (isAdmin) {
+              openAdminRosterModal(String(sObj.id));
+            } else {
+              openSessionBreakdownModal(String(sObj.id), true);
+            }
+          }
+        };
+      });
     }
+  }
 
-    return `
-      <div class="glass-card p-4 space-y-3 border-white/10" data-session-card="${esc(session.id)}">
-        <div class="flex items-start justify-between gap-2">
-          <div>
-            <h3 class="ios-headline text-white">${esc(session.title)}</h3>
-            <p class="text-xs text-neutral-400 mt-0.5">${startFormatted} (Cairo)</p>
-          </div>
-          ${statusPill}
-        </div>
-
-        <div class="text-[11px] text-neutral-400 space-y-0.5">
-          <div>Early window: ${session.earlyCheckInMinutes} mins before start</div>
-          <div>Late cutoff: ${session.lateCutoffMinutes} mins after start</div>
-        </div>
-
-        <div id="session-preview-container-${esc(session.id)}">
-          ${previewBox}
-        </div>
-
-        <button
-          class="btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition ${btnDisabled ? 'bg-white/10 text-neutral-500 cursor-not-allowed' : (isLate ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white')}"
-          data-session-id="${esc(session.id)}"
-          ${btnDisabled ? 'disabled' : ''}
-          id="btn-session-checkin-${esc(session.id)}">
-          ${btnText}
-        </button>
-      </div>
-    `;
-  }).join('');
-
-  container.querySelectorAll('.btn-check-in-session:not([disabled])').forEach(btn => {
-    btn.onclick = () => handleAttendanceCheckIn(btn.dataset.sessionId);
-  });
-
-  // Start 1-second live penalty preview counter
   attendanceTickerInterval = setInterval(() => {
-    const curNow = serverNow();
-    activeSessions.forEach(session => {
-      const card = container.querySelector(`[data-session-card="${session.id}"]`);
-      if (!card) return;
-
-      const calc = computeAttendance(session, curNow);
-      const prevTextEl = card.querySelector(`#preview-text-${session.id}`);
-      const prevPenEl = card.querySelector(`#preview-penalty-${session.id}`);
-      const btn = card.querySelector(`#btn-session-checkin-${session.id}`);
-
-      if (calc.status === 'blocked') {
-        if (prevTextEl) prevTextEl.textContent = calc.message;
-        if (btn && !btn.disabled) {
-          btn.disabled = true;
-          btn.className = 'btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition bg-white/10 text-neutral-500 cursor-not-allowed';
-          btn.textContent = calc.reason === 'early' ? 'Check-in Opens Soon' : 'Check-in Closed';
-        }
-      } else if (calc.status === 'on_time') {
-        if (prevTextEl) prevTextEl.textContent = 'On time check-in window';
-        if (btn && btn.disabled) {
-          btn.disabled = false;
-          btn.className = 'btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition bg-emerald-600 hover:bg-emerald-500 text-white';
-          btn.textContent = 'Check In Now (0 Penalty)';
-          btn.onclick = () => handleAttendanceCheckIn(session.id);
-        }
-      } else if (calc.status === 'late') {
-        if (prevTextEl) prevTextEl.textContent = calc.message;
-        if (prevPenEl) prevPenEl.textContent = `-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'}`;
-        if (btn) {
-          btn.disabled = false;
-          btn.className = 'btn-check-in-session w-full py-2.5 rounded-xl font-bold text-xs shadow-sm transition bg-rose-600 hover:bg-rose-500 text-white';
-          btn.textContent = `Check In Now (-${calc.penalty} ${session.penaltyFinesEnabled ? 'EGP' : 'pts'})`;
-          btn.onclick = () => handleAttendanceCheckIn(session.id);
-        }
-      }
-    });
+    if (heroContainer && userAttendanceActiveTab === 'active') {
+      renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
+    }
   }, 1000);
 }
 
@@ -10011,8 +12068,16 @@ async function handleAttendanceCheckIn(sessionId) {
     return;
   }
 
-  const session = state.attendanceSessions.find(s => s.id === sessionId);
-  if (!session) return;
+  const session = (state.attendanceSessions || []).find(s => s.id === sessionId);
+  if (!session) {
+    toast('Session not found', 'error');
+    return;
+  }
+
+  if (!isUserEligibleForSession(session, state.user)) {
+    toast('You are not eligible for this attendance session', 'error');
+    return;
+  }
 
   const nowMs = serverNow();
   const calc = computeAttendance(session, nowMs);
@@ -10024,81 +12089,96 @@ async function handleAttendanceCheckIn(sessionId) {
 
   const occurrenceKey = calc.occurrenceKey;
 
-  // Check if member already has an approved waiver for this occurrence
   const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
   if (approvedWaiver) {
     toast('You have an approved excuse for this session.', 'info');
     return;
   }
 
-  const penaltyPts = (session.penaltyPointsEnabled !== false) ? calc.penalty : 0;
-  const fineEGP = (session.penaltyFinesEnabled) ? calc.penalty : 0;
+  const isEarly = Boolean(calc.isEarly && (calc.earlyBonusPoints > 0 || calc.earlyBonusEGP > 0));
+  const earlyBonusPoints = isEarly ? (calc.earlyBonusPoints || 0) : 0;
+  const earlyBonusEGP = isEarly ? (calc.earlyBonusEGP || 0) : 0;
+  const penaltyPts = (session.penaltyPointsEnabled !== false && calc.status === 'late') ? Math.abs(calc.pointsDelta || calc.penalty || 0) : 0;
+  const fineEGP = (session.penaltyFinesEnabled && calc.status === 'late') ? Math.abs(calc.egpDelta || calc.penalty || 0) : 0;
+  const pointsDelta = isEarly ? earlyBonusPoints : (penaltyPts > 0 ? -penaltyPts : 0);
+  const egpDelta = isEarly ? earlyBonusEGP : (fineEGP > 0 ? -fineEGP : 0);
+
+  let confirmTitle = 'Confirm Check-In';
+  let confirmMsg = `Check in for "${session.title}" on time with 0 penalty?`;
+  if (isEarly && (earlyBonusPoints > 0 || earlyBonusEGP > 0)) {
+    confirmTitle = 'Early Check-In Bonus!';
+    const rParts = [];
+    if (earlyBonusPoints > 0) rParts.push(`+${earlyBonusPoints} pts`);
+    if (earlyBonusEGP > 0) rParts.push(`+${earlyBonusEGP} EGP`);
+    confirmMsg = `Check in early (${calc.earlyMinutes}m before start) for "${session.title}"? You will earn ${rParts.join(' & ')}!`;
+  } else if (calc.status === 'late') {
+    confirmTitle = 'Confirm Late Check-In';
+    const dParts = [];
+    if (penaltyPts > 0) dParts.push(`-${penaltyPts} pts`);
+    if (fineEGP > 0) dParts.push(`-${fineEGP} EGP`);
+    confirmMsg = `You are checking in late (${calc.lateMinutes}m ${calc.lateSeconds}s) for "${session.title}". A deduction of ${dParts.join(' & ') || '0 pts'} will be recorded. Confirm?`;
+  }
 
   const confirmed = await confirmSheet({
-    title: calc.status === 'on_time' ? 'Confirm Check-In' : 'Confirm Late Check-In',
-    message: calc.status === 'on_time'
-      ? `Check in for "${session.title}" on time with 0 penalty?`
-      : `You are checking in late for "${session.title}". A deduction of ${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} will be recorded. Confirm?`,
+    title: confirmTitle,
+    message: confirmMsg,
     confirmLabel: 'Check In',
     destructive: calc.status === 'late'
   });
 
   if (!confirmed) return;
 
-  // Exact deterministic log ID: sessionId_occurrenceKey_uid
   const logId = `${session.id}_${occurrenceKey}_${state.user.uid}`;
 
   try {
-    const batch = writeBatch(db);
-    const logRef = doc(db, 'attendance_logs', logId);
-
-    const logPayload = {
+    // Dispatch PROCESS_CHECKIN to GAS backend for authoritative server-time evaluation & Firestore update.
+    // All active UI sections and member balances update reactively via Firestore onSnapshot.
+    const gasRes = await callGasBackend({
+      action: 'PROCESS_CHECKIN',
       sessionId: session.id,
       sessionTitle: session.title,
+      occurrenceKey,
+      sessionStartMs: calc.occurrenceStart,
       uid: state.user.uid,
       userName: state.user.name || state.user.displayName || 'Member',
       userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-      occurrenceKey,
-      occurrenceStart: Timestamp.fromMillis(calc.occurrenceStart),
-      checkedInAt: serverTimestamp(),
-      status: calc.status,
-      delaySeconds: calc.delaySeconds,
+      logId,
+      isAdminOverride: false
+    });
+
+    if (gasRes && gasRes.ok === false) {
+      throw new Error(gasRes.error || 'Check-in rejected by server');
+    }
+
+    const decision = gasRes?.result || {
+      status: isEarly ? 'early' : calc.status,
+      pointsDelta,
+      egpDelta,
       penalty: penaltyPts,
-      fineEGP: fineEGP,
-      penaltyUnit: session.penaltyUnit || 'minutes'
+      fineEGP,
+      earlyBonusPoints,
+      earlyBonusEGP
     };
 
-    batch.set(logRef, logPayload);
+    const decStatus = decision.status || (isEarly ? 'early' : calc.status);
+    const decEarlyPts = Number(decision.earlyBonusPoints ?? earlyBonusPoints) || 0;
+    const decEarlyEGP = Number(decision.earlyBonusEGP ?? earlyBonusEGP) || 0;
+    const decPenaltyPts = Number(decision.penalty ?? penaltyPts) || 0;
+    const decFineEGP = Number(decision.fineEGP ?? fineEGP) || 0;
 
-    // Conditionally increment penalties ONLY if penaltyPointsEnabled is true and penaltyPts > 0
-    if (session.penaltyPointsEnabled !== false && penaltyPts > 0) {
-      const userRef = doc(db, 'users', state.user.uid);
-      batch.update(userRef, {
-        penalties: increment(penaltyPts),
-        lastOpId: logId
-      });
+    let successMsg = 'Checked in successfully! (On Time • 0 penalty)';
+    if (decStatus === 'early' && (decEarlyPts > 0 || decEarlyEGP > 0)) {
+      const bParts = [];
+      if (decEarlyPts > 0) bParts.push(`+${decEarlyPts} pts`);
+      if (decEarlyEGP > 0) bParts.push(`+${decEarlyEGP} EGP`);
+      successMsg = `Checked in early! ${bParts.join(' | ')} awarded!`;
+    } else if (decStatus === 'late') {
+      const pParts = [];
+      if (decPenaltyPts > 0) pParts.push(`-${decPenaltyPts} pts`);
+      if (decFineEGP > 0) pParts.push(`-${decFineEGP} EGP`);
+      successMsg = `Checked in late. ${pParts.join(' | ') || '0 pts'} applied.`;
     }
-
-    await batch.commit();
-
-    // Optimistic cache update
-    const optLog = normalizeAttendanceLog({
-      id: logId,
-      ...logPayload,
-      checkedInAt: { toMillis: () => nowMs }
-    });
-    state.myAttendanceLogs = [optLog, ...state.myAttendanceLogs.filter(l => l.id !== logId)];
-    if (penaltyPts > 0) {
-      state.user.penalties = (state.user.penalties || 0) + penaltyPts;
-      updateProfileUI();
-    }
-    renderAttendanceView();
-    renderAttendanceLogs();
-    renderProfileAttendance();
-    updateUserTodayAttendanceBadge();
-
-    getMemberDerivedEgpBalance(state.user.uid, true).then(() => { updateProfileUI(); });
-    toast(calc.status === 'on_time' ? 'Checked in successfully! (0 penalty)' : `Checked in late. -${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''} applied.`, 'success');
+    toast(successMsg, 'success');
   } catch (err) {
     console.error('Attendance check-in error:', err);
     toast(err.message || 'Check-in failed', 'error');
@@ -10110,32 +12190,51 @@ function renderAttendanceLogs() {
   const countEl = document.getElementById('attendance-log-count');
   if (!feed) return;
 
-  const userLogs = state.myAttendanceLogs || [];
-  if (countEl) countEl.textContent = `${userLogs.length} Check-ins`;
+  const nowMs = serverNow();
+  const todayKey = formatZonedDateKey(nowMs, APP_TIMEZONE);
 
-  if (userLogs.length === 0) {
-    feed.innerHTML = '<p class="text-xs text-neutral-400 py-4 text-center">No check-ins recorded yet.</p>';
+  const allLogs = (state.attendanceLogs && state.attendanceLogs.length > 0)
+    ? state.attendanceLogs
+    : (state.myAttendanceLogs || []);
+
+  const todayLogs = allLogs.filter(l => {
+    const tMs = parseDateTimeToMs(l.timestamp || l.checkedInAt || l.checkInTimestamp || l.occurrenceStart);
+    return tMs && formatZonedDateKey(tMs, APP_TIMEZONE) === todayKey;
+  }).sort((a, b) => {
+    const tA = parseDateTimeToMs(a.timestamp || a.checkedInAt || a.checkInTimestamp || 0);
+    const tB = parseDateTimeToMs(b.timestamp || b.checkedInAt || b.checkInTimestamp || 0);
+    return tB - tA;
+  });
+
+  if (countEl) countEl.textContent = `${todayLogs.length} Check-ins`;
+
+  if (todayLogs.length === 0) {
+    feed.innerHTML = '<p class="text-xs text-neutral-400 py-4 text-center">No check-ins recorded yet today.</p>';
     return;
   }
 
-  feed.innerHTML = userLogs.map(log => {
-    const isLate = log.status === 'late' || log.penalty > 0;
+  feed.innerHTML = todayLogs.map(log => {
+    const exactTimeStr = formatCheckInExactTime(log.timestamp || log.checkedInAt || log.checkInTimestamp, false);
+    const uid = log.userId || log.uid;
+    const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {};
+    const prof = getUserProfile(uid, log.userName || log.displayName || member.displayName || member.name, log.userAvatar || member.photoURL || member.avatarUrl);
+    const sessionTitle = log.sessionTitle || (state.attendanceSessions?.find(s => s.id === log.sessionId)?.title) || 'Attendance';
+
     return `
-      <div class="inset-row flex items-center justify-between text-xs py-2.5">
-        <div class="flex items-center gap-2.5">
-          ${renderAvatar({ displayName: log.userName, uid: log.uid, photoURL: log.userAvatar }, 'w-8 h-8')}
-          <div>
-            <div class="font-semibold text-white">${esc(log.sessionTitle)}</div>
-            <div class="text-[11px] text-neutral-400">${formatDateTime(log.checkedInAt)}</div>
+      <div class="inset-row flex items-center justify-between gap-2 text-xs py-2.5 px-3">
+        <div class="flex items-center gap-2.5 min-w-0 flex-1">
+          ${renderAvatar(prof, 'w-8 h-8 shrink-0')}
+          <div class="min-w-0">
+            <div class="font-semibold text-white truncate">${esc(prof.displayName)}</div>
+            <div class="text-[11px] text-neutral-400 font-mono flex items-center gap-1.5">
+              <span>${esc(sessionTitle)}</span>
+              <span>•</span>
+              <span>${esc(exactTimeStr)}</span>
+            </div>
           </div>
         </div>
-        <div class="text-right">
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}">
-            ${isLate ? `Late (-${log.penalty} pts)` : 'On Time'}
-          </span>
-          ${log.delaySeconds > 0 ? `
-            <div class="text-[10px] text-neutral-500 mt-0.5">+${Math.floor(log.delaySeconds / 60)}m ${log.delaySeconds % 60}s delay</div>
-          ` : ''}
+        <div class="text-right shrink-0">
+          ${renderCheckInMetricsPills(log)}
         </div>
       </div>
     `;
@@ -10156,20 +12255,15 @@ function renderProfileAttendance() {
   }
 
   listEl.innerHTML = logs.map(log => {
-    const isLate = log.status === 'late' || log.penalty > 0;
+    const exactTimeStr = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp);
     return `
-      <div class="inset-row flex items-center justify-between py-2.5 text-xs">
-        <div>
-          <div class="font-semibold text-white">${esc(log.sessionTitle)}</div>
-          <div class="text-[11px] text-neutral-400">${formatDateTime(log.checkedInAt)}</div>
+      <div class="inset-row flex items-center justify-between gap-2 py-2.5 text-xs">
+        <div class="min-w-0 flex-1">
+          <div class="font-semibold text-white truncate">${esc(log.sessionTitle)}</div>
+          <div class="text-[11px] text-neutral-400 font-mono">${esc(exactTimeStr)}</div>
         </div>
-        <div class="text-right">
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">
-            ${isLate ? `Late (-${log.penalty} pts)` : 'On Time'}
-          </span>
-          ${log.delaySeconds > 0 ? `
-            <div class="text-[10px] text-neutral-500 mt-0.5">${Math.floor(log.delaySeconds / 60)}m ${log.delaySeconds % 60}s late</div>
-          ` : ''}
+        <div class="text-right shrink-0">
+          ${renderCheckInMetricsPills(log)}
         </div>
       </div>
     `;
@@ -10266,9 +12360,6 @@ function updateUserTodayAttendanceBadge() {
   }
 }
 
-/* ==========================================================================
-   UI RENDERING: LEADERBOARD
-   ========================================================================== */
 let leaderboardSegmentedInstance = null;
 
 function setupLeaderboardSegmented() {
@@ -10311,45 +12402,14 @@ export function renderLeaderboard() {
   const nowMs = serverNow();
   const period = state.leaderboardPeriod || 'all';
 
-  // Zero-Extra-Reads: compute directly from usersMap in memory
   const allMembers = usersMap.size > 0 ? Array.from(usersMap.values()) : [...state.members];
-  const activeMembers = allMembers.filter(m => !m.disabled);
-
-  const sorted = (activeMembers || []).map(m => {
-    const prof = getUserProfile(m.uid, m.displayName, m.photoURL);
-    const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
-    const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
-    return { ...m, ...prof, periodPoints, penalties, points: periodPoints };
-  });
-
-  const rankedMembers = sorted
-    .filter(m => Number(m.periodPoints || 0) > 0)
-    .sort((a, b) => {
-      const diff = Number(b.periodPoints || 0) - Number(a.periodPoints || 0);
-      if (diff !== 0) return diff;
-      const penDiff = (a.penalties || 0) - (b.penalties || 0);
-      if (penDiff !== 0) return penDiff;
-      return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
-    });
-
-  // Calculate tie-aware ranks: members with equal periodPoints share the exact same rank
-  rankedMembers.forEach((m, idx) => {
-    if (idx > 0 && m.periodPoints === rankedMembers[idx - 1].periodPoints) {
-      m.rank = rankedMembers[idx - 1].rank;
-    } else {
-      m.rank = idx + 1;
-    }
-  });
-
-  const unrankedMembers = sorted
-    .filter(m => Number(m.periodPoints || 0) <= 0)
-    .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  const { rankedMembers, unrankedMembers, sorted } = computeMemberRanks(allMembers, period);
 
   if (countEl) countEl.textContent = `${sorted.length} Members`;
 
   function renderStagePillar(member, defaultPlace, pillarClass) {
     if (!member) {
-      // Vacant Stage Pedestal
+
       return `
         <div class="podium-pillar podium-pillar-vacant ${pillarClass} flex flex-col items-center justify-end pb-3 text-center">
           <div class="text-[11px] font-mono font-bold text-neutral-500 mb-2">#${defaultPlace}</div>
@@ -10365,7 +12425,6 @@ export function renderLeaderboard() {
       `;
     }
 
-    // Dynamic rank styling based on actual tied rank
     const actualRank = member.rank;
     let rankColor = 'text-neutral-400';
     let tierClass = pillarClass;
@@ -10385,14 +12444,14 @@ export function renderLeaderboard() {
     const isFirst = defaultPlace === 1;
     const avatarSize = isFirst ? 'w-14 h-14' : 'w-11 h-11';
 
-    // Up to 2 compact badge chips below the score
-    const memberBadges = (member.badges || []).slice(0, 2);
+    const memberBadges = resolveOrderedUserBadges(member.badges, member).slice(0, 3);
     const badgesHtml = memberBadges.length > 0 ? `
-      <div class="flex items-center justify-center gap-1 mt-1 flex-wrap">
-        ${memberBadges.map(b => {
-          const bObj = typeof b === 'string' ? { label: b, color: '#0A84FF' } : b;
-          return `<span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold text-white truncate max-w-[70px]" style="background-color: ${bObj.color || '#0A84FF'}30; border: 1px solid ${bObj.color || '#0A84FF'}50;">${esc(bObj.label || bObj.name || bObj.id || 'Badge')}</span>`;
-        }).join('')}
+      <div class="flex items-center justify-center gap-1 mt-1 overflow-hidden">
+        ${memberBadges.map(b => `
+          <span class="badge-icon-micro rounded-full inline-flex items-center justify-center shrink-0" style="width:20px; height:20px; background:${b.color}22; color:${b.color}; border: 1px solid ${b.color}40;" title="${esc(b.label)}">
+            ${getCategorySvg(b.icon || 'star', 'w-2.5 h-2.5')}
+          </span>
+        `).join('')}
       </div>
     ` : '';
 
@@ -10409,7 +12468,6 @@ export function renderLeaderboard() {
     `;
   }
 
-  // Permanent 3-Pillar Podium Stage
   if (podiumEl) {
     const firstMember = rankedMembers[0] || null;
     const secondMember = rankedMembers[1] || null;
@@ -10433,7 +12491,6 @@ export function renderLeaderboard() {
     });
   }
 
-  // 4-Column "ALL MEMBERS" Roster: [Rank] [Avatar] [Middle Info Column] [Right Points Column]
   function memberRowHtml(member, rankDisplay, muted = false) {
     const isMe = state.user?.uid === member.uid;
     const isPodiumTop = member.rank && member.rank <= 3;
@@ -10443,23 +12500,24 @@ export function renderLeaderboard() {
       <div class="leaderboard-member-row inset-row flex items-center justify-between py-2.5 px-3 cursor-pointer hover:bg-white/[0.03] transition rounded-xl ${isMe ? 'bg-[#0A84FF]/10' : ''} ${muted ? 'opacity-60' : ''}" data-member-uid="${esc(member.uid)}">
         <!-- Col 1: Rank -->
         <span class="w-7 text-center font-mono font-bold text-xs shrink-0 ${rankColorClass}">${rankDisplay}</span>
-        
+
         <!-- Col 2: Avatar -->
         <div class="shrink-0 mr-3">${renderAvatar(member, 'w-9 h-9')}</div>
-        
+
         <!-- Col 3: Middle Info Column -->
         <div class="flex-1 min-w-0 mr-3">
-          <!-- Line 1: Member Name + YOU badge -->
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-semibold text-xs text-white truncate max-w-[180px]">${esc(member.displayName || member.name || 'Member')}</span>
+          <!-- Line 1: Member Name + YOU badge + Compact Icon-Only Badge Strip -->
+          <div class="flex items-center gap-1.5 min-w-0 w-full">
+            <span class="font-semibold text-xs text-white truncate shrink-0 max-w-[130px]">${esc(member.displayName || member.name || 'Member')}</span>
             ${isMe ? '<span class="you-badge shrink-0">YOU</span>' : ''}
+            <div class="badge-row-container badge-strip-compact flex items-center gap-1 flex-1 min-w-0 overflow-hidden" style="flex: 1 1 auto; overflow: hidden;" data-uid="${esc(member.uid)}"></div>
           </div>
-          <!-- Line 2: Badges Row (or subtle role label if no badges) -->
-          <div class="badge-row-container flex flex-wrap gap-1 mt-1 min-w-0" data-uid="${esc(member.uid)}">
-            ${(!member.badges || member.badges.length === 0) ? '<span class="text-[10px] text-neutral-500 font-medium capitalize">' + esc(member.role || 'Member') + '</span>' : ''}
+          <!-- Line 2: Subtle role label -->
+          <div class="text-[10px] text-neutral-500 font-medium capitalize mt-0.5 truncate">
+            ${esc(member.role || 'Member')}
           </div>
         </div>
-        
+
         <!-- Col 4: Right Points Column (Fixed width, tabular, right-aligned) -->
         <div class="w-20 shrink-0 text-right">
           <span class="font-bold font-mono text-xs tabular-nums ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} pts</span>
@@ -10476,7 +12534,7 @@ export function renderLeaderboard() {
     if (rankedMembers.length > 0) {
       listHtml += `<div class="pt-3 pb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">Other Members</div>`;
     }
-    listHtml += unrankedMembers.map(m => memberRowHtml(m, '–', true)).join('');
+    listHtml += unrankedMembers.map(m => memberRowHtml(m, '--', true)).join('');
   }
 
   listEl.innerHTML = listHtml;
@@ -10487,9 +12545,10 @@ export function renderLeaderboard() {
   listEl.querySelectorAll('.badge-row-container').forEach(c => {
     const uid = c.dataset.uid;
     const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-    if (mem && mem.badges && mem.badges.length > 0) {
+    const ordered = mem ? resolveOrderedUserBadges(mem.badges, mem) : [];
+    if (ordered.length > 0) {
       c.innerHTML = '';
-      renderBadgeRow(c, mem.badges, mem);
+      renderBadgeRow(c, ordered, mem);
     }
   });
 
@@ -10502,9 +12561,6 @@ export function renderLeaderboard() {
   });
 }
 
-/* ==========================================================================
-   UI RENDERING: NOTIFICATIONS (Task 6)
-   ========================================================================== */
 function updateNotificationBadges() {
   const badge = document.getElementById('header-unread-badge');
   const dockBadge = document.getElementById('dock-unread-badge');
@@ -10540,17 +12596,8 @@ function updateNotificationBadges() {
   }
 }
 
-/* ==========================================================================
-   TASK 8: 50+ VECTOR SVG ICON LIBRARY (ZERO EMOJIS)
-   ========================================================================== */
-
-/* ==========================================================================
-   PRECISION 100 SVG ICON LIBRARY (v2.2.6) — LAZY-LOADED
-   5 Categories x 20 Distinct Minimalist SVG Icons
-   Media (1–20), Tasks (21–40), Rewards (41–60), People (61–80), System (81–100)
-   ========================================================================== */
 export const UNIFIED_ICON_KEYS = [
-  // Category 1: Media (1-20)
+
   "dslr-camera",
   "video-camcorder",
   "cinema-camera",
@@ -10571,7 +12618,7 @@ export const UNIFIED_ICON_KEYS = [
   "desktop-monitor",
   "audio-cable",
   "headphones",
-  // Category 2: Tasks (21-40)
+
   "checklist",
   "clipboard",
   "calendar",
@@ -10592,7 +12639,7 @@ export const UNIFIED_ICON_KEYS = [
   "rocket-ship",
   "wrench",
   "hammer",
-  // Category 3: Rewards (41-60)
+
   "trophy",
   "solid-star",
   "military-medal",
@@ -10613,7 +12660,7 @@ export const UNIFIED_ICON_KEYS = [
   "flag",
   "certificate",
   "open-hands",
-  // Category 4: People (61-80)
+
   "person-portrait",
   "two-people",
   "group-three",
@@ -10634,7 +12681,7 @@ export const UNIFIED_ICON_KEYS = [
   "person-standing",
   "person-sitting",
   "user-admin-gear",
-  // Category 5: System (81-100)
+
   "settings-gear",
   "padlock-closed",
   "padlock-open",
@@ -10658,7 +12705,7 @@ export const UNIFIED_ICON_KEYS = [
 ];
 
 export const ICON_ALIASES = {
-  // Legacy Media aliases
+
   "mic": "studio-mic",
   "camera": "dslr-camera",
   "video": "video-camcorder",
@@ -10684,7 +12731,7 @@ export const ICON_ALIASES = {
   "megaphone": "live-stream",
   "airplay": "projection-screen",
   "clapperboard": "clapboard",
-  // Legacy Tasks aliases
+
   "checkmark": "checkmark-circle",
   "check-circle": "checkmark-circle",
   "list": "checklist",
@@ -10703,7 +12750,7 @@ export const ICON_ALIASES = {
   "upload": "outbox-tray",
   "ribbon": "ribbon-award",
   "rocket": "rocket-ship",
-  // Legacy Rewards aliases
+
   "star": "solid-star",
   "medal": "military-medal",
   "crown": "royal-crown",
@@ -10724,7 +12771,7 @@ export const ICON_ALIASES = {
   "coins": "coin",
   "compass": "bullseye-target",
   "key": "certificate",
-  // Legacy People aliases
+
   "person": "person-portrait",
   "user": "person-portrait",
   "person-2": "two-people",
@@ -10748,7 +12795,7 @@ export const ICON_ALIASES = {
   "face-id": "smiling-face",
   "voice": "speaking-head",
   "walking": "person-walking",
-  // Legacy System aliases
+
   "gear": "settings-gear",
   "settings": "settings-gear",
   "sliders-horizontal": "control-sliders",
@@ -10787,214 +12834,205 @@ const SVG_WRAP_OPEN = '<svg class="{CLASS}" fill="none" stroke="currentColor" st
 const SVG_WRAP_CLOSE = '</svg>';
 
 const RAW_ICON_DEFS = [
-  // ======================== CATEGORY 1: MEDIA (1-20) ========================
-  // 1. DSLR Camera
+
   ['dslr-camera', 'media', 'DSLR Camera', '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'],
-  // 2. Video Camcorder
+
   ['video-camcorder', 'media', 'Video Camcorder', '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>'],
-  // 3. Cinema Camera (with film reels)
+
   ['cinema-camera', 'media', 'Cinema Camera', '<circle cx="7" cy="7" r="3"/><circle cx="15" cy="7" r="3"/><rect x="3" y="10" width="14" height="10" rx="2"/><polygon points="17 13 22 10 22 20 17 17 17 13"/>'],
-  // 4. Camera Lens
+
   ['camera-lens', 'media', 'Camera Lens', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/>'],
-  // 5. Tripod
+
   ['tripod', 'media', 'Tripod', '<rect x="8" y="3" width="8" height="4" rx="1"/><line x1="12" y1="7" x2="12" y2="21"/><line x1="12" y1="10" x2="5" y2="21"/><line x1="12" y1="10" x2="19" y2="21"/>'],
-  // 6. Studio Microphone
+
   ['studio-mic', 'media', 'Studio Microphone', '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>'],
-  // 7. Lavalier Mic
+
   ['lavalier-mic', 'media', 'Lavalier Mic', '<ellipse cx="12" cy="6" rx="3" ry="4"/><line x1="12" y1="10" x2="12" y2="16"/><path d="M9 13h6l2 3H7l2-3z"/><path d="M12 16v3a3 3 0 0 0 6 0v-2"/>'],
-  // 8. Audio Mixer (Sliders)
+
   ['audio-mixer', 'media', 'Audio Mixer', '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'],
-  // 9. Audio Waveform
+
   ['audio-waveform', 'media', 'Audio Waveform', '<line x1="2" y1="10" x2="2" y2="14"/><line x1="6" y1="6" x2="6" y2="18"/><line x1="10" y1="3" x2="10" y2="21"/><line x1="14" y1="8" x2="14" y2="16"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="10" x2="22" y2="14"/>'],
-  // 10. Projector
+
   ['projector', 'media', 'Projector', '<rect x="2" y="7" width="20" height="10" rx="2"/><circle cx="9" cy="12" r="2.5"/><line x1="15" y1="11" x2="18" y2="11"/><line x1="15" y1="14" x2="18" y2="14"/><line x1="5" y1="17" x2="4" y2="20"/><line x1="19" y1="17" x2="20" y2="20"/>'],
-  // 11. Projection Screen
+
   ['projection-screen', 'media', 'Projection Screen', '<line x1="2" y1="3" x2="22" y2="3"/><rect x="4" y="3" width="16" height="12" rx="1"/><line x1="12" y1="15" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/>'],
-  // 12. Clapboard
+
   ['clapboard', 'media', 'Clapboard', '<path d="M4 11h16v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8z"/><path d="M4 11V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5"/><line x1="8" y1="4" x2="10" y2="11"/><line x1="14" y1="4" x2="16" y2="11"/>'],
-  // 13. Play Button
+
   ['play-btn', 'media', 'Play Button', '<polygon points="6 4 20 12 6 20 6 4"/>'],
-  // 14. Pause Button
+
   ['pause-btn', 'media', 'Pause Button', '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'],
-  // 15. Record Button (circle)
+
   ['record-btn', 'media', 'Record Button', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>'],
-  // 16. Live Stream (Radio waves)
+
   ['live-stream', 'media', 'Live Stream', '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.48"/><path d="M7.76 16.24a6 6 0 0 1 0-8.48"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>'],
-  // 17. Film Reel
+
   ['film-reel', 'media', 'Film Reel', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="7" r="1"/><circle cx="12" cy="17" r="1"/><circle cx="7" cy="12" r="1"/><circle cx="17" cy="12" r="1"/><path d="M12 21h9"/>'],
-  // 18. Desktop Monitor
+
   ['desktop-monitor', 'media', 'Desktop Monitor', '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'],
-  // 19. Audio Cable (Jack)
+
   ['audio-cable', 'media', 'Audio Cable', '<line x1="12" y1="2" x2="12" y2="6"/><rect x="9" y="6" width="6" height="7" rx="1"/><path d="M10 13v3h4v-3"/><path d="M12 16v3a3 3 0 0 0 6 0v-4"/>'],
-  // 20. Headphones
+
   ['headphones', 'media', 'Headphones', '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>'],
 
-  // ======================== CATEGORY 2: TASKS (21-40) ========================
-  // 21. Checklist
   ['checklist', 'tasks', 'Checklist', '<polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 13 6 15 10 11"/><line x1="13" y1="13" x2="20" y2="13"/><polyline points="4 19 6 21 10 17"/><line x1="13" y1="19" x2="20" y2="19"/>'],
-  // 22. Clipboard
+
   ['clipboard', 'tasks', 'Clipboard', '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>'],
-  // 23. Calendar
+
   ['calendar', 'tasks', 'Calendar', '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'],
-  // 24. Wall Clock
+
   ['wall-clock', 'tasks', 'Wall Clock', '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'],
-  // 25. Stopwatch (Timer)
+
   ['stopwatch', 'tasks', 'Stopwatch', '<circle cx="12" cy="13" r="8"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="13" x2="15" y2="15"/><line x1="10" y1="2" x2="14" y2="2"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="18" y1="5" x2="20" y2="7"/>'],
-  // 26. Hourglass
+
   ['hourglass', 'tasks', 'Hourglass', '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>'],
-  // 27. Map Pin
+
   ['map-pin', 'tasks', 'Map Pin', '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'],
-  // 28. Folder
+
   ['folder', 'tasks', 'Folder', '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'],
-  // 29. Price Tag
+
   ['price-tag', 'tasks', 'Price Tag', '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>'],
-  // 30. Archive Box
+
   ['archive-box', 'tasks', 'Archive Box', '<polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>'],
-  // 31. Scissors
+
   ['scissors', 'tasks', 'Scissors', '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>'],
-  // 32. Paperclip
+
   ['paperclip', 'tasks', 'Paperclip', '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'],
-  // 33. Inbox Tray
+
   ['inbox-tray', 'tasks', 'Inbox Tray', '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'],
-  // 34. Outbox Tray
+
   ['outbox-tray', 'tasks', 'Outbox Tray', '<polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="14"/><path d="M20 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5"/>'],
-  // 35. Bar Chart
+
   ['bar-chart', 'tasks', 'Bar Chart', '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/>'],
-  // 36. Line Graph
+
   ['line-graph', 'tasks', 'Line Graph', '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>'],
-  // 37. Bullseye Target
+
   ['bullseye-target', 'tasks', 'Bullseye Target', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'],
-  // 38. Rocket Ship
+
   ['rocket-ship', 'tasks', 'Rocket Ship', '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'],
-  // 39. Wrench
+
   ['wrench', 'tasks', 'Wrench', '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'],
-  // 40. Hammer
+
   ['hammer', 'tasks', 'Hammer', '<path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0a2.12 2.12 0 0 1 0-3L12 9"/><path d="m17.64 4.36 2-2a2 2 0 0 1 2.83 0l1.17 1.17a2 2 0 0 1 0 2.83l-2 2"/><path d="m14 8 4 4"/>'],
 
-  // ======================== CATEGORY 3: REWARDS (41-60) ========================
-  // 41. Trophy
   ['trophy', 'rewards', 'Trophy', '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1 .45-1 1v1h12v-1c0-.55-.45-1-1-1h-2c-.55 0-1-.45-1-1v-2.34"/><path d="M18 4H6v7a6 6 0 0 0 12 0V4z"/>'],
-  // 42. Solid Star
+
   ['solid-star', 'rewards', 'Solid Star', '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'],
-  // 43. Military Medal
+
   ['military-medal', 'rewards', 'Military Medal', '<polygon points="7 2 17 2 15 9 9 9 7 2"/><circle cx="12" cy="15" r="5"/><line x1="12" y1="13" x2="12" y2="17"/>'],
-  // 44. Royal Crown
+
   ['royal-crown', 'rewards', 'Royal Crown', '<path d="M2 5l3 12h14l3-12-6 6-4-7-4 7-6-6zm3 15h14"/>'],
-  // 45. Gemstone
+
   ['gemstone', 'rewards', 'Gemstone', '<path d="M6 3h12l4 6-10 12L2 9z"/><path d="M11 3 8 9l4 12 4-12-3-6"/><path d="M2 9h20"/>'],
-  // 46. Diamond
+
   ['diamond', 'rewards', 'Diamond', '<polygon points="12 2 21 12 12 22 3 12 12 2"/>'],
-  // 47. Security Shield
+
   ['security-shield', 'rewards', 'Security Shield', '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'],
-  // 48. Ribbon Award
+
   ['ribbon-award', 'rewards', 'Ribbon Award', '<circle cx="12" cy="8" r="6"/><polyline points="8.21 13.89 7 22 12 19 17 22 15.79 13.88"/>'],
-  // 49. Wrapped Gift
+
   ['wrapped-gift', 'rewards', 'Wrapped Gift', '<polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>'],
-  // 50. Sparkles (Magic)
+
   ['sparkles', 'rewards', 'Sparkles', '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 16l.9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16z"/><path d="M5 2l.7 1.6L7.3 4.3 5.7 5 5 6.6 4.3 5 2.7 4.3 4.3 3.6 5 2z"/>'],
-  // 51. Fire (Flame)
+
   ['fire-flame', 'rewards', 'Fire Flame', '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>'],
-  // 52. Lightning Bolt
+
   ['lightning-bolt', 'rewards', 'Lightning Bolt', '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'],
-  // 53. Heart
+
   ['heart', 'rewards', 'Heart', '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>'],
-  // 54. Thumbs Up
+
   ['thumbs-up', 'rewards', 'Thumbs Up', '<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>'],
-  // 55. Sheriff (Police Badge)
+
   ['sheriff-badge', 'rewards', 'Sheriff Badge', '<polygon points="12 3 14.8 7.5 20 8.5 16.5 12.5 17.5 18 12 15.5 6.5 18 7.5 12.5 4 8.5 9.2 7.5 12 3"/><circle cx="12" cy="11" r="2"/>'],
-  // 56. Coin
+
   ['coin', 'rewards', 'Coin', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="6"/><line x1="12" y1="9" x2="12" y2="15"/>'],
-  // 57. Checkmark Circle
+
   ['checkmark-circle', 'rewards', 'Checkmark Circle', '<circle cx="12" cy="12" r="10"/><polyline points="8.5 12.5 11 15 16 9.5"/>'],
-  // 58. Flag
+
   ['flag', 'rewards', 'Flag', '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'],
-  // 59. Certificate (Diploma)
+
   ['certificate', 'rewards', 'Certificate', '<rect x="3" y="4" width="18" height="14" rx="2"/><line x1="7" y1="8" x2="17" y2="8"/><line x1="7" y1="12" x2="12" y2="12"/><circle cx="16" cy="15" r="2.5"/><polyline points="15 17.5 14.5 21 16 20 17.5 21 17 17.5"/>'],
-  // 60. Open Hands (Giving)
+
   ['open-hands', 'rewards', 'Open Hands', '<path d="M3 14c1.5 0 3 1 4.5 2.5L10 19h8a2 2 0 0 0 2-2c0-1.1-.9-2-2-2h-5"/><path d="M10 15l2.5-2.5a2 2 0 0 0-2.8-2.8L6 13H2"/><circle cx="15" cy="7" r="3"/>'],
 
-  // ======================== CATEGORY 4: PEOPLE (61-80) ========================
-  // 61. Single Person Portrait
   ['person-portrait', 'people', 'Single Person Portrait', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'],
-  // 62. Two People
+
   ['two-people', 'people', 'Two People', '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'],
-  // 63. Group of Three
+
   ['group-three', 'people', 'Group of Three', '<circle cx="12" cy="7" r="3.5"/><path d="M7 21v-2a5 5 0 0 1 10 0v2"/><circle cx="5" cy="9" r="2.5"/><path d="M1.5 21v-1.5a3.5 3.5 0 0 1 3.5-3.5"/><circle cx="19" cy="9" r="2.5"/><path d="M22.5 21v-1.5a3.5 3.5 0 0 0-3.5-3.5"/>'],
-  // 64. ID Badge (with Lanyard)
+
   ['id-badge', 'people', 'ID Badge', '<path d="M10 2l2 3 2-3"/><rect x="4" y="5" width="16" height="16" rx="2"/><circle cx="12" cy="11" r="2.5"/><path d="M8 18a4 4 0 0 1 8 0"/>'],
-  // 65. Hand Waving (Human hand with open palm, spread fingers, and motion lines)
+
   ['hand-waving', 'people', 'Hand Waving', '<path d="M18 11V6a2 2 0 0 0-4 0v4"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V5.5a2 2 0 0 0-4 0v8.5"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/><path d="M2.5 6.5a5 5 0 0 1 2-3.5"/><path d="M20.5 3a5 5 0 0 1 2 3.5"/>'],
-  // 66. Handshake
+
   ['handshake', 'people', 'Handshake', '<path d="M2 11l5-5 4 4 4-4 7 5"/><path d="M7 16l3 3a2 2 0 0 0 2.8 0l5.2-5.2a2 2 0 0 0 0-2.8L15 8l-4 4-2-2-5 5z"/><line x1="9" y1="18" x2="11" y2="16"/><line x1="12" y1="19" x2="14" y2="17"/>'],
-  // 67. Raised Hand (asking question)
+
   ['raised-hand', 'people', 'Raised Hand', '<path d="M18 11V5a1.5 1.5 0 0 0-3 0v5"/><path d="M15 10V3.5a1.5 1.5 0 0 0-3 0V10"/><path d="M12 10V4.5a1.5 1.5 0 0 0-3 0V12"/><path d="M9 12H7.5a1.5 1.5 0 0 0 0 3H9"/><path d="M9 12v4a6 6 0 0 0 12 0v-5a1.5 1.5 0 0 0-3 0"/>'],
-  // 68. Message Bubble
+
   ['message-bubble', 'people', 'Message Bubble', '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'],
-  // 69. Mail Envelope
+
   ['mail-envelope', 'people', 'Mail Envelope', '<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/>'],
-  // 70. Phone Receiver
+
   ['phone-receiver', 'people', 'Phone Receiver', '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>'],
-  // 71. Double Chat Bubbles
+
   ['double-chat', 'people', 'Double Chat Bubbles', '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>'],
-  // 72. Team Network Graph
+
   ['team-network', 'people', 'Team Network Graph', '<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><line x1="10.5" y1="7" x2="6.5" y2="17"/><line x1="13.5" y1="7" x2="17.5" y2="17"/><line x1="7.5" y1="19" x2="16.5" y2="19"/>'],
-  // 73. Eye (Audience/Views)
+
   ['eye-views', 'people', 'Eye Views', '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'],
-  // 74. Smiling Face
+
   ['smiling-face', 'people', 'Smiling Face', '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>'],
-  // 75. Voice (Speaking head)
+
   ['speaking-head', 'people', 'Speaking Head', '<path d="M9 18v3H5v-4a6 6 0 1 1 9-5.2L15.5 14H13v4H9z"/><path d="M18 10a3 3 0 0 1 0 4"/><path d="M20.5 8a6 6 0 0 1 0 8"/>'],
-  // 76. Person Running
+
   ['person-running', 'people', 'Person Running', '<circle cx="15" cy="4" r="2"/><path d="M10.5 9.5L7 12l2 3.5"/><path d="M13.5 9.5l3 3 3-1"/><path d="M8 15.5L4 19"/><path d="M10.5 9.5l3 4.5-2 7"/><path d="M13.5 14l4.5 2 1 5"/>'],
-  // 77. Person Walking
+
   ['person-walking', 'people', 'Person Walking', '<circle cx="13" cy="4" r="2"/><path d="m14.5 9-3 4-2.5-1.5-3 5"/><path d="m10 14.5 1.5 5.5 3.5-1"/><path d="m9 9 2-2 3.5 1 2.5 3"/>'],
-  // 78. Person Standing
+
   ['person-standing', 'people', 'Person Standing', '<circle cx="12" cy="4" r="2"/><line x1="12" y1="6" x2="12" y2="14"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="12" y1="14" x2="9" y2="21"/><line x1="12" y1="14" x2="15" y2="21"/>'],
-  // 79. Person Sitting
+
   ['person-sitting', 'people', 'Person Sitting', '<circle cx="11" cy="4" r="2"/><path d="M11 6v6h5l2 6"/><path d="M7 9v6h5"/><line x1="7" y1="15" x2="7" y2="20"/>'],
-  // 80. User Profile with Gear (Admin)
+
   ['user-admin-gear', 'people', 'User Admin Gear', '<path d="M14 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7.5" cy="7" r="4"/><circle cx="18" cy="16" r="2.5"/><line x1="18" y1="12" x2="18" y2="13.5"/><line x1="18" y1="18.5" x2="18" y2="20"/><line x1="14" y1="16" x2="15.5" y2="16"/><line x1="20.5" y1="16" x2="22" y2="16"/>'],
 
-  // ======================== CATEGORY 5: SYSTEM (81-100) ========================
-  // 81. Settings Gear
   ['settings-gear', 'system', 'Settings Gear', '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'],
-  // 82. Closed Padlock
+
   ['padlock-closed', 'system', 'Closed Padlock', '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'],
-  // 83. Open Padlock
+
   ['padlock-open', 'system', 'Open Padlock', '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'],
-  // 84. Notification Bell
+
   ['notification-bell', 'system', 'Notification Bell', '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'],
-  // 85. Globe (Web)
+
   ['globe-web', 'system', 'Globe Web', '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'],
-  // 86. WiFi Signal
+
   ['wifi-signal', 'system', 'WiFi Signal', '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>'],
-  // 87. Cloud Sync
+
   ['cloud-sync', 'system', 'Cloud Sync', '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><polyline points="10 13 12 11 14 13"/><line x1="12" y1="11" x2="12" y2="17"/>'],
-  // 88. Microchip (Processor)
+
   ['microchip', 'system', 'Microchip Processor', '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>'],
-  // 89. Terminal (Console Prompt)
+
   ['terminal-prompt', 'system', 'Terminal Prompt', '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'],
-  // 90. Stacked Layers
+
   ['stacked-layers', 'system', 'Stacked Layers', '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'],
-  // 91. Database Server
+
   ['database-server', 'system', 'Database Server', '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>'],
-  // 92. Control Sliders
+
   ['control-sliders', 'system', 'Control Sliders', '<line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/>'],
-  // 93. Home House
+
   ['home-house', 'system', 'Home House', '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>'],
-  // 94. Magnifying Glass
+
   ['magnifying-glass', 'system', 'Magnifying Glass', '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'],
-  // 95. Hamburger Menu
+
   ['hamburger-menu', 'system', 'Hamburger Menu', '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>'],
-  // 96. Trash Can
+
   ['trash-can', 'system', 'Trash Can', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>'],
-  // 97. Edit Pencil
+
   ['edit-pencil', 'system', 'Edit Pencil', '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>'],
-  // 98. Share Nodes
+
   ['share-nodes', 'system', 'Share Nodes', '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>'],
-  // 99. Chain Link
+
   ['chain-link', 'system', 'Chain Link', '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'],
-  // 100. Exit (Logout Door)
+
   ['exit-door', 'system', 'Exit Door', '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>']
 ];
 
@@ -11191,7 +13229,6 @@ export function closeUnifiedIconPicker() {
 
 export const openIconPicker = openUnifiedIconPicker;
 
-
 function getSquircleColorClass(type) {
   if (type === 'reward' || type === 'bonus' || type === 'points' || type === 'attendance_approved') return 'notification-squircle-green';
   if (type === 'penalty' || type === 'fine' || type === 'revocation' || type === 'attendance_missed') return 'notification-squircle-red';
@@ -11268,22 +13305,28 @@ export function renderNotifications() {
     const { snippet, hasNote } = getNotificationSnippet(n);
 
     return `
-      <div class="notification-card bulk-select-card ${isUnread ? 'unread border-l-4 border-l-[#0A84FF]' : 'read opacity-85'}${isSelected ? ' selected' : ''}" data-notif-id="${esc(n.id)}" data-bulk-id="${esc(n.id)}" role="button" tabindex="0">
-        ${BULK_INDICATOR_HTML}
-        <div class="bulk-card-content flex items-center gap-3 w-full min-w-0">
-          <div class="notification-squircle ${squircleClass} !w-9 !h-9 shrink-0 flex items-center justify-center">
-            ${iconSvg}
-          </div>
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-1.5 min-w-0 truncate">
-                ${isUnread ? '<span class="w-1.5 h-1.5 rounded-full bg-[#0A84FF] shrink-0"></span>' : ''}
-                <div class="font-bold text-white text-xs truncate">${esc(n.title)}</div>
-              </div>
-              <span class="text-[10px] text-neutral-400 shrink-0 font-mono">${timeFormatted}</span>
+      <div class="notif-swipe-wrapper" data-notif-id="${esc(n.id)}">
+        <div class="notif-swipe-bg" data-delete-notif-id="${esc(n.id)}" role="button" aria-label="Delete notification">
+          <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          <span>Delete</span>
+        </div>
+        <div class="notification-card bulk-select-card ${isUnread ? 'unread border-l-4 border-l-[#0A84FF]' : 'read opacity-85'}${isSelected ? ' selected' : ''}" data-notif-id="${esc(n.id)}" data-bulk-id="${esc(n.id)}" role="button" tabindex="0">
+          ${BULK_INDICATOR_HTML}
+          <div class="bulk-card-content flex items-center gap-3 w-full min-w-0">
+            <div class="notification-squircle ${squircleClass} !w-9 !h-9 shrink-0 flex items-center justify-center">
+              ${iconSvg}
             </div>
-            <div class="text-neutral-400 text-xs truncate mt-0.5">
-              ${esc(snippet)}${hasNote ? ' <span class="text-[#0A84FF] font-semibold text-[10px]">[Note]</span>' : ''}
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-1.5 min-w-0 truncate">
+                  ${isUnread ? '<span class="w-1.5 h-1.5 rounded-full bg-[#0A84FF] shrink-0 unread-dot"></span>' : ''}
+                  <div class="font-bold text-white text-xs truncate">${esc(n.title)}</div>
+                </div>
+                <span class="text-[10px] text-neutral-400 shrink-0 font-mono">${timeFormatted}</span>
+              </div>
+              <div class="text-neutral-400 text-xs truncate mt-0.5">
+                ${esc(snippet)}${hasNote ? ' <span class="text-[#0A84FF] font-semibold text-[10px]">[Note]</span>' : ''}
+              </div>
             </div>
           </div>
         </div>
@@ -11291,7 +13334,11 @@ export function renderNotifications() {
     `;
   }).join('');
 
-  container.querySelectorAll('.notification-card').forEach(card => {
+  container.querySelectorAll('.notif-swipe-wrapper').forEach(wrapper => {
+    const card = wrapper.querySelector('.notification-card');
+    const notifId = wrapper.dataset.notifId;
+    if (!card || !notifId) return;
+
     card.onclick = (e) => {
       if (selectionState.active && selectionState.type === 'notifications') {
         e.preventDefault();
@@ -11306,28 +13353,46 @@ export function renderNotifications() {
     attachLongPress(card, () => {
       enterSelectionMode('notifications', card.dataset.bulkId);
     });
+
+    const notifObj = state.notifications.find(x => x.id === notifId);
+    attachUniversalSwipeActions(wrapper, {
+      archiveLabel: 'Mark Read',
+      onArchive: async () => {
+        try {
+          if (notifObj) notifObj.read = true;
+          updateNotificationBadges();
+          renderNotifications();
+          await markSingleNotificationReadInFirestore(notifId, state.user?.uid, true);
+        } catch (err) {
+          console.warn('Mark read warning:', err);
+        }
+      },
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteSingleNotificationFromFirestore(notifId, state.user?.uid);
+          state.notifications = (state.notifications || []).filter(x => x.id !== notifId);
+          updateNotificationBadges();
+          renderNotifications();
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete notification', 'error');
+        }
+      },
+      entityName: 'Notification'
+    });
   });
 }
 
 export function openNotificationDetailModal(notif) {
-  // Mark as read in Firestore
+
   if (!notif.read && state.user) {
     notif.read = true;
-    try {
-      if (notif.isBroadcast) {
-        updateDoc(doc(db, 'notifications_broadcast', notif.id), {
-          readBy: arrayUnion(state.user.uid)
-        }).catch(err => console.warn('Error marking broadcast notification read:', err));
-      } else {
-        updateDoc(doc(db, 'notifications', notif.id), { read: true }).catch(err => {
-          console.warn('Error marking notification read:', err);
-        });
-      }
-    } catch (e) {
-      console.warn('Mark as read exception:', e);
-    }
+    notif.isRead = true;
     updateNotificationBadges();
     renderNotifications();
+    persistToLocalCache(true);
+    markSingleNotificationReadInFirestore(notif, state.user.uid, true).catch(() => {});
   }
 
   const timeFormatted = formatDateTime(notif.timestamp || notif.createdAt);
@@ -11463,35 +13528,24 @@ async function markAllNotificationsRead() {
     return;
   }
 
+  const uid = state.user.uid;
+  unreads.forEach(n => {
+    n.read = true;
+    n.isRead = true;
+  });
+  (state.personalNotifications || []).forEach(n => { n.read = true; n.isRead = true; });
+  (userNotifications || []).forEach(n => { n.read = true; n.isRead = true; });
+  persistToLocalCache(true);
+  updateNotificationBadges();
+  renderNotifications();
+
   try {
-    const CHUNK_SIZE = 450;
-    for (let i = 0; i < unreads.length; i += CHUNK_SIZE) {
-      const chunk = unreads.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      chunk.forEach(n => {
-        if (n.isBroadcast) {
-          batch.update(doc(db, 'notifications_broadcast', n.id), {
-            readBy: arrayUnion(state.user.uid)
-          });
-        } else {
-          batch.update(doc(db, 'notifications', n.id), { read: true });
-        }
-        n.read = true;
-      });
-      await batch.commit();
-    }
-    updateNotificationBadges();
-    renderNotifications();
-    toast('All notifications marked as read', 'success');
+    await Promise.all(unreads.map(n => markSingleNotificationReadInFirestore(n, uid, true)));
   } catch (err) {
-    console.error('Error marking all notifications read:', err);
-    toast(err.message || 'Failed to mark all as read', 'error');
+    console.warn('Mark all notifications read warning:', err);
   }
 }
 
-/* ==========================================================================
-   UI RENDERING: PROFILE
-   ========================================================================== */
 function updateProfileUI() {
   const nameEl = document.getElementById('profile-view-name');
   const emailEl = document.getElementById('profile-view-email');
@@ -11500,8 +13554,9 @@ function updateProfileUI() {
   const streakEl = document.getElementById('profile-view-streak');
 
   const ptsEl = document.getElementById('profile-stat-points');
-  const compEl = document.getElementById('profile-stat-completed');
+  const finesEl = document.getElementById('profile-stat-fines') || document.getElementById('profile-stat-completed');
   const penEl = document.getElementById('profile-stat-penalties');
+  const scoreEl = document.getElementById('profile-stat-score');
   const rankEl = document.getElementById('profile-stat-rank');
 
   const guestCard = document.getElementById('drawer-guest-card');
@@ -11531,19 +13586,22 @@ function updateProfileUI() {
     if (nameEl) nameEl.textContent = state.user.displayName;
     const emailToDisplay = state.userPrivate?.email || state.user.email || 'Verified Member';
     if (emailEl) emailEl.textContent = emailToDisplay;
-    if (avatarEl && state.user.photoURL) avatarEl.src = state.user.photoURL;
+    if (avatarEl) avatarEl.src = state.user.photoURL || state.user.avatarUrl || getDeterministicPresetAvatar(state.user.uid);
 
+    const resolvedMyBadges = resolveOrderedUserBadges(state.user.badges, state.user);
     if (profileBadgesEl) {
-      const userBadgeIds = Array.isArray(state.user.badgeIds) ? state.user.badgeIds : (
-        Array.isArray(state.user.badges) ? state.user.badges.map(b => typeof b === 'object' ? b?.id : b).filter(Boolean) : []
-      );
-      const badgeObjs = userBadgeIds.map(bid => badgesMap.get(bid) || (Array.isArray(state.user.badges) ? state.user.badges.find(x => (x?.id || x) === bid) : null)).filter(Boolean);
-      profileBadgesEl.innerHTML = badgeObjs.map(b => {
-        const bObj = typeof b === 'object' ? b : { id: b, label: b, color: '#0A84FF', icon: 'star' };
-        const color = bObj.color || '#0A84FF';
-        const label = bObj.label || bObj.name || bObj.id;
-        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1" style="background-color: ${color}25; color: ${color}; border: 1px solid ${color}40;">${getCategorySvg(bObj.iconKey || bObj.icon || 'star', 'w-2.5 h-2.5')}<span>${esc(label)}</span></span>`;
-      }).join('');
+      profileBadgesEl.className = 'badge-pills-expanded-wrap flex flex-wrap items-center gap-1.5 mt-2 empty:hidden';
+      profileBadgesEl.innerHTML = renderExpandedBadgesHtml(resolvedMyBadges, state.user);
+    }
+
+    const reorderBadgesBtn = document.getElementById('btn-reorder-my-badges');
+    if (reorderBadgesBtn) {
+      if (resolvedMyBadges.length > 0) {
+        reorderBadgesBtn.classList.remove('hidden');
+      } else {
+        reorderBadgesBtn.classList.add('hidden');
+      }
+      reorderBadgesBtn.onclick = () => openMemberBadgeReorderSheet();
     }
 
     const avatarCropBtn = document.getElementById('btn-profile-avatar-crop');
@@ -11574,14 +13632,17 @@ function updateProfileUI() {
     if (roleEl) roleEl.textContent = state.user.role.toUpperCase();
     if (streakEl) streakEl.textContent = `${state.user.streakDays || 0} Day Streak`;
 
-    if (ptsEl) ptsEl.textContent = state.user.points || 0;
-    const completedCount = state.submissions.filter(s => s.userId === state.user.uid).length;
-    if (compEl) compEl.textContent = completedCount;
-    if (penEl) penEl.textContent = `${state.user.penalties || 0} pts`;
+    if (ptsEl) ptsEl.textContent = Math.max(0, state.user.points || 0);
+    const userFines = Math.max(0, state.user.finesDue ?? state.user.fines ?? state.user.quotas ?? 0);
+    if (finesEl) finesEl.textContent = `${userFines} EGP`;
+    const userPenalties = Math.max(0, state.user.penalties || 0);
+    if (penEl) penEl.textContent = `${userPenalties} pts`;
 
-    const sorted = [...state.members].sort((a, b) => (b.points || 0) - (a.points || 0));
-    const myRank = sorted.findIndex(m => m.uid === state.user.uid);
-    if (rankEl) rankEl.textContent = myRank !== -1 ? `#${myRank + 1}` : '--';
+    const netScore = Math.max(0, (state.user.points || 0) - userPenalties);
+    if (scoreEl) scoreEl.textContent = netScore;
+
+    const myRank = getUserRank(state.user.uid, 'all');
+    if (rankEl) rankEl.textContent = (myRank != null && Number(state.user.points || 0) > 0) ? `#${myRank}` : '--';
 
     renderSettingsDrawer();
 
@@ -11610,8 +13671,9 @@ function updateProfileUI() {
     if (streakEl) streakEl.textContent = '0 Days';
 
     if (ptsEl) ptsEl.textContent = '0';
-    if (compEl) compEl.textContent = '0';
-    if (penEl) penEl.textContent = '0';
+    if (finesEl) finesEl.textContent = '0 EGP';
+    if (penEl) penEl.textContent = '0 pts';
+    if (scoreEl) scoreEl.textContent = '0';
     if (rankEl) rankEl.textContent = '--';
 
     if (guestCard) guestCard.classList.remove('hidden');
@@ -11695,7 +13757,6 @@ function updateActivityRings() {
   const Pen = Math.max(0, Number(state.user?.penalties || 0));
   const netPoints = P - Pen;
 
-  // Attendance Commitment Percentage (Z%)
   const logs = state.myAttendanceLogs || [];
   let attendancePct = 100;
   if (logs.length > 0) {
@@ -11703,28 +13764,27 @@ function updateActivityRings() {
     attendancePct = Math.min(100, Math.max(0, Math.round((onTimeCount / logs.length) * 100)));
   }
 
-  // Relative Rings Proportions (Yellow Points: 251.32, Red Penalties: 125.66)
   let ptsOffset = 251.32;
   let penOffset = 125.66;
   let ptsOpacity = 1;
   let penOpacity = 1;
 
   if (P === 0 && Pen === 0) {
-    // Both 100% closed, dimmed
+
     ptsOffset = 0;
     penOffset = 0;
     ptsOpacity = 0.35;
     penOpacity = 0.35;
   } else if (P > 0 && Pen === 0) {
-    // Points 100% closed, Penalties tiny dot
+
     ptsOffset = 0;
     penOffset = 125.66 * (1 - 0.008);
   } else if (P === 0 && Pen > 0) {
-    // Penalties 100% closed, Points tiny dot
+
     penOffset = 0;
     ptsOffset = 251.32 * (1 - 0.008);
   } else {
-    // Both > 0: proportional to sum
+
     const total = P + Pen;
     const ptsRatio = P / total;
     const penRatio = Pen / total;
@@ -11741,7 +13801,6 @@ function updateActivityRings() {
     ringPen.style.opacity = penOpacity;
   }
 
-  // Middle Ring: Attendance Commitment (188.49)
   const quotasProgress = attendancePct / 100;
   const quotasOffset = 188.49 * (1 - quotasProgress);
   if (ringQuotas) {
@@ -11762,7 +13821,6 @@ function renderHomeDueTasks() {
   const now = serverNow();
   const activeTasks = state.tasks.filter(t => t.active && !t.archived && isTaskVisibleToUser(t, state.user?.uid));
 
-  // Filter tasks that are open/due today
   const dueTasks = activeTasks.filter(task => {
     try {
       const windowInfo = getTaskWindow(task, now);
@@ -11772,7 +13830,6 @@ function renderHomeDueTasks() {
     }
   });
 
-  // Filter out tasks the user has already submitted for this occurrence
   const pendingDue = dueTasks.filter(task => {
     if (!state.user) return true;
     const occ = getOccurrenceFor(task, now);
@@ -11835,9 +13892,299 @@ function renderHomeDueTasks() {
   });
 }
 
-/* ==========================================================================
-   ADMIN CONTROLLER & OPERATIONS
-   ========================================================================== */
+export function attachDragReorderList(containerEl, itemSelector, idAttr, onOrderCommitted) {
+  if (!containerEl) return;
+  const handles = containerEl.querySelectorAll('.drag-reorder-handle');
+  handles.forEach(handle => {
+    if (handle.dataset.dragBound === 'true') return;
+    handle.dataset.dragBound = 'true';
+
+    let draggingItem = null;
+    let placeholder = null;
+    let pointerId = null;
+    let initialIds = [];
+    let startY = 0;
+    let startX = 0;
+    let initialRect = null;
+    let isHorizontal = false;
+
+    const getOrderedIds = () => Array.from(containerEl.querySelectorAll(itemSelector))
+      .map(el => el.getAttribute(idAttr))
+      .filter(Boolean);
+
+    const onPointerDown = (e) => {
+      if (selectionState && selectionState.active) return;
+      if (e.button !== undefined && e.button !== 0) return;
+      const item = handle.closest(itemSelector);
+      if (!item || !containerEl.contains(item)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      draggingItem = item;
+      pointerId = e.pointerId;
+      initialIds = getOrderedIds();
+      startY = e.clientY;
+      startX = e.clientX;
+
+      const allItems = Array.from(containerEl.querySelectorAll(itemSelector));
+      initialRect = draggingItem.getBoundingClientRect();
+
+      isHorizontal = allItems.length > 1 && allItems.some((el, idx) => {
+        if (idx === 0) return false;
+        return Math.abs(el.getBoundingClientRect().top - allItems[0].getBoundingClientRect().top) < 10;
+      });
+
+      placeholder = document.createElement('div');
+      placeholder.className = 'drag-reorder-placeholder';
+      placeholder.style.width = initialRect.width + 'px';
+      placeholder.style.height = initialRect.height + 'px';
+      placeholder.style.minHeight = initialRect.height + 'px';
+      placeholder.style.margin = window.getComputedStyle(draggingItem).margin;
+
+      safeInsertBefore(containerEl, placeholder, draggingItem);
+
+      draggingItem.classList.add('dragging-reorder-item', 'dragging-reorder-floating');
+      draggingItem.style.position = 'fixed';
+      draggingItem.style.top = initialRect.top + 'px';
+      draggingItem.style.left = initialRect.left + 'px';
+      draggingItem.style.width = initialRect.width + 'px';
+      draggingItem.style.height = initialRect.height + 'px';
+      draggingItem.style.margin = '0';
+      draggingItem.style.boxSizing = 'border-box';
+      draggingItem.style.zIndex = '9999';
+      draggingItem.style.pointerEvents = 'none';
+      draggingItem.style.transform = 'scale(1.02)';
+      draggingItem.style.transition = 'none';
+      draggingItem.style.willChange = 'transform, top, left';
+
+      try {
+        if (handle.setPointerCapture && pointerId != null) {
+          handle.setPointerCapture(pointerId);
+        }
+      } catch (err) {  }
+    };
+
+    const onPointerMove = (e) => {
+      if (!draggingItem || !placeholder) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const deltaY = e.clientY - startY;
+      const deltaX = e.clientX - startX;
+
+      if (isHorizontal) {
+        draggingItem.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) scale(1.02)`;
+      } else {
+        draggingItem.style.transform = `translate3d(0, ${deltaY}px, 0) scale(1.02)`;
+      }
+
+      const siblings = Array.from(containerEl.querySelectorAll(itemSelector)).filter(el => el !== draggingItem && el !== placeholder);
+      const cursorY = e.clientY;
+      const cursorX = e.clientX;
+
+      for (let i = 0; i < siblings.length; i++) {
+        const sib = siblings[i];
+        const r = sib.getBoundingClientRect();
+        if (isHorizontal) {
+          const midX = r.left + r.width / 2;
+          const midY = r.top + r.height / 2;
+          const isOver = cursorX >= r.left && cursorX <= r.right && cursorY >= r.top && cursorY <= r.bottom;
+          if (isOver) {
+            if (cursorX < midX) {
+              safeInsertBefore(containerEl, placeholder, sib);
+            } else {
+              safeInsertBefore(containerEl, placeholder, sib.nextSibling);
+            }
+            break;
+          }
+        } else {
+          const midY = r.top + r.height / 2;
+          if (cursorY < midY) {
+            if (placeholder.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_PRECEDING) {
+              safeInsertBefore(containerEl, placeholder, sib);
+              break;
+            }
+          } else {
+            if (placeholder.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_FOLLOWING) {
+              safeInsertBefore(containerEl, placeholder, sib.nextSibling);
+              break;
+            }
+          }
+        }
+      }
+    };
+
+    const onPointerEnd = async (e) => {
+      if (!draggingItem) return;
+      e.stopPropagation();
+      const item = draggingItem;
+      const ph = placeholder;
+      draggingItem = null;
+      placeholder = null;
+
+      try {
+        if (handle.releasePointerCapture && pointerId != null) {
+          handle.releasePointerCapture(pointerId);
+        }
+      } catch (err) {  }
+      pointerId = null;
+
+      if (ph && containerEl.contains(ph)) {
+
+        const pRect = ph.getBoundingClientRect();
+        const currentRect = item.getBoundingClientRect();
+        const diffX = pRect.left - currentRect.left;
+        const diffY = pRect.top - currentRect.top;
+
+        item.style.transition = 'transform 0.16s cubic-bezier(0.2, 0, 0, 1)';
+        const curTransform = item.style.transform || '';
+        const match = curTransform.match(/translate3d\(([^,]+)px,\s*([^,]+)px/);
+        const curX = match ? parseFloat(match[1]) : 0;
+        const curY = match ? parseFloat(match[2]) : 0;
+        item.style.transform = `translate3d(${curX + diffX}px, ${curY + diffY}px, 0) scale(1)`;
+
+        await new Promise(res => setTimeout(res, 160));
+
+        safeInsertBefore(containerEl, item, ph);
+        safeRemoveChild(containerEl, ph);
+      }
+
+      item.classList.remove('dragging-reorder-item', 'dragging-reorder-floating');
+      item.style.position = '';
+      item.style.top = '';
+      item.style.left = '';
+      item.style.width = '';
+      item.style.height = '';
+      item.style.margin = '';
+      item.style.boxSizing = '';
+      item.style.zIndex = '';
+      item.style.pointerEvents = '';
+      item.style.transform = '';
+      item.style.transition = '';
+      item.style.willChange = '';
+
+      const finalIds = getOrderedIds();
+      const changed = finalIds.length === initialIds.length && finalIds.some((id, idx) => id !== initialIds[idx]);
+      if (changed && typeof onOrderCommitted === 'function') {
+        try {
+          await onOrderCommitted(finalIds);
+        } catch (err) {
+          console.error('onOrderCommitted error:', err);
+        }
+      }
+    };
+
+    handle.addEventListener('pointerdown', onPointerDown);
+    handle.addEventListener('pointermove', onPointerMove);
+    handle.addEventListener('pointerup', onPointerEnd);
+    handle.addEventListener('pointercancel', onPointerEnd);
+  });
+}
+
+export function openMemberBadgeReorderSheet() {
+  if (!state.user) {
+    toast('Please sign in to reorder your badges', 'warning');
+    return;
+  }
+  const currentOrdered = resolveOrderedUserBadges(state.user.badges, state.user);
+  if (currentOrdered.length < 2) {
+    toast('You need at least 2 badges to reorder them.', 'info');
+    return;
+  }
+
+  let draftIds = currentOrdered.map(b => b.id);
+  const badgeLookup = new Map(currentOrdered.map(b => [b.id, b]));
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-3 text-xs';
+
+  const renderList = () => {
+    bodyEl.innerHTML = `
+      <div class="p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-300 leading-relaxed">
+        Drag the <strong class="text-white">≡</strong> handle to set your badge priority. The <strong class="text-[#0A84FF]">first badge (Index 0)</strong> is your featured Primary Badge shown first next to your name.
+      </div>
+      <div id="member-badge-reorder-list" class="space-y-2">
+        ${draftIds.map((id, idx) => {
+          const b = badgeLookup.get(id) || normalizeBadgeItem(id);
+          const color = b?.color || '#0A84FF';
+          const iconSvg = getIconSvg(b?.icon || b?.iconKey || 'star', 'w-4 h-4');
+          return `
+            <div class="member-badge-reorder-item glass-card p-3 rounded-xl flex items-center justify-between gap-3 select-none" data-badge-id="${esc(id)}">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <span class="w-5 h-5 rounded-full bg-white/10 text-[10px] font-mono font-bold text-neutral-300 flex items-center justify-center shrink-0">${idx + 1}</span>
+                <span class="badge-pill-expanded" style="background-color: ${color}1F; border-color: ${color}4D;">
+                  <span class="badge-pill-icon" style="color: ${color};">${iconSvg}</span>
+                  <span>${esc(b?.label || b?.name || id)}</span>
+                </span>
+                ${idx === 0 ? '<span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/40">Primary</span>' : ''}
+              </div>
+              <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+    const listEl = bodyEl.querySelector('#member-badge-reorder-list');
+    attachDragReorderList(listEl, '.member-badge-reorder-item', 'data-badge-id', (newOrder) => {
+      draftIds = newOrder;
+      renderList();
+    });
+  };
+
+  renderList();
+
+  openModal({
+    title: 'Reorder My Badges',
+    body: bodyEl,
+    saveLabel: 'Save Priority',
+    onSave: async () => {
+      try {
+        const newBadges = draftIds.map(id => {
+          const b = badgeLookup.get(id) || normalizeBadgeItem(id);
+          return {
+            id: b.id,
+            label: b.label || b.name || b.id,
+            name: b.name || b.label || b.id,
+            color: b.color || '#0A84FF',
+            icon: b.icon || b.iconKey || 'star'
+          };
+        });
+
+        await updateDoc(doc(db, 'users', state.user.uid), {
+          badgeIds: draftIds,
+          badges: newBadges,
+          updatedAt: serverTimestamp()
+        });
+
+        state.user.badgeIds = [...draftIds];
+        state.user.badges = newBadges;
+        if (usersMap.has(state.user.uid)) {
+          const u = usersMap.get(state.user.uid);
+          u.badgeIds = [...draftIds];
+          u.badges = newBadges;
+        }
+        const mIdx = state.members.findIndex(m => m.uid === state.user.uid);
+        if (mIdx !== -1) {
+          state.members[mIdx].badgeIds = [...draftIds];
+          state.members[mIdx].badges = newBadges;
+        }
+
+        updateProfileUI();
+        renderLeaderboard();
+        renderAdminMembers();
+        toast('Badge priority order saved!', 'success');
+        return true;
+      } catch (err) {
+        console.error('Error saving badge order:', err);
+        toast(err.message || 'Failed to save badge order', 'error');
+        return false;
+      }
+    }
+  });
+}
+
 function openCategoryModal(categoryId = null) {
   state.editingCategoryId = categoryId;
   const existingCat = categoryId ? state.categories.find(c => c.id === categoryId) : null;
@@ -11958,6 +14305,7 @@ function openCategoryModal(categoryId = null) {
         iconKey: currentIconKey,
         icon: currentIconKey,
         color: currentColor,
+        order: existingCat && typeof existingCat.order === 'number' ? existingCat.order : (state.categories || []).length,
         archived: false
       };
 
@@ -11987,11 +14335,15 @@ function openCategoryModal(categoryId = null) {
 }
 
 function renderAdminCategories() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const list = document.getElementById('admin-categories-list');
   if (!list) return;
 
   const isArchivedView = state.adminCatsFilter === 'archived';
-  const filtered = state.categories.filter(c => isArchivedView ? c.archived : !c.archived);
+  const filtered = [...state.categories]
+    .filter(c => isArchivedView ? c.archived : !c.archived)
+    .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
   if (filtered.length === 0) {
     list.innerHTML = `<div class="glass-card p-6 text-center text-xs text-neutral-400">No ${isArchivedView ? 'archived' : 'active'} categories found.</div>`;
@@ -12015,7 +14367,8 @@ function renderAdminCategories() {
               <div class="text-[10px] text-neutral-400">${taskCount} active tasks</div>
             </div>
           </div>
-          <div class="flex items-center gap-2 shrink-0 text-neutral-500">
+          <div class="flex items-center gap-1.5 shrink-0 text-neutral-500">
+            <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
@@ -12030,14 +14383,38 @@ function renderAdminCategories() {
       onSingleTap: () => openCategoryModal(card.dataset.catId)
     });
   });
+
+  attachDragReorderList(list, '.bulk-select-card', 'data-cat-id', async (orderedIds) => {
+    try {
+      const batch = writeBatch(db);
+      orderedIds.forEach((id, idx) => {
+        const cat = state.categories.find(c => c.id === id);
+        if (cat) cat.order = idx;
+        if (categoriesMap.has(id)) categoriesMap.get(id).order = idx;
+        batch.update(doc(db, 'categories', id), { order: idx, updatedAt: serverTimestamp() });
+      });
+      state.categories.sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      await batch.commit();
+      populateCategoryFilters();
+      renderTasks();
+      toast('Category order updated', 'success');
+    } catch (err) {
+      console.error('Reorder categories error:', err);
+      toast(err.message || 'Failed to reorder categories', 'error');
+    }
+  });
 }
 
 export function renderAdminTasks() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tbody = document.getElementById('admin-tasks-tbody');
   if (!tbody) return;
 
   const isArchivedView = state.adminTasksFilter === 'archived';
-  const filtered = (state.tasks || []).filter(t => isArchivedView ? t.archived : !t.archived);
+  const filtered = [...(state.tasks || [])]
+    .filter(t => isArchivedView ? t.archived : !t.archived)
+    .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
 
   if (filtered.length === 0) {
     tbody.innerHTML = `<div class="p-6 text-center text-xs text-neutral-400">No ${isArchivedView ? 'archived' : 'active'} tasks found.</div>`;
@@ -12064,7 +14441,8 @@ export function renderAdminTasks() {
               <span>${t.isPermanent ? 'Permanent' : (t.schedule?.type || 'once')}</span>
             </div>
           </div>
-          <div class="flex items-center gap-2 shrink-0 text-neutral-500">
+          <div class="flex items-center gap-1.5 shrink-0 text-neutral-500">
+            <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
@@ -12078,6 +14456,60 @@ export function renderAdminTasks() {
       bulkId: row.dataset.bulkId,
       onSingleTap: () => openAdminTaskModal(row.dataset.taskId)
     });
+
+    const taskId = row.dataset.taskId;
+    const task = (state.tasks || []).find(t => t.id === taskId);
+    attachUniversalSwipeActions(row, {
+      archiveLabel: task?.archived ? 'Unarchive' : 'Archive',
+      onArchive: async () => {
+        try {
+          const nextArchived = !task?.archived;
+          await updateDoc(doc(db, 'tasks', taskId), { archived: nextArchived, updatedAt: serverTimestamp() });
+          if (task) task.archived = nextArchived;
+          dispatchBackendTaskMutation('TASK_UPDATED', taskId, { archived: nextArchived });
+          renderAdminTasks();
+          renderTasks();
+          toast(nextArchived ? 'Task archived' : 'Task unarchived', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to update task archive status', 'error');
+        }
+      },
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteDoc(doc(db, 'tasks', taskId));
+          state.tasks = (state.tasks || []).filter(t => t.id !== taskId);
+          dispatchBackendTaskMutation('TASK_UPDATED', taskId, { deleted: true });
+          renderAdminTasks();
+          renderTasks();
+          toast('Task deleted', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete task', 'error');
+        }
+      },
+      entityName: 'Task'
+    });
+  });
+
+  attachDragReorderList(tbody, '.bulk-select-card', 'data-task-id', async (orderedIds) => {
+    try {
+      const batch = writeBatch(db);
+      orderedIds.forEach((id, idx) => {
+        const task = state.tasks.find(t => t.id === id);
+        if (task) task.order = idx;
+        batch.update(doc(db, 'tasks', id), { order: idx, updatedAt: serverTimestamp() });
+      });
+      state.tasks.sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      await batch.commit();
+      renderTasks();
+      renderHomeDueTasks();
+      toast('Task order updated', 'success');
+    } catch (err) {
+      console.error('Reorder tasks error:', err);
+      toast(err.message || 'Failed to reorder tasks', 'error');
+    }
   });
 }
 
@@ -12141,7 +14573,6 @@ function openAdminTaskModal(taskId = null) {
   let enableDefaultTextField = task ? Boolean(task.enableDefaultTextField) : false;
   let currentIsPermanent = task ? Boolean(task.isPermanent) : false;
 
-  // Normalized tiers & schedule
   const normTiers = normalizeTaskTiers(task || {});
   let sched = normalizeScheduleObject(task?.schedule || task || { type: 'once', startDateTime: Date.now() });
   let schedType = sched.type || 'once';
@@ -12166,29 +14597,27 @@ function openAdminTaskModal(taskId = null) {
     return zonedDateToMs(y, mo, d, h || 0, mi || 0, 0, APP_TIMEZONE);
   };
 
-  // Deadline state (absolute date + time, relative to the first occurrence start)
   const currentDurationMinutes = normTiers.durationMinutes || 1440;
   let deadlineDateStr = toDateStr(schedStartMs + currentDurationMinutes * 60000);
   let deadlineTimeStr = toTimeStr(schedStartMs + currentDurationMinutes * 60000);
 
-  // Tier 1: Early Bonus
   let earlyBonusEnabled = Boolean(normTiers.earlyBonus.enabled);
   let earlyBonusPoints = normTiers.earlyBonus.points || 15;
   const earlyMins = normTiers.earlyBonus.untilMinutes > 0 ? normTiers.earlyBonus.untilMinutes : Math.max(1, Math.round(currentDurationMinutes / 2));
   let earlyBonusDateStr = toDateStr(schedStartMs + earlyMins * 60000);
   let earlyBonusTimeStr = toTimeStr(schedStartMs + earlyMins * 60000);
 
-  // Tier 2: Grace Period (NO grace points)
   let graceEnabled = Boolean(normTiers.grace.enabled);
   const graceMins = normTiers.grace.untilMinutes > 0 ? normTiers.grace.untilMinutes : currentDurationMinutes + 1440;
   let graceDateStr = toDateStr(schedStartMs + graceMins * 60000);
   let graceTimeStr = toTimeStr(schedStartMs + graceMins * 60000);
+  let gracePenaltyPoints = normTiers.grace.penaltyPoints || 0;
+  let graceFineEGP = normTiers.grace.fineAmountEGP || 0;
 
-  // Tier 3: Missed Penalty
   let missedPenaltyEnabled = Boolean(normTiers.missedPenalty.enabled);
   let missedPenaltyPoints = normTiers.missedPenalty.points || 5;
+  let missedPenaltyFineEGP = normTiers.missedPenalty.fineAmountEGP || 0;
 
-  // Recurrence schedule sets
   let weeklyDays = new Set(Array.isArray(sched.days) ? sched.days : ['Sat', 'Sun']);
   let monthlyDates = new Set(Array.isArray(sched.dates) ? sched.dates.map(Number).filter(n => n >= 1 && n <= 31) : [1]);
   let monthlyLastDay = sched.lastDay === true;
@@ -12196,7 +14625,6 @@ function openAdminTaskModal(taskId = null) {
   let monthlyWeeks = new Set(Array.isArray(sched.weeks) ? sched.weeks : ['1st']);
   let monthlyWeekdays = new Set(Array.isArray(sched.weekdays) ? sched.weekdays : ['Sat']);
 
-  // Questions with type ('short' | 'long' | 'mcq'), options, allowOther
   let currentQuestions = (Array.isArray(task?.questions) ? task.questions : []).map(q => ({
     id: q.id || ('q_' + Math.random().toString(36).slice(2, 7)),
     questionText: q.questionText || '',
@@ -12320,6 +14748,16 @@ function openAdminTaskModal(taskId = null) {
             </div>
             <div id="adm-grace-container" class="${graceEnabled ? '' : 'hidden'} space-y-2.5 pt-2 border-t border-white/10">
               <div id="mount-adm-grace-field"></div>
+              <div class="grid grid-cols-2 gap-2.5 pt-1">
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Late Penalty Pts (Optional)</label>
+                  <input id="adm-task-grace-penalty-pts" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${gracePenaltyPoints}" placeholder="0" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Late Fine EGP (Optional)</label>
+                  <input id="adm-task-grace-fine-egp" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${graceFineEGP}" placeholder="0" />
+                </div>
+              </div>
               <div id="adm-grace-words" class="hidden"></div>
             </div>
           </div>
@@ -12333,9 +14771,17 @@ function openAdminTaskModal(taskId = null) {
               </div>
               <div id="mount-switch-missed"></div>
             </div>
-            <div id="adm-missed-container" class="${missedPenaltyEnabled ? '' : 'hidden'} pt-2 border-t border-white/10">
-              <label class="block text-[11px] text-neutral-300 mb-1">Penalty Points</label>
-              <input id="adm-task-missed-pts" type="number" inputmode="numeric" min="1" class="ios-input font-mono" value="${missedPenaltyPoints}" placeholder="5" />
+            <div id="adm-missed-container" class="${missedPenaltyEnabled ? '' : 'hidden'} pt-2 border-t border-white/10 space-y-2.5">
+              <div class="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Penalty Points</label>
+                  <input id="adm-task-missed-pts" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${missedPenaltyPoints}" placeholder="5" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-neutral-300 mb-1">Fine EGP (Optional)</label>
+                  <input id="adm-task-missed-fine-egp" type="number" inputmode="numeric" min="0" class="ios-input font-mono" value="${missedPenaltyFineEGP}" placeholder="0" />
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -12366,7 +14812,6 @@ function openAdminTaskModal(taskId = null) {
       </div>
     `;
 
-    // Wire inputs with defensive null guards
     const titleInp = bodyEl.querySelector('#adm-task-title');
     if (titleInp) titleInp.oninput = e => { currentTitle = e.target.value; };
     const descInp = bodyEl.querySelector('#adm-task-desc');
@@ -12378,13 +14823,12 @@ function openAdminTaskModal(taskId = null) {
     const linkInp = bodyEl.querySelector('#adm-task-link');
     if (linkInp) linkInp.oninput = e => { currentLink = e.target.value; };
 
-    // Live Interactive Category Picker Row
     function updateCategoryPickerUI() {
       const wrap = bodyEl.querySelector('#adm-task-category-picker-wrap');
       if (!wrap) return;
       const cat = getCategoryForTask({ categoryId: currentCategoryId });
       wrap.innerHTML = `
-        <div id="btn-pick-task-category" role="button" tabindex="0" class="admin-category-picker-row w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-between text-xs hover:bg-white/10 transition cursor-pointer select-none">
+        <div id="btn-pick-task-category" role="button" tabindex="0" class="admin-category-picker-row w-full p-2.5 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-between text-xs hover:bg-white/10 active:bg-white/15 active:scale-[0.98] transition cursor-pointer select-none">
           <div class="flex items-center gap-2 min-w-0">
             <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${cat.color || '#0A84FF'};"></span>
             <span class="shrink-0 text-neutral-300">${getCategorySvg(cat.iconKey, 'w-3.5 h-3.5')}</span>
@@ -12398,21 +14842,35 @@ function openAdminTaskModal(taskId = null) {
       const btn = wrap.querySelector('#btn-pick-task-category');
       if (btn) {
         btn.onclick = () => {
-          const items = Array.from(categoriesMap.values())
-            .filter(c => !c.archived)
-            .map(c => ({
-              id: c.id,
-              label: c.name || c.nameEn,
-              color: c.color,
-              icon: c.iconKey || c.icon || 'folder'
-            }));
+          const allCats = [];
+          const seenIds = new Set();
+          const candidates = [
+            ...(Array.isArray(state.categories) ? state.categories : []),
+            ...Array.from(categoriesMap.values())
+          ];
+          candidates.forEach(c => {
+            if (c && c.id && !c.archived && !seenIds.has(c.id)) {
+              seenIds.add(c.id);
+              allCats.push({
+                id: c.id,
+                label: c.name || c.nameEn || c.label || c.id,
+                color: c.color || '#0A84FF',
+                icon: c.iconKey || c.icon || 'folder',
+                iconKey: c.iconKey || c.icon || 'folder',
+                category: c
+              });
+            }
+          });
+
           openItemPicker({
             title: 'Select Category',
-            items: items.length > 0 ? items : [{ id: 'uncategorized', label: 'Uncategorized', color: '#8E8E93', icon: 'folder' }],
+            items: allCats.length > 0 ? allCats : [{ id: 'uncategorized', label: 'Uncategorized', color: '#8E8E93', icon: 'folder', iconKey: 'folder' }],
             selectedId: currentCategoryId,
             onSelect: (item) => {
-              currentCategoryId = item.id;
-              updateCategoryPickerUI();
+              if (item && item.id) {
+                currentCategoryId = item.id;
+                updateCategoryPickerUI();
+              }
             }
           });
         };
@@ -12420,7 +14878,6 @@ function openAdminTaskModal(taskId = null) {
     }
     updateCategoryPickerUI();
 
-    // Mount Unified Advanced Color Picker for Task (FIX 6)
     const taskColorMount = bodyEl.querySelector('#adm-task-color-picker-mount');
     if (taskColorMount) {
       taskColorMount.appendChild(renderAdvancedColorPicker({
@@ -12431,7 +14888,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Default Text Field Switch (FIX 4: OFF by default)
     const mountDefaultTextSw = bodyEl.querySelector('#mount-switch-default-text-field');
     if (mountDefaultTextSw) {
       mountDefaultTextSw.appendChild(renderSwitch({
@@ -12443,7 +14899,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Stacked Radio Group for Points Claim Policy (FIX 3: Only Open to All & Admin-Assigned + Exclude Members)
     function applyClaimPolicyVisibility() {
       const card = bodyEl.querySelector('#adm-recurrence-card');
       if (card) card.classList.remove('hidden');
@@ -12545,7 +15000,6 @@ function openAdminTaskModal(taskId = null) {
     updateClaimPolicyUI();
     applyClaimPolicyVisibility();
 
-    // Mount renderDateTimeField for Task Deadline, Early Bonus, Grace Period
     const mountDl = bodyEl.querySelector('#mount-adm-deadline-field');
     if (mountDl) {
       const currentDlMs = dtToMs(deadlineDateStr, deadlineTimeStr);
@@ -12591,7 +15045,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Schedule Type Segmented control (updates only the sub-form, never the whole modal)
     const mountTaskSchedType = bodyEl.querySelector('#adm-task-sched-type-wrap');
     if (mountTaskSchedType) {
       mountTaskSchedType.innerHTML = '';
@@ -12611,7 +15064,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Permanent Switch
     const mountPerm = bodyEl.querySelector('#mount-switch-permanent');
     if (mountPerm) {
       mountPerm.appendChild(renderSwitch({
@@ -12625,7 +15077,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Early Switch
     const mountEarly = bodyEl.querySelector('#mount-switch-early');
     if (mountEarly) {
       mountEarly.appendChild(renderSwitch({
@@ -12640,7 +15091,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Grace Switch
     const mountGrace = bodyEl.querySelector('#mount-switch-grace');
     if (mountGrace) {
       mountGrace.appendChild(renderSwitch({
@@ -12655,7 +15105,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Mount Missed Penalty Switch
     const mountMissed = bodyEl.querySelector('#mount-switch-missed');
     if (mountMissed) {
       mountMissed.appendChild(renderSwitch({
@@ -12669,7 +15118,6 @@ function openAdminTaskModal(taskId = null) {
       }));
     }
 
-    // Native date / time inputs
     const bindField = (sel, setter) => {
       const el = bodyEl.querySelector(sel);
       if (el) {
@@ -12687,8 +15135,14 @@ function openAdminTaskModal(taskId = null) {
 
     const earlyPtsInp = bodyEl.querySelector('#adm-early-pts');
     if (earlyPtsInp) earlyPtsInp.oninput = e => { earlyBonusPoints = Number(e.target.value) || 15; };
+    const gracePenInp = bodyEl.querySelector('#adm-task-grace-penalty-pts');
+    if (gracePenInp) gracePenInp.oninput = e => { gracePenaltyPoints = Math.max(0, Number(e.target.value) || 0); };
+    const graceFineInp = bodyEl.querySelector('#adm-task-grace-fine-egp');
+    if (graceFineInp) graceFineInp.oninput = e => { graceFineEGP = Math.max(0, Number(e.target.value) || 0); };
     const missedPtsInp = bodyEl.querySelector('#adm-task-missed-pts');
-    if (missedPtsInp) missedPtsInp.oninput = e => { missedPenaltyPoints = Number(e.target.value) || 5; };
+    if (missedPtsInp) missedPtsInp.oninput = e => { missedPenaltyPoints = Math.max(0, Number(e.target.value) || 0); };
+    const missedFineInp = bodyEl.querySelector('#adm-task-missed-fine-egp');
+    if (missedFineInp) missedFineInp.oninput = e => { missedPenaltyFineEGP = Math.max(0, Number(e.target.value) || 0); };
 
     renderSchedSubform();
     renderQuestionsList();
@@ -12720,7 +15174,6 @@ function openAdminTaskModal(taskId = null) {
     el.className = msg ? HINT_CLASS : 'hidden';
   }
 
-  // Inline validation hints only (no developer-facing text)
   function updateAllWords() {
     const startMs = dtToMs(selectedDateStr, selectedTimeStr);
     const dlMs = dtToMs(deadlineDateStr, deadlineTimeStr);
@@ -12792,7 +15245,7 @@ function openAdminTaskModal(taskId = null) {
       });
       wireStartFields();
     } else {
-      // Monthly: day-of-month grid (1-31) + Last Day of Month
+
       const dayCls = (on) => `btn-mday h-9 rounded-lg text-xs font-semibold font-mono transition ${on ? 'bg-[#0A84FF] text-white' : 'bg-white/[0.08] text-neutral-300'}`;
       const lastCls = (on) => `w-full h-10 rounded-lg text-xs font-semibold transition ${on ? 'bg-[#0A84FF] text-white' : 'bg-white/[0.08] text-neutral-300'}`;
       subContainer.innerHTML = `
@@ -12839,7 +15292,6 @@ function openAdminTaskModal(taskId = null) {
       qCard.className = 'p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-3 text-xs';
       qCard.dataset.idx = idx;
 
-      // Card Header: Reorder buttons, Prompt Input, Delete
       const headerRow = document.createElement('div');
       headerRow.className = 'flex items-start gap-2';
 
@@ -12892,7 +15344,6 @@ function openAdminTaskModal(taskId = null) {
       headerRow.appendChild(delBtn);
       qCard.appendChild(headerRow);
 
-      // Row 2: Type selector (full width)
       const typeRow = document.createElement('div');
       typeRow.className = 'pt-1 border-t border-white/5';
       typeRow.appendChild(renderSegmented({
@@ -12915,7 +15366,6 @@ function openAdminTaskModal(taskId = null) {
       }));
       qCard.appendChild(typeRow);
 
-      // Row 3: Required label (left) + iOS switch (right), never clipped
       const reqRow = document.createElement('div');
       reqRow.className = 'flex items-center';
       reqRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
@@ -12927,7 +15377,6 @@ function openAdminTaskModal(taskId = null) {
       }));
       qCard.appendChild(reqRow);
 
-      // MCQ Options Builder (if type === 'mcq')
       if (q.type === 'mcq') {
         const mcqBox = document.createElement('div');
         mcqBox.className = 'p-2.5 rounded-xl bg-black/20 border border-white/5 space-y-2 pt-2';
@@ -13020,10 +15469,8 @@ function openAdminTaskModal(taskId = null) {
         APP_TIMEZONE
       );
 
-      // Milestones never repeat: force a one-time schedule
       const effectiveSchedType = currentClaimPolicy === 'milestone' ? 'once' : schedType;
 
-      // Validate & compute durationMinutes (deadline date/time relative to start)
       let finalDurationMinutes = null;
       if (!currentIsPermanent) {
         const deadlineMs = dtToMs(deadlineDateStr, deadlineTimeStr);
@@ -13034,7 +15481,6 @@ function openAdminTaskModal(taskId = null) {
         }
       }
 
-      // Early Bonus validation
       let finalEarlyBonus = { enabled: false, untilMinutes: 0, points: Number(currentPoints) || 5 };
       if (!currentIsPermanent && earlyBonusEnabled) {
         const ebMs = dtToMs(earlyBonusDateStr, earlyBonusTimeStr);
@@ -13050,8 +15496,7 @@ function openAdminTaskModal(taskId = null) {
         };
       }
 
-      // Grace Period validation (NO grace points)
-      let finalGrace = { enabled: false, untilMinutes: 0 };
+      let finalGrace = { enabled: false, untilMinutes: 0, penaltyPoints: 0, fineAmountEGP: 0 };
       if (!currentIsPermanent && graceEnabled) {
         const grMs = dtToMs(graceDateStr, graceTimeStr);
         const grUntilMinutes = Math.round((grMs - startDateTimeMs) / 60000);
@@ -13059,15 +15504,20 @@ function openAdminTaskModal(taskId = null) {
           toast('The grace cutoff must be after the deadline', 'error');
           return false;
         }
-        finalGrace = { enabled: true, untilMinutes: grUntilMinutes };
+        finalGrace = {
+          enabled: true,
+          untilMinutes: grUntilMinutes,
+          penaltyPoints: Math.max(0, Number(gracePenaltyPoints) || 0),
+          fineAmountEGP: Math.max(0, Number(graceFineEGP) || 0)
+        };
       }
 
-      // Missed Penalty
-      let finalMissedPenalty = { enabled: false, points: 0 };
+      let finalMissedPenalty = { enabled: false, points: 0, fineAmountEGP: 0 };
       if (!currentIsPermanent && missedPenaltyEnabled) {
         finalMissedPenalty = {
           enabled: true,
-          points: Number(missedPenaltyPoints) || 5
+          points: Math.max(0, Number(missedPenaltyPoints) || 0),
+          fineAmountEGP: Math.max(0, Number(missedPenaltyFineEGP) || 0)
         };
       }
 
@@ -13136,11 +15586,13 @@ function openAdminTaskModal(taskId = null) {
         enableDefaultTextField: Boolean(enableDefaultTextField),
         durationMinutes: currentIsPermanent ? null : finalDurationMinutes,
         questions: validQuestions,
+        order: task && typeof task.order === 'number' ? task.order : (state.tasks || []).length,
         active: true,
         archived: false
       };
 
       try {
+        let savedTaskId = state.editingTaskId;
         if (state.editingTaskId) {
           await updateDoc(doc(db, 'tasks', state.editingTaskId), {
             ...payload,
@@ -13148,12 +15600,14 @@ function openAdminTaskModal(taskId = null) {
           });
           toast('Task updated', 'success');
         } else {
-          await addDoc(collection(db, 'tasks'), {
+          const docRef = await addDoc(collection(db, 'tasks'), {
             ...payload,
             createdAt: serverTimestamp()
           });
+          savedTaskId = docRef?.id || null;
           toast('Task created', 'success');
         }
+        dispatchBackendTaskMutation('TASK_UPDATED', savedTaskId);
         return true;
       } catch (err) {
         console.error('Task save error:', err);
@@ -13168,45 +15622,245 @@ let adminSessionsSegmentedInstance = null;
 function setupAdminSessionsSegmented() {
   const mount = document.getElementById('mount-admin-sessions-segmented');
   if (!mount) return;
-  if (!adminSessionsSegmentedInstance || !mount.contains(adminSessionsSegmentedInstance)) {
-    mount.innerHTML = '';
-    adminSessionsSegmentedInstance = renderSegmented({
-      id: 'admin-sessions-segmented',
-      options: [
-        { value: 'active', label: 'Active Sessions' },
-        { value: 'archived', label: 'Archived' }
-      ],
-      value: adminSessionsFilter || 'active',
-      onChange: (val) => {
-        adminSessionsFilter = val;
+
+  const currentTab = adminSessionsFilter === 'recent_logs'
+    ? 'recent_logs'
+    : (adminSessionsFilter === 'archived' ? 'archived' : 'sessions');
+
+  mount.innerHTML = '';
+  mount.appendChild(renderSegmented({
+    id: 'segmented-admin-attendance-tabs',
+    options: [
+      { value: 'sessions', label: 'Sessions' },
+      { value: 'recent_logs', label: 'Attendance Logs' },
+      { value: 'archived', label: 'Archived' }
+    ],
+    value: currentTab,
+    onChange: (val) => {
+      adminSessionsFilter = val;
+      const sessList = document.getElementById('admin-sessions-list');
+      const logsSection = document.getElementById('admin-attendance-logs-section');
+
+      if (val === 'recent_logs') {
+        if (sessList) sessList.style.display = 'none';
+        if (logsSection) {
+          logsSection.style.display = 'block';
+          logsSection.classList.remove('hidden');
+        }
+        renderAdminAttendanceLogs();
+      } else {
+        if (sessList) sessList.style.display = 'block';
+        if (logsSection) {
+          logsSection.style.display = 'none';
+          logsSection.classList.add('hidden');
+        }
         renderAdminSessions();
       }
-    });
-    mount.appendChild(adminSessionsSegmentedInstance);
-  } else if (adminSessionsSegmentedInstance.getValue && adminSessionsSegmentedInstance.getValue() !== (adminSessionsFilter || 'active')) {
-    adminSessionsSegmentedInstance.setValue(adminSessionsFilter || 'active', false);
+    }
+  }));
+
+  const sessList = document.getElementById('admin-sessions-list');
+  const logsSection = document.getElementById('admin-attendance-logs-section');
+  if (currentTab === 'recent_logs') {
+    if (sessList) sessList.style.display = 'none';
+    if (logsSection) {
+      logsSection.style.display = 'block';
+      logsSection.classList.remove('hidden');
+    }
+  } else {
+    if (sessList) sessList.style.display = 'block';
+    if (logsSection) {
+      logsSection.style.display = 'none';
+      logsSection.classList.add('hidden');
+    }
   }
 }
 
+const sessionCardStatsCache = new Map();
+
+export async function hydrateSessionCardStats(sessionId, occurrenceKey = null) {
+  if (!sessionId) return { present: 0, late: 0, absent: 0 };
+
+  const session = (state.attendanceSessions || []).find(s => s.id === sessionId);
+  const nowMs = serverNow();
+
+  const getAssignedCount = () => {
+    if (!session) return 0;
+    const allActive = (usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])]).filter(m => m && !m.disabled && !m.blocked);
+    if (session.targetType === 'badge' && Array.isArray(session.badgeIds) && session.badgeIds.length > 0) {
+      return allActive.filter(m => {
+        const userBadges = Array.isArray(m.badges) ? m.badges : (Array.isArray(m.badgeIds) ? m.badgeIds : []);
+        return userBadges.some(b => session.badgeIds.includes(typeof b === 'object' ? b.id : b));
+      }).length || allActive.length;
+    } else if ((session.targetType === 'custom' || !session.targetType) && Array.isArray(session.assignedUids) && session.assignedUids.length > 0) {
+      return allActive.filter(m => session.assignedUids.includes(m.uid)).length || allActive.length;
+    }
+    return allActive.length;
+  };
+
+  const computeTallies = (logs, occStartMs) => {
+    let present = 0;
+    let late = 0;
+    let absent = 0;
+    const handledUids = new Set();
+
+    logs.forEach(l => {
+      const uid = l.uid || l.userId;
+      if (uid) handledUids.add(uid);
+      const st = String(l.status || '').toLowerCase();
+      if (st === 'early' || st === 'on_time' || (!l.penalty && !l.fineEGP && st !== 'late' && st !== 'absent' && st !== 'excused')) {
+        present++;
+      } else if (st === 'late' || (Number(l.penalty) > 0 && st !== 'absent')) {
+        late++;
+      } else if (st === 'absent') {
+        absent++;
+      }
+    });
+
+    if (session) {
+      const assignedCount = getAssignedCount();
+      const cutoffMs = (occStartMs || nowMs) + (Number(session.lateCutoffMinutes) || 120) * 60000;
+      const isClosed = session.status === 'closed' || session.status === 'completed' || nowMs > cutoffMs;
+      if (isClosed && assignedCount > handledUids.size) {
+        absent = Math.max(absent, (assignedCount - handledUids.size) + logs.filter(l => l.status === 'absent').length);
+      }
+    }
+
+    return { present, late, absent };
+  };
+
+  // Determine target occurrence
+  let resolvedOcc = session ? (resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs)) : null;
+  let targetOccKey = occurrenceKey || (resolvedOcc ? resolvedOcc.key : 'once');
+  let targetOccStartMs = resolvedOcc ? resolvedOcc.start : (parseDateTimeToMs(session?.schedule?.startDateTime) || nowMs);
+
+  // 1. Initial fast tally from local state
+  const localLogs = (state.attendanceLogs || []).filter(l => l.sessionId === sessionId);
+  let localFiltered = localLogs.filter(l => !targetOccKey || targetOccKey === 'once' || l.occurrenceKey === targetOccKey || l.occurrenceDate === targetOccKey);
+  if (localFiltered.length === 0 && localLogs.length > 0) {
+    localFiltered = localLogs;
+  }
+  let stats = computeTallies(localFiltered, targetOccStartMs);
+  sessionCardStatsCache.set(sessionId, stats);
+  updateSessionCardStatsDOM(sessionId, stats);
+
+  // 2. Aggressive scan of attendance_records and attendance_logs in Firestore
+  try {
+    const [recSnap, logSnap] = await Promise.all([
+      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', sessionId), limit(500))).catch(() => ({ docs: [] })),
+      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', sessionId), limit(500))).catch(() => ({ docs: [] }))
+    ]);
+
+    const logsMap = new Map();
+    recSnap.docs.forEach(d => {
+      const data = d.data();
+      const id = d.id;
+      logsMap.set(id, { id, ...data });
+    });
+    logSnap.docs.forEach(d => {
+      const data = d.data();
+      const id = d.id;
+      if (logsMap.has(id)) {
+        logsMap.set(id, { ...logsMap.get(id), ...data });
+      } else {
+        logsMap.set(id, { id, ...data });
+      }
+    });
+
+    const allDbLogs = Array.from(logsMap.values());
+    if (allDbLogs.length > 0) {
+      const occDateGroups = new Map();
+      allDbLogs.forEach(l => {
+        const dKey = l.occurrenceDate || (l.occurrenceKey && l.occurrenceKey !== 'once' ? l.occurrenceKey : '') || (l.checkedInAt ? new Date(parseDateTimeToMs(l.checkedInAt)).toISOString().slice(0, 10) : 'once');
+        if (!occDateGroups.has(dKey)) occDateGroups.set(dKey, []);
+        occDateGroups.get(dKey).push(l);
+      });
+
+      let targetLogs = [];
+      if (targetOccKey && occDateGroups.has(targetOccKey)) {
+        targetLogs = occDateGroups.get(targetOccKey);
+      } else {
+        const sortedKeys = Array.from(occDateGroups.keys()).sort().reverse();
+        targetLogs = occDateGroups.get(sortedKeys[0]) || allDbLogs;
+      }
+
+      stats = computeTallies(targetLogs, targetOccStartMs);
+      sessionCardStatsCache.set(sessionId, stats);
+      updateSessionCardStatsDOM(sessionId, stats);
+    }
+  } catch (err) {
+    console.warn('[hydrateSessionCardStats] error scanning records & logs:', err);
+  }
+
+  return stats;
+}
+
+function updateSessionCardStatsDOM(sessionId, stats) {
+  const cards = document.querySelectorAll(`[data-session-id="${sessionId}"]`);
+  cards.forEach(card => {
+    const pEl = card.querySelector('.stat-present');
+    const lEl = card.querySelector('.stat-late');
+    const aEl = card.querySelector('.stat-absent');
+    if (pEl) pEl.textContent = stats.present;
+    if (lEl) lEl.textContent = stats.late;
+    if (aEl) aEl.textContent = stats.absent;
+  });
+}
+
 function renderAdminSessions() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const list = document.getElementById('admin-sessions-list');
   if (!list) return;
 
   setupAdminSessionsSegmented();
 
-  const isArchived = adminSessionsFilter === 'archived';
-  const filtered = state.attendanceSessions.filter(s => isArchived ? s.archived : !s.archived);
-
-  if (filtered.length === 0) {
-    list.innerHTML = `
-      <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
-        No ${isArchived ? 'archived' : 'active'} attendance sessions found.
-      </div>
-    `;
+  if (adminSessionsFilter === 'recent_logs') {
+    renderAdminAttendanceLogs();
     return;
   }
 
   const nowMs = serverNow();
+  const isArchived = adminSessionsFilter === 'archived';
+
+  let filtered = [];
+  if (isArchived) {
+    filtered = (state.attendanceSessions || []).filter(s => s.archived);
+  } else {
+    const unarchived = (state.attendanceSessions || []).filter(s => !s.archived);
+    const activeSessions = [];
+    const closedSessions = [];
+
+    unarchived.forEach(session => {
+      const calc = computeAttendance(session, nowMs);
+      const occStart = calc.occurrenceStart || parseDateTimeToMs(session.schedule?.startDateTime) || 0;
+      const cutoffMs = occStart + (Number(session.lateCutoffMinutes) || 120) * 60000;
+      const isClosed = session.status === 'closed' || session.status === 'completed' || session.active === false || (occStart > 0 && nowMs > cutoffMs);
+
+      if (isClosed) {
+        closedSessions.push({ session, occStart });
+      } else {
+        activeSessions.push({ session, occStart });
+      }
+    });
+
+    activeSessions.sort((a, b) => (a.occStart || 0) - (b.occStart || 0));
+    closedSessions.sort((a, b) => (b.occStart || 0) - (a.occStart || 0));
+
+    filtered = [
+      ...activeSessions.map(x => x.session),
+      ...closedSessions.map(x => x.session)
+    ];
+  }
+
+  if (filtered.length === 0) {
+    list.innerHTML = `
+      <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
+        ${isArchived ? 'No archived attendance sessions found.' : 'No attendance sessions found. Create a new session to get started.'}
+      </div>
+    `;
+    return;
+  }
 
   list.innerHTML = filtered.map(session => {
     const calc = computeAttendance(session, nowMs);
@@ -13236,8 +15890,16 @@ function renderAdminSessions() {
     const penaltyMatrixText = `${perStep} pts per ${stepDur}m late (${minPen}–${maxPen} pts)`;
     const windowBoundariesText = `Opens ${formatMinutesDuration(session.earlyCheckInMinutes)} early • Closes ${formatMinutesDuration(session.lateCutoffMinutes)} after`;
 
+    const initialStats = sessionCardStatsCache.get(session.id) || {
+      present: (state.attendanceLogs || []).filter(l => l.sessionId === session.id && (l.status === 'early' || l.status === 'on_time' || (!l.penalty && !l.fineEGP && l.status !== 'late' && l.status !== 'absent'))).length,
+      late: (state.attendanceLogs || []).filter(l => l.sessionId === session.id && (l.status === 'late' || (l.penalty > 0 && l.status !== 'absent'))).length,
+      absent: (state.attendanceLogs || []).filter(l => l.sessionId === session.id && l.status === 'absent').length
+    };
+
     let statusPillHtml = '';
-    if (calc.status === 'on_time') {
+    if (session.status === 'closed' || calc.reason === 'late') {
+      statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-white/10 text-neutral-300 border border-white/15">Closed</span>`;
+    } else if (calc.status === 'on_time') {
       statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">On Time</span>`;
     } else if (calc.status === 'late') {
       statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-rose-500/20 text-rose-400 border border-rose-500/30">Late Window</span>`;
@@ -13246,6 +15908,10 @@ function renderAdminSessions() {
     } else {
       statusPillHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-white/10 text-neutral-400 border border-white/15">Check-in Closed</span>`;
     }
+
+    const bracketsCount = Array.isArray(session.timeBrackets)
+      ? session.timeBrackets.length
+      : (Array.isArray(session.earlyBonusTiers) ? session.earlyBonusTiers.length : 0);
 
     return `
       <div class="glass-card bulk-select-card p-4 space-y-3 text-xs border-white/10 cursor-pointer hover:bg-white/[0.03] transition rounded-2xl${isSelected ? ' selected' : ''}" data-session-id="${esc(session.id)}" data-bulk-id="${esc(session.id)}">
@@ -13256,15 +15922,15 @@ function renderAdminSessions() {
               <h3 class="ios-headline text-white">${esc(session.title)}</h3>
               <p class="text-[11px] text-neutral-400 mt-0.5">${esc(schedDesc)}</p>
             </div>
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${session.active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-neutral-400'}">
-              ${session.active ? 'Active' : 'Inactive'}
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${session.status === 'closed' ? 'bg-neutral-500/20 text-neutral-300 border border-neutral-500/30' : (session.active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-neutral-400')}">
+              ${session.status === 'closed' ? 'Closed' : (session.active ? 'Active' : 'Completed')}
             </span>
           </div>
 
           <div class="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-white/[0.03] text-[11px] text-neutral-300">
             <div>
               <span class="text-[10px] text-neutral-400 block font-medium">Window Boundaries</span>
-              <span>${windowBoundariesText}</span>
+              <span>${windowBoundariesText}${bracketsCount > 0 ? ` • ${bracketsCount} Brackets` : ''}${session.gracePeriodMins ? ` • ${session.gracePeriodMins}m Grace` : ''}</span>
             </div>
             <div>
               <span class="text-[10px] text-neutral-400 block font-medium">Penalty Matrix</span>
@@ -13272,14 +15938,31 @@ function renderAdminSessions() {
             </div>
           </div>
 
+          <div class="grid grid-cols-3 gap-2 text-center text-[11px]" id="session-stats-${esc(session.id)}">
+            <div class="p-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-mono">
+              <strong class="stat-present">${initialStats.present}</strong> Present
+            </div>
+            <div class="p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono">
+              <strong class="stat-late">${initialStats.late}</strong> Late
+            </div>
+            <div class="p-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 font-mono">
+              <strong class="stat-absent">${initialStats.absent}</strong> Absent
+            </div>
+          </div>
+
           <div class="p-2 rounded-lg bg-black/20 text-[11px] flex items-center justify-between text-neutral-300">
-            <span>Current Occurrence: <strong class="text-white">${formatDateTime(occStart)}</strong></span>
+            <span>Occurrence: <strong class="text-white">${formatDateTime(occStart)}</strong></span>
             ${statusPillHtml}
           </div>
 
-          <div class="flex items-center justify-between pt-2 border-t border-white/5">
-            <button type="button" class="btn-card-view-attendance text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
-              <span>View Attendance</span> &rarr;
+          <div class="flex items-center justify-between pt-2 border-t border-white/5 gap-2">
+            <span class="text-[11px] text-neutral-400 flex items-center gap-1">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none text-[#0A84FF]" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              <span>Tap card to view breakdown</span>
+            </span>
+            <button type="button" class="btn-card-edit-session btn-edit px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-200 text-xs font-semibold flex items-center justify-center gap-1 transition" data-session-id="${esc(session.id)}" data-no-row-tap="true">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              <span>Edit</span>
             </button>
           </div>
 
@@ -13289,29 +15972,69 @@ function renderAdminSessions() {
   }).join('');
 
   list.querySelectorAll('.bulk-select-card').forEach(card => {
+    const sessionId = String(card.dataset.sessionId || '');
+    const sessionObj = (state.attendanceSessions || []).find(s => s.id === sessionId);
+
+    hydrateSessionCardStats(sessionId);
+
     attachRowGestures(card, {
       bulkType: 'sessions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
-        openAdminSessionModal(card.dataset.sessionId);
+        if (sessionId) openAdminRosterModal(sessionId);
       }
     });
 
-    const btnView = card.querySelector('.btn-card-view-attendance');
-    if (btnView) {
-      btnView.onclick = (e) => {
+    card.onclick = (e) => {
+      if (e && e.target && (e.target.closest('.btn-edit') || e.target.closest('.btn-card-edit-session') || e.target.closest('button') || e.target.closest('[data-no-row-tap="true"]'))) return;
+      if (selectionState.active && selectionState.type === 'sessions') return;
+      if (sessionId) openAdminRosterModal(sessionId);
+    };
+
+    const btnEdit = card.querySelector('.btn-card-edit-session, .btn-edit');
+    if (btnEdit) {
+      btnEdit.onclick = (e) => {
+        e.preventDefault();
         e.stopPropagation();
-        const targetSession = state.attendanceSessions.find(s => s.id === card.dataset.sessionId);
-        if (targetSession) openAdminRosterModal(targetSession);
+        openAdminSessionModal(sessionId);
       };
     }
 
-    const btnEdit = card.querySelector('.btn-card-edit-session');
-    if (btnEdit) {
-      btnEdit.onclick = (e) => {
-        e.stopPropagation();
-        openAdminSessionModal(card.dataset.sessionId);
-      };
+    if (sessionObj) {
+      attachUniversalSwipeActions(card, {
+        archiveLabel: sessionObj.archived ? 'Unarchive' : 'Archive',
+        archiveIcon: sessionObj.archived ? 'rotate-ccw' : 'archive',
+        onArchive: async () => {
+          try {
+            const newArchived = !sessionObj.archived;
+            await updateDoc(doc(db, 'attendance_sessions', sessionId), {
+              archived: newArchived,
+              status: newArchived ? 'archived' : 'active',
+              updatedAt: serverTimestamp()
+            });
+            sessionObj.archived = newArchived;
+            sessionObj.status = newArchived ? 'archived' : 'active';
+            toast(newArchived ? 'Session archived' : 'Session restored', 'success');
+            renderAdminSessions();
+          } catch (err) {
+            console.error(err);
+            toast('Failed to update session archive state', 'error');
+          }
+        },
+        deleteLabel: 'Delete',
+        onDelete: async () => {
+          try {
+            await deleteDoc(doc(db, 'attendance_sessions', sessionId));
+            state.attendanceSessions = (state.attendanceSessions || []).filter(s => s.id !== sessionId);
+            toast('Session deleted', 'success');
+            renderAdminSessions();
+          } catch (err) {
+            console.error(err);
+            toast('Failed to delete session', 'error');
+          }
+        },
+        entityName: 'Session'
+      });
     }
   });
 }
@@ -13334,7 +16057,6 @@ function openAdminSessionModal(sessionId = null) {
   let selectedDateStr = `${schedParts.year}-${pad2(schedParts.month)}-${pad2(schedParts.day)}`;
   let selectedTimeStr = `${pad2(schedParts.hour)}:${pad2(schedParts.minute)}`;
 
-  // Window boundaries
   let earlyCheckInMinutes = session ? session.earlyCheckInMinutes : 30;
   let lateCutoffMinutes = session ? session.lateCutoffMinutes : 120;
 
@@ -13347,12 +16069,30 @@ function openAdminSessionModal(sessionId = null) {
   let opensTimeStr = `${pad2(Math.floor(openMins / 60))}:${pad2(openMins % 60)}`;
   let closesTimeStr = `${pad2(Math.floor(closeMins / 60))}:${pad2(closeMins % 60)}`;
 
-  // 3-Way Attendee Assignment State: 'all' | 'badge' | 'custom'
   let targetType = session?.targetType || (Array.isArray(session?.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session?.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
   let selectedBadgeIds = new Set(Array.isArray(session?.badgeIds) ? session.badgeIds : []);
-  let assignedUids = new Set(Array.isArray(session?.assignedUids) ? session.assignedUids : []);
+  let assignedUids = new Set(Array.isArray(session?.assignedMembers) ? session.assignedMembers : (Array.isArray(session?.assignedUids) ? session.assignedUids : []));
+  let earlyBonusPoints = session ? (Number(session.earlyBonusPoints) || Number(session.earlyCheckInBonusPoints) || 0) : 0;
+  let earlyBonusEGP = session ? (Number(session.earlyBonusEGP) || Number(session.earlyCheckInBonusEGP) || 0) : 0;
+  let gracePeriodMins = session ? Math.max(0, Number(session.gracePeriodMins ?? session.graceMinutes ?? 0)) : 0;
+  let timeBrackets = Array.isArray(session?.timeBrackets)
+    ? session.timeBrackets.map(t => ({
+        type: t.type === 'after' ? 'after' : 'before',
+        fromMins: Math.max(0, Number(t.fromMins ?? t.fromMinsBefore) || 0),
+        toMins: Math.max(0, Number(t.toMins ?? t.toMinsBefore) || 0),
+        points: Math.max(0, Number(t.points ?? t.bonusPoints) || 0),
+        egp: Math.max(0, Number(t.egp ?? t.bonusEgp ?? t.bonusEGP) || 0)
+      }))
+    : (Array.isArray(session?.earlyBonusTiers)
+      ? session.earlyBonusTiers.map(t => ({
+          type: 'before',
+          fromMins: Math.max(0, Number(t.fromMinsBefore) || 0),
+          toMins: Math.max(0, Number(t.toMinsBefore) || 0),
+          points: Math.max(0, Number(t.bonusPoints) || 0),
+          egp: Math.max(0, Number(t.bonusEgp ?? t.bonusEGP) || 0)
+        }))
+      : []);
 
-  // SYSTEM 1: Points Deductions
   let pointsPenalty = {
     enabled: session ? session.pointsPenalty.enabled : true,
     mode: session ? session.pointsPenalty.mode : 'stepped',
@@ -13365,7 +16105,6 @@ function openAdminSessionModal(sessionId = null) {
     absence: session ? session.pointsPenalty.absence : 20
   };
 
-  // SYSTEM 2: Financial Fines (EGP)
   let finePenalty = {
     enabled: session ? session.finePenalty.enabled : false,
     mode: session ? session.finePenalty.mode : 'stepped',
@@ -13383,8 +16122,6 @@ function openAdminSessionModal(sessionId = null) {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
 
-  // Build the entire DOM once without innerHTML destruction on toggle
-  // 1. Title
   const titleBox = document.createElement('div');
   titleBox.innerHTML = `
     <label class="block text-xs font-semibold text-neutral-200 mb-1">Session Title *</label>
@@ -13394,7 +16131,6 @@ function openAdminSessionModal(sessionId = null) {
   titleInp.oninput = (e) => { currentTitle = e.target.value; };
   bodyEl.appendChild(titleBox);
 
-  // 2. Recurrence & Schedule Type
   const schedBox = document.createElement('div');
   schedBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
   schedBox.innerHTML = `
@@ -13468,7 +16204,6 @@ function openAdminSessionModal(sessionId = null) {
   }
   bodyEl.appendChild(schedBox);
 
-  // 3. Clean Native Date & Time Pickers (Stripped of "(Africa/Cairo)" and "308m")
   const timeCard = document.createElement('div');
   timeCard.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-2.5';
   timeCard.innerHTML = `
@@ -13493,6 +16228,38 @@ function openAdminSessionModal(sessionId = null) {
         <label for="attClosesTime" class="text-xs font-medium text-neutral-300">Check-in Closes</label>
         <input type="time" id="attClosesTime" value="${closesTimeStr}" class="glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" />
       </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <label for="attGracePeriod" class="text-xs font-medium text-amber-300 block">Grace Period (Minutes)</label>
+          <span class="text-[10px] text-neutral-400 block">Arrival within this window after start incurs 0 penalty.</span>
+        </div>
+        <input type="number" min="0" id="attGracePeriod" value="${gracePeriodMins}" class="w-24 glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono text-right" placeholder="0" />
+      </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="grid grid-cols-2 gap-2 pt-1">
+        <div>
+          <label for="attEarlyBonusPts" class="text-[11px] font-medium text-emerald-400 block mb-1">Default Early Bonus (Pts)</label>
+          <input type="number" min="0" id="attEarlyBonusPts" value="${earlyBonusPoints}" class="w-full glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" placeholder="0" />
+        </div>
+        <div>
+          <label for="attEarlyBonusEGP" class="text-[11px] font-medium text-emerald-400 block mb-1">Default Early Bonus (EGP)</label>
+          <input type="number" min="0" id="attEarlyBonusEGP" value="${earlyBonusEGP}" class="w-full glass-input text-xs px-2.5 py-1.5 rounded-lg text-white bg-white/5 border border-white/10 font-mono" placeholder="0" />
+        </div>
+      </div>
+      <div class="h-px bg-white/5"></div>
+      <div class="space-y-2 pt-1">
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <span class="text-xs font-bold text-white block">Custom Time Brackets (Bidirectional Matrix)</span>
+            <span class="text-[10px] text-neutral-400 block">Configure arrival brackets before start (bonuses) or after start (penalties).</span>
+          </div>
+          <button type="button" id="btn-add-time-bracket" class="px-2.5 py-1.5 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] border border-[#0A84FF]/30 text-[11px] font-bold transition shrink-0 flex items-center gap-1">
+            <span>+ Add Bracket</span>
+          </button>
+        </div>
+        <div id="custom-time-brackets-list" class="space-y-2"></div>
+      </div>
     </div>
   `;
 
@@ -13500,14 +16267,113 @@ function openAdminSessionModal(sessionId = null) {
   const inpTime = timeCard.querySelector('#attSessionTime');
   const inpOpens = timeCard.querySelector('#attOpensTime');
   const inpCloses = timeCard.querySelector('#attClosesTime');
+  const inpGrace = timeCard.querySelector('#attGracePeriod');
+  const inpEarlyPts = timeCard.querySelector('#attEarlyBonusPts');
+  const inpEarlyEGP = timeCard.querySelector('#attEarlyBonusEGP');
+  const tiersListEl = timeCard.querySelector('#custom-time-brackets-list');
+  const addTierBtn = timeCard.querySelector('#btn-add-time-bracket');
+
+  const renderTimeBracketsUI = () => {
+    if (!tiersListEl) return;
+    if (timeBrackets.length === 0) {
+      tiersListEl.innerHTML = `<div class="p-2.5 rounded-xl bg-black/20 border border-dashed border-white/10 text-[11px] text-neutral-400 text-center">No custom time brackets added. Flat default bonus/penalty rules apply.</div>`;
+      return;
+    }
+    tiersListEl.innerHTML = timeBrackets.map((bracket, idx) => `
+      <div class="time-bracket-row early-tier-row" data-bracket-idx="${idx}">
+        <div class="tier-type-cell">
+          <label class="text-[10px] text-neutral-400 block mb-0.5">Bracket Type</label>
+          <select class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 inp-bracket-type">
+            <option value="before" ${bracket.type !== 'after' ? 'selected' : ''}>Before Start (Bonus)</option>
+            <option value="after" ${bracket.type === 'after' ? 'selected' : ''}>After Start (Penalty)</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[10px] text-neutral-400 block mb-0.5">From (mins)</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-from" value="${bracket.fromMins}" placeholder="60" />
+        </div>
+        <div>
+          <label class="text-[10px] text-neutral-400 block mb-0.5">To (mins)</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-to" value="${bracket.toMins}" placeholder="30" />
+        </div>
+        <div>
+          <label class="text-[10px] ${bracket.type === 'after' ? 'text-rose-400' : 'text-emerald-400'} block mb-0.5 label-pts">${bracket.type === 'after' ? 'Penalty Pts' : '+Bonus Pts'}</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-pts" value="${bracket.points}" placeholder="10" />
+        </div>
+        <div>
+          <label class="text-[10px] ${bracket.type === 'after' ? 'text-rose-400' : 'text-emerald-400'} block mb-0.5 label-egp">${bracket.type === 'after' ? 'Fine EGP' : '+Bonus EGP'}</label>
+          <input type="number" min="0" class="w-full glass-input text-xs px-2 py-1 rounded text-white bg-white/5 border border-white/10 font-mono inp-tier-egp" value="${bracket.egp}" placeholder="20" />
+        </div>
+        <div class="tier-remove-cell flex items-end pb-0.5">
+          <button type="button" class="btn-remove-time-bracket p-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition" data-idx="${idx}" title="Remove Bracket">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>
+          </button>
+        </div>
+      </div>
+    `).join('');
+
+    tiersListEl.querySelectorAll('.time-bracket-row').forEach(row => {
+      const idx = Number(row.dataset.bracketIdx);
+      const bObj = timeBrackets[idx];
+      if (!bObj) return;
+      const typeSelect = row.querySelector('.inp-bracket-type');
+      const fromInp = row.querySelector('.inp-tier-from');
+      const toInp = row.querySelector('.inp-tier-to');
+      const ptsInp = row.querySelector('.inp-tier-pts');
+      const egpInp = row.querySelector('.inp-tier-egp');
+      const delBtn = row.querySelector('.btn-remove-time-bracket');
+      const labelPts = row.querySelector('.label-pts');
+      const labelEgp = row.querySelector('.label-egp');
+
+      if (typeSelect) {
+        typeSelect.onchange = (e) => {
+          bObj.type = e.target.value;
+          if (labelPts) {
+            labelPts.textContent = bObj.type === 'after' ? 'Penalty Pts' : '+Bonus Pts';
+            labelPts.className = `text-[10px] ${bObj.type === 'after' ? 'text-rose-400' : 'text-emerald-400'} block mb-0.5 label-pts`;
+          }
+          if (labelEgp) {
+            labelEgp.textContent = bObj.type === 'after' ? 'Fine EGP' : '+Bonus EGP';
+            labelEgp.className = `text-[10px] ${bObj.type === 'after' ? 'text-rose-400' : 'text-emerald-400'} block mb-0.5 label-egp`;
+          }
+        };
+      }
+      if (fromInp) fromInp.oninput = (e) => { bObj.fromMins = Math.max(0, Number(e.target.value) || 0); };
+      if (toInp) toInp.oninput = (e) => { bObj.toMins = Math.max(0, Number(e.target.value) || 0); };
+      if (ptsInp) ptsInp.oninput = (e) => { bObj.points = Math.max(0, Number(e.target.value) || 0); };
+      if (egpInp) egpInp.oninput = (e) => { bObj.egp = Math.max(0, Number(e.target.value) || 0); };
+      if (delBtn) delBtn.onclick = () => {
+        timeBrackets.splice(idx, 1);
+        renderTimeBracketsUI();
+      };
+    });
+  };
+
+  if (addTierBtn) {
+    addTierBtn.onclick = () => {
+      const nextFrom = timeBrackets.length === 0 ? 60 : Math.max(10, (timeBrackets[timeBrackets.length - 1].toMins || 30) - 1);
+      const nextTo = Math.max(0, nextFrom - 20);
+      timeBrackets.push({
+        type: 'before',
+        fromMins: nextFrom,
+        toMins: nextTo,
+        points: 5,
+        egp: 10
+      });
+      renderTimeBracketsUI();
+    };
+  }
+  renderTimeBracketsUI();
 
   if (inpDate) inpDate.onchange = (e) => { selectedDateStr = e.target.value; };
   if (inpTime) inpTime.onchange = (e) => { selectedTimeStr = e.target.value; };
   if (inpOpens) inpOpens.onchange = (e) => { opensTimeStr = e.target.value; };
   if (inpCloses) inpCloses.onchange = (e) => { closesTimeStr = e.target.value; };
+  if (inpGrace) inpGrace.oninput = (e) => { gracePeriodMins = Math.max(0, Number(e.target.value) || 0); };
+  if (inpEarlyPts) inpEarlyPts.oninput = (e) => { earlyBonusPoints = Math.max(0, Number(e.target.value) || 0); };
+  if (inpEarlyEGP) inpEarlyEGP.oninput = (e) => { earlyBonusEGP = Math.max(0, Number(e.target.value) || 0); };
   bodyEl.appendChild(timeCard);
 
-  // 4. 3-Way Attendee Assignment Selector (All Members | By Badge | Specific Members)
   const assignBox = document.createElement('div');
   assignBox.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
   assignBox.innerHTML = `
@@ -13542,17 +16408,29 @@ function openAdminSessionModal(sessionId = null) {
         <span class="text-neutral-400">Select Individual Members:</span>
         <span id="att-custom-count-label" class="text-[#0A84FF] font-semibold">${assignedUids.size} selected</span>
       </div>
-      <div class="max-h-48 overflow-y-auto rounded-xl bg-black/20 border border-white/5 divide-y divide-white/5">
+      <div class="max-h-60 overflow-y-auto rounded-xl bg-black/20 border border-white/5 divide-y divide-white/5 p-1 space-y-1">
         ${(state.members || []).map(m => {
           const isSelected = assignedUids.has(m.uid);
           return `
-            <label class="flex items-center justify-between p-2 hover:bg-white/5 transition cursor-pointer text-xs">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="font-medium text-white truncate">${esc(m.displayName || m.name || m.email || m.uid)}</span>
-                ${m.role === 'admin' ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Admin</span>' : ''}
+            <div class="att-member-picker-row ${isSelected ? 'selected border-[#0A84FF]/40 bg-[#0A84FF]/5' : ''}" data-uid="${esc(m.uid)}">
+              <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-3">
+                ${renderAvatar(m, 'w-8 h-8 rounded-full border border-white/10 shrink-0')}
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-medium text-xs text-white truncate">${esc(m.displayName || m.name || m.email || m.uid)}</span>
+                    <span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium ${m.role === 'admin' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-white/10 text-neutral-400'}">${m.role === 'admin' ? 'Admin' : 'Member'}</span>
+                  </div>
+                  <p class="text-[10px] text-neutral-400 truncate">${esc(m.email || '')}</p>
+                </div>
               </div>
-              <input type="checkbox" class="att-member-cb rounded bg-white/10 border-white/20 text-[#0A84FF] focus:ring-0" data-uid="${esc(m.uid)}" ${isSelected ? 'checked' : ''} />
-            </label>
+              <div class="att-member-check shrink-0">
+                <div class="w-5 h-5 rounded-full border flex items-center justify-center transition-all ${isSelected ? 'bg-[#0A84FF] border-[#0A84FF]' : 'border-white/20 bg-white/5'}">
+                  <svg class="w-3.5 h-3.5 text-white transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0'}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </div>
+              </div>
+            </div>
           `;
         }).join('')}
       </div>
@@ -13576,11 +16454,33 @@ function openAdminSessionModal(sessionId = null) {
     };
   });
 
-  assignBox.querySelectorAll('.att-member-cb').forEach(cb => {
-    cb.onchange = (e) => {
-      const uid = cb.dataset.uid;
-      if (e.target.checked) assignedUids.add(uid);
-      else assignedUids.delete(uid);
+  assignBox.querySelectorAll('.att-member-picker-row').forEach(row => {
+    row.onclick = () => {
+      const uid = row.dataset.uid;
+      if (!uid) return;
+      const checkCircle = row.querySelector('.att-member-check > div');
+      const checkSvg = row.querySelector('.att-member-check svg');
+      if (assignedUids.has(uid)) {
+        assignedUids.delete(uid);
+        row.classList.remove('selected', 'border-[#0A84FF]/40', 'bg-[#0A84FF]/5');
+        if (checkCircle) {
+          checkCircle.className = 'w-5 h-5 rounded-full border flex items-center justify-center transition-all border-white/20 bg-white/5';
+        }
+        if (checkSvg) {
+          checkSvg.classList.remove('opacity-100');
+          checkSvg.classList.add('opacity-0');
+        }
+      } else {
+        assignedUids.add(uid);
+        row.classList.add('selected', 'border-[#0A84FF]/40', 'bg-[#0A84FF]/5');
+        if (checkCircle) {
+          checkCircle.className = 'w-5 h-5 rounded-full border flex items-center justify-center transition-all bg-[#0A84FF] border-[#0A84FF]';
+        }
+        if (checkSvg) {
+          checkSvg.classList.remove('opacity-0');
+          checkSvg.classList.add('opacity-100');
+        }
+      }
       if (customCountLabel) customCountLabel.textContent = `${assignedUids.size} selected`;
     };
   });
@@ -13605,7 +16505,6 @@ function openAdminSessionModal(sessionId = null) {
   }
   bodyEl.appendChild(assignBox);
 
-  // 5. Penalty Systems (Points & Fines) with attendance-grid-2 and zero-scroll-jump
   function renderPenaltySystemSection(sysKey, title, subtitle, unitLabel, sysObj) {
     const card = document.createElement('div');
     card.className = 'p-3 rounded-2xl bg-black/20 border border-white/10 space-y-3';
@@ -13635,7 +16534,6 @@ function openAdminSessionModal(sessionId = null) {
     }));
     card.appendChild(header);
 
-    // Mode: Fixed vs Stepped
     const modeWrap = document.createElement('div');
     modeWrap.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-semibold">Calculation Mode</label>`;
 
@@ -13656,7 +16554,6 @@ function openAdminSessionModal(sessionId = null) {
     steppedContainer.className = 'space-y-3';
     steppedContainer.style.display = (sysObj.mode === 'stepped') ? 'block' : 'none';
 
-    // Step Unit (Minutes vs Seconds)
     const unitRow = document.createElement('div');
     unitRow.innerHTML = `<label class="block text-[11px] text-neutral-300 mb-1 font-medium">Step Unit</label>`;
     unitRow.appendChild(renderSegmented({
@@ -13672,7 +16569,6 @@ function openAdminSessionModal(sessionId = null) {
     }));
     steppedContainer.appendChild(unitRow);
 
-    // Stepped Rate: Strict 2-column grid (.attendance-grid-2)
     const stepRow = document.createElement('div');
     stepRow.className = 'attendance-grid-2 pt-1';
     stepRow.innerHTML = `
@@ -13723,7 +16619,6 @@ function openAdminSessionModal(sessionId = null) {
     matrixBox.appendChild(fixedDiv);
     matrixBox.appendChild(steppedContainer);
 
-    // Min & Max Bounds (in attendance-grid-2)
     const boundsGrid = document.createElement('div');
     boundsGrid.className = 'attendance-grid-2 pt-1';
     boundsGrid.innerHTML = `
@@ -13742,7 +16637,6 @@ function openAdminSessionModal(sessionId = null) {
     if (inpMax) inpMax.oninput = (e) => { sysObj.max = Math.max(0, Number(e.target.value) || 0); };
     matrixBox.appendChild(boundsGrid);
 
-    // Unexcused Absence
     const absenceBox = document.createElement('div');
     absenceBox.className = 'pt-2 border-t border-white/5';
     absenceBox.innerHTML = `
@@ -13785,7 +16679,6 @@ function openAdminSessionModal(sessionId = null) {
         return false;
       }
 
-      // Calculate clean relative offsets in JS
       const [sHour, sMin] = selectedTimeStr.split(':').map(Number);
       const [oHour, oMin] = opensTimeStr.split(':').map(Number);
       const [cHour, cMin] = closesTimeStr.split(':').map(Number);
@@ -13794,8 +16687,24 @@ function openAdminSessionModal(sessionId = null) {
       const openTotalMins = (oHour || 0) * 60 + (oMin || 0);
       const closeTotalMins = (cHour || 0) * 60 + (cMin || 0);
 
-      const earlyCheckInMinutes = (startTotalMins - openTotalMins + 1440) % 1440;
-      const lateCutoffMinutes = (closeTotalMins - startTotalMins + 1440) % 1440;
+      const earlyCheckInMinutes = startTotalMins - openTotalMins;
+      const lateCutoffMinutes = closeTotalMins - startTotalMins;
+
+      // Strict validation on session save: window boundaries and bidirectional non-overlapping tiers
+      const valRes = validateSessionWindowAndBrackets({
+        openTotalMins,
+        startTotalMins,
+        closeTotalMins,
+        earlyCheckInMinutes,
+        lateCutoffMinutes,
+        gracePeriodMins,
+        timeBrackets
+      });
+
+      if (!valRes.valid) {
+        toast(valRes.error, 'error');
+        return false;
+      }
 
       const dateParts = selectedDateStr.split('-').map(Number);
       const startDateTimeMs = zonedDateToMs(
@@ -13825,8 +16734,27 @@ function openAdminSessionModal(sessionId = null) {
         earlyCheckInMinutes,
         lateCutoffMinutes,
         targetType,
+        assignmentType: targetType === 'custom' ? 'specific' : (targetType === 'badge' ? 'by_badge' : 'all'),
         badgeIds: targetType === 'badge' ? Array.from(selectedBadgeIds) : [],
         assignedUids: targetType === 'custom' ? Array.from(assignedUids) : [],
+        assignedMembers: targetType === 'custom' ? Array.from(assignedUids) : [],
+        earlyBonusPoints: Math.max(0, Number(earlyBonusPoints) || 0),
+        earlyBonusEGP: Math.max(0, Number(earlyBonusEGP) || 0),
+        gracePeriodMins: Math.max(0, Number(gracePeriodMins) || 0),
+        graceMinutes: Math.max(0, Number(gracePeriodMins) || 0),
+        timeBrackets: timeBrackets.map(t => ({
+          type: t.type === 'after' ? 'after' : 'before',
+          fromMins: Math.max(0, Number(t.fromMins) || 0),
+          toMins: Math.max(0, Number(t.toMins) || 0),
+          points: Math.max(0, Number(t.points) || 0),
+          egp: Math.max(0, Number(t.egp) || 0)
+        })),
+        earlyBonusTiers: timeBrackets.filter(t => t.type !== 'after').map(t => ({
+          fromMinsBefore: Math.max(0, Number(t.fromMins) || 0),
+          toMinsBefore: Math.max(0, Number(t.toMins) || 0),
+          bonusPoints: Math.max(0, Number(t.points) || 0),
+          bonusEgp: Math.max(0, Number(t.egp) || 0)
+        })),
         pointsPenalty: {
           enabled: Boolean(pointsPenalty.enabled),
           mode: pointsPenalty.mode,
@@ -13851,7 +16779,6 @@ function openAdminSessionModal(sessionId = null) {
         },
         active: Boolean(active),
 
-        // Legacy compatibility fields
         penaltyPointsEnabled: Boolean(pointsPenalty.enabled),
         penaltyFinesEnabled: Boolean(finePenalty.enabled),
         penaltyUnit: pointsPenalty.stepUnit || 'minutes',
@@ -13870,14 +16797,16 @@ function openAdminSessionModal(sessionId = null) {
             updatedAt: serverTimestamp()
           });
           toast('Attendance session updated', 'success');
+          dispatchBackendSessionMutation('SESSION_UPDATED', editingSessionId);
         } else {
-          await addDoc(collection(db, 'attendance_sessions'), {
+          const newDocRef = await addDoc(collection(db, 'attendance_sessions'), {
             ...payload,
             archived: false,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
           toast('Attendance session created', 'success');
+          dispatchBackendSessionMutation('SESSION_UPDATED', newDocRef.id);
         }
         renderAdminSessions();
         renderAttendanceView();
@@ -13892,12 +16821,10 @@ function openAdminSessionModal(sessionId = null) {
   });
 }
 
-// =========================================================================
-// SECTION 3: ADMIN "BADGES" MANAGEMENT DASHBOARD
-// =========================================================================
-
-export 
+export
 async function checkAndSeedBadgesOnce() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   if (!state.user || (state.user.role !== 'admin' && !state.user.isAdmin)) return;
   try {
     const genDoc = await getDoc(doc(db, 'settings', 'general'));
@@ -13923,6 +16850,8 @@ async function checkAndSeedBadgesOnce() {
 }
 
 function renderAdminBadges() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-badges-list');
   if (!container) return;
 
@@ -13966,10 +16895,11 @@ function renderAdminBadges() {
             </div>
           </div>
 
-          <div class="flex items-center gap-3 shrink-0">
+          <div class="flex items-center gap-2 shrink-0">
             <span class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white/5 border border-white/10 text-neutral-300 whitespace-nowrap" style="font-variant-numeric: tabular-nums;">
               ${memberCount} member${memberCount === 1 ? '' : 's'}
             </span>
+            <span class="drag-reorder-handle" data-no-row-tap="true" title="Drag to reorder">≡</span>
             <svg class="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
         </div>
@@ -13986,6 +16916,47 @@ function renderAdminBadges() {
         if (badge) openBadgeModal(badge);
       }
     });
+
+    const badgeId = card.dataset.badgeId;
+    attachUniversalSwipeActions(card, {
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteDoc(doc(db, 'badges', badgeId));
+          state.badges = (state.badges || []).filter(b => b.id !== badgeId);
+          badgesMap.delete(badgeId);
+          renderAdminBadges();
+          renderLeaderboard();
+          toast('Badge deleted', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete badge', 'error');
+        }
+      },
+      entityName: 'Badge'
+    });
+  });
+
+  attachDragReorderList(container, '.bulk-select-card', 'data-badge-id', async (orderedIds) => {
+    try {
+      const batch = writeBatch(db);
+      orderedIds.forEach((id, idx) => {
+        const b = (state.badges || []).find(x => x.id === id);
+        if (b) b.order = idx;
+        if (badgesMap.has(id)) badgesMap.get(id).order = idx;
+        batch.update(doc(db, 'badges', id), { order: idx, updatedAt: serverTimestamp() });
+      });
+      if (Array.isArray(state.badges)) {
+        state.badges.sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
+      }
+      await batch.commit();
+      renderLeaderboard();
+      renderAdminMembers();
+      toast('Badge display order updated', 'success');
+    } catch (err) {
+      console.error('Reorder badges error:', err);
+      toast(err.message || 'Failed to reorder badges', 'error');
+    }
   });
 }
 
@@ -14108,6 +17079,7 @@ function openBadgeModal(badge = null) {
         description: description.trim(),
         color: selectedColor,
         icon: selectedIcon,
+        order: badge && typeof badge.order === 'number' ? badge.order : (state.badges || []).length,
         updatedAt: serverTimestamp()
       };
 
@@ -14133,7 +17105,6 @@ function openBadgeModal(badge = null) {
     }
   });
 }
-
 
 function formatMinutesDuration(totalMinutes) {
   const mins = Math.max(0, Math.round(Number(totalMinutes) || 0));
@@ -14165,16 +17136,155 @@ function matchesOccurrence(log, targetOccKey, targetOccStartMs, session) {
   return false;
 }
 
-function openAdminLogEditModal(log, session) {
-  if (!log) return;
-  const prof = getUserProfile(log.uid, log.userName, log.userAvatar);
-  const checkedInMs = parseDateTimeToMs(log.checkedInAt || log.occurrenceStart) || Date.now();
-  const checkedInTimeStr = formatDateTime(checkedInMs);
+export function formatOccurrenceLabel(dateKey, startMs) {
+  if (startMs && startMs > 0) {
+    return formatDateTime(startMs, { hour: undefined, minute: undefined });
+  }
+  if (dateKey && dateKey !== 'once' && /^\d{4}-\d{2}-\d{2}/.test(dateKey)) {
+    const [y, m, d] = dateKey.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    return formatDateTime(dt.getTime(), { hour: undefined, minute: undefined });
+  }
+  if (typeof dateKey === 'string' && dateKey.startsWith('occ_')) {
+    const parsed = parseInt(dateKey.replace('occ_', ''), 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      return formatDateTime(parsed, { hour: undefined, minute: undefined });
+    }
+  }
+  return dateKey || 'Session Occurrence';
+}
 
-  let currentStatus = log.status || 'on_time';
-  let currentPenalty = typeof log.penalty === 'number' ? log.penalty : 0;
-  let currentFineEGP = typeof log.fineEGP === 'number' ? log.fineEGP : 0;
-  let currentNote = log.adminNote || log.note || '';
+export async function deleteAttendanceRecordAndReverseLedger(logId, logData = null) {
+  if (!logId) return false;
+  const targetLog = logData ||
+    (state.attendanceLogs && state.attendanceLogs.find(l => l.id === logId)) ||
+    (state.attendanceRecords && state.attendanceRecords.find(l => l.id === logId)) ||
+    (state.myAttendanceLogs && state.myAttendanceLogs.find(l => l.id === logId)) || {};
+
+  const targetUid = targetLog.userId || targetLog.uid;
+  const ptsDelta = targetLog.pointsDelta !== undefined
+    ? Number(targetLog.pointsDelta)
+    : (targetLog.status === 'early' ? (Number(targetLog.earlyBonusPoints) || 0) : -(Number(targetLog.penalty) || 0));
+  const fineDelta = targetLog.egpDelta !== undefined
+    ? Number(targetLog.egpDelta)
+    : (targetLog.status === 'early' ? (Number(targetLog.earlyBonusEGP) || 0) : -(Number(targetLog.fineEGP) || 0));
+
+  try {
+    await callGasBackend({
+      action: 'DELETE_LOG',
+      logId,
+      uid: targetUid,
+      pointsDelta: ptsDelta,
+      egpDelta: fineDelta
+    });
+  } catch (gasErr) {
+    console.warn('Backend callGasBackend DELETE_LOG failed (continuing Firestore deletion):', gasErr);
+  }
+
+  await Promise.allSettled([
+    deleteDoc(doc(db, 'attendance_logs', logId)),
+    deleteDoc(doc(db, 'attendance_records', logId))
+  ]);
+
+  if (targetUid) {
+    try {
+      const uDocSnap = await getDoc(doc(db, 'users', targetUid));
+      if (uDocSnap.exists()) {
+        const uData = uDocSnap.data();
+        const curPts = Number(uData.points) || 0;
+        const curPen = Number(uData.penalties) || 0;
+        const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
+
+        const bonusPts = ptsDelta > 0 ? ptsDelta : 0;
+        const penaltyPts = ptsDelta < 0 ? Math.abs(ptsDelta) : 0;
+        const bonusEGP = fineDelta > 0 ? fineDelta : 0;
+        const penaltyEGP = fineDelta < 0 ? Math.abs(fineDelta) : 0;
+
+        const revPts = Math.max(0, curPts - bonusPts);
+        const revPen = Math.max(0, curPen - penaltyPts);
+        const revFines = Math.max(0, curFines + bonusEGP - penaltyEGP);
+        const revNet = Math.max(0, revPts - revPen);
+
+        await updateDoc(doc(db, 'users', targetUid), {
+          points: revPts,
+          penalties: revPen,
+          finesDue: revFines,
+          fines: revFines,
+          netPts: revNet,
+          updatedAt: serverTimestamp()
+        });
+      }
+    } catch (fsErr) {
+      console.warn('Direct user ledger reverse fallback ignored:', fsErr);
+    }
+  }
+
+  // Local state cleanup
+  state.attendanceLogs = (state.attendanceLogs || []).filter(l => l.id !== logId);
+  state.myAttendanceLogs = (state.myAttendanceLogs || []).filter(l => l.id !== logId);
+  if (state.attendanceRecords) {
+    state.attendanceRecords = state.attendanceRecords.filter(l => l.id !== logId);
+  }
+
+  if (targetUid) {
+    const mem = (state.members || []).find(m => m.uid === targetUid);
+    if (mem) {
+      const bonusPts = ptsDelta > 0 ? ptsDelta : 0;
+      const penaltyPts = ptsDelta < 0 ? Math.abs(ptsDelta) : 0;
+      const bonusEGP = fineDelta > 0 ? fineDelta : 0;
+      const penaltyEGP = fineDelta < 0 ? Math.abs(fineDelta) : 0;
+      mem.points = Math.max(0, (mem.points || 0) - bonusPts);
+      mem.penalties = Math.max(0, (mem.penalties || 0) - penaltyPts);
+      mem.finesDue = Math.max(0, (mem.finesDue || 0) + bonusEGP - penaltyEGP);
+      mem.fines = mem.finesDue;
+      mem.netPts = Math.max(0, (mem.points || 0) - (mem.penalties || 0));
+    }
+    if (state.user && state.user.uid === targetUid) {
+      const bonusPts = ptsDelta > 0 ? ptsDelta : 0;
+      const penaltyPts = ptsDelta < 0 ? Math.abs(ptsDelta) : 0;
+      const bonusEGP = fineDelta > 0 ? fineDelta : 0;
+      const penaltyEGP = fineDelta < 0 ? Math.abs(fineDelta) : 0;
+      state.user.points = Math.max(0, (state.user.points || 0) - bonusPts);
+      state.user.penalties = Math.max(0, (state.user.penalties || 0) - penaltyPts);
+      state.user.finesDue = Math.max(0, (state.user.finesDue || 0) + bonusEGP - penaltyEGP);
+      state.user.fines = state.user.finesDue;
+      state.user.netPts = Math.max(0, (state.user.points || 0) - (state.user.penalties || 0));
+      if (typeof updateProfileUI === 'function') updateProfileUI();
+    }
+  }
+
+  return true;
+}
+
+export function openAdminLogEditModal(logOrMember, session = null, occKey = null, occStartMs = null) {
+  if (!logOrMember) return;
+  const isExistingLog = Boolean(logOrMember.id && !logOrMember.isUnprocessed);
+  const logId = isExistingLog ? logOrMember.id : null;
+  const memberUid = logOrMember.uid || logOrMember.userId || logOrMember.member?.uid || logOrMember.member?.id;
+  const member = (typeof usersMap !== 'undefined' ? usersMap.get(memberUid) : null) ||
+                 (state.members || []).find(m => m.uid === memberUid) ||
+                 logOrMember.member || {};
+  const prof = getUserProfile(memberUid, logOrMember.userName || logOrMember.displayName || member.displayName || member.name, logOrMember.userAvatar || member.photoURL || member.avatarUrl);
+
+  const checkedInMs = parseDateTimeToMs(
+    logOrMember.checkedInAt || logOrMember.timestamp || logOrMember.checkInTimestamp || occStartMs
+  ) || Date.now();
+
+  const initialDateStr = formatZonedDateKey(checkedInMs, APP_TIMEZONE);
+  const parts = getZonedParts(checkedInMs, APP_TIMEZONE);
+  const initialTimeStr = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
+
+  const defaultAbsencePenalty = (session?.pointsPenalty && session.pointsPenalty.absence) || session?.absencePenalty || session?.maxPenalty || 5;
+  const defaultAbsenceFine = (session?.finePenalty && session.finePenalty.absence) || session?.absenceFineEGP || 0;
+
+  let currentStatus = logOrMember.status || (isExistingLog ? 'on_time' : 'absent');
+  let currentPenalty = typeof logOrMember.penalty === 'number' ? logOrMember.penalty : (currentStatus === 'absent' ? defaultAbsencePenalty : 0);
+  let currentFineEGP = typeof logOrMember.fineEGP === 'number' ? logOrMember.fineEGP : (currentStatus === 'absent' ? defaultAbsenceFine : 0);
+  let currentPoints = typeof logOrMember.points === 'number' ? logOrMember.points : (typeof logOrMember.pointsDelta === 'number' && logOrMember.pointsDelta > 0 ? logOrMember.pointsDelta : (typeof logOrMember.earlyBonusPoints === 'number' ? logOrMember.earlyBonusPoints : 0));
+  let currentNote = logOrMember.adminNote || logOrMember.note || '';
+
+  const sessTitle = session?.title || logOrMember.sessionTitle || 'Session';
+  const occLabel = occKey ? formatOccurrenceLabel(occKey, occStartMs) : formatOccurrenceLabel(initialDateStr, checkedInMs);
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
@@ -14183,7 +17293,7 @@ function openAdminLogEditModal(log, session) {
       ${renderAvatar(prof, 'w-10 h-10')}
       <div class="min-w-0 flex-1">
         <h4 class="font-bold text-white text-sm truncate">${esc(prof.displayName)}</h4>
-        <p class="text-xs text-neutral-400 mt-0.5">${esc(session?.title || log.sessionTitle || 'Session')} • ${checkedInTimeStr}</p>
+        <p class="text-xs text-neutral-400 mt-0.5">${esc(sessTitle)} • ${esc(occLabel)}</p>
       </div>
     </div>
 
@@ -14191,6 +17301,7 @@ function openAdminLogEditModal(log, session) {
       <label class="block text-xs font-semibold text-neutral-200">Attendance Status</label>
       <select id="adm-log-status" class="w-full ios-input text-xs">
         <option value="on_time" ${currentStatus === 'on_time' ? 'selected' : ''}>On Time</option>
+        <option value="early" ${currentStatus === 'early' ? 'selected' : ''}>Early</option>
         <option value="late" ${currentStatus === 'late' ? 'selected' : ''}>Late</option>
         <option value="excused" ${currentStatus === 'excused' ? 'selected' : ''}>Excused (Waiver)</option>
         <option value="absent" ${currentStatus === 'absent' ? 'selected' : ''}>Absent</option>
@@ -14199,7 +17310,22 @@ function openAdminLogEditModal(log, session) {
 
     <div class="grid grid-cols-2 gap-3">
       <div class="space-y-1">
-        <label class="block text-xs font-semibold text-neutral-200">Penalty Points</label>
+        <label class="block text-xs font-semibold text-neutral-200">Date of Arrival</label>
+        <input id="adm-log-date" type="date" class="w-full ios-input text-xs" value="${initialDateStr}" />
+      </div>
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Time of Arrival</label>
+        <input id="adm-log-time" type="time" class="w-full ios-input text-xs" value="${initialTimeStr}" />
+      </div>
+    </div>
+
+    <div class="grid grid-cols-3 gap-2.5">
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Points Awarded</label>
+        <input id="adm-log-points" type="number" min="0" class="w-full ios-input text-xs font-mono" value="${currentPoints}" />
+      </div>
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Penalty Pts</label>
         <input id="adm-log-penalty" type="number" min="0" class="w-full ios-input text-xs font-mono" value="${currentPenalty}" />
       </div>
       <div class="space-y-1">
@@ -14213,114 +17339,526 @@ function openAdminLogEditModal(log, session) {
       <input id="adm-log-note" type="text" class="w-full ios-input text-xs" placeholder="e.g. Approved traffic excuse or manual adjustment" value="${esc(currentNote)}" />
     </div>
 
-    <div class="pt-2">
-      <button type="button" id="adm-log-btn-delete" class="w-full py-2 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold flex items-center justify-center gap-1.5 transition">
-        <svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
-          <polyline points="3 6 5 6 21 6"></polyline>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-        </svg>
-        <span>Delete Attendance Log</span>
-      </button>
-    </div>
+    ${isExistingLog ? `
+      <div class="pt-2">
+        <button type="button" id="adm-log-btn-delete" class="w-full py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          <span id="adm-log-delete-label">Delete Attendance Record</span>
+        </button>
+      </div>
+    ` : ''}
   `;
 
   const statusSel = bodyEl.querySelector('#adm-log-status');
+  const dateInp = bodyEl.querySelector('#adm-log-date');
+  const timeInp = bodyEl.querySelector('#adm-log-time');
+  const pointsInp = bodyEl.querySelector('#adm-log-points');
   const penaltyInp = bodyEl.querySelector('#adm-log-penalty');
   const fineInp = bodyEl.querySelector('#adm-log-fine');
   const noteInp = bodyEl.querySelector('#adm-log-note');
   const deleteBtn = bodyEl.querySelector('#adm-log-btn-delete');
 
-  deleteBtn.onclick = async () => {
-    const confirmed = await confirmSheet({
-      title: 'Delete Attendance Log?',
-      message: `Are you sure you want to delete this attendance log for ${prof.displayName}? This action cannot be undone.`,
-      confirmLabel: 'Delete Log',
-      destructive: true
-    });
-    if (!confirmed) return;
+  if (statusSel) {
+    statusSel.onchange = () => {
+      const st = statusSel.value;
+      if (st === 'on_time') {
+        pointsInp.value = session?.pointsAwarded || 1;
+        penaltyInp.value = 0;
+        fineInp.value = 0;
+      } else if (st === 'early') {
+        pointsInp.value = (session?.earlyCheckInPoints || 2);
+        penaltyInp.value = 0;
+        fineInp.value = 0;
+      } else if (st === 'late') {
+        pointsInp.value = 0;
+        penaltyInp.value = session?.lateCutoffPenalty || 2;
+        fineInp.value = session?.lateCutoffFineEGP || 0;
+      } else if (st === 'excused') {
+        pointsInp.value = 0;
+        penaltyInp.value = 0;
+        fineInp.value = 0;
+      } else if (st === 'absent') {
+        pointsInp.value = 0;
+        penaltyInp.value = defaultAbsencePenalty;
+        fineInp.value = defaultAbsenceFine;
+      }
+    };
+  }
 
-    try {
-      const batch = writeBatch(db);
-      batch.delete(doc(db, 'attendance_logs', log.id));
-      logAdminAction(batch, {
-        action: 'attendance_log_deleted',
-        targetUid: log.uid,
-        details: { logId: log.id, sessionId: session?.id || log.sessionId }
+  if (deleteBtn && isExistingLog) {
+    deleteBtn.onclick = async () => {
+      const confirmed = await openDeleteConfirmModal({
+        title: 'Delete Attendance Record?',
+        message: 'This action will delete the attendance record and reverse all awarded points, penalties, and fines from the member ledger as if it was never recorded.',
+        confirmText: 'Delete'
       });
-      await batch.commit();
-      toast('Attendance log deleted', 'success');
-      const cancelBtn = document.getElementById('shared-modal-cancel');
-      if (cancelBtn) cancelBtn.click();
-    } catch (err) {
-      console.error('Delete log error:', err);
-      toast(err.message || 'Failed to delete log', 'error');
-    }
-  };
+      if (!confirmed) return;
+
+      // SHOW LOADING STATE WHILE DELETING
+      deleteBtn.disabled = true;
+      deleteBtn.innerHTML = `
+        <div class="w-4 h-4 border-2 border-white/20 border-t-rose-400 rounded-full animate-spin shrink-0"></div>
+        <span>Deleting & Reversing Ledger...</span>
+      `;
+
+      try {
+        await deleteAttendanceRecordAndReverseLedger(logId, logOrMember);
+        toast('Attendance record deleted and ledger reversed', 'success');
+        closeModal();
+        if (typeof renderRecentLogs === 'function') renderRecentLogs();
+        if (typeof renderAdminAttendanceLogs === 'function') renderAdminAttendanceLogs();
+        renderAdminSessions();
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          window.refreshCurrentRosterView();
+        }
+      } catch (err) {
+        console.error('Delete attendance record error:', err);
+        toast(err.message || 'Failed to delete record', 'error');
+        deleteBtn.disabled = false;
+        deleteBtn.innerHTML = `
+          <svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          <span>Delete Attendance Record</span>
+        `;
+      }
+    };
+  }
 
   openModal({
-    title: 'Edit Attendance Log',
+    title: isExistingLog ? 'Edit Attendance Record' : 'Record Member Attendance',
     body: bodyEl,
     saveLabel: 'Save Changes',
     onSave: async () => {
       const newStatus = statusSel.value;
+      const newDateStr = dateInp.value || initialDateStr;
+      const newTimeStr = timeInp.value || initialTimeStr;
+      const newPoints = Math.max(0, parseInt(pointsInp.value, 10) || 0);
       const newPenalty = Math.max(0, parseInt(penaltyInp.value, 10) || 0);
       const newFine = Math.max(0, parseInt(fineInp.value, 10) || 0);
       const newNote = (noteInp.value || '').trim();
 
+      const [y, m, d] = newDateStr.split('-').map(Number);
+      const [hh, mm] = newTimeStr.split(':').map(Number);
+      const arrivalMs = zonedDateToMs(y, m, d, hh || 0, mm || 0, 0, APP_TIMEZONE);
+      const arrivalIso = new Date(arrivalMs).toISOString();
+
+      const targetOccKey = occKey || formatZonedDateKey(arrivalMs, APP_TIMEZONE);
+      const targetLogId = logId || `${session?.id || 'session'}_${targetOccKey}_${memberUid}`;
+
+      const sessId = session?.id || logOrMember.sessionId || '';
+      const sTitle = session?.title || logOrMember.sessionTitle || 'Session';
+
       try {
-        const batch = writeBatch(db);
-        const logRef = doc(db, 'attendance_logs', log.id);
-        batch.update(logRef, {
+        const gasRes = await callGasBackend({
+          action: 'UPDATE_LOG',
+          isAdminOverride: true,
+          logId: targetLogId,
+          uid: memberUid,
           status: newStatus,
+          points: newPoints,
           penalty: newPenalty,
           fineEGP: newFine,
           adminNote: newNote,
-          updatedAt: serverTimestamp()
+          checkedInAt: arrivalIso,
+          timestamp: arrivalIso,
+          sessionId: sessId,
+          sessionTitle: sTitle,
+          occurrenceKey: targetOccKey,
+          userName: prof.displayName,
+          userAvatar: prof.photoURL
         });
 
-        logAdminAction(batch, {
-          action: 'attendance_log_updated',
-          targetUid: log.uid,
-          details: {
-            logId: log.id,
-            sessionId: session?.id || log.sessionId,
-            oldStatus: log.status,
-            newStatus,
-            oldPenalty: log.penalty,
-            newPenalty,
-            oldFine: log.fineEGP,
-            newFine
+        if (gasRes && gasRes.ok === false) {
+          throw new Error(gasRes.error || 'Failed to update attendance record');
+        }
+
+        // Only run client-side Firestore fallback when GAS is offline/opaque/skipped
+        if (gasRes?.sent_opaque || gasRes?.status === 'skipped' || gasRes?.status === 'sent_nonblocking') {
+          try {
+            const batch = writeBatch(db);
+            const logPayload = {
+              id: targetLogId,
+              sessionId: sessId,
+              sessionTitle: sTitle,
+              occurrenceKey: targetOccKey,
+              uid: memberUid,
+              userId: memberUid,
+              userName: prof.displayName,
+              userAvatar: prof.photoURL,
+              status: newStatus,
+              points: newPoints,
+              pointsDelta: newPoints,
+              penalty: newPenalty,
+              fineEGP: newFine,
+              adminNote: newNote,
+              checkedInAt: arrivalIso,
+              timestamp: arrivalIso,
+              updatedAt: serverTimestamp()
+            };
+
+            batch.set(doc(db, 'attendance_logs', targetLogId), logPayload, { merge: true });
+            batch.set(doc(db, 'attendance_records', targetLogId), logPayload, { merge: true });
+
+            const penDiff = newPenalty - currentPenalty;
+            const fineDiff = newFine - currentFineEGP;
+            const ptsDiff = newPoints - currentPoints;
+
+            if (memberUid && (penDiff !== 0 || fineDiff !== 0 || ptsDiff !== 0)) {
+              const uData = usersMap.get(memberUid);
+              if (uData) {
+                const curPts = Number(uData.points) || 0;
+                const curPen = Number(uData.penalties) || 0;
+                const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
+
+                const nextPts = Math.max(0, curPts + ptsDiff);
+                const nextPen = Math.max(0, curPen + penDiff);
+                const nextFines = Math.max(0, curFines + fineDiff);
+                const nextNet = Math.max(0, nextPts - nextPen);
+
+                batch.update(doc(db, 'users', memberUid), {
+                  points: nextPts,
+                  totalPoints: nextPts,
+                  penalties: nextPen,
+                  penaltyPoints: nextPen,
+                  totalPenalties: nextPen,
+                  finesDue: nextFines,
+                  fines: nextFines,
+                  netPts: nextNet,
+                  updatedAt: serverTimestamp()
+                });
+              }
+            }
+
+            await batch.commit();
+          } catch (fsErr) {
+            console.warn('Firestore direct write fallback ignored:', fsErr);
           }
-        });
+        }
 
-        await batch.commit();
-        toast('Attendance log updated', 'success');
+        toast('Attendance recorded and ledger synchronized', 'success');
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          window.refreshCurrentRosterView();
+        }
         return true;
       } catch (err) {
-        console.error('Save log error:', err);
-        toast(err.message || 'Failed to update log', 'error');
+        console.error('Save attendance error:', err);
+        toast(err.message || 'Failed to save attendance', 'error');
         return false;
       }
     }
   });
 }
 
+export function openManualAttendanceModal(defaultSessionId = null, defaultOccKey = null) {
+  const members = [...(state.members || [])].sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  const sessions = [...(state.attendanceSessions || [])].filter(s => !s.archived);
 
-async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart) {
-  const rawSession = (typeof sessionOrId === 'string'
-    ? state.attendanceSessions.find(s => s.id === sessionOrId)
-    : sessionOrId) || sessionOrId;
+  if (members.length === 0) {
+    toast('No members found to record attendance for', 'warning');
+    return;
+  }
+  if (sessions.length === 0) {
+    toast('No active sessions found', 'warning');
+    return;
+  }
+
+  const nowMs = typeof serverNow === 'function' ? serverNow() : Date.now();
+  const defaultDateStr = defaultOccKey && /^\d{4}-\d{2}-\d{2}$/.test(defaultOccKey)
+    ? defaultOccKey
+    : formatZonedDateKey(nowMs, APP_TIMEZONE);
+  const parts = getZonedParts(nowMs, APP_TIMEZONE);
+  const defaultTimeStr = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4';
+  bodyEl.innerHTML = `
+    <div class="space-y-1">
+      <label class="block text-xs font-semibold text-neutral-200">Select Member</label>
+      <select id="man-att-member" class="w-full ios-input text-xs">
+        <option value="" disabled selected>-- Choose Member --</option>
+        ${members.map(m => {
+          const prof = getUserProfile(m.uid, m.displayName || m.name, m.photoURL || m.avatarUrl);
+          return `<option value="${esc(m.uid)}">${esc(prof.displayName)}</option>`;
+        }).join('')}
+      </select>
+    </div>
+
+    <div class="space-y-1">
+      <label class="block text-xs font-semibold text-neutral-200">Select Session</label>
+      <select id="man-att-session" class="w-full ios-input text-xs">
+        <option value="" disabled ${!defaultSessionId ? 'selected' : ''}>-- Choose Session --</option>
+        ${sessions.map(s => {
+          const isSel = s.id === defaultSessionId;
+          return `<option value="${esc(s.id)}" ${isSel ? 'selected' : ''}>${esc(s.title || 'Session')}</option>`;
+        }).join('')}
+      </select>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Attendance Date</label>
+        <input id="man-att-date" type="date" class="w-full ios-input text-xs" value="${defaultDateStr}" />
+      </div>
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Arrival Time</label>
+        <input id="man-att-time" type="time" class="w-full ios-input text-xs" value="${defaultTimeStr}" />
+      </div>
+    </div>
+
+    <div class="space-y-1">
+      <label class="block text-xs font-semibold text-neutral-200">Status</label>
+      <select id="man-att-status" class="w-full ios-input text-xs">
+        <option value="on_time" selected>On Time</option>
+        <option value="early">Early</option>
+        <option value="late">Late</option>
+        <option value="excused">Excused (Waiver)</option>
+        <option value="absent">Absent</option>
+      </select>
+    </div>
+
+    <div class="grid grid-cols-3 gap-2.5">
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Points</label>
+        <input id="man-att-points" type="number" min="0" class="w-full ios-input text-xs font-mono" value="1" />
+      </div>
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Penalty Pts</label>
+        <input id="man-att-penalty" type="number" min="0" class="w-full ios-input text-xs font-mono" value="0" />
+      </div>
+      <div class="space-y-1">
+        <label class="block text-xs font-semibold text-neutral-200">Fine (EGP)</label>
+        <input id="man-att-fine" type="number" min="0" class="w-full ios-input text-xs font-mono" value="0" />
+      </div>
+    </div>
+
+    <div class="space-y-1">
+      <label class="block text-xs font-semibold text-neutral-200">Admin Note / Reason</label>
+      <input id="man-att-note" type="text" class="w-full ios-input text-xs" placeholder="e.g. Manual entry by Admin" value="Manual attendance" />
+    </div>
+  `;
+
+  const memberSel = bodyEl.querySelector('#man-att-member');
+  const sessionSel = bodyEl.querySelector('#man-att-session');
+  const dateInp = bodyEl.querySelector('#man-att-date');
+  const timeInp = bodyEl.querySelector('#man-att-time');
+  const statusSel = bodyEl.querySelector('#man-att-status');
+  const pointsInp = bodyEl.querySelector('#man-att-points');
+  const penaltyInp = bodyEl.querySelector('#man-att-penalty');
+  const fineInp = bodyEl.querySelector('#man-att-fine');
+  const noteInp = bodyEl.querySelector('#man-att-note');
+
+  const updateDefaults = () => {
+    const sId = sessionSel.value;
+    const sess = sessions.find(s => s.id === sId);
+    const st = statusSel.value;
+    if (st === 'on_time') {
+      pointsInp.value = sess?.pointsAwarded || 1;
+      penaltyInp.value = 0;
+      fineInp.value = 0;
+    } else if (st === 'early') {
+      pointsInp.value = sess?.earlyCheckInPoints || 2;
+      penaltyInp.value = 0;
+      fineInp.value = 0;
+    } else if (st === 'late') {
+      pointsInp.value = 0;
+      penaltyInp.value = sess?.lateCutoffPenalty || 2;
+      fineInp.value = sess?.lateCutoffFineEGP || 0;
+    } else if (st === 'excused') {
+      pointsInp.value = 0;
+      penaltyInp.value = 0;
+      fineInp.value = 0;
+    } else if (st === 'absent') {
+      pointsInp.value = 0;
+      penaltyInp.value = (sess?.pointsPenalty && sess.pointsPenalty.absence) || sess?.absencePenalty || sess?.maxPenalty || 5;
+      fineInp.value = (sess?.finePenalty && sess.finePenalty.absence) || sess?.absenceFineEGP || 0;
+    }
+  };
+
+  sessionSel.onchange = updateDefaults;
+  statusSel.onchange = updateDefaults;
+  if (defaultSessionId) updateDefaults();
+
+  openModal({
+    title: 'Add Manual Attendance',
+    body: bodyEl,
+    saveLabel: 'Save Attendance',
+    onSave: async () => {
+      const memberUid = memberSel.value;
+      const sId = sessionSel.value;
+      if (!memberUid) {
+        toast('Please select a member', 'error');
+        return false;
+      }
+      if (!sId) {
+        toast('Please select a session', 'error');
+        return false;
+      }
+
+      const sess = sessions.find(s => s.id === sId) || { id: sId, title: 'Session' };
+      const mem = members.find(m => m.uid === memberUid);
+      const prof = getUserProfile(memberUid, mem?.displayName || mem?.name, mem?.photoURL || mem?.avatarUrl);
+
+      const dStr = dateInp.value || defaultDateStr;
+      const tStr = timeInp.value || defaultTimeStr;
+      const [y, m, d] = dStr.split('-').map(Number);
+      const [hh, mm] = tStr.split(':').map(Number);
+      const arrivalMs = zonedDateToMs(y, m, d, hh || 0, mm || 0, 0, APP_TIMEZONE);
+      const arrivalIso = new Date(arrivalMs).toISOString();
+
+      const st = statusSel.value;
+      const pts = Math.max(0, parseInt(pointsInp.value, 10) || 0);
+      const pen = Math.max(0, parseInt(penaltyInp.value, 10) || 0);
+      const fine = Math.max(0, parseInt(fineInp.value, 10) || 0);
+      const note = (noteInp.value || '').trim();
+
+      const targetOccKey = defaultOccKey || formatZonedDateKey(arrivalMs, APP_TIMEZONE);
+      const logId = `manual_${sId}_${targetOccKey}_${memberUid}_${Date.now()}`;
+
+      try {
+        const gasRes = await callGasBackend({
+          action: 'UPDATE_LOG',
+          isAdminOverride: true,
+          logId,
+          uid: memberUid,
+          status: st,
+          points: pts,
+          penalty: pen,
+          fineEGP: fine,
+          adminNote: note,
+          checkedInAt: arrivalIso,
+          timestamp: arrivalIso,
+          sessionId: sId,
+          sessionTitle: sess.title,
+          occurrenceKey: targetOccKey,
+          userName: prof.displayName,
+          userAvatar: prof.photoURL
+        });
+
+        if (gasRes && gasRes.ok === false) {
+          throw new Error(gasRes.error || 'Failed to record manual attendance');
+        }
+
+        // Only run client-side Firestore fallback when GAS is offline/opaque/skipped
+        if (gasRes?.sent_opaque || gasRes?.status === 'skipped' || gasRes?.status === 'sent_nonblocking') {
+          try {
+            const batch = writeBatch(db);
+            const logData = {
+              id: logId,
+              sessionId: sId,
+              sessionTitle: sess.title,
+              occurrenceKey: targetOccKey,
+              uid: memberUid,
+              userId: memberUid,
+              userName: prof.displayName,
+              userAvatar: prof.photoURL,
+              status: st,
+              points: pts,
+              pointsDelta: pts,
+              penalty: pen,
+              fineEGP: fine,
+              adminNote: note,
+              checkedInAt: arrivalIso,
+              timestamp: arrivalIso,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            };
+            batch.set(doc(db, 'attendance_logs', logId), logData);
+            batch.set(doc(db, 'attendance_records', logId), logData);
+
+            const uData = usersMap.get(memberUid);
+            if (uData) {
+              const curPts = Number(uData.points) || 0;
+              const curPen = Number(uData.penalties) || 0;
+              const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
+
+              const nextPts = Math.max(0, curPts + pts);
+              const nextPen = Math.max(0, curPen + pen);
+              const nextFines = Math.max(0, curFines + fine);
+              const nextNet = Math.max(0, nextPts - nextPen);
+
+              batch.update(doc(db, 'users', memberUid), {
+                points: nextPts,
+                totalPoints: nextPts,
+                penalties: nextPen,
+                penaltyPoints: nextPen,
+                totalPenalties: nextPen,
+                finesDue: nextFines,
+                fines: nextFines,
+                netPts: nextNet,
+                updatedAt: serverTimestamp()
+              });
+            }
+            await batch.commit();
+          } catch (fsErr) {
+            console.warn('Manual attendance Firestore direct write fallback ignored:', fsErr);
+          }
+        }
+
+        toast('Manual attendance recorded successfully', 'success');
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          window.refreshCurrentRosterView();
+        }
+        return true;
+      } catch (err) {
+        console.error('Manual attendance error:', err);
+        toast(err.message || 'Failed to record manual attendance', 'error');
+        return false;
+      }
+    }
+  });
+}
+
+export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = null, initialOccurrenceStart = null, isReadOnly = false) {
+  let targetSessionId = null;
+  let rawSession = null;
+
+  if (typeof sessionOrId === 'string' && sessionOrId.trim()) {
+    targetSessionId = sessionOrId.trim();
+    rawSession = state.attendanceSessions.find(s => s.id === targetSessionId);
+  } else if (sessionOrId && typeof sessionOrId === 'object') {
+    if (sessionOrId instanceof Event || sessionOrId.target || sessionOrId.nativeEvent || sessionOrId.pointerId !== undefined) {
+      const targetEl = sessionOrId.currentTarget || sessionOrId.target;
+      const card = targetEl?.closest?.('[data-session-id]');
+      targetSessionId = card?.dataset?.sessionId ? String(card.dataset.sessionId).trim() : null;
+      if (targetSessionId) {
+        rawSession = state.attendanceSessions.find(s => s.id === targetSessionId);
+      }
+    } else if (typeof sessionOrId.id === 'string' && sessionOrId.id.trim()) {
+      targetSessionId = sessionOrId.id.trim();
+      rawSession = sessionOrId;
+    }
+  }
+
+  if (!targetSessionId || typeof targetSessionId !== 'string') {
+    console.warn('[openAdminRosterModal] Invalid sessionId provided:', sessionOrId);
+    toast('Session not found', 'error');
+    return;
+  }
+
+  if (!rawSession) {
+    try {
+      const snap = await getDoc(doc(db, 'attendance_sessions', targetSessionId));
+      if (snap.exists()) {
+        rawSession = { id: snap.id, ...snap.data() };
+      }
+    } catch (e) {
+      console.warn('Could not fetch session by ID:', e);
+    }
+  }
 
   if (!rawSession) {
     toast('Session not found', 'error');
     return;
   }
   const session = normalizeSession(rawSession);
+  session.id = targetSessionId;
 
   const getAssignedRosterMembers = () => {
     const allActiveMembers = (usersMap.size > 0
       ? Array.from(usersMap.values())
-      : [...state.members]
+      : [...(state.members || [])]
     ).filter(m => m && !m.disabled && !m.blocked);
 
     let filtered = allActiveMembers;
@@ -14337,204 +17875,234 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
     return filtered.length > 0 ? filtered : allActiveMembers;
   };
 
-  // 2. Resolve initial occurrence
-  const nowMs = serverNow();
-  const isOnceSession = (session.schedule?.type || session.type || 'once') === 'once';
-  let occ = null;
-  if (occurrenceKey && occurrenceStart) {
-    occ = { key: occurrenceKey, start: Number(occurrenceStart) || nowMs };
-  } else if (isOnceSession) {
-    const startMs = parseDateTimeToMs(session.schedule?.startDateTime || session.startDateTime) || nowMs;
-    occ = { key: 'once', start: startMs };
-  } else {
-    occ = resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs) || { key: 'once', start: session.schedule?.startDateTime || nowMs };
-  }
-  let selectedOccKey = occ ? occ.key : 'once';
-  let selectedOccStartMs = occ ? occ.start : nowMs;
+  const getLogTimestampMs = (log) => {
+    if (!log) return 0;
+    if (typeof log.occurrenceKey === 'string' && log.occurrenceKey.startsWith('occ_')) {
+      const parsed = parseInt(log.occurrenceKey.replace('occ_', ''), 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return parseDateTimeToMs(log.occurrenceStart) ||
+           parseDateTimeToMs(log.checkedInAt) ||
+           parseDateTimeToMs(log.checkInTimestamp) ||
+           (typeof log.checkInTimestamp === 'number' ? log.checkInTimestamp : 0) ||
+           parseDateTimeToMs(log.checkInTime) ||
+           parseDateTimeToMs(log.createdAt) ||
+           parseDateTimeToMs(log.timestamp) ||
+           parseDateTimeToMs(log.excusedAt) ||
+           parseDateTimeToMs(log.sessionDate) ||
+           parseDateTimeToMs(log.date) ||
+           0;
+  };
 
-  const occurrenceOptions = new Map();
-  occurrenceOptions.set(selectedOccKey, selectedOccStartMs);
+  const getLogOccurrenceDateKey = (log) => {
+    if (!log) return 'once';
+    if (log.occurrenceDate && typeof log.occurrenceDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(log.occurrenceDate)) {
+      return log.occurrenceDate.slice(0, 10);
+    }
+    if (log.occurrenceKey && typeof log.occurrenceKey === 'string' && /^\d{4}-\d{2}-\d{2}/.test(log.occurrenceKey)) {
+      return log.occurrenceKey.slice(0, 10);
+    }
+    if (log.sessionDate && typeof log.sessionDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(log.sessionDate)) {
+      return log.sessionDate.slice(0, 10);
+    }
+    const ms = getLogTimestampMs(log);
+    if (ms && ms > 0) {
+      try {
+        return formatZonedDateKey(ms, APP_TIMEZONE);
+      } catch (_) {
+        const d = new Date(ms);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
+    }
+    return log.occurrenceKey || 'once';
+  };
 
-  let activeTab = 'occurrence';
-  let sessionLogs = [];
-  let waiversMap = new Map();
-  let unsubLogs = null;
+  const formatOccurrenceLabel = (dateKey, startMs) => {
+    if (startMs && startMs > 0) {
+      return formatDateTime(startMs, { hour: undefined, minute: undefined });
+    }
+    if (dateKey && dateKey !== 'once' && /^\d{4}-\d{2}-\d{2}/.test(dateKey)) {
+      const [y, m, d] = dateKey.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      return formatDateTime(dt.getTime(), { hour: undefined, minute: undefined });
+    }
+    if (typeof dateKey === 'string' && dateKey.startsWith('occ_')) {
+      const parsed = parseInt(dateKey.replace('occ_', ''), 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        return formatDateTime(parsed, { hour: undefined, minute: undefined });
+      }
+    }
+    return dateKey || 'Session Occurrence';
+  };
+
+  let activeTab = 'occurrence'; // 'occurrence' | 'history'
+  let selectedOccKey = initialOccurrenceKey || null;
+  let selectedOccStartMs = initialOccurrenceStart || null;
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4';
   bodyEl.innerHTML = `
-    <div class="p-6 text-center text-xs text-neutral-400">
-      Loading attendance for ${esc(session.title)}...
+    <div class="p-8 text-center text-xs text-neutral-400 flex flex-col items-center justify-center gap-3">
+      <div class="w-6 h-6 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
+      <span>Loading attendance records &amp; history...</span>
     </div>
   `;
 
+  let unsubLogs = null;
+  clearFsListener('roster');
+
   openModal({
-    title: `${session.title} Attendance`,
+    title: `${session.title} Details`,
     body: bodyEl,
     saveLabel: 'Done',
     clearStack: true,
     onSave: async () => true,
     onClose: () => {
+      window.refreshCurrentRosterView = null;
+      clearFsListener('roster');
       if (unsubLogs) {
-        unsubLogs();
+        try { unsubLogs(); } catch (_) {}
         unsubLogs = null;
       }
     }
   });
 
-  try {
-    const waiversSnap = await getDocs(query(
-      collection(db, 'waiver_requests'),
-      where('sessionId', '==', session.id),
-      limit(300)
-    )).catch(() => ({ docs: [] }));
-    waiversSnap.docs.forEach(d => {
-      const w = d.data();
-      if (w.status === 'approved') {
-        waiversMap.set(w.uid, { id: d.id, ...w });
+  const mergedRecordsMap = new Map();
+  const waiversMap = new Map();
+
+  const addOrUpdateRecord = (raw) => {
+    if (!raw) return;
+    const log = normalizeAttendanceLog(raw);
+    const id = log.id || raw.id || `${targetSessionId}_${log.occurrenceKey}_${log.uid}`;
+    if (mergedRecordsMap.has(id)) {
+      mergedRecordsMap.set(id, { ...mergedRecordsMap.get(id), ...log });
+    } else {
+      mergedRecordsMap.set(id, log);
+    }
+  };
+
+  const isMatchingLog = (l) => {
+    if (!l) return false;
+    if (l.sessionId && l.sessionId === targetSessionId) return true;
+    if (session.title && l.sessionTitle && l.sessionTitle.trim().toLowerCase() === session.title.trim().toLowerCase()) return true;
+    return false;
+  };
+
+  const syncRosterFromState = () => {
+    mergedRecordsMap.clear();
+    waiversMap.clear();
+    (state.waiverRequests || []).forEach(w => {
+      if (w && w.sessionId === targetSessionId && w.status === 'approved') {
+        waiversMap.set(w.uid, w);
       }
     });
-  } catch (e) {
-    console.warn('Could not fetch waivers:', e);
-  }
+    (state.attendanceLogs || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
+    (state.attendanceRecords || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
+  };
 
-  const qLogs = query(
-    collection(db, 'attendance_logs'),
-    where('sessionId', '==', session.id),
-    limit(300)
-  );
+  syncRosterFromState();
 
-  const renderRosterView = () => {
+  const renderModal = () => {
+    const allRecords = Array.from(mergedRecordsMap.values());
     const assignedMembers = getAssignedRosterMembers();
+    const isAdminUser = !isReadOnly && isCurrentUserAdmin();
 
-    if (!isOnceSession) {
-      sessionLogs.forEach(l => {
-        if (l.occurrenceKey && (l.occurrenceStart || l.checkedInAt)) {
-          const ms = parseDateTimeToMs(l.occurrenceStart) || parseDateTimeToMs(l.checkedInAt);
-          if (ms && !occurrenceOptions.has(l.occurrenceKey)) {
-            occurrenceOptions.set(l.occurrenceKey, ms);
-          }
-        }
+    // Group records by occurrenceDate
+    const occGroups = new Map();
+    allRecords.forEach(log => {
+      const dateKey = getLogOccurrenceDateKey(log);
+      if (!occGroups.has(dateKey)) {
+        occGroups.set(dateKey, {
+          dateKey,
+          startMs: getLogTimestampMs(log),
+          logs: []
+        });
+      }
+      const grp = occGroups.get(dateKey);
+      grp.logs.push(log);
+      const lMs = getLogTimestampMs(log);
+      if (lMs > grp.startMs) grp.startMs = lMs;
+    });
+
+    const nowMs = serverNow();
+    const currOcc = resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs);
+    const currDateKey = currOcc ? currOcc.key : (session.schedule?.startDateTime ? formatZonedDateKey(parseDateTimeToMs(session.schedule.startDateTime)) : 'once');
+    const currStartMs = currOcc ? currOcc.start : (parseDateTimeToMs(session.schedule?.startDateTime) || nowMs);
+
+    if (!occGroups.has(currDateKey)) {
+      occGroups.set(currDateKey, {
+        dateKey: currDateKey,
+        startMs: currStartMs,
+        logs: []
       });
     }
 
-    const occLogs = sessionLogs.filter(l => matchesOccurrence(l, selectedOccKey, selectedOccStartMs, session));
-    const attendedMap = new Map();
-    occLogs.forEach(l => attendedMap.set(l.uid, l));
-
-    const presentList = [];
-    const excusedList = [];
-    const penalizedAbsentList = [];
-    const unprocessedAbsentList = [];
-    const handledUids = new Set();
-
-    const occCutoffMs = selectedOccStartMs + (session.lateCutoffMinutes || 120) * 60000;
-    const isClosed = serverNow() > occCutoffMs;
-
-    assignedMembers.forEach(m => {
-      handledUids.add(m.uid);
-      if (attendedMap.has(m.uid)) {
-        const log = attendedMap.get(m.uid);
-        if (log.status === 'excused' || log.excused === true) {
-          excusedList.push({ member: m, log, waiver: waiversMap.get(m.uid) });
-        } else if (log.status === 'absent') {
-          penalizedAbsentList.push({ member: m, log });
-        } else {
-          presentList.push({ member: m, log });
-        }
-      } else if (waiversMap.has(m.uid)) {
-        excusedList.push({ member: m, waiver: waiversMap.get(m.uid) });
-      } else {
-        unprocessedAbsentList.push(m);
+    // Generate ALL historical scheduled occurrences since session creation / start date
+    const sched = normalizeScheduleObject(session.schedule || session);
+    let earliestStartMs = parseDateTimeToMs(sched.startDateTime || session.createdAt || session.date || session.startDate) || currStartMs;
+    allRecords.forEach(l => {
+      const lMs = getLogTimestampMs(l);
+      if (lMs > 0 && lMs < earliestStartMs) {
+        earliestStartMs = lMs;
       }
     });
 
-    // Ensure any member with a valid check-in log for this occurrence is included even if not in assignedMembers
-    occLogs.forEach(log => {
-      if (!log.uid || handledUids.has(log.uid)) return;
-      handledUids.add(log.uid);
-      const fallbackMember = usersMap.get(log.uid) || {
-        uid: log.uid,
-        displayName: log.userName || 'Member',
-        name: log.userName || 'Member',
-        photoURL: log.userAvatar || '',
-        avatarUrl: log.userAvatar || ''
-      };
-      if (log.status === 'excused' || log.excused === true) {
-        excusedList.push({ member: fallbackMember, log, waiver: waiversMap.get(log.uid) });
-      } else if (log.status === 'absent') {
-        penalizedAbsentList.push({ member: fallbackMember, log });
-      } else {
-        presentList.push({ member: fallbackMember, log });
+    if (sched.type !== 'once') {
+      try {
+        const historicalOccs = getOccurrences(sched, earliestStartMs, nowMs + 86400000);
+        historicalOccs.forEach(occMs => {
+          const occKey = formatZonedDateKey(occMs, APP_TIMEZONE);
+          if (!occGroups.has(occKey)) {
+            occGroups.set(occKey, {
+              dateKey: occKey,
+              startMs: occMs,
+              logs: []
+            });
+          } else {
+            const g = occGroups.get(occKey);
+            if (!g.startMs || g.startMs === 0) g.startMs = occMs;
+          }
+        });
+      } catch (err) {
+        console.warn('Error generating historical occurrences for session:', err);
       }
-    });
+    } else {
+      const onceKey = sched.startDateTime ? formatZonedDateKey(earliestStartMs, APP_TIMEZONE) : 'once';
+      if (!occGroups.has(onceKey)) {
+        occGroups.set(onceKey, {
+          dateKey: onceKey,
+          startMs: earliestStartMs,
+          logs: []
+        });
+      }
+    }
 
-    const totalAssignedCount = Math.max(assignedMembers.length, handledUids.size);
-    const onTimeCount = presentList.filter(p => p.log.status === 'on_time' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
-    const lateCount = presentList.filter(p => p.log.status === 'late' || p.log.penalty > 0 || p.log.fineEGP > 0).length;
-    const excusedCount = excusedList.length;
-    const absentCount = penalizedAbsentList.length + unprocessedAbsentList.length;
+    const sortedOccGroups = Array.from(occGroups.values()).sort((a, b) => (b.startMs || 0) - (a.startMs || 0));
 
-    const totalPenalties = presentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0) +
-      penalizedAbsentList.reduce((sum, p) => sum + (p.log.penalty || 0), 0);
-    const totalFines = presentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0) +
-      penalizedAbsentList.reduce((sum, p) => sum + (p.log.fineEGP || 0), 0);
-
-    const dateStr = formatDateTime(selectedOccStartMs, { hour: undefined, minute: undefined });
+    if (!selectedOccKey) {
+      const hasLogsForCurr = occGroups.get(currDateKey)?.logs.length > 0;
+      if (hasLogsForCurr || sortedOccGroups.length <= 1) {
+        selectedOccKey = currDateKey;
+        selectedOccStartMs = currStartMs;
+      } else {
+        selectedOccKey = sortedOccGroups[0]?.dateKey || currDateKey;
+        selectedOccStartMs = sortedOccGroups[0]?.startMs || currStartMs;
+      }
+    }
 
     bodyEl.innerHTML = `
-      <div class="flex items-center justify-between pb-1">
-        <div class="space-y-0.5">
-          <div class="text-xs text-neutral-400 flex items-center gap-1.5">
-            <span>Occurrence: <strong class="text-white">${dateStr}</strong></span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="font-mono text-[10px] px-2 py-0.5 rounded-full ${isClosed ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}">
-              ${isClosed ? 'Window Closed' : 'Check-in Open'}
-            </span>
-          </div>
-        </div>
+      <div class="space-y-3.5">
+        <div id="mount-admin-roster-segmented" class="w-full"></div>
+        <div id="admin-roster-tab-content" class="flex flex-col gap-3 pb-6 w-full overflow-y-auto"></div>
       </div>
-
-      <div class="grid grid-cols-5 gap-1.5 text-center text-xs">
-        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-          <span class="text-[10px] text-neutral-400 block font-medium">Assigned</span>
-          <span class="font-bold text-white mt-0.5 block" style="font-variant-numeric: tabular-nums;">${totalAssignedCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-          <span class="text-[10px] text-emerald-300 block font-medium">On Time</span>
-          <span class="font-bold text-emerald-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${onTimeCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
-          <span class="text-[10px] text-amber-300 block font-medium">Late</span>
-          <span class="font-bold text-amber-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${lateCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
-          <span class="text-[10px] text-blue-300 block font-medium">Excused</span>
-          <span class="font-bold text-blue-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${excusedCount}</span>
-        </div>
-        <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
-          <span class="text-[10px] text-rose-300 block font-medium">Absent</span>
-          <span class="font-bold text-rose-400 mt-0.5 block" style="font-variant-numeric: tabular-nums;">${absentCount}</span>
-        </div>
-      </div>
-
-      ${(totalPenalties > 0 || totalFines > 0) ? `
-        <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center justify-between font-mono">
-          <span>Deductions Incurred:</span>
-          <span>${totalPenalties > 0 ? `-${totalPenalties} pts ` : ''}${totalFines > 0 ? `-${totalFines} EGP` : ''}</span>
-        </div>
-      ` : ''}
-
-      <div id="mount-roster-tab-segmented" class="w-full"></div>
-
-      <div id="roster-tab-content" class="space-y-4"></div>
     `;
 
-    const segMount = bodyEl.querySelector('#mount-roster-tab-segmented');
+    const segMount = bodyEl.querySelector('#mount-admin-roster-segmented');
+    const tabContent = bodyEl.querySelector('#admin-roster-tab-content');
+
     if (segMount) {
       segMount.appendChild(renderSegmented({
-        id: 'seg-roster-view',
+        id: 'segmented-roster-subtabs',
         options: [
           { value: 'occurrence', label: 'This Occurrence' },
           { value: 'history', label: 'Session History' }
@@ -14542,431 +18110,1049 @@ async function openAdminRosterModal(sessionOrId, occurrenceKey, occurrenceStart)
         value: activeTab,
         onChange: (val) => {
           activeTab = val;
-          renderSubContent();
+          renderTabContent();
         }
       }));
     }
 
-    const renderSubContent = () => {
-      const container = bodyEl.querySelector('#roster-tab-content');
-      if (!container) return;
+    const renderTabContent = () => {
+      if (!tabContent) return;
 
-      if (activeTab === 'history') {
-        if (sessionLogs.length === 0) {
-          container.innerHTML = `
-            <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10">
-              No attendance events recorded for this session yet.
+      if (activeTab === 'occurrence') {
+        // --- TAB 1: THIS OCCURRENCE ---
+        const activeOccRecord = occGroups.get(selectedOccKey) || { dateKey: selectedOccKey, startMs: selectedOccStartMs || nowMs, logs: [] };
+        const occLogs = activeOccRecord.logs;
+        const occStartMs = activeOccRecord.startMs || selectedOccStartMs || nowMs;
+
+        const attendedMap = new Map();
+        occLogs.forEach(l => {
+          const uid = l.uid || l.userId;
+          if (uid) attendedMap.set(uid, l);
+        });
+
+        const attendedList = [];
+        const excusedList = [];
+        const penalizedAbsentList = [];
+        const unprocessedAbsentList = [];
+        const handledUids = new Set();
+
+        const occCutoffMs = occStartMs + (Number(session.lateCutoffMinutes) || 120) * 60000;
+        const isClosed = session.status === 'closed' || session.status === 'completed' || nowMs > occCutoffMs;
+
+        // Tally logs
+        attendedMap.forEach((log, uid) => {
+          handledUids.add(uid);
+          const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {
+            uid,
+            displayName: log.userName || log.displayName || 'Member',
+            name: log.userName || log.displayName || 'Member',
+            photoURL: log.userAvatar || '',
+            avatarUrl: log.userAvatar || ''
+          };
+
+          if (log.status === 'excused' || log.excused === true || waiversMap.has(uid)) {
+            excusedList.push({ member, log, waiver: waiversMap.get(uid) });
+          } else if (log.status === 'absent') {
+            penalizedAbsentList.push({ member, log });
+          } else {
+            attendedList.push({ member, log });
+          }
+        });
+
+        // Roster members not in logs
+        assignedMembers.forEach(m => {
+          if (handledUids.has(m.uid)) return;
+          handledUids.add(m.uid);
+          if (waiversMap.has(m.uid)) {
+            excusedList.push({ member: m, waiver: waiversMap.get(m.uid) });
+          } else {
+            unprocessedAbsentList.push(m);
+          }
+        });
+
+        attendedList.sort((a, b) => (getLogTimestampMs(b.log) - getLogTimestampMs(a.log)));
+
+        const totalAssigned = Math.max(assignedMembers.length, handledUids.size);
+        const onTimeCount = attendedList.filter(p => p.log.status === 'on_time' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
+        const lateCount = attendedList.filter(p => p.log.status === 'late' || Number(p.log.penalty) > 0 || Number(p.log.fineEGP) > 0).length;
+        const earlyCount = attendedList.filter(p => p.log.status === 'early' || Number(p.log.earlyMinutes) > 0).length;
+        const totalAbsent = penalizedAbsentList.length + unprocessedAbsentList.length;
+
+        const totalPenalties = attendedList.reduce((sum, p) => sum + (Number(p.log.penalty) || 0), 0) +
+          penalizedAbsentList.reduce((sum, p) => sum + (Number(p.log.penalty) || 0), 0);
+        const totalFines = attendedList.reduce((sum, p) => sum + (Number(p.log.fineEGP) || 0), 0) +
+          penalizedAbsentList.reduce((sum, p) => sum + (Number(p.log.fineEGP) || 0), 0);
+
+        const penaltyPtsDef = (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
+        const fineAbsenceDef = (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+
+        let occPickerHtml = '';
+        if (sortedOccGroups.length > 1) {
+          occPickerHtml = `
+            <div class="flex items-center gap-2 pb-1">
+              <label class="text-[11px] text-neutral-400 shrink-0 font-medium">Select Occurrence Date:</label>
+              <select id="sel-admin-roster-occ" class="ios-input text-xs py-1 px-2.5 flex-1 font-mono">
+                ${sortedOccGroups.map(g => `
+                  <option value="${esc(g.dateKey)}" ${g.dateKey === selectedOccKey ? 'selected' : ''}>
+                    ${formatOccurrenceLabel(g.dateKey, g.startMs)}${g.dateKey === currDateKey ? ' (Current)' : ''}
+                  </option>
+                `).join('')}
+              </select>
+            </div>
+          `;
+        }
+
+        tabContent.innerHTML = `
+          ${occPickerHtml}
+
+          <div class="flex items-center justify-between pb-1">
+            <div class="space-y-0.5">
+              <span class="text-xs text-neutral-400">Date: <strong class="text-white">${formatOccurrenceLabel(selectedOccKey, occStartMs)}</strong></span>
+            </div>
+            <span class="font-mono text-[10px] px-2 py-0.5 rounded-full ${isClosed ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}">
+              ${isClosed ? 'Window Closed' : 'Check-in Open'}
+            </span>
+          </div>
+
+          <!-- Overview Stats Grid -->
+          <div class="grid grid-cols-4 gap-2 text-center text-xs">
+            <div class="p-2.5 rounded-xl bg-white/[0.04] border border-white/10">
+              <span class="text-[10px] text-neutral-400 block font-medium">Assigned</span>
+              <span class="font-bold text-white text-sm mt-0.5 block">${totalAssigned}</span>
+            </div>
+            <div class="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+              <span class="text-[10px] text-emerald-300 block font-medium">Attended</span>
+              <span class="font-bold text-emerald-400 text-sm mt-0.5 block">${attendedList.length}</span>
+            </div>
+            <div class="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20">
+              <span class="text-[10px] text-blue-300 block font-medium">Excused</span>
+              <span class="font-bold text-blue-400 text-sm mt-0.5 block">${excusedList.length}</span>
+            </div>
+            <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20">
+              <span class="text-[10px] text-rose-300 block font-medium">Absent</span>
+              <span class="font-bold text-rose-400 text-sm mt-0.5 block">${totalAbsent}</span>
+            </div>
+          </div>
+
+          ${(totalPenalties > 0 || totalFines > 0) ? `
+            <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center justify-between font-mono">
+              <span>Deductions Incurred:</span>
+              <span>${totalPenalties > 0 ? `-${totalPenalties} pts ` : ''}${totalFines > 0 ? `-${totalFines} EGP` : ''}</span>
+            </div>
+          ` : ''}
+
+          <!-- 1. ATTENDED LIST -->
+          <div class="space-y-2">
+            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+              <span>Attended Members (${attendedList.length})</span>
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] text-emerald-400 font-normal">
+                  ${earlyCount > 0 ? `${earlyCount} early · ` : ''}${onTimeCount} on time · ${lateCount} late
+                </span>
+                ${isAdminUser ? `
+                  <button type="button" id="btn-roster-add-manual-attendance" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#0A84FF]/20 text-[#0A84FF] hover:bg-[#0A84FF]/30 border border-[#0A84FF]/30 transition flex items-center gap-1 shrink-0">
+                    <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    <span>Add Member</span>
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-72 overflow-y-auto">
+              ${attendedList.length === 0 ? `
+                <div class="p-4 text-xs text-neutral-400 text-center">No check-ins recorded for this occurrence yet.</div>
+              ` : attendedList.map(({ member, log }) => {
+                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+                const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
+                const tierLabel = log.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(log.appliedTierLabel)}</span>` : '';
+
+                return `
+                  <div class="admin-roster-row bulk-select-card p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-bulk-id="${esc(log.id)}" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+                      <div class="min-w-0 flex-1">
+                        <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
+                          <span class="truncate">${esc(prof.displayName)}</span>
+                          <div class="badge-row-container flex items-center gap-1 shrink-0" data-uid="${esc(member.uid)}"></div>
+                        </div>
+                        <div class="flex items-center gap-1.5 mt-0.5">
+                          <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
+                          ${tierLabel}
+                        </div>
+                      </div>
+                    </div>
+                    <div class="text-right shrink-0">
+                      ${renderCheckInMetricsPills(log)}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+
+          <!-- 2. ABSENT LIST -->
+          <div class="space-y-2">
+            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+              <span>Absent Members (${totalAbsent})</span>
+              ${(isAdminUser && unprocessedAbsentList.length > 0) ? `
+                <button type="button" id="btn-roster-penalize-all" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
+                  <span>Penalize All Unprocessed (${unprocessedAbsentList.length})</span>
+                </button>
+              ` : ''}
+            </div>
+            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-56 overflow-y-auto">
+              ${totalAbsent === 0 ? `
+                <div class="p-4 text-xs text-emerald-400 text-center">All rostered members attended or excused!</div>
+              ` : `
+                ${penalizedAbsentList.map(({ member, log }) => {
+                  const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+                  const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp, true);
+                  return `
+                    <div class="admin-roster-row bulk-select-card p-2.5 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-xl" data-bulk-id="${esc(log.id)}" data-log-id="${esc(log.id)}" data-uid="${esc(member.uid)}">
+                      <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                        <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+                        <div class="min-w-0 flex-1">
+                          <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                          <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
+                        </div>
+                      </div>
+                      <div class="text-right shrink-0">
+                        ${renderCheckInMetricsPills(log)}
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+
+                ${unprocessedAbsentList.map(member => {
+                  const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+                  return `
+                    <div class="admin-roster-absent-row p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-xl ${isAdminUser ? 'cursor-pointer' : ''}" data-uid="${esc(member.uid)}">
+                      <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                        <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+                        <div class="min-w-0 flex-1">
+                          <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                          <span class="text-[10px] text-neutral-400">Not checked in · Penalty: -${penaltyPtsDef} pts${fineAbsenceDef > 0 ? `, -${fineAbsenceDef} EGP` : ''}</span>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-2 shrink-0">
+                        <span class="checkin-timing-pill pill-absent">Absent</span>
+                        ${isAdminUser ? `
+                          <button type="button" class="btn-roster-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
+                            Penalize
+                          </button>
+                        ` : ''}
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              `}
+            </div>
+          </div>
+
+          <!-- 3. EXCUSED LIST (IF ANY) -->
+          ${excusedList.length > 0 ? `
+            <div class="space-y-2">
+              <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+                <span>Excused Members (${excusedList.length})</span>
+                <span class="text-[10px] text-blue-400 font-normal">Approved Excuse</span>
+              </div>
+              <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-36 overflow-y-auto">
+                ${excusedList.map(({ member, waiver, log }) => {
+                  const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
+                  const excuseText = waiver?.reason || log?.reason || 'Approved Waiver';
+                  const logId = log?.id || '';
+                  return `
+                    <div class="admin-roster-excused-row ${logId ? 'admin-roster-row bulk-select-card' : ''} p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-xl ${isAdminUser ? 'cursor-pointer' : ''}" data-bulk-id="${esc(logId)}" data-log-id="${esc(logId)}" data-uid="${esc(member.uid)}">
+                      <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                        <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
+                        <div class="min-w-0 flex-1">
+                          <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                          <span class="text-[10px] text-neutral-400 truncate block">"${esc(excuseText)}"</span>
+                        </div>
+                      </div>
+                      <span class="checkin-timing-pill pill-excused shrink-0">Excused</span>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          ` : ''}
+        `;
+
+        const selOcc = tabContent.querySelector('#sel-admin-roster-occ');
+        if (selOcc) {
+          selOcc.onchange = (e) => {
+            selectedOccKey = e.target.value;
+            const targetGrp = occGroups.get(selectedOccKey);
+            selectedOccStartMs = targetGrp ? targetGrp.startMs : nowMs;
+            renderTabContent();
+          };
+        }
+
+        const btnAddManualTab1 = tabContent.querySelector('#btn-roster-add-manual-attendance');
+        if (btnAddManualTab1) {
+          btnAddManualTab1.onclick = () => openManualAttendanceModal(session.id, selectedOccKey);
+        }
+
+        tabContent.querySelectorAll('.badge-row-container').forEach(c => {
+          const uid = c.dataset.uid;
+          const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
+          if (mem) renderBadgeRow(c, mem.badges, mem);
+        });
+
+        if (isAdminUser) {
+          tabContent.querySelectorAll('.admin-roster-row').forEach(row => {
+            const logId = row.dataset.logId;
+            const targetLog = allRecords.find(l => l.id === logId) || mergedRecordsMap.get(logId);
+            if (targetLog && logId) {
+              attachRowGestures(row, {
+                bulkType: 'attendance_logs',
+                bulkId: logId,
+                onSingleTap: () => openAdminLogEditModal(targetLog, session, selectedOccKey, selectedOccStartMs)
+              });
+              attachUniversalSwipeActions(row, {
+                deleteLabel: 'Delete',
+                entityName: 'Attendance Record',
+                onDelete: async () => {
+                  const confirmed = await openDeleteConfirmModal({
+                    title: 'Delete Attendance Record?',
+                    message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
+                    confirmText: 'Delete'
+                  });
+                  if (!confirmed) return;
+                  await deleteAttendanceRecordAndReverseLedger(logId, targetLog);
+                  toast('Attendance record deleted and ledger reversed', 'success');
+                  renderModal();
+                }
+              });
+            }
+            row.onclick = (e) => {
+              if (e.target.closest('button')) return;
+              if (selectionState.active && selectionState.type === 'attendance_logs') return;
+              if (targetLog) openAdminLogEditModal(targetLog, session, selectedOccKey, selectedOccStartMs);
+            };
+          });
+
+          tabContent.querySelectorAll('.admin-roster-absent-row').forEach(row => {
+            row.onclick = (e) => {
+              if (e.target.closest('button')) return;
+              const targetUid = row.dataset.uid;
+              const targetMember = unprocessedAbsentList.find(m => m.uid === targetUid);
+              if (targetMember) openAdminLogEditModal({ ...targetMember, isUnprocessed: true }, session, selectedOccKey, selectedOccStartMs);
+            };
+          });
+
+          tabContent.querySelectorAll('.admin-roster-excused-row').forEach(row => {
+            row.onclick = (e) => {
+              if (e.target.closest('button')) return;
+              const targetUid = row.dataset.uid;
+              const targetItem = excusedList.find(x => x.member.uid === targetUid);
+              if (targetItem) openAdminLogEditModal(targetItem.log || { ...targetItem.member, status: 'excused' }, session, selectedOccKey, selectedOccStartMs);
+            };
+          });
+        }
+
+        const penalizeAllBtn = tabContent.querySelector('#btn-roster-penalize-all');
+        if (penalizeAllBtn) {
+          penalizeAllBtn.onclick = () => {
+            penalizeAbsentMembers([...unprocessedAbsentList], penalizeAllBtn);
+          };
+        }
+
+        tabContent.querySelectorAll('.btn-roster-penalize-single').forEach(btn => {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            const targetUid = btn.dataset.uid;
+            const targetMember = unprocessedAbsentList.find(m => m.uid === targetUid);
+            if (targetMember) penalizeAbsentMembers([targetMember], btn);
+          };
+        });
+
+      } else {
+        // --- TAB 2: SESSION HISTORY ---
+        if (sortedOccGroups.length === 0) {
+          tabContent.innerHTML = `
+            <div class="glass-card p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-2xl">
+              No historical check-in occurrences recorded for this session yet.
             </div>
           `;
           return;
         }
 
-        container.innerHTML = `
-          <div class="space-y-2">
+        tabContent.innerHTML = `
+          <div class="history-occurrences-container flex flex-col gap-3 pb-6 w-full overflow-y-auto">
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-              <span>All Event History (${sessionLogs.length})</span>
-              <span class="text-[10px] text-neutral-400 font-normal">Tap any log to edit</span>
+              <span>All Historical Occurrences (${sortedOccGroups.length})</span>
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] text-neutral-400 font-normal hidden sm:inline">Click any occurrence to view or edit details</span>
+                ${isAdminUser ? `
+                  <button type="button" id="btn-history-add-manual-attendance" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#0A84FF]/20 text-[#0A84FF] hover:bg-[#0A84FF]/30 border border-[#0A84FF]/30 transition flex items-center gap-1 shrink-0">
+                    <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    <span>Add Attendance</span>
+                  </button>
+                ` : ''}
+              </div>
             </div>
-            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-80 overflow-y-auto">
-              ${sessionLogs.map(l => {
-                const prof = getUserProfile(l.uid, l.userName, l.userAvatar);
-                const isLate = l.status === 'late' || (l.penalty > 0) || (l.fineEGP > 0);
-                const isExcused = l.status === 'excused' || l.excused;
-                const isAbsent = l.status === 'absent';
-                const timeStr = formatDateTime(l.checkedInAt || l.occurrenceStart);
+            ${sortedOccGroups.map(grp => {
+              const logsForOcc = grp.logs;
+              const occStartMs = grp.startMs || nowMs;
+              const occCutoffMs = occStartMs + (Number(session.lateCutoffMinutes) || 120) * 60000;
+              const isOccClosed = session.status === 'closed' || session.status === 'completed' || nowMs > occCutoffMs;
 
-                let statusBadge = '';
-                if (isAbsent) {
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-rose-500/20 text-rose-300">Absent</span>`;
-                } else if (isExcused) {
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-blue-500/20 text-blue-300">Excused</span>`;
-                } else if (isLate) {
-                  const lateLabel = l.lateMinutes ? `Late +${l.lateMinutes}m` : 'Late';
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-amber-500/20 text-amber-300">${lateLabel}</span>`;
+              const attendedMap = new Map();
+              logsForOcc.forEach(l => {
+                const uid = l.uid || l.userId;
+                if (uid) attendedMap.set(uid, l);
+              });
+
+              const attendedMembersList = [];
+              const excusedMembersList = [];
+              const absentMembersList = [];
+              const handledUids = new Set();
+
+              attendedMap.forEach((log, uid) => {
+                handledUids.add(uid);
+                const member = usersMap.get(uid) || state.members?.find(m => m.uid === uid) || {
+                  uid,
+                  displayName: log.userName || log.displayName || 'Member',
+                  name: log.userName || log.displayName || 'Member',
+                  photoURL: log.userAvatar || '',
+                  avatarUrl: log.userAvatar || ''
+                };
+
+                if (log.status === 'excused' || log.excused === true || waiversMap.has(uid)) {
+                  excusedMembersList.push({ member, log });
+                } else if (log.status === 'absent') {
+                  absentMembersList.push({ member, log, isPenalized: true });
                 } else {
-                  statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-emerald-500/20 text-emerald-300">On Time</span>`;
+                  attendedMembersList.push({ member, log });
                 }
+              });
 
-                return `
-                  <div class="log-history-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(l.id)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400 block">${timeStr}</span>
+              assignedMembers.forEach(m => {
+                if (handledUids.has(m.uid)) return;
+                handledUids.add(m.uid);
+                if (waiversMap.has(m.uid)) {
+                  excusedMembersList.push({ member: m, waiver: waiversMap.get(m.uid) });
+                } else {
+                  absentMembersList.push({
+                    member: m,
+                    log: {
+                      uid: m.uid,
+                      status: 'absent',
+                      penalty: (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5,
+                      fineEGP: (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0
+                    },
+                    isPenalized: false,
+                    isUnprocessed: true
+                  });
+                }
+              });
+
+              const occPresent = attendedMembersList.filter(p => p.log.status === 'on_time' || p.log.status === 'early' || (!p.log.penalty && !p.log.fineEGP && p.log.status !== 'late')).length;
+              const occLate = attendedMembersList.filter(p => p.log.status === 'late' || Number(p.log.penalty) > 0 || Number(p.log.fineEGP) > 0).length;
+              const occAbsent = absentMembersList.length;
+              const occExcused = excusedMembersList.length;
+
+              const totalPtsDed = logsForOcc.reduce((acc, l) => acc + (Number(l.penalty) || 0), 0);
+              const totalFineDed = logsForOcc.reduce((acc, l) => acc + (Number(l.fineEGP) || 0), 0);
+
+              const allMembersForOcc = [
+                ...attendedMembersList.map(a => ({ type: 'attended', member: a.member, log: a.log })),
+                ...excusedMembersList.map(e => ({ type: 'excused', member: e.member, log: e.log, waiver: e.waiver })),
+                ...absentMembersList.map(ab => ({ type: 'absent', member: ab.member, log: ab.log, isPenalized: ab.isPenalized, isUnprocessed: ab.isUnprocessed }))
+              ];
+
+              return `
+                <div class="history-occurrence-card p-3 rounded-2xl bg-white/[0.02] border border-white/10 space-y-2.5 transition hover:bg-white/[0.04]" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-white/5 pb-2">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs font-bold text-white truncate">${formatOccurrenceLabel(grp.dateKey, grp.startMs)}</span>
+                        ${grp.dateKey === currDateKey ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">Current</span>` : ''}
                       </div>
+                      <span class="text-[10px] text-neutral-400 font-mono mt-0.5 block truncate">
+                        ${occPresent} Present • ${occLate} Late • ${occAbsent} Absent • ${occExcused} Excused
+                      </span>
                     </div>
-                    <div class="text-right shrink-0 flex items-center gap-2">
-                      ${(l.penalty > 0 || l.fineEGP > 0) ? `
-                        <span class="text-[10px] font-mono text-rose-400">
-                          ${l.penalty > 0 ? `-${l.penalty} pts ` : ''}${l.fineEGP > 0 ? `-${l.fineEGP} EGP` : ''}
+                    <div class="flex items-center gap-2 shrink-0">
+                      ${(totalPtsDed > 0 || totalFineDed > 0) ? `
+                        <span class="text-[10px] font-mono text-rose-400 px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 whitespace-nowrap">
+                          ${totalPtsDed > 0 ? `-${totalPtsDed} pts ` : ''}${totalFineDed > 0 ? `-${totalFineDed} EGP` : ''}
                         </span>
                       ` : ''}
-                      ${statusBadge}
+                      <button type="button" class="btn-load-occ-breakdown px-2.5 py-1 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] text-[11px] font-semibold border border-[#0A84FF]/30 transition flex items-center gap-1 shrink-0 whitespace-nowrap" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                        <span>View in Tab 1</span>
+                        <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                      </button>
                     </div>
                   </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        `;
 
-        container.querySelectorAll('.log-history-row').forEach(row => {
-          row.onclick = () => {
-            const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
-            if (targetLog) openAdminLogEditModal(targetLog, session);
-          };
-        });
-        return;
-      }
+                  <div class="divide-y divide-white/5 max-h-56 overflow-y-auto">
+                    ${allMembersForOcc.length === 0 ? `
+                      <div class="p-2 text-xs text-neutral-500 text-center">No assigned members or check-ins recorded for this occurrence.</div>
+                    ` : allMembersForOcc.map(item => {
+                      const memberUid = item.member.uid || item.member.id;
+                      const prof = getUserProfile(memberUid, item.member.displayName || item.member.name, item.member.photoURL || item.member.avatarUrl);
+                      const log = item.log || {};
+                      const exactTime = formatCheckInExactTime(log.checkedInAt || log.checkInTimestamp || log.timestamp || grp.startMs, true);
+                      const tierLabel = log.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(log.appliedTierLabel)}</span>` : '';
+                      const isLogged = Boolean(log && log.id);
 
-      let occPickerHtml = '';
-      if (occurrenceOptions.size > 1) {
-        const sortedOccs = Array.from(occurrenceOptions.entries()).sort((a, b) => b[1] - a[1]);
-        occPickerHtml = `
-          <div class="flex items-center gap-2 pb-1">
-            <label class="text-[11px] text-neutral-400 shrink-0 font-medium">Select Date:</label>
-            <select id="sel-roster-occurrence" class="ios-input text-xs py-1 px-2.5 flex-1 font-mono">
-              ${sortedOccs.map(([k, ms]) => `
-                <option value="${esc(k)}" ${k === selectedOccKey ? 'selected' : ''}>
-                  ${formatDateTime(ms, { hour: undefined, minute: undefined })} (${formatDateTime(ms, { month: undefined, day: undefined })})
-                </option>
-              `).join('')}
-            </select>
-          </div>
-        `;
-      }
+                      let statusBadge = '';
+                      if (item.type === 'attended') {
+                        statusBadge = renderCheckInMetricsPills(log);
+                      } else if (item.type === 'excused') {
+                        statusBadge = `<span class="checkin-timing-pill pill-excused">Excused</span>`;
+                      } else {
+                        const pts = log.penalty || (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
+                        const egp = log.fineEGP || (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+                        if (item.isPenalized) {
+                          statusBadge = `
+                            <div class="flex items-center gap-1">
+                              <span class="checkin-timing-pill pill-absent">Absent</span>
+                              <span class="checkin-impact-pill impact-negative">-${pts} pts${egp > 0 ? ` | -${egp} EGP` : ''}</span>
+                            </div>
+                          `;
+                        } else {
+                          statusBadge = `
+                            <div class="flex items-center gap-1">
+                              <span class="checkin-timing-pill pill-absent text-amber-300 border-amber-500/30">Unprocessed</span>
+                              ${isAdminUser ? `
+                                <button type="button" class="btn-penalize-single-history px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 border border-rose-500/30 transition" data-uid="${esc(memberUid)}" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                                  Penalize
+                                </button>
+                              ` : ''}
+                            </div>
+                          `;
+                        }
+                      }
 
-      container.innerHTML = `
-        ${occPickerHtml}
-
-        <div class="space-y-2">
-          <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-            <span>Attended (${presentList.length})</span>
-            <span class="text-[10px] text-emerald-400 font-normal">${onTimeCount} on time, ${lateCount} late • Tap log to edit</span>
-          </div>
-          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-48 overflow-y-auto">
-            ${presentList.length === 0 ? `
-              <div class="p-3 text-xs text-neutral-400 text-center">No members checked in yet for this occurrence.</div>
-            ` : presentList.map(({ member, log }) => {
-              const isLate = log.status === 'late' || (log.penalty > 0) || (log.fineEGP > 0);
-              const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-              const checkInTime = formatDateTime(log.checkedInAt, { month: undefined, day: undefined });
-              return `
-                <div class="roster-log-item p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(log.id)}">
-                  <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                    <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                    <div class="min-w-0 flex-1">
-                      <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
-                        <span class="truncate shrink-0 max-w-[120px]">${esc(prof.displayName)}</span>
-                        <div class="badge-row-container flex items-center gap-1 min-w-0 flex-1 overflow-hidden" data-uid="${esc(member.uid)}"></div>
-                      </div>
-                      <div class="text-[10px] text-neutral-400">${checkInTime}</div>
-                    </div>
-                  </div>
-                  <div class="text-right shrink-0">
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}">
-                      ${isLate ? `Late (-${log.penalty} pts${log.fineEGP > 0 ? ' -' + log.fineEGP + ' EGP' : ''})` : 'On Time'}
-                    </span>
+                      return `
+                        <div class="history-log-row ${isLogged ? 'bulk-select-card' : ''} p-2 flex items-center justify-between gap-2 text-xs ${isAdminUser ? 'cursor-pointer hover:bg-white/[0.04]' : ''} transition rounded-lg" data-bulk-id="${esc(log.id || '')}" data-log-id="${esc(log.id || '')}" data-uid="${esc(memberUid)}" data-date-key="${esc(grp.dateKey)}" data-start-ms="${grp.startMs}">
+                          <div class="flex items-center gap-2 min-w-0 flex-1">
+                            <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
+                            <div class="min-w-0 flex-1">
+                              <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
+                              <div class="flex items-center gap-1.5 mt-0.5">
+                                <span class="exact-time text-[10px] text-neutral-400">${item.type === 'attended' ? esc(exactTime) : (item.type === 'excused' ? 'Approved Excuse' : 'Not checked in')}</span>
+                                ${tierLabel}
+                                ${log.adminNote ? `<span class="text-[10px] text-amber-300/80 italic truncate">(${esc(log.adminNote)})</span>` : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <div class="text-right shrink-0">
+                            ${statusBadge}
+                          </div>
+                        </div>
+                      `;
+                    }).join('')}
                   </div>
                 </div>
               `;
             }).join('')}
           </div>
-        </div>
+        `;
 
-        ${excusedList.length > 0 ? `
-          <div class="space-y-2">
-            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-              <span>Excused (${excusedList.length})</span>
-              <span class="text-[10px] text-blue-400 font-normal">Approved Waiver</span>
-            </div>
-            <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-36 overflow-y-auto">
-              ${excusedList.map(({ member, waiver }) => {
-                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                return `
-                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-member-uid="${esc(member.uid)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-6 h-6')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400 truncate block">"${esc(waiver?.reason || 'Approved Excuse')}"</span>
-                      </div>
-                    </div>
-                    <span class="badge-waived px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono shrink-0">
-                      Excused
-                    </span>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        ` : ''}
+        tabContent.querySelectorAll('.history-occurrence-card').forEach(card => {
+          card.onclick = (e) => {
+            if (e.target.closest('.history-log-row') || e.target.closest('button')) return;
+            selectedOccKey = card.dataset.dateKey;
+            selectedOccStartMs = Number(card.dataset.startMs) || nowMs;
+            activeTab = 'occurrence';
+            renderModal();
+          };
+        });
 
-        <div class="space-y-2">
-          <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-            <span>Absent (${penalizedAbsentList.length + unprocessedAbsentList.length})</span>
-            ${(isClosed && unprocessedAbsentList.length > 0) ? `
-              <button type="button" id="btn-penalize-all-absent" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 transition shadow-sm">
-                <span>Penalize All Unprocessed (${unprocessedAbsentList.length})</span>
-              </button>
-            ` : ''}
-          </div>
-          <div class="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 max-h-48 overflow-y-auto">
-            ${(penalizedAbsentList.length === 0 && unprocessedAbsentList.length === 0) ? `
-              <div class="p-3 text-xs text-emerald-400 text-center">All assigned members present or excused!</div>
-            ` : `
-              ${penalizedAbsentList.map(({ member, log }) => {
-                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                return `
-                  <div class="roster-log-item p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-white/[0.04] transition rounded-xl" data-log-id="${esc(log.id)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-rose-400 font-mono">Penalized: -${log.penalty} pts${log.fineEGP > 0 ? ' -' + log.fineEGP + ' EGP' : ''}</span>
-                      </div>
-                    </div>
-                    <span class="badge-penalized px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono shrink-0">
-                      Absent (Penalized)
-                    </span>
-                  </div>
-                `;
-              }).join('')}
+        tabContent.querySelectorAll('.btn-load-occ-breakdown').forEach(btn => {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            selectedOccKey = btn.dataset.dateKey;
+            selectedOccStartMs = Number(btn.dataset.startMs) || nowMs;
+            activeTab = 'occurrence';
+            renderModal();
+          };
+        });
 
-              ${unprocessedAbsentList.map(member => {
-                const prof = getUserProfile(member.uid, member.displayName || member.name, member.photoURL || member.avatarUrl);
-                return `
-                  <div class="roster-member-row p-2.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition rounded-xl" data-member-uid="${esc(member.uid)}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                      <div class="shrink-0">${renderAvatar(prof, 'w-7 h-7')}</div>
-                      <div class="min-w-0 flex-1">
-                        <span class="font-semibold text-white truncate block">${esc(prof.displayName)}</span>
-                        <span class="text-[10px] text-neutral-400">Not checked in</span>
-                      </div>
-                    </div>
-                    <div class="flex items-center gap-1.5 shrink-0">
-                      <span class="badge-unprocessed px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono">
-                        ${isClosed ? 'Absent' : 'Pending'}
-                      </span>
-                      ${isClosed ? `
-                        <button type="button" class="btn-penalize-single px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-semibold text-[11px] border border-rose-500/30 transition" data-uid="${esc(member.uid)}">
-                          Penalize
-                        </button>
-                      ` : ''}
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            `}
-          </div>
-        </div>
-      `;
+        const btnAddManualTab2 = tabContent.querySelector('#btn-history-add-manual-attendance');
+        if (btnAddManualTab2) {
+          btnAddManualTab2.onclick = () => openManualAttendanceModal(session.id);
+        }
 
-      const occSelect = container.querySelector('#sel-roster-occurrence');
-      if (occSelect) {
-        occSelect.onchange = (e) => {
-          selectedOccKey = e.target.value;
-          selectedOccStartMs = occurrenceOptions.get(selectedOccKey) || nowMs;
-          renderRosterView();
-        };
+        tabContent.querySelectorAll('.btn-penalize-single-history').forEach(btn => {
+          btn.onclick = async (e) => {
+            e.stopPropagation();
+            const targetUid = btn.dataset.uid;
+            const targetMember = assignedMembers.find(m => m.uid === targetUid);
+            const dateKey = btn.dataset.dateKey;
+            if (targetMember) {
+              selectedOccKey = dateKey;
+              selectedOccStartMs = Number(btn.dataset.startMs) || nowMs;
+              await penalizeAbsentMembers([targetMember], btn);
+              renderModal();
+            }
+          };
+        });
+
+        if (isAdminUser) {
+          tabContent.querySelectorAll('.history-log-row').forEach(row => {
+            const logId = row.dataset.logId;
+            const memberUid = row.dataset.uid;
+            const dateKey = row.dataset.dateKey;
+            const startMs = Number(row.dataset.startMs) || nowMs;
+            const targetLog = logId ? (allRecords.find(l => l.id === logId) || mergedRecordsMap.get(logId)) : null;
+
+            if (logId && targetLog) {
+              attachRowGestures(row, {
+                bulkType: 'attendance_logs',
+                bulkId: logId,
+                onSingleTap: () => openAdminLogEditModal(targetLog, session, dateKey, startMs)
+              });
+              attachUniversalSwipeActions(row, {
+                deleteLabel: 'Delete',
+                entityName: 'Attendance Record',
+                onDelete: async () => {
+                  const confirmed = await openDeleteConfirmModal({
+                    title: 'Delete Attendance Record?',
+                    message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
+                    confirmText: 'Delete'
+                  });
+                  if (!confirmed) return;
+                  await deleteAttendanceRecordAndReverseLedger(logId, targetLog);
+                  toast('Attendance record deleted and ledger reversed', 'success');
+                  renderModal();
+                }
+              });
+            }
+
+            row.onclick = (e) => {
+              if (e.target.closest('button')) return;
+              if (selectionState.active && selectionState.type === 'attendance_logs') return;
+              e.stopPropagation();
+              if (targetLog) {
+                openAdminLogEditModal(targetLog, session, dateKey, startMs);
+              } else {
+                const targetMem = assignedMembers.find(m => m.uid === memberUid) || { uid: memberUid };
+                openAdminLogEditModal({ ...targetMem, isUnprocessed: true }, session, dateKey, startMs);
+              }
+            };
+          });
+        }
       }
-
-      container.querySelectorAll('.badge-row-container').forEach(c => {
-        const uid = c.dataset.uid;
-        const mem = usersMap.get(uid) || state.members.find(m => m.uid === uid);
-        if (mem) renderBadgeRow(c, mem.badges, mem);
-      });
-
-      container.querySelectorAll('.roster-log-item').forEach(row => {
-        row.onclick = () => {
-          const targetLog = sessionLogs.find(l => l.id === row.dataset.logId);
-          if (targetLog) openAdminLogEditModal(targetLog, session);
-        };
-      });
-
-      container.querySelectorAll('.roster-member-row').forEach(row => {
-        row.onclick = (e) => {
-          if (e.target.closest('button')) return;
-          const uid = row.dataset.memberUid;
-          if (uid) openMiniProfileSheet(uid);
-        };
-      });
-
-      const penalizeAllBtn = container.querySelector('#btn-penalize-all-absent');
-      if (penalizeAllBtn) {
-        penalizeAllBtn.onclick = () => {
-          applyAbsencePenalties([...unprocessedAbsentList], penalizeAllBtn);
-        };
-      }
-
-      container.querySelectorAll('.btn-penalize-single').forEach(btn => {
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          const targetUid = btn.dataset.uid;
-          const targetMember = unprocessedAbsentList.find(m => m.uid === targetUid);
-          if (targetMember) applyAbsencePenalties([targetMember], btn);
-        };
-      });
     };
 
-    renderSubContent();
+    window.refreshCurrentRosterView = () => {
+      syncRosterFromState();
+      renderModal();
+    };
+    renderTabContent();
   };
 
-  const applyAbsencePenalties = async (targetMembers, buttonEl) => {
+  const penalizeAbsentMembers = async (targetMembers, buttonEl) => {
     if (buttonEl) {
       buttonEl.disabled = true;
       buttonEl.textContent = 'Processing...';
     }
 
-    const penaltyPts = (session.penaltyPointsEnabled !== false) ? (session.absencePenalty || session.maxPenalty || 20) : 0;
-    const fineEGP = (session.penaltyFinesEnabled) ? (session.absenceFineEGP || session.maxPenalty || 50) : 0;
+    const penaltyPtsDef = (session.pointsPenalty && session.pointsPenalty.absence) || session.absencePenalty || session.maxPenalty || 5;
+    const fineAbsenceDef = (session.finePenalty && session.finePenalty.absence) || session.absenceFineEGP || 0;
+    const pointsDelta = penaltyPtsDef > 0 ? -penaltyPtsDef : 0;
+    const egpDelta = fineAbsenceDef > 0 ? -fineAbsenceDef : 0;
+    const occKey = selectedOccKey || 'once';
 
     let processedCount = 0;
     try {
       for (const m of targetMembers) {
-        const deterministicId = `${session.id}_${selectedOccKey}_${m.uid}`;
-
-        const existingInMem = sessionLogs.find(l => l.id === deterministicId);
-        if (existingInMem) continue;
-
-        const snap = await getDoc(doc(db, 'attendance_logs', deterministicId));
-        if (snap.exists()) continue;
-
+        const deterministicId = `${session.id}_${occKey}_${m.uid}`;
         const batch = writeBatch(db);
-        const logRef = doc(db, 'attendance_logs', deterministicId);
         const logData = {
           sessionId: session.id,
           sessionTitle: session.title,
           uid: m.uid,
           userName: m.displayName || m.name || 'Member',
           userAvatar: m.avatarUrl || m.photoURL || '',
-          occurrenceKey: selectedOccKey,
-          occurrenceStart: Timestamp.fromMillis(selectedOccStartMs),
+          occurrenceKey: occKey,
+          occurrenceDate: occKey,
+          occurrenceStart: serverTimestamp(),
           checkedInAt: serverTimestamp(),
+          checkInTimestamp: serverTimestamp(),
           status: 'absent',
-          penalty: penaltyPts,
-          fineEGP: fineEGP,
-          processedBy: state.user.uid
+          earlyMinutes: 0,
+          lateMinutes: 0,
+          lateSeconds: 0,
+          penalty: penaltyPtsDef,
+          fineEGP: fineAbsenceDef,
+          pointsDelta,
+          egpDelta,
+          ledgerSynced: true,
+          processedBy: state.user?.uid || 'admin'
         };
-        batch.set(logRef, logData);
 
-        if (penaltyPts > 0) {
-          batch.update(doc(db, 'users', m.uid), {
-            penalties: increment(penaltyPts),
-            updatedAt: serverTimestamp()
-          });
+        batch.set(doc(db, 'attendance_logs', deterministicId), logData);
+        batch.set(doc(db, 'attendance_records', deterministicId), logData);
+
+        const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
+        if (pointsDelta !== 0) {
+          const targetUserDoc = usersMap.get(m.uid) || m || {};
+          Object.assign(userUpdateObj, buildPointsUpdate(targetUserDoc, pointsDelta));
+          userUpdateObj.penalties = increment(penaltyPtsDef);
         }
-
-        if (fineEGP > 0) {
+        if (fineAbsenceDef > 0) {
+          userUpdateObj.finesDue = increment(fineAbsenceDef);
+          userUpdateObj.fines = increment(fineAbsenceDef);
           batch.set(doc(db, 'users_private', m.uid), {
-            finesEGP: increment(fineEGP),
+            finesEGP: increment(fineAbsenceDef),
             updatedAt: serverTimestamp()
           }, { merge: true });
+        }
+        batch.update(doc(db, 'users', m.uid), userUpdateObj);
 
-          const txRef = doc(collection(db, 'users', m.uid, 'transactions'));
-          batch.set(txRef, {
-            type: 'fine',
-            category: 'financial',
-            amount: fineEGP,
-            reason: `Unexcused absence penalty: ${session.title}`,
-            adminUid: state.user.uid,
-            adminName: state.user.displayName || 'Admin',
-            createdAt: serverTimestamp()
+        if (pointsDelta !== 0 || egpDelta !== 0) {
+          const adjRef = doc(collection(db, 'adjustments'), `att_${deterministicId}`);
+          batch.set(adjRef, {
+            uid: m.uid,
+            targetUid: m.uid,
+            userName: m.displayName || m.name || 'Member',
+            type: 'penalty',
+            pointsDelta,
+            egpDelta,
+            amountEGP: egpDelta,
+            reason: `Absent: ${session.title}`,
+            source: 'attendance_absence',
+            sessionId: session.id,
+            logId: deterministicId,
+            createdAt: serverTimestamp(),
+            timestamp: serverTimestamp()
           });
         }
 
         createNotification(batch, {
           uid: m.uid,
           title: 'Absence Penalty Recorded',
-          message: `Unexcused absence recorded for "${session.title}" (${penaltyPts > 0 ? penaltyPts + ' pts' : ''}${fineEGP > 0 ? ' ' + fineEGP + ' EGP' : ''}).`,
+          message: `Unexcused absence recorded for "${session.title}" (${penaltyPtsDef > 0 ? '-' + penaltyPtsDef + ' pts' : ''}${fineAbsenceDef > 0 ? ' -' + fineAbsenceDef + ' EGP' : ''}).`,
           type: 'attendance',
           targetAction: { route: 'attendance' }
         });
 
-        logAdminAction(batch, {
-          action: 'absence_penalty_applied',
-          targetUid: m.uid,
-          details: { sessionId: session.id, occKey: selectedOccKey, penaltyPts, fineEGP }
-        });
-
         await batch.commit();
+        addOrUpdateRecord({ id: deterministicId, ...logData });
         processedCount++;
       }
 
       toast(`Absence penalty applied for ${processedCount} member(s)`, 'success');
+      hydrateSessionCardStats(session.id);
+      renderModal();
     } catch (err) {
       console.error('Error applying absence penalty:', err);
       toast(err.message || 'Failed to apply absence penalty', 'error');
+      if (buttonEl) {
+        buttonEl.disabled = false;
+        buttonEl.textContent = 'Retry';
+      }
     }
   };
 
-  unsubLogs = onSnapshot(qLogs, (snap) => {
-    sessionLogs = snap.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-    sessionLogs.sort((a, b) => (parseDateTimeToMs(b.checkedInAt) || 0) - (parseDateTimeToMs(a.checkedInAt) || 0));
-    renderRosterView();
-  }, (err) => {
-    console.error('Snapshot error for attendance logs:', err);
-    bodyEl.innerHTML = `<div class="p-4 text-xs text-rose-400 text-center">Failed to load attendance logs: ${esc(err.message)}</div>`;
-  });
+  renderModal();
+
+  // Listen to attendance_logs updates for this session (bounded limit)
+  if (targetSessionId && typeof targetSessionId === 'string') {
+    try {
+      clearFsListener('roster');
+      const qSnap = query(collection(db, 'attendance_logs'), where('sessionId', '==', targetSessionId), limit(150));
+      unsubLogs = onSnapshot(qSnap, (snap) => {
+        syncRosterFromState();
+        snap.docs.forEach(d => addOrUpdateRecord({ id: d.id, ...d.data() }));
+        renderModal();
+      }, (err) => console.warn('[openAdminRosterModal] logs listener:', err));
+      setFsListener('roster', unsubLogs);
+    } catch (e) {
+      console.warn('[openAdminRosterModal] logs listener setup error:', e);
+    }
+  }
 }
 
-function renderAdminAttendanceLogs() {
-  const tbody = document.getElementById('admin-attendance-logs-tbody');
-  const countEl = document.getElementById('admin-attendance-log-count');
-  if (!tbody) return;
+export function closeSessionBreakdownModal() {
+  closeModal();
+}
 
-  const logs = state.attendanceLogs || [];
-  if (countEl) countEl.textContent = `${logs.length} logs`;
-
-  if (logs.length === 0) {
-    tbody.innerHTML = '<div class="p-3 text-xs text-neutral-400 text-center">No recent check-in logs.</div>';
+export async function openSessionBreakdownModal(sessionOrId, isReadOnly = false) {
+  const sid = (typeof sessionOrId === 'string' ? sessionOrId : sessionOrId?.id);
+  if (!sid) {
+    console.warn('[openSessionBreakdownModal] Missing sessionId:', sessionOrId);
     return;
   }
-
-  tbody.innerHTML = logs.map(l => {
-    const isLate = l.status === 'late' || l.penalty > 0;
-    const prof = getUserProfile(l.uid, l.userName, l.userAvatar);
-    return `
-      <div class="inset-row flex items-center justify-between py-2 text-xs">
-        <div class="flex items-center gap-2">
-          ${renderAvatar(prof, 'w-7 h-7')}
-          <div>
-            <div class="font-semibold text-white">${esc(prof.displayName)}</div>
-            <div class="text-[10px] text-neutral-400">${esc(l.sessionTitle)} • ${formatDateTime(l.checkedInAt)}</div>
-          </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono ${isLate ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}">
-            ${isLate ? `-${l.penalty} pts` : 'On Time'}
-          </span>
-          <button class="btn-delete-attendance-log text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-rose-500/10" data-log-id="${esc(l.id)}">
-            Remove
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  tbody.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
-    btn.onclick = async () => {
-      const confirm = await confirmSheet({
-        title: 'Delete Attendance Log',
-        message: 'Remove this check-in record? This cannot be undone.',
-        confirmLabel: 'Remove',
-        destructive: true
-      });
-      if (confirm) {
-        await deleteDoc(doc(db, 'attendance_logs', btn.dataset.logId));
-        toast('Log removed', 'info');
-      }
-    };
-  });
+  return openAdminRosterModal(String(sid), null, null, isReadOnly);
 }
 
-/* ==========================================================================
-   ADMIN CONTROLS: SUBMISSIONS INSPECTOR, MEMBER CONTROL, REPAIR TOTALS (Task 5)
-   ========================================================================== */
+export function renderTodayCheckIns(records = []) {
+  renderAttendanceLogs();
+}
+
+let adminAttendanceSearchQuery = '';
+let adminAttendanceStatusFilter = 'all';
+
+export async function renderRecentLogs() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
+  clearFsListener('recent');
+  const tbody = document.getElementById('admin-attendance-logs-tbody');
+  const countEl = document.getElementById('admin-attendance-log-count');
+  const searchInput = document.getElementById('input-admin-search-attendance-logs');
+  const filterChips = document.getElementById('admin-attendance-logs-filter-chips');
+  if (!tbody) return;
+
+  if (tbody.children.length === 0 || tbody.querySelector('.animate-spin')) {
+    tbody.innerHTML = `
+      <div class="p-6 text-center text-xs text-neutral-400 flex flex-col items-center justify-center gap-2">
+        <div class="w-5 h-5 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
+        <span>Loading all attendance logs...</span>
+      </div>
+    `;
+  }
+
+  // Setup search input and filter chips
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = 'true';
+    searchInput.value = adminAttendanceSearchQuery;
+    searchInput.addEventListener('input', (e) => {
+      adminAttendanceSearchQuery = (e.target.value || '').trim().toLowerCase();
+      renderFilteredAttendanceLogsList();
+    });
+  }
+
+  if (filterChips && !filterChips.dataset.bound) {
+    filterChips.dataset.bound = 'true';
+    filterChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.btn-att-log-filter');
+      if (!chip) return;
+      adminAttendanceStatusFilter = chip.dataset.status || 'all';
+      filterChips.querySelectorAll('.btn-att-log-filter').forEach(btn => {
+        if (btn.dataset.status === adminAttendanceStatusFilter) {
+          btn.className = 'btn-att-log-filter px-2.5 py-1 rounded-lg text-xs font-medium border border-white/10 transition bg-white/20 text-white';
+        } else {
+          btn.className = 'btn-att-log-filter px-2.5 py-1 rounded-lg text-xs font-medium border border-white/10 text-neutral-400 hover:text-white transition';
+        }
+      });
+      renderFilteredAttendanceLogsList();
+    });
+  }
+
+  function renderFilteredAttendanceLogsList() {
+    const tbodyEl = document.getElementById('admin-attendance-logs-tbody');
+    const cntEl = document.getElementById('admin-attendance-log-count');
+    if (!tbodyEl) return;
+
+    const allLogs = state.attendanceLogs || [];
+
+    const getLogTime = (l) => {
+      return parseDateTimeToMs(l.timestamp) ||
+             parseDateTimeToMs(l.checkedInAt) ||
+             parseDateTimeToMs(l.checkInTimestamp) ||
+             (typeof l.checkInTimestamp === 'number' ? l.checkInTimestamp : 0) ||
+             parseDateTimeToMs(l.occurrenceStart) ||
+             parseDateTimeToMs(l.createdAt) ||
+             parseDateTimeToMs(l.checkInTime) ||
+             0;
+    };
+
+    const filteredLogs = allLogs.filter(l => {
+      const status = (l.status || 'on_time').toLowerCase();
+      if (adminAttendanceStatusFilter !== 'all') {
+        if (adminAttendanceStatusFilter === 'on_time') {
+          if (status !== 'on_time' || Number(l.earlyMinutes) > 0 || Number(l.lateMinutes) > 0 || Number(l.delaySeconds) > 0 || Number(l.penalty) > 0) return false;
+        } else if (adminAttendanceStatusFilter === 'early') {
+          if (status !== 'early' && Number(l.earlyMinutes) <= 0 && Number(l.earlyBonusPoints) <= 0 && Number(l.earlyBonusEGP) <= 0) return false;
+        } else if (adminAttendanceStatusFilter === 'late') {
+          if (status !== 'late' && Number(l.lateMinutes) <= 0 && Number(l.delaySeconds) <= 0 && Number(l.penalty) <= 0) return false;
+        } else if (adminAttendanceStatusFilter === 'absent') {
+          if (status !== 'absent') return false;
+        } else if (adminAttendanceStatusFilter === 'excused') {
+          if (status !== 'excused' && !l.excused) return false;
+        }
+      }
+
+      if (adminAttendanceSearchQuery) {
+        const uid = l.userId || l.uid || '';
+        const member = (typeof usersMap !== 'undefined' ? usersMap.get(uid) : null) || state.members?.find(m => m.uid === uid) || {};
+        const memberName = (l.userName || l.displayName || member.displayName || member.name || '').toLowerCase();
+        const memberEmail = (l.userEmail || member.email || '').toLowerCase();
+        const sessionTitle = (l.sessionTitle || (state.attendanceSessions?.find(s => s.id === l.sessionId)?.title) || '').toLowerCase();
+        const dateStr = (l.sessionDate || l.occurrenceKey || '').toLowerCase();
+        const noteStr = (l.adminNote || l.note || '').toLowerCase();
+
+        if (!memberName.includes(adminAttendanceSearchQuery) &&
+            !memberEmail.includes(adminAttendanceSearchQuery) &&
+            !sessionTitle.includes(adminAttendanceSearchQuery) &&
+            !dateStr.includes(adminAttendanceSearchQuery) &&
+            !noteStr.includes(adminAttendanceSearchQuery)) {
+          return false;
+        }
+      }
+
+      return true;
+    }).sort((a, b) => getLogTime(b) - getLogTime(a));
+
+    if (cntEl) {
+      if (filteredLogs.length !== allLogs.length) {
+        cntEl.textContent = `${filteredLogs.length} of ${allLogs.length} logs`;
+      } else {
+        cntEl.textContent = `${allLogs.length} logs`;
+      }
+    }
+
+    if (filteredLogs.length === 0) {
+      tbodyEl.innerHTML = allLogs.length === 0
+        ? '<div class="p-6 text-xs text-neutral-400 text-center">No attendance logs recorded yet.</div>'
+        : '<div class="p-6 text-xs text-neutral-400 text-center">No attendance logs matching your filter.</div>';
+      return;
+    }
+
+    tbodyEl.innerHTML = filteredLogs.map(l => {
+      const uid = l.userId || l.uid;
+      const member = (typeof usersMap !== 'undefined' ? usersMap.get(uid) : null) || state.members?.find(m => m.uid === uid) || {};
+      const prof = getUserProfile(uid, l.userName || l.displayName || member.displayName || member.name, l.userAvatar || member.photoURL || member.avatarUrl);
+      const logTimeVal = l.timestamp || l.checkedInAt || l.checkInTimestamp || l.createdAt || l.checkInTime;
+      const exactTime = formatCheckInExactTime(logTimeVal, true);
+      const sessionTitle = l.sessionTitle || (state.attendanceSessions?.find(s => s.id === l.sessionId)?.title) || 'Attendance';
+
+      return `
+        <div class="roster-breakdown-row bulk-select-card p-3 flex items-center justify-between gap-2.5 text-xs hover:bg-white/[0.04] transition rounded-xl cursor-pointer" data-bulk-id="${esc(l.id)}" data-log-id="${esc(l.id)}" data-session-id="${esc(l.sessionId || '')}">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            <div class="shrink-0">${renderAvatar(prof, 'w-8 h-8')}</div>
+            <div class="min-w-0 flex-1">
+              <div class="font-semibold text-white flex items-center gap-1.5 min-w-0">
+                <span class="truncate">${esc(prof.displayName)}</span>
+                <span class="text-[10px] text-neutral-400 font-normal truncate">• ${esc(sessionTitle)}</span>
+              </div>
+              <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                <span class="exact-time text-[10px] text-neutral-400">${esc(exactTime)}</span>
+                ${l.adminNote ? `<span class="text-[10px] text-amber-300/90 italic truncate">(${esc(l.adminNote)})</span>` : ''}
+                ${l.appliedTierLabel ? `<span class="text-[10px] text-emerald-400/80 font-mono block">${esc(l.appliedTierLabel)}</span>` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            ${renderCheckInMetricsPills(l)}
+            <button type="button" class="btn-edit-attendance-log text-[#0A84FF] hover:text-[#0A84FF]/80 text-xs px-2.5 py-1 rounded bg-[#0A84FF]/10 hover:bg-[#0A84FF]/20 border border-[#0A84FF]/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
+              <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              <span>Edit</span>
+            </button>
+            <button type="button" class="btn-delete-attendance-log text-rose-400 hover:text-rose-300 text-xs px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 font-medium transition flex items-center gap-1" data-log-id="${esc(l.id)}">
+              <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const btnAddManual = document.getElementById('btn-admin-add-manual-attendance');
+    if (btnAddManual) {
+      btnAddManual.onclick = () => openManualAttendanceModal();
+    }
+
+    tbodyEl.querySelectorAll('.roster-breakdown-row').forEach(row => {
+      const logId = row.dataset.logId;
+      const targetLog = allLogs.find(l => l.id === logId);
+      const sess = (state.attendanceSessions || []).find(s => s.id === targetLog?.sessionId) || { id: targetLog?.sessionId, title: targetLog?.sessionTitle || 'Session' };
+
+      if (logId && targetLog) {
+        attachRowGestures(row, {
+          bulkType: 'attendance_logs',
+          bulkId: logId,
+          onSingleTap: () => {
+            if (targetLog) openAdminLogEditModal(targetLog, sess);
+          }
+        });
+        attachUniversalSwipeActions(row, {
+          deleteLabel: 'Delete',
+          entityName: 'Attendance Record',
+          onDelete: async () => {
+            const confirmed = await openDeleteConfirmModal({
+              title: 'Delete Attendance Record?',
+              message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
+              confirmText: 'Delete'
+            });
+            if (!confirmed) return;
+            await deleteAttendanceRecordAndReverseLedger(logId, targetLog);
+            toast('Attendance record deleted and ledger reversed', 'success');
+            renderFilteredAttendanceLogsList();
+            renderAdminSessions();
+          }
+        });
+      }
+
+      row.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        if (selectionState.active && selectionState.type === 'attendance_logs') return;
+        if (targetLog) openAdminLogEditModal(targetLog, sess);
+      };
+    });
+
+    tbodyEl.querySelectorAll('.btn-edit-attendance-log').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const logId = btn.dataset.logId;
+        const targetLog = allLogs.find(l => l.id === logId);
+        if (targetLog) {
+          const sess = (state.attendanceSessions || []).find(s => s.id === targetLog.sessionId) || { id: targetLog.sessionId, title: targetLog.sessionTitle || 'Session' };
+          openAdminLogEditModal(targetLog, sess);
+        }
+      };
+    });
+
+    tbodyEl.querySelectorAll('.btn-delete-attendance-log').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const confirmed = await openDeleteConfirmModal({
+          title: 'Delete Attendance Record?',
+          message: 'This action will delete the attendance record and reverse all awarded points or applied penalty fines.',
+          confirmText: 'Delete'
+        });
+        if (!confirmed) return;
+        const logId = btn.dataset.logId;
+        const targetLog = allLogs.find(l => l.id === logId) || {};
+
+        btn.disabled = true;
+        btn.innerHTML = `<div class="w-3 h-3 border-2 border-white/20 border-t-rose-400 rounded-full animate-spin shrink-0"></div><span>Deleting...</span>`;
+
+        try {
+          await deleteAttendanceRecordAndReverseLedger(logId, targetLog);
+          toast('Attendance log deleted and ledger reversed', 'success');
+          renderFilteredAttendanceLogsList();
+          renderAdminSessions();
+        } catch (err) {
+          console.error('Failed to delete log:', err);
+          toast('Failed to delete log', 'error');
+          btn.disabled = false;
+          btn.innerHTML = `
+            <svg class="w-3 h-3 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            <span>Delete</span>
+          `;
+        }
+      };
+    });
+  }
+
+  const mergedLogsMap = new Map();
+  const addLog = (d) => {
+    if (!d) return;
+    const data = typeof d.data === 'function' ? d.data() : d;
+    const id = d.id || data.id;
+    if (!id) return;
+    const normalized = normalizeAttendanceLog({ id, ...data });
+    if (mergedLogsMap.has(id)) {
+      mergedLogsMap.set(id, { ...mergedLogsMap.get(id), ...normalized });
+    } else {
+      mergedLogsMap.set(id, normalized);
+    }
+  };
+  (state.attendanceRecords || []).forEach(addLog);
+  (state.attendanceLogs || []).forEach(addLog);
+  state.attendanceLogs = Array.from(mergedLogsMap.values());
+  renderFilteredAttendanceLogsList();
+}
+
+export const renderAdminAttendanceLogs = renderRecentLogs;
 
 function getFilteredAdminSubmissions() {
   const queryText = (state.adminSubmissionsSearch || '').toLowerCase().trim();
@@ -14988,8 +19174,9 @@ function getFilteredAdminSubmissions() {
   });
 }
 
-
 async function renderAdminMissedTasks() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-missed-tasks-container');
   const listEl = document.getElementById('admin-missed-tasks-list');
   const countBadge = document.getElementById('admin-missed-tasks-count-badge');
@@ -15008,11 +19195,10 @@ async function renderAdminMissedTasks() {
     const graceMs = (task.tieredRewards?.enabled ? (Number(task.tieredRewards.graceMinutes) || 120) : 0) * 60000;
     const deadlineWithGrace = win.closesAt + graceMs;
 
-    if (nowMs <= deadlineWithGrace) continue; // Not closed yet
+    if (nowMs <= deadlineWithGrace) continue;
 
     const occurrenceKey = win.occurrenceKey || 'once';
 
-    // Target members
     let targets = [];
     if (Array.isArray(task.assignedUids) && task.assignedUids.length > 0) {
       targets = task.assignedUids.map(uid => usersMap.get(uid)).filter(Boolean);
@@ -15094,77 +19280,89 @@ async function renderAdminMissedTasks() {
       btn.textContent = 'Applying penalties...';
 
       try {
-        const batch = writeBatch(db);
-        const processedDocIds = [];
+        const gasRes = await callGasBackend({
+          action: 'MANUAL_CLOSE_TASK',
+          taskId: targetItem.task.id,
+          occurrenceKey: targetItem.occurrenceKey
+        });
 
-        for (const member of targetItem.missedMembers) {
-          const lockDocId = `${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`;
-          
-          // Verify with Firestore getDoc for cross-tab idempotency
-          const lockDocRef = doc(db, 'missed_penalties', lockDocId);
-          const lockSnap = await getDoc(lockDocRef);
-          if (lockSnap.exists()) {
-            state.appliedMissedPenalties.add(lockDocId);
-            continue;
+        if (gasRes && gasRes.ok === false) {
+          throw new Error(gasRes.error || 'Failed to apply missed task penalties');
+        }
+
+        if (gasRes?.sent_opaque || gasRes?.status === 'skipped' || gasRes?.status === 'sent_nonblocking') {
+          const batch = writeBatch(db);
+          const processedDocIds = [];
+
+          for (const member of targetItem.missedMembers) {
+            const lockDocId = `${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`;
+            if (state.appliedMissedPenalties?.has(lockDocId)) {
+              continue;
+            }
+
+            const lockDocRef = doc(db, 'missed_penalties', lockDocId);
+            batch.set(lockDocRef, {
+              taskId: targetItem.task.id,
+              occurrenceKey: targetItem.occurrenceKey,
+              uid: member.uid,
+              penaltyPoints: targetItem.penaltyPoints,
+              adminUid: state.user.uid,
+              createdAt: serverTimestamp()
+            });
+
+            const userRef = doc(db, 'users', member.uid);
+            batch.update(userRef, {
+              penalties: increment(targetItem.penaltyPoints),
+              penaltyPoints: increment(targetItem.penaltyPoints),
+              totalPenalties: increment(targetItem.penaltyPoints),
+              updatedAt: serverTimestamp()
+            });
+
+            const txRef = doc(collection(db, 'users', member.uid, 'transactions'));
+            batch.set(txRef, {
+              type: 'penalty',
+              category: 'penalty',
+              amount: targetItem.penaltyPoints,
+              reason: `Missed task penalty: ${targetItem.task.title}`,
+              adminUid: state.user.uid,
+              adminName: state.user.displayName || 'Admin',
+              createdAt: serverTimestamp()
+            });
+
+            createNotification(batch, {
+              uid: member.uid,
+              title: 'Missed Task Penalty',
+              message: `A penalty of ${targetItem.penaltyPoints} points was recorded for missing the task "${targetItem.task.title}".`,
+              type: 'task',
+              refId: lockDocId
+            });
+
+            logAdminAction(batch, {
+              action: 'apply_missed_task_penalty',
+              targetUid: member.uid,
+              details: {
+                taskId: targetItem.task.id,
+                taskTitle: targetItem.task.title,
+                occurrenceKey: targetItem.occurrenceKey,
+                penaltyPoints: targetItem.penaltyPoints,
+                lockDocId
+              }
+            });
+
+            processedDocIds.push(lockDocId);
           }
 
-          batch.set(lockDocRef, {
-            taskId: targetItem.task.id,
-            occurrenceKey: targetItem.occurrenceKey,
-            uid: member.uid,
-            penaltyPoints: targetItem.penaltyPoints,
-            adminUid: state.user.uid,
-            createdAt: serverTimestamp()
-          });
-
-          const userRef = doc(db, 'users', member.uid);
-          batch.update(userRef, {
-            penalties: increment(targetItem.penaltyPoints),
-            updatedAt: serverTimestamp()
-          });
-
-          const txRef = doc(collection(db, 'users', member.uid, 'transactions'));
-          batch.set(txRef, {
-            type: 'penalty',
-            category: 'penalty',
-            amount: targetItem.penaltyPoints,
-            reason: `Missed task penalty: ${targetItem.task.title}`,
-            adminUid: state.user.uid,
-            adminName: state.user.displayName || 'Admin',
-            createdAt: serverTimestamp()
-          });
-
-          createNotification(batch, {
-            uid: member.uid,
-            title: 'Missed Task Penalty',
-            message: `A penalty of ${targetItem.penaltyPoints} points was recorded for missing the task "${targetItem.task.title}".`,
-            type: 'task',
-            refId: lockDocId
-          });
-
-          logAdminAction(batch, {
-            action: 'apply_missed_task_penalty',
-            targetUid: member.uid,
-            details: {
-              taskId: targetItem.task.id,
-              taskTitle: targetItem.task.title,
-              occurrenceKey: targetItem.occurrenceKey,
-              penaltyPoints: targetItem.penaltyPoints,
-              lockDocId
-            }
-          });
-
-          processedDocIds.push(lockDocId);
-        }
-
-        if (processedDocIds.length > 0) {
-          await batch.commit();
-          processedDocIds.forEach(id => state.appliedMissedPenalties.add(id));
-          toast(`Penalties applied to ${processedDocIds.length} member(s)`, 'success');
+          if (processedDocIds.length > 0) {
+            await batch.commit();
+            processedDocIds.forEach(id => state.appliedMissedPenalties.add(id));
+          }
         } else {
-          toast('All missed penalties were already processed.', 'info');
+          targetItem.missedMembers.forEach(member => {
+            state.appliedMissedPenalties.add(`${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`);
+          });
         }
 
+        toast(`Penalties applied for "${targetItem.task.title}"`, 'success');
         renderAdminMissedTasks();
       } catch (err) {
         console.error('Error applying missed penalties:', err);
@@ -15177,13 +19375,14 @@ async function renderAdminMissedTasks() {
 }
 
 function renderAdminSubmissions() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   renderAdminMissedTasks();
   const list = document.getElementById('admin-submissions-list');
   const taskSelect = document.getElementById('select-admin-filter-task');
   const loadMoreBtn = document.getElementById('btn-load-more-submissions');
   if (!list) return;
 
-  // Populate task filter dropdown if not focused
   if (taskSelect && document.activeElement !== taskSelect) {
     const currentVal = state.adminSubmissionsTaskFilter || 'all';
     const taskOptions = [`<option value="all">All Tasks</option>`];
@@ -15193,7 +19392,6 @@ function renderAdminSubmissions() {
     taskSelect.innerHTML = taskOptions.join('');
   }
 
-  // Update load more button visibility
   if (loadMoreBtn) {
     if (state.hasMoreSubmissions) {
       loadMoreBtn.classList.remove('hidden');
@@ -15218,7 +19416,6 @@ function renderAdminSubmissions() {
     const task = state.tasks.find(t => t.id === s.taskId);
     const dateFormatted = formatDateTime(s.submittedAt);
 
-    // Build question/answer elements
     let qaHtml = '';
     if (task && Array.isArray(task.questions) && task.questions.length > 0) {
       qaHtml = (Array.isArray(s.answers) && s.answers.length > 0)
@@ -15315,11 +19512,6 @@ function renderAdminSubmissions() {
   });
 }
 
-// ============================================================================
-// TASK 6: ATTENDANCE ASSIGNMENTS, IDEMPOTENT ABSENCE & WAIVER REQUESTS
-// ============================================================================
-
-
 export function generateFutureOccurrences(sessionTemplate, count = 52) {
   if (!sessionTemplate) return [];
   const schedule = sessionTemplate.schedule || sessionTemplate;
@@ -15370,7 +19562,6 @@ export function generateFutureOccurrences(sessionTemplate, count = 52) {
     const weekdayShort = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: APP_TIMEZONE }).toLowerCase();
     const weekdayLong = d.toLocaleDateString('en-US', { weekday: 'long', timeZone: APP_TIMEZONE }).toLowerCase();
 
-    // Normalized search variations string (e.g., "2026-11-08 11/8 11-8 8/11 8-11 8 nov november sunday sun...")
     const searchTerms = `${dateStr} ${monthNum}/${dayNum} ${monthNum}-${dayNum} ${dayNum}/${monthNum} ${dayNum}-${monthNum} ${dayNum} ${monthShort} ${monthLong} ${weekdayShort} ${weekdayLong} ${formattedDate} ${formattedTime}`.toLowerCase();
 
     return {
@@ -15393,7 +19584,6 @@ export function openRequestWaiverModal() {
     return;
   }
 
-  // STEP 1: Find UNIQUE service templates the user is rostered for
   const assignedSessions = (state.attendanceSessions || []).filter(session => {
     if (session.active === false || session.archived) return false;
     const targetType = session.targetType || (Array.isArray(session.assignedUids) && session.assignedUids.length > 0 ? 'custom' : (Array.isArray(session.badgeIds) && session.badgeIds.length > 0 ? 'badge' : 'all'));
@@ -15429,7 +19619,7 @@ export function openRequestWaiverModal() {
     bodyEl.innerHTML = '';
 
     if (currentStep === 1) {
-      // STEP 1: Unique Service Templates Selection
+
       const headerBox = document.createElement('div');
       headerBox.className = 'space-y-1 mb-2';
       headerBox.innerHTML = `
@@ -15482,7 +19672,7 @@ export function openRequestWaiverModal() {
         bodyEl.appendChild(listDiv);
       }
     } else {
-      // STEP 2: Pick Specific Date Occurrence & Fill Excuse Details
+
       const topRow = document.createElement('div');
       topRow.className = 'flex items-center justify-between pb-2 border-b border-white/10';
       topRow.innerHTML = `
@@ -15675,13 +19865,14 @@ function formatWaiverTargetDate(w) {
 }
 
 function renderAdminWaivers() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-waivers-list');
   const countEl = document.getElementById('admin-waiver-count');
   const labelEl = document.getElementById('admin-waivers-filter-label');
   const segMount = document.getElementById('admin-waivers-segmented-mount');
   if (!container) return;
 
-  // Prevent re-rendering and tearing down DOM while admin is actively typing in a note field
   if (document.activeElement && container.contains(document.activeElement)) {
     return;
   }
@@ -15690,7 +19881,6 @@ function renderAdminWaivers() {
   const all = state.waiverRequests || [];
   updateWaiversBadge(all.filter(w => w.status === 'pending').length);
 
-  // Segmented control: mounted once, then only its value is synced
   if (segMount && !segMount.firstChild) {
     segMount.appendChild(renderSegmented({
       id: 'admin-waivers-segmented',
@@ -15812,7 +20002,6 @@ function renderAdminWaivers() {
         updatedAt: serverTimestamp()
       });
 
-      // System Impact on attendance log
       if (waiver.sessionId && waiver.occurrenceKey && waiver.uid) {
         const logId = `${waiver.sessionId}_${waiver.occurrenceKey}_${waiver.uid}`;
         const logRef = doc(db, 'attendance_logs', logId);
@@ -15847,7 +20036,7 @@ function renderAdminWaivers() {
             resolvedBy: state.user.uid
           }, { merge: true });
         } else {
-          // Reverting from approved to rejected or pending: remove excused status
+
           batch.set(logRef, {
             status: 'unexcused',
             excused: false,
@@ -15856,7 +20045,6 @@ function renderAdminWaivers() {
         }
       }
 
-      // In-app notification for the member
       const statusLabel = newStatus === 'approved' ? 'Approved' : (newStatus === 'rejected' ? 'Rejected' : 'Moved to Pending');
       const serviceName = waiver.serviceName || waiver.sessionTitle || 'Service';
       const baseBody = `Your attendance excuse for ${serviceName} on ${targetDate} was ${statusLabel}.`;
@@ -15930,7 +20118,6 @@ function renderAdminWaivers() {
     btn.onclick = () => resolveWaiver(btn.dataset.id, 'pending', btn.closest('[data-waiver-id]'));
   });
 
-  // Attach stopPropagation and draft persistence on note inputs
   container.querySelectorAll('.input-waiver-note').forEach(inp => {
     inp.oninput = (e) => {
       waiverDraftNotes.set(inp.dataset.id, e.target.value);
@@ -15945,6 +20132,19 @@ function renderAdminWaivers() {
     attachRowGestures(card, {
       bulkType: 'waivers',
       bulkId: card.dataset.bulkId
+    });
+
+    const waiverId = card.dataset.waiverId || card.dataset.bulkId;
+    attachUniversalSwipeActions(card, {
+      archiveLabel: 'Approve',
+      onArchive: async () => {
+        await resolveWaiver(waiverId, 'approved', card);
+      },
+      deleteLabel: 'Reject',
+      onDelete: async () => {
+        await resolveWaiver(waiverId, 'rejected', card);
+      },
+      entityName: 'Excuse'
     });
   });
 }
@@ -16142,7 +20342,7 @@ function exportSubmissionsCSV() {
   a.download = `coc_submissions_${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  safeRemoveChild(document.body, a);
   URL.revokeObjectURL(url);
   toast(`Exported ${list.length} records to CSV`, 'success');
 }
@@ -16163,6 +20363,8 @@ function getFilteredAdminMembers() {
 }
 
 function renderAdminMembers() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const tbody = document.getElementById('admin-members-tbody');
   const loadMoreBtn = document.getElementById('btn-load-more-members');
   if (!tbody) return;
@@ -16192,22 +20394,23 @@ function renderAdminMembers() {
     const isDisabled = Boolean(m.disabled);
     const isSelected = selectionState.active && selectionState.type === 'members' && selectionState.selectedIds.has(m.uid);
     const memberEmail = esc(usersPrivate.get(m.uid)?.email || m.email || '');
-    const points = m.points || 0;
-    const penalties = m.penalties || 0;
-    const finesDue = m.finesDue || 0;
+    const points = Math.max(0, m.points || 0);
+    const penalties = Math.max(0, m.penalties || 0);
+    const finesDue = Math.max(0, m.finesDue ?? m.fines ?? m.quotas ?? 0);
 
     return `
       <div class="admin-member-row member-card-row bulk-select-card hover:bg-white/5 transition cursor-pointer select-none rounded-xl p-3 bg-white/[0.02] border border-white/5 mb-2${isDisabled ? ' member-disabled' : ''}${isSelected ? ' selected' : ''}" data-member-uid="${esc(m.uid)}" data-bulk-id="${esc(m.uid)}">
         ${BULK_INDICATOR_HTML}
         <div class="bulk-card-content flex flex-col w-full min-w-0 gap-2">
-          <!-- ROW 1 (Header): Avatar + Name + Badges (Left) | Chevron (Right) -->
+          <!-- ROW 1 (Header): Avatar + Name + Compact Icon-Only Badge Strip (Left) | Role & Chevron (Right) -->
           <div class="flex items-center justify-between w-full min-w-0">
             <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
               <div class="shrink-0">
                 ${renderAvatar(m, 'w-10 h-10')}
               </div>
-              <div class="min-w-0 flex-1">
-                <div class="font-bold text-white text-sm truncate">${esc(m.displayName || m.name || 'Member')}</div>
+              <div class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
+                <div class="font-bold text-white text-sm truncate shrink-0 max-w-[160px]">${esc(m.displayName || m.name || 'Member')}</div>
+                <div class="badge-row-container badge-strip-compact flex items-center gap-1 flex-1 min-w-0 overflow-hidden" data-uid="${esc(m.uid)}"></div>
               </div>
               ${isDisabled ? `
                 <span class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">
@@ -16229,15 +20432,14 @@ function renderAdminMembers() {
             </div>
           </div>
 
-          <!-- ROW 2 (Details): Email + Badges (wrap) (Left) | Stat pills: pts (Green), pen (Red), EGP (Orange) (Right) -->
+          <!-- ROW 2 (Details): Email (Left) | Stat pills: pts (Green), pen (Red), EGP (Orange) (Right) -->
           <div class="flex items-center justify-between w-full min-w-0 pt-2 border-t border-white/5 gap-2">
-            <div class="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
+            <div class="flex items-center gap-2 min-w-0 flex-1">
               ${memberEmail ? `
-                <span style="font-size:12px; color:#8E8E93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;">
+                <span style="font-size:12px; color:#8E8E93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px;">
                   ${memberEmail}
                 </span>
-              ` : ''}
-              <div class="badge-row-container flex items-center gap-1 min-w-0 flex-wrap" data-uid="${esc(m.uid)}"></div>
+              ` : '<span class="text-[11px] text-neutral-500">Active Member</span>'}
             </div>
             <div class="member-stats-wrap flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
               <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">${points} pts</span>
@@ -16271,7 +20473,8 @@ function renderAdminMembers() {
 }
 
 export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
-  if (!containerEl) return;
+  if (!containerEl || !uid || !db) return;
+  clearFsListener('member_ledger_tx');
   containerEl.innerHTML = `
     <div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
       <div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
@@ -16283,68 +20486,77 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
     const q = query(
       collection(db, 'users', uid, 'transactions'),
       orderBy('createdAt', 'desc'),
-      limit(50)
+      limit(100)
     );
-    const snap = await getDocs(q);
-    const txs = [];
-    snap.forEach(d => txs.push({ id: d.id, ...d.data() }));
+    const unsub = onSnapshot(q, (snap) => {
+      const txs = [];
+      snap.forEach(d => txs.push({ id: d.id, ...d.data() }));
 
-    if (countBadgeEl) {
-      countBadgeEl.textContent = txs.length;
-      if (txs.length > 0) countBadgeEl.classList.remove('hidden');
-    }
+      if (countBadgeEl) {
+        countBadgeEl.textContent = txs.length;
+        if (txs.length > 0) countBadgeEl.classList.remove('hidden');
+      }
 
-    if (txs.length === 0) {
+      if (txs.length === 0) {
+        containerEl.innerHTML = `
+          <div class="p-6 text-center text-xs text-neutral-400">
+            No transactions recorded yet.
+          </div>
+        `;
+        return;
+      }
+
       containerEl.innerHTML = `
-        <div class="p-6 text-center text-xs text-neutral-400">
-          No transactions recorded yet.
+        <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+          ${txs.map(tx => {
+            const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty';
+            let badgeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+            let sign = '+';
+            let unit = isPts ? 'pts' : 'EGP';
+
+            if (tx.type === 'penalty') {
+              badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+              sign = '-';
+            } else if (tx.type === 'fine') {
+              badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+              sign = '+';
+            } else if (tx.type === 'payment') {
+              badgeColor = 'text-blue-400 bg-blue-500/10 border-blue-500/20';
+              sign = '-';
+            } else if (tx.type === 'waive') {
+              badgeColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+              sign = 'Waived ';
+            }
+
+            const dateStr = tx.createdAt ? formatDateTime(tx.createdAt) : 'Just now';
+
+            return `
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
+                  <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
+                    ${sign}${tx.amount} ${unit}
+                  </span>
+                </div>
+                <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
+                <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
+                  <span>By ${esc(tx.adminName || 'Admin')}</span>
+                  <span>${dateStr}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
       `;
-      return;
-    }
-
-    containerEl.innerHTML = `
-      <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-        ${txs.map(tx => {
-          const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty';
-          let badgeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
-          let sign = '+';
-          let unit = isPts ? 'pts' : 'EGP';
-
-          if (tx.type === 'penalty') {
-            badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
-            sign = '-';
-          } else if (tx.type === 'fine') {
-            badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
-            sign = '+';
-          } else if (tx.type === 'payment') {
-            badgeColor = 'text-blue-400 bg-blue-500/10 border-blue-500/20';
-            sign = '-';
-          } else if (tx.type === 'waive') {
-            badgeColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-            sign = 'Waived ';
-          }
-
-          const dateStr = tx.createdAt ? formatDateTime(tx.createdAt) : 'Just now';
-
-          return `
-            <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
-              <div class="flex items-center justify-between gap-2">
-                <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
-                <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
-                  ${sign}${tx.amount} ${unit}
-                </span>
-              </div>
-              <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
-              <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
-                <span>By ${esc(tx.adminName || 'Admin')}</span>
-                <span>${dateStr}</span>
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `;
+    }, (err) => {
+      console.error('Error in transaction ledger listener:', err);
+      containerEl.innerHTML = `
+        <div class="p-4 text-center text-xs text-rose-400">
+          Failed to load ledger: ${esc(err.message)}
+        </div>
+      `;
+    });
+    setFsListener('member_ledger_tx', unsub);
   } catch (err) {
     console.error('Error loading transaction ledger:', err);
     containerEl.innerHTML = `
@@ -16357,8 +20569,6 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
 
 function openMemberControlModal(member) {
   let activeTab = 'profile';
-  let adjusterCategory = 'points'; // 'points' | 'financial'
-  let adjusterType = 'bonus'; // 'bonus' | 'penalty' | 'fine' | 'payment' | 'waive'
   let hasPendingChanges = false;
   let editedName = member.displayName || '';
   let selectedRole = member.role || (member.isAdmin ? 'admin' : 'member');
@@ -16369,7 +20579,7 @@ function openMemberControlModal(member) {
   const privateData = usersPrivate.get(currentMember.uid) || {};
   const memberEmail = privateData.email || currentMember.email || 'No email on record';
   const cachedFineSum = egpAggregateCache.get(currentMember.uid)?.fineSum || 0;
-  const finesBalance = (privateData.finesEGP || currentMember.finesDue || 0) + cachedFineSum;
+  const finesBalance = Math.max(0, (privateData.finesEGP ?? currentMember.finesDue ?? currentMember.fines ?? currentMember.quotas ?? 0) + cachedFineSum);
 
   function markDirty() {
     hasPendingChanges = true;
@@ -16395,9 +20605,6 @@ function openMemberControlModal(member) {
       <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap bg-[#0A84FF] text-white shadow-sm" data-tab="profile">
         Profile
       </button>
-      <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="adjuster">
-        Adjust
-      </button>
       <button type="button" class="member-tab-btn flex-shrink-0 py-1.5 px-3 rounded-lg font-semibold transition text-center whitespace-nowrap text-neutral-400 hover:text-white" data-tab="ledger">
         Ledger
       </button>
@@ -16420,10 +20627,14 @@ function openMemberControlModal(member) {
         <div class="min-w-0 flex-1">
           <div class="font-bold text-white text-base truncate" id="member-ctrl-hero-name">${esc(currentMember.displayName || currentMember.name || 'Member')}</div>
           <div class="text-[12px] text-neutral-400 truncate">${esc(memberEmail)}</div>
-          <div class="mt-1">
+          <div class="mt-1 flex items-center gap-2 flex-wrap">
             <span id="member-ctrl-hero-role-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}">
               ${isAdmin ? 'ADMIN' : 'MEMBER'}
             </span>
+            <button type="button" id="btn-ctrl-open-member-notifs" class="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#0A84FF]/15 hover:bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/30 transition flex items-center gap-1">
+              <svg class="w-3 h-3 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+              <span>Notification History &amp; Push</span>
+            </button>
           </div>
         </div>
       </div>
@@ -16442,20 +20653,23 @@ function openMemberControlModal(member) {
         </div>
       </div>
 
-      <!-- Badges Management Card -->
+      <!-- Badges Management Card (Zero-Latency Local Draft + Drag Reorder) -->
       <div class="ios-card space-y-3">
         <div class="flex items-center justify-between">
-          <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Member Badges</span>
-          <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline">
+          <div>
+            <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Member Badges (Draft)</span>
+            <p class="text-[10px] text-neutral-400">Drag <strong class="text-white">≡</strong> to set Primary badge (Index 0). Saved when you tap Save.</p>
+          </div>
+          <button type="button" id="btn-open-badge-picker" class="text-[#0A84FF] text-[11px] font-semibold hover:underline shrink-0">
             + Create New Badge
           </button>
         </div>
 
-        <div id="ctrl-badges-list" class="flex flex-wrap gap-1.5 min-h-8 items-center"></div>
+        <div id="ctrl-badges-list" class="badge-pills-expanded-wrap min-h-8 items-center"></div>
 
         <div>
-          <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Available Badges (Tap to Toggle):</label>
-          <div id="ctrl-live-badges-grid" class="flex flex-wrap gap-1.5"></div>
+          <label class="block text-neutral-400 text-[11px] font-semibold mb-1.5">Available Badges (Tap to Toggle in Draft):</label>
+          <div id="ctrl-live-badges-grid" class="badge-pills-expanded-wrap"></div>
         </div>
       </div>
 
@@ -16477,108 +20691,7 @@ function openMemberControlModal(member) {
       </div>
     </div>
 
-    <!-- TAB 2: Universal Adjuster (Points & Financials) -->
-    <div id="tab-sec-adjuster" class="member-tab-panel space-y-3 hidden">
-      <!-- Quick Metric Summary strip (.ios-card) -->
-      <div class="ios-card grid grid-cols-3 gap-2 text-center">
-        <div class="p-1">
-          <div class="text-[10px] text-neutral-400 uppercase font-mono">Points</div>
-          <div id="ctrl-summary-points" class="text-base font-bold text-amber-400 font-mono">${currentMember.points || 0}</div>
-        </div>
-        <div class="p-1 border-x border-white/10">
-          <div class="text-[10px] text-neutral-400 uppercase font-mono">Penalties</div>
-          <div id="ctrl-summary-penalties" class="text-base font-bold text-rose-400 font-mono">${currentMember.penalties || 0}</div>
-        </div>
-        <div class="p-1">
-          <div class="text-[10px] text-neutral-400 uppercase font-mono">Fines Due</div>
-          <div id="ctrl-summary-fines" class="text-base font-bold text-blue-400 font-mono">${finesBalance} EGP</div>
-        </div>
-      </div>
-
-      <!-- Adjuster Form (.ios-card) -->
-      <div class="ios-card space-y-3.5">
-        <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">Adjustment Type</div>
-        
-        <!-- Category Toggle Segmented -->
-        <div id="ctrl-adj-cat-wrap"></div>
-
-        <!-- Action Pills: Points Group -->
-        <div id="adj-action-points-group" class="grid grid-cols-2 gap-2">
-          <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition bg-emerald-500/20 border-emerald-500/50 text-emerald-300" data-type="bonus">
-            + Add Bonus
-          </button>
-          <button type="button" class="btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="penalty">
-            - Deduct Penalty
-          </button>
-        </div>
-
-        <!-- Action Pills: Financial Group -->
-        <div id="adj-action-financial-group" class="space-y-2 hidden">
-          <div class="flex items-center justify-between px-1">
-            <span class="text-[11px] text-neutral-400">Current Balance:</span>
-            <span id="ctrl-adj-fines-preview" class="text-xs font-mono text-[#0A84FF] font-bold">${finesBalance} EGP</span>
-          </div>
-          <div class="grid grid-cols-3 gap-2">
-            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-rose-500/20 border-rose-500/50 text-rose-300" data-type="fine">
-              + Add Fine
-            </button>
-            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="payment">
-              - Record Pay
-            </button>
-            <button type="button" class="btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10" data-type="waive">
-              ~ Waive Fine
-            </button>
-          </div>
-        </div>
-
-        <!-- Amount & Preset Chips -->
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">
-            Amount (<span id="ctrl-adj-unit-label">Points</span>)
-          </label>
-          <input id="ctrl-adjust-amount" type="number" min="1" step="1" class="ios-input text-white font-mono text-sm w-full" placeholder="e.g. 50" required />
-          
-          <!-- Points Presets -->
-          <div id="adj-presets-points" class="grid grid-cols-4 gap-1.5 mt-2">
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="25">25</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="250">250</button>
-          </div>
-
-          <!-- Financial Presets -->
-          <div id="adj-presets-financial" class="grid grid-cols-4 gap-1.5 mt-2 hidden">
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="50">50</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="100">100</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="200">200</button>
-            <button type="button" class="btn-adj-preset py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono text-xs text-center" data-amount="500">500</button>
-          </div>
-        </div>
-
-        <!-- Reason & Quick Chips -->
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">
-            Reason <span class="text-rose-400">*</span>
-          </label>
-          <textarea id="ctrl-adjust-reason" class="ios-input text-white text-xs leading-relaxed w-full" rows="2" placeholder="Required explanation for the transaction ledger..." required></textarea>
-          <div class="flex flex-wrap gap-1 mt-1.5">
-            ${['Meeting attendance', 'Late check-in', 'Special contribution', 'Manual adjustment'].map(chip => `
-              <button type="button" class="btn-quick-reason px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-neutral-300 transition" data-reason="${chip}">
-                ${chip}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-
-        <div class="pt-1">
-          <button type="button" id="btn-submit-adjust" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold transition flex items-center justify-center gap-2">
-            <span>Apply &amp; Record in Ledger</span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- TAB 3: Ledger -->
+    <!-- TAB 2: Ledger -->
     <div id="tab-sec-ledger" class="member-tab-panel space-y-3 hidden">
       <div class="ios-card space-y-3">
         <div class="flex items-center justify-between text-neutral-400 text-[11px] px-1">
@@ -16687,7 +20800,6 @@ function openMemberControlModal(member) {
     </div>
   `;
 
-  // Wire Tab Switching: Strictly CSS class toggle (Zero innerHTML re-render)
   modalBody.querySelectorAll('.member-tab-btn').forEach(btn => {
     btn.onclick = () => {
       activeTab = btn.dataset.tab;
@@ -16710,7 +20822,6 @@ function openMemberControlModal(member) {
     };
   });
 
-  // Wire Refresh Ledger
   const refreshLedgerBtn = modalBody.querySelector('#btn-refresh-ctrl-ledger');
   if (refreshLedgerBtn) {
     refreshLedgerBtn.onclick = () => {
@@ -16718,7 +20829,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Avatar Tap-to-Crop
   const avatarCropBtn = modalBody.querySelector('#btn-crop-member-avatar');
   if (avatarCropBtn) {
     avatarCropBtn.onclick = () => {
@@ -16748,7 +20858,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Display Name Input
   const nameInp = modalBody.querySelector('#ctrl-member-name');
   if (nameInp) {
     nameInp.oninput = (e) => {
@@ -16759,7 +20868,6 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Role Segmented Selector
   const roleWrap = modalBody.querySelector('#ctrl-role-seg-wrap');
   if (roleWrap) {
     roleWrap.appendChild(renderSegmented({
@@ -16793,7 +20901,6 @@ function openMemberControlModal(member) {
     }));
   }
 
-  // Mount Member Disable Switch
   const mountDisableSw = modalBody.querySelector('#mount-switch-member-disable');
   if (mountDisableSw) {
     mountDisableSw.appendChild(renderSwitch({
@@ -16819,7 +20926,6 @@ function openMemberControlModal(member) {
     }));
   }
 
-  // Mount Member Permanent Delete Button
   const delPermanentlyBtn = modalBody.querySelector('#btn-delete-member-permanently');
   if (delPermanentlyBtn) {
     delPermanentlyBtn.onclick = async () => {
@@ -16844,35 +20950,24 @@ function openMemberControlModal(member) {
     };
   }
 
-  // Wire Badges Management (Live Badges from Firestore)
-  function getMemberBadgeIdsSet() {
-    const set = new Set();
-    if (Array.isArray(currentMember.badgeIds)) {
-      currentMember.badgeIds.forEach(id => { if (id) set.add(String(id)); });
-    }
-    if (Array.isArray(currentMember.badges)) {
-      currentMember.badges.forEach(b => {
-        const id = typeof b === 'string' ? b : (b?.id || b?.label || b?.name);
-        if (id) set.add(String(id));
-      });
-    }
-    return set;
+  const openMemberNotifsBtn = modalBody.querySelector('#btn-ctrl-open-member-notifs');
+  if (openMemberNotifsBtn) {
+    openMemberNotifsBtn.onclick = () => {
+      openAdminMemberNotificationCenter(currentMember.uid);
+    };
   }
 
-  async function toggleMemberBadge(badgeObj) {
-    if (!badgeObj || !badgeObj.id) return;
+  const initialOrderedBadges = resolveOrderedUserBadges(currentMember.badges, currentMember);
+  const initialBadgeIds = initialOrderedBadges.map(b => String(b.id));
+  let draftBadgeIds = [...initialBadgeIds];
+
+  function getMemberBadgeIdsSet() {
+    return new Set(draftBadgeIds);
+  }
+
+  function resolveDraftBadgeObjects(idsList) {
     const allBadges = getAllAvailableBadges();
-    const assignedIds = getMemberBadgeIdsSet();
-    const isRemoving = assignedIds.has(badgeObj.id);
-
-    if (isRemoving) {
-      assignedIds.delete(badgeObj.id);
-    } else {
-      assignedIds.add(badgeObj.id);
-    }
-
-    const newBadgeIds = Array.from(assignedIds);
-    const newBadges = newBadgeIds.map(id => {
+    return idsList.map(id => {
       const found = allBadges.find(b => b.id === id);
       if (found) {
         return {
@@ -16884,48 +20979,23 @@ function openMemberControlModal(member) {
         };
       }
       const existing = (currentMember.badges || []).find(b => (typeof b === 'string' ? b : b?.id) === id);
-      return typeof existing === 'object' && existing ? existing : { id, label: id, color: '#0A84FF', icon: 'star' };
+      return typeof existing === 'object' && existing ? existing : { id, label: id, name: id, color: '#0A84FF', icon: 'star' };
     });
+  }
 
-    try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'users', currentMember.uid), {
-        badges: newBadges,
-        badgeIds: newBadgeIds,
-        updatedAt: serverTimestamp()
-      });
+  function toggleMemberBadge(badgeObj) {
+    if (!badgeObj || !badgeObj.id) return;
+    const targetId = String(badgeObj.id);
+    const existingIdx = draftBadgeIds.indexOf(targetId);
 
-      if (!isRemoving) {
-        createNotification(batch, {
-          uid: currentMember.uid,
-          title: 'Badge Awarded!',
-          message: `You have been awarded the "${badgeObj.label || badgeObj.name}" badge!`,
-          type: 'badge'
-        });
-      }
-
-      logAdminAction(batch, {
-        action: isRemoving ? 'badge_removed' : 'badge_awarded',
-        targetUid: currentMember.uid,
-        details: { badgeId: badgeObj.id, badgeLabel: badgeObj.label || badgeObj.name }
-      });
-
-      await batch.commit();
-      currentMember.badges = newBadges;
-      currentMember.badgeIds = newBadgeIds;
-      const inMap = usersMap.get(currentMember.uid);
-      if (inMap) {
-        inMap.badges = newBadges;
-        inMap.badgeIds = newBadgeIds;
-      }
-      toast(isRemoving ? `Badge "${badgeObj.label || badgeObj.name}" removed` : `Badge "${badgeObj.label || badgeObj.name}" awarded!`, isRemoving ? 'info' : 'success');
-      refreshBadgesDOM();
-      renderAdminMembers();
-      renderLeaderboard();
-    } catch (err) {
-      console.error('Error toggling badge:', err);
-      toast('Failed to update badge: ' + (err.message || err), 'error');
+    if (existingIdx !== -1) {
+      draftBadgeIds.splice(existingIdx, 1);
+    } else {
+      draftBadgeIds.push(targetId);
     }
+
+    markDirty();
+    refreshBadgesDOM();
   }
 
   function refreshBadgesDOM() {
@@ -16935,32 +21005,36 @@ function openMemberControlModal(member) {
     const assignedIds = getMemberBadgeIdsSet();
 
     if (badgesList) {
-      const assignedList = Array.from(assignedIds).map(id => {
-        const live = allBadges.find(b => b.id === id);
-        if (live) return live;
-        const raw = (currentMember.badges || []).find(b => (typeof b === 'string' ? b : b?.id) === id);
-        return typeof raw === 'object' && raw ? raw : { id, label: id, color: '#0A84FF', icon: 'star' };
-      });
+      const assignedList = resolveDraftBadgeObjects(draftBadgeIds);
 
       if (assignedList.length > 0) {
-        badgesList.innerHTML = assignedList.map(b => {
+        badgesList.innerHTML = assignedList.map((b, idx) => {
           const color = b.color || '#0A84FF';
           const iconKey = b.icon || b.iconKey || 'star';
           const label = b.label || b.name || b.id;
           return `
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition" style="background-color: ${color}24; border-color: ${color}55; color: ${color};">
-              <span class="w-3.5 h-3.5 flex items-center justify-center shrink-0">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
-              <span class="text-white">${esc(label)}</span>
+            <span class="badge-pill-expanded ctrl-assigned-badge-item select-none" data-badge-id="${esc(b.id)}" style="background-color: ${color}1F; border-color: ${color}4D;">
+              <span class="drag-reorder-handle !w-4 !h-4 !text-[12px] mr-0.5" data-no-row-tap="true" title="Drag to reorder badge priority">≡</span>
+              <span class="badge-pill-icon" style="color: ${color};">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
+              <span>${esc(label)}</span>
+              ${idx === 0 ? '<span class="px-1.5 py-0.2 rounded text-[9px] font-bold uppercase bg-[#0A84FF]/30 text-[#0A84FF]">Primary</span>' : ''}
               <button type="button" class="btn-remove-member-badge hover:text-rose-400 transition ml-0.5 text-white/70" data-badge-id="${esc(b.id)}" aria-label="Remove badge">&times;</button>
             </span>
           `;
         }).join('');
+
+        attachDragReorderList(badgesList, '.ctrl-assigned-badge-item', 'data-badge-id', (newOrder) => {
+          draftBadgeIds = newOrder;
+          markDirty();
+          refreshBadgesDOM();
+        });
       } else {
         badgesList.innerHTML = '<span class="text-neutral-500 italic text-[11px] py-1">No badges assigned to this member.</span>';
       }
 
       badgesList.querySelectorAll('.btn-remove-member-badge').forEach(btn => {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
           const bId = btn.dataset.badgeId;
           const found = allBadges.find(b => b.id === bId) || { id: bId, label: bId };
           toggleMemberBadge(found);
@@ -16978,10 +21052,10 @@ function openMemberControlModal(member) {
           const iconKey = badge.icon || badge.iconKey || 'star';
           const label = badge.label || badge.name || badge.id;
           return `
-            <button type="button" class="btn-toggle-live-badge text-[11px] px-2.5 py-1.5 rounded-xl border transition flex items-center gap-1.5 font-semibold ${alreadyHas ? 'ring-1 ring-white/30 text-white' : ' hover:bg-white/10 text-neutral-200'}" data-badge-id="${esc(badge.id)}" style="background-color: ${alreadyHas ? color + '38' : 'rgba(255,255,255,0.05)'}; border-color: ${alreadyHas ? color : 'rgba(255,255,255,0.12)'};">
-              <span class="w-3.5 h-3.5 flex items-center justify-center shrink-0" style="color: ${color};">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
+            <button type="button" class="btn-toggle-live-badge badge-pill-expanded cursor-pointer transition ${alreadyHas ? 'ring-1 ring-white/40' : 'opacity-75 hover:opacity-100'}" data-badge-id="${esc(badge.id)}" style="background-color: ${alreadyHas ? color + '30' : 'rgba(255,255,255,0.05)'}; border-color: ${alreadyHas ? color : 'rgba(255,255,255,0.12)'};">
+              <span class="badge-pill-icon" style="color: ${color};">${getIconSvg(iconKey, 'w-3.5 h-3.5')}</span>
               <span>${esc(label)}</span>
-              <span class="text-[10px] ml-0.5 ${alreadyHas ? 'text-emerald-300' : 'text-neutral-400'}">${alreadyHas ? '✓' : '+'}</span>
+              <span class="text-[10px] ml-0.5 ${alreadyHas ? 'text-emerald-300 font-bold' : 'text-neutral-400'}">${alreadyHas ? '✓' : '+'}</span>
             </button>
           `;
         }).join('');
@@ -17003,156 +21077,15 @@ function openMemberControlModal(member) {
   if (openBadgePickerBtn) {
     openBadgePickerBtn.onclick = () => {
       openBadgePickerSheet({
-        onSelect: async (badgeObj) => {
+        onSelect: (badgeObj) => {
           if (!badgeObj) return;
           const assignedIds = getMemberBadgeIdsSet();
           if (!assignedIds.has(badgeObj.id)) {
-            await toggleMemberBadge(badgeObj);
+            toggleMemberBadge(badgeObj);
           }
         }
       });
     };
-  }
-
-  // Wire Adjuster Category Segmented (In-place switching)
-  const adjCatWrap = modalBody.querySelector('#ctrl-adj-cat-wrap');
-  if (adjCatWrap) {
-    adjCatWrap.appendChild(renderSegmented({
-      id: 'adj-cat-segmented',
-      options: [
-        { value: 'points', label: 'Points & Penalties' },
-        { value: 'financial', label: 'Financials (EGP)' }
-      ],
-      value: adjusterCategory,
-      onChange: (val) => {
-        adjusterCategory = val;
-        adjusterType = val === 'points' ? 'bonus' : 'fine';
-        
-        const pointsGroup = modalBody.querySelector('#adj-action-points-group');
-        const finGroup = modalBody.querySelector('#adj-action-financial-group');
-        const pointsPresets = modalBody.querySelector('#adj-presets-points');
-        const finPresets = modalBody.querySelector('#adj-presets-financial');
-        const unitLabel = modalBody.querySelector('#ctrl-adj-unit-label');
-
-        if (pointsGroup) pointsGroup.classList.toggle('hidden', val !== 'points');
-        if (finGroup) finGroup.classList.toggle('hidden', val !== 'financial');
-        if (pointsPresets) pointsPresets.classList.toggle('hidden', val !== 'points');
-        if (finPresets) finPresets.classList.toggle('hidden', val !== 'financial');
-        if (unitLabel) unitLabel.textContent = val === 'points' ? 'Points' : 'EGP';
-
-        updateAdjusterTypeButtons();
-      }
-    }));
-  }
-
-  function updateAdjusterTypeButtons() {
-    modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
-      const isSel = btn.dataset.type === adjusterType;
-      if (btn.dataset.type === 'bonus') {
-        btn.className = `btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${isSel ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'penalty') {
-        btn.className = `btn-adj-type py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${isSel ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'fine') {
-        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-rose-500/20 border-rose-500/50 text-rose-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'payment') {
-        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      } else if (btn.dataset.type === 'waive') {
-        btn.className = `btn-adj-type py-2 px-2 rounded-xl border text-center font-bold text-[11px] transition ${isSel ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'}`;
-      }
-    });
-  }
-
-  // Wire Adjuster Action Pills
-  modalBody.querySelectorAll('.btn-adj-type').forEach(btn => {
-    btn.onclick = () => {
-      adjusterType = btn.dataset.type;
-      updateAdjusterTypeButtons();
-    };
-  });
-
-  // Wire Adjuster Preset Chips
-  modalBody.querySelectorAll('.btn-adj-preset').forEach(btn => {
-    btn.onclick = () => {
-      const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
-      if (amtInput) amtInput.value = btn.dataset.amount;
-    };
-  });
-
-  // Wire Quick Reason Chips
-  modalBody.querySelectorAll('.btn-quick-reason').forEach(btn => {
-    btn.onclick = () => {
-      const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
-      if (reasonInput) reasonInput.value = btn.dataset.reason;
-    };
-  });
-
-  // Wire Adjuster Submit
-  const submitAdjustBtn = modalBody.querySelector('#btn-submit-adjust');
-  if (submitAdjustBtn) {
-    submitAdjustBtn.onclick = async () => {
-        const amtVal = Math.abs(Number(modalBody.querySelector('#ctrl-adjust-amount')?.value));
-        if (isNaN(amtVal) || amtVal <= 0) {
-          toast('Please enter a valid amount greater than 0', 'error');
-          return;
-        }
-
-        const reasonVal = String(modalBody.querySelector('#ctrl-adjust-reason')?.value || '').trim();
-        if (!reasonVal) {
-          toast('Adjustment reason is mandatory for the ledger', 'error');
-          return;
-        }
-
-        submitAdjustBtn.disabled = true;
-        submitAdjustBtn.textContent = 'Recording adjustment...';
-
-        try {
-          let bucket = 'points';
-          let direction = 'add';
-          if (adjusterCategory === 'points') {
-            bucket = adjusterType === 'bonus' ? 'points' : 'penalties';
-            direction = adjusterType === 'bonus' ? 'add' : 'add';
-          } else {
-            bucket = 'fines';
-            direction = adjusterType === 'fine' ? 'add' : 'deduct';
-          }
-
-          const result = await applyAccountAdjustment({
-            targetUid: currentMember.uid,
-            bucket,
-            direction,
-            amount: amtVal,
-            reason: reasonVal
-          });
-
-          // Update Summary metrics in place
-          const ptsEl = modalBody.querySelector('#ctrl-summary-points');
-          if (ptsEl && result.newPoints !== undefined) ptsEl.textContent = result.newPoints;
-          const penEl = modalBody.querySelector('#ctrl-summary-penalties');
-          if (penEl && result.newPenalties !== undefined) penEl.textContent = result.newPenalties;
-          const finEl = modalBody.querySelector('#ctrl-summary-fines');
-          if (finEl && result.newFinesDue !== undefined) finEl.textContent = `${result.newFinesDue} EGP`;
-
-          // Reset inputs
-          const amtInput = modalBody.querySelector('#ctrl-adjust-amount');
-          if (amtInput) amtInput.value = '';
-          const reasonInput = modalBody.querySelector('#ctrl-adjust-reason');
-          if (reasonInput) reasonInput.value = '';
-
-          if (ledgerLoaded) {
-            loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
-          }
-
-          toast('Successfully applied adjustment', 'success');
-          if (typeof renderAdminMembers === 'function') renderAdminMembers();
-          if (typeof renderLeaderboard === 'function') renderLeaderboard();
-        } catch (err) {
-          console.error('Adjuster error:', err);
-          toast('Failed to record adjustment: ' + err.message, 'error');
-        } finally {
-          submitAdjustBtn.disabled = false;
-          submitAdjustBtn.textContent = 'Apply & Record in Ledger';
-        }
-      };
   }
 
   openModal({
@@ -17172,19 +21105,32 @@ function openMemberControlModal(member) {
       try {
         const batch = writeBatch(db);
         const userRef = doc(db, 'users', member.uid);
+        const newBadges = resolveDraftBadgeObjects(draftBadgeIds);
+        const newlyAddedBadges = newBadges.filter(b => !initialBadgeIds.includes(String(b.id)));
 
         batch.update(userRef, {
           displayName: cleanName,
           name: cleanName,
           role: selectedRole,
           isAdmin: selectedRole === 'admin',
+          badgeIds: draftBadgeIds,
+          badges: newBadges,
           updatedAt: serverTimestamp()
+        });
+
+        newlyAddedBadges.forEach(badgeObj => {
+          createNotification(batch, {
+            uid: member.uid,
+            title: 'Badge Awarded!',
+            message: `You have been awarded the "${badgeObj.label || badgeObj.name}" badge!`,
+            type: 'badge'
+          });
         });
 
         logAdminAction(batch, {
           action: 'member_updated',
           targetUid: member.uid,
-          details: { displayName: cleanName, role: selectedRole }
+          details: { displayName: cleanName, role: selectedRole, badgeIds: draftBadgeIds }
         });
 
         await batch.commit();
@@ -17193,6 +21139,10 @@ function openMemberControlModal(member) {
         member.name = cleanName;
         member.role = selectedRole;
         member.isAdmin = (selectedRole === 'admin');
+        member.badgeIds = [...draftBadgeIds];
+        member.badges = newBadges;
+        currentMember.badgeIds = [...draftBadgeIds];
+        currentMember.badges = newBadges;
 
         const u = usersMap.get(member.uid);
         if (u) {
@@ -17200,10 +21150,22 @@ function openMemberControlModal(member) {
           u.name = cleanName;
           u.role = selectedRole;
           u.isAdmin = (selectedRole === 'admin');
+          u.badgeIds = [...draftBadgeIds];
+          u.badges = newBadges;
+        }
+        if (state.user?.uid === member.uid) {
+          state.user.displayName = cleanName;
+          state.user.name = cleanName;
+          state.user.role = selectedRole;
+          state.user.isAdmin = (selectedRole === 'admin');
+          state.user.badgeIds = [...draftBadgeIds];
+          state.user.badges = newBadges;
+          updateProfileUI();
         }
 
         renderMembersAdmin();
-        toast('Member profile saved successfully', 'success');
+        renderLeaderboard();
+        toast('Member profile & badges saved successfully', 'success');
         hasPendingChanges = false;
         return true;
       } catch (err) {
@@ -17232,7 +21194,7 @@ async function handleRepairTotals() {
   });
 
   try {
-    // 1. Fetch all members with pagination
+
     let allUsers = [];
     let lastDoc = null;
     while (true) {
@@ -17251,13 +21213,11 @@ async function handleRepairTotals() {
     const nowMs = serverNow();
     const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
 
-    // 2. Audit each member with submissions + bonus transactions + attendance logs
     for (const u of allUsers) {
       let realPoints = 0;
       let realMonthPoints = 0;
       let realWeekPoints = 0;
 
-      // 2.1 Verified Task Submissions
       const subSnap = await getDocs(query(collection(db, 'submissions'), where('uid', '==', u.uid))).catch(() => ({ docs: [] }));
       subSnap.docs.forEach(d => {
         const s = d.data();
@@ -17268,7 +21228,6 @@ async function handleRepairTotals() {
         if (weekKeyOf(sTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += pts;
       });
 
-      // 2.2 Points & Deduction Transactions
       const txSnap = await getDocs(query(collection(db, 'users', u.uid, 'transactions'))).catch(() => ({ docs: [] }));
       let txDeductions = 0;
       txSnap.docs.forEach(d => {
@@ -17284,7 +21243,6 @@ async function handleRepairTotals() {
         }
       });
 
-      // 2.3 Attendance Penalties
       const attAgg = await getAggregateFromServer(query(collection(db, 'attendance_logs'), where('uid', '==', u.uid)), {
         totalPenalty: sum('penalty')
       }).catch(() => ({ data: () => ({ totalPenalty: 0 }) }));
@@ -17295,11 +21253,11 @@ async function handleRepairTotals() {
       const curMonthPoints = (u.monthKey === curMonthKey || u.monthBucket === curMonthKey) ? (u.monthPoints || 0) : 0;
       const curWeekPoints = (u.weekKey === curWeekKey || u.weekBucket === curWeekKey) ? (u.weekPoints || 0) : 0;
 
-      const needsRepair = curPoints !== realPoints || 
-                          curPenalties !== realPenalties || 
-                          u.monthKey !== curMonthKey || 
-                          u.monthPoints !== realMonthPoints || 
-                          u.weekKey !== curWeekKey || 
+      const needsRepair = curPoints !== realPoints ||
+                          curPenalties !== realPenalties ||
+                          u.monthKey !== curMonthKey ||
+                          u.monthPoints !== realMonthPoints ||
+                          u.weekKey !== curWeekKey ||
                           u.weekPoints !== realWeekPoints;
 
       if (needsRepair) {
@@ -17337,7 +21295,6 @@ async function handleRepairTotals() {
       return;
     }
 
-    // Display mismatches preview
     bodyEl.innerHTML = `
       <div class="text-left space-y-4">
         <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
@@ -17483,10 +21440,6 @@ async function handleRepairTotals() {
   }
 }
 
-/* ==========================================================================
-   UI RENDERING: BROADCAST CAROUSEL & ADMIN BROADCASTS (Task 6)
-   ========================================================================== */
-
 let broadcastTimer = null;
 let currentBroadcastIndex = 0;
 let isBroadcastModalOpen = false;
@@ -17514,16 +21467,14 @@ export function getActiveBroadcasts() {
   ]);
 
   return (state.broadcasts || []).filter(b => {
-    // 1. Exclude archived broadcasts
+
     if (b.isArchived === true || b.archived === true || b.status === 'archived') return false;
 
-    // 2. Ensure serverNow() is strictly within start/end limits
     const startMs = typeof b.startDateTime === 'number' ? b.startDateTime : (b.startDateTime?.toMillis ? b.startDateTime.toMillis() : new Date(b.startDateTime || 0).getTime());
     const endMs = typeof b.endDateTime === 'number' ? b.endDateTime : (b.endDateTime?.toMillis ? b.endDateTime.toMillis() : new Date(b.endDateTime || 0).getTime());
     if (startMs && now < startMs) return false;
     if (endMs && now > endMs) return false;
 
-    // 3. Strictly match audience: badgeIds or 'all'
     const targetType = b.targetType || 'all';
     if (targetType === 'all') return true;
 
@@ -17551,7 +21502,6 @@ function ensureBroadcastTicker() {
     const active = getActiveBroadcasts();
     const fillEl = document.getElementById('broadcast-progress-fill') || document.querySelector('.broadcast-progress-fill');
 
-    // If active <= 1: do not rotate, reset width to 0%
     if (active.length <= 1) {
       broadcastProgressMs = 0;
       lastBroadcastTickMs = Date.now();
@@ -17559,7 +21509,6 @@ function ensureBroadcastTicker() {
       return;
     }
 
-    // Pause on modal open, touch/hold, hover, or document.hidden
     if (isBroadcastModalOpen || isBannerHeldOrHovered || (typeof document !== 'undefined' && document.hidden)) {
       lastBroadcastTickMs = Date.now();
       return;
@@ -17578,7 +21527,7 @@ function ensureBroadcastTicker() {
     broadcastProgressMs += delta;
 
     if (broadcastProgressMs >= durationMs) {
-      // 100% reached: advance immediately to next broadcast, reset width to 0%, repeat
+
       broadcastProgressMs = 0;
       if (fillEl) {
         fillEl.style.transition = 'none';
@@ -17606,7 +21555,6 @@ export function renderHomeBroadcastBanner() {
 
   const active = getActiveBroadcasts();
 
-  // If activeBroadcasts.length === 0: hide banner
   if (active.length === 0) {
     banner.classList.add('hidden');
     if (fillEl) fillEl.style.width = '0%';
@@ -17628,12 +21576,10 @@ export function renderHomeBroadcastBanner() {
     iconEl.innerHTML = getIconSvg(current.icon || 'megaphone', 'w-4 h-4 text-[#0A84FF]');
   }
 
-  // Tapping banner opens Broadcast Detail modal
   banner.onclick = () => {
     openBroadcastDetailModal(current.id);
   };
 
-  // Wire pause listeners on touch/hold and mouse hover
   if (!banner.dataset.touchWired) {
     banner.dataset.touchWired = 'true';
     banner.addEventListener('touchstart', () => { isBannerHeldOrHovered = true; }, { passive: true });
@@ -17643,7 +21589,6 @@ export function renderHomeBroadcastBanner() {
     banner.addEventListener('mouseleave', () => { isBannerHeldOrHovered = false; lastBroadcastTickMs = Date.now(); });
   }
 
-  // If active.length === 1: hide track, do not run rotation
   if (active.length === 1) {
     if (trackEl) trackEl.classList.add('hidden');
     if (fillEl) fillEl.style.width = '0%';
@@ -17780,7 +21725,6 @@ function openBroadcastDetailModal(initialBroadcastOrId) {
   });
 }
 
-// 30-second re-evaluation interval for active broadcasts
 if (!broadcastEvalInterval) {
   broadcastEvalInterval = setInterval(() => {
     renderHomeBroadcastBanner();
@@ -17788,6 +21732,8 @@ if (!broadcastEvalInterval) {
 }
 
 function renderAdminBroadcasts() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   const container = document.getElementById('admin-broadcasts-list');
   if (!container) return;
 
@@ -17859,26 +21805,6 @@ function renderAdminBroadcasts() {
       }
     }
 
-    const actionsHtml = isArchivedItem ? `
-      <div class="flex items-center gap-1.5" data-no-row-tap="true">
-        <button type="button" class="btn-broadcast-restore px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Restore
-        </button>
-        <button type="button" class="btn-broadcast-delete px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Permanent Delete
-        </button>
-      </div>
-    ` : `
-      <div class="flex items-center gap-1.5" data-no-row-tap="true">
-        <button type="button" class="btn-broadcast-archive px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/10 hover:bg-white/15 text-neutral-200 border border-white/15 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Archive
-        </button>
-        <button type="button" class="btn-broadcast-delete px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer" data-broadcast-id="${esc(b.id)}">
-          Delete
-        </button>
-      </div>
-    `;
-
     return `
       <div class="glass-card bulk-select-card p-3.5 space-y-2 text-xs cursor-pointer select-none rounded-xl hover:bg-white/[0.04] transition${isSelected ? ' selected' : ''}" data-broadcast-id="${esc(b.id)}" data-bulk-id="${esc(b.id)}">
         ${BULK_INDICATOR_HTML}
@@ -17924,36 +21850,11 @@ function renderAdminBroadcasts() {
               <span>Schedule:</span>
               <span>${startFormatted} &rarr; ${endFormatted}</span>
             </div>
-            ${actionsHtml}
           </div>
         </div>
       </div>
     `;
   }).join('');
-
-  container.querySelectorAll('.btn-broadcast-archive').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) handleArchiveBroadcast(b, true);
-    };
-  });
-
-  container.querySelectorAll('.btn-broadcast-restore').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) handleArchiveBroadcast(b, false);
-    };
-  });
-
-  container.querySelectorAll('.btn-broadcast-delete').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const b = state.broadcasts.find(x => x.id === btn.dataset.broadcastId);
-      if (b) handleDeleteBroadcast(b);
-    };
-  });
 
   container.querySelectorAll('.bulk-select-card').forEach(card => {
     attachRowGestures(card, {
@@ -17963,6 +21864,39 @@ function renderAdminBroadcasts() {
         const b = state.broadcasts.find(x => x.id === card.dataset.broadcastId);
         if (b) openAdminBroadcastModal(b);
       }
+    });
+
+    const bId = card.dataset.broadcastId;
+    const b = (state.broadcasts || []).find(x => x.id === bId);
+    attachUniversalSwipeActions(card, {
+      archiveLabel: (b?.isArchived || b?.archived) ? 'Unarchive' : 'Archive',
+      onArchive: async () => {
+        try {
+          const nextArchived = !(b?.isArchived || b?.archived);
+          await updateDoc(doc(db, 'broadcasts', bId), { isArchived: nextArchived, archived: nextArchived, updatedAt: serverTimestamp() });
+          if (b) { b.isArchived = nextArchived; b.archived = nextArchived; }
+          renderAdminBroadcasts();
+          renderHomeBroadcastBanner();
+          toast(nextArchived ? 'Broadcast archived' : 'Broadcast unarchived', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to update broadcast archive status', 'error');
+        }
+      },
+      deleteLabel: 'Delete',
+      onDelete: async () => {
+        try {
+          await deleteDoc(doc(db, 'broadcasts', bId));
+          state.broadcasts = (state.broadcasts || []).filter(x => x.id !== bId);
+          renderAdminBroadcasts();
+          renderHomeBroadcastBanner();
+          toast('Broadcast deleted', 'success');
+        } catch (err) {
+          console.error(err);
+          toast('Failed to delete broadcast', 'error');
+        }
+      },
+      entityName: 'Broadcast'
     });
   });
 }
@@ -18015,7 +21949,7 @@ function openAdminBroadcastModal(broadcast = null) {
       <!-- Card 1: Announcement Identity -->
       <div class="ios-card space-y-3">
         <div class="text-[11px] font-bold text-neutral-400 tracking-wider">ANNOUNCEMENT IDENTITY</div>
-        
+
         <!-- Broadcast Icon Row -->
         <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/5 border border-white/10">
           <div class="flex items-center gap-3 min-w-0">
@@ -18054,7 +21988,7 @@ function openAdminBroadcastModal(broadcast = null) {
       <!-- Card 2: Audience & Rotation -->
       <div class="ios-card space-y-3">
         <div class="text-[11px] font-bold text-neutral-400 tracking-wider">AUDIENCE &amp; ROTATION</div>
-        
+
         <!-- Target Audience -->
         <div>
           <label class="block text-neutral-300 font-semibold mb-1.5">Target Audience</label>
@@ -18113,28 +22047,13 @@ function openAdminBroadcastModal(broadcast = null) {
         <input type="text" id="broadcastFooter" class="ios-input text-white text-xs" maxlength="80" placeholder="e.g. Bring your laptop and ID badge" value="${esc(broadcast?.customFooter || "")}" />
         <p class="text-[10px] text-neutral-400">Displayed at the bottom of the member detail card. Leave empty to omit the footer.</p>
       </div>
-
-      ${broadcast ? `
-        <!-- Card 5: Broadcast Actions (Archive / Restore / Delete) -->
-        <div class="ios-card space-y-2">
-          <div class="text-[11px] font-bold text-neutral-400 tracking-wider">BROADCAST ACTIONS</div>
-          <div class="grid grid-cols-2 gap-2">
-            <button type="button" id="btnModalArchiveBroadcast" class="py-2.5 px-3 rounded-xl text-xs font-semibold ${(broadcast.isArchived || broadcast.archived) ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30' : 'bg-white/10 hover:bg-white/15 text-white border border-white/15'} transition cursor-pointer">
-              ${(broadcast.isArchived || broadcast.archived) ? 'Restore Broadcast' : 'Archive Broadcast'}
-            </button>
-            <button type="button" id="btnModalDeleteBroadcast" class="py-2.5 px-3 rounded-xl text-xs font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer">
-              ${(broadcast.isArchived || broadcast.archived) ? 'Permanent Delete' : 'Delete Broadcast'}
-            </button>
-          </div>
-        </div>
-      ` : ''}
     `;
 
     wireForm();
   }
 
   function wireForm() {
-    // 1. Icon Change Button & Unified Color Picker (FIX 6)
+
     const broadcastColorMount = modalBody.querySelector("#broadcast-color-picker-mount");
     if (broadcastColorMount) {
       broadcastColorMount.appendChild(renderAdvancedColorPicker({
@@ -18164,7 +22083,6 @@ function openAdminBroadcastModal(broadcast = null) {
       };
     }
 
-    // 2. Audience Segmented Buttons
     const segButtons = modalBody.querySelectorAll(".btn-seg-audience");
     const badgesSection = modalBody.querySelector("#broadcastBadgesContainer");
     segButtons.forEach(btn => {
@@ -18183,7 +22101,6 @@ function openAdminBroadcastModal(broadcast = null) {
 
     renderBadgePills();
 
-    // 3. Rotation Duration Presets & Input
     const presetBtns = modalBody.querySelectorAll("#broadcastDurationPresets .duration-pill");
     const durationInput = modalBody.querySelector("#broadcastDurationInput");
 
@@ -18205,23 +22122,6 @@ function openAdminBroadcastModal(broadcast = null) {
             b.classList.toggle("active", parseInt(b.dataset.sec, 10) === val);
           });
         }
-      };
-    }
-
-    const modalArchiveBtn = modalBody.querySelector("#btnModalArchiveBroadcast");
-    if (modalArchiveBtn && broadcast) {
-      modalArchiveBtn.onclick = async () => {
-        const isCurrentlyArchived = Boolean(broadcast.isArchived || broadcast.archived);
-        closeAllModals();
-        await handleArchiveBroadcast(broadcast, !isCurrentlyArchived);
-      };
-    }
-
-    const modalDeleteBtn = modalBody.querySelector("#btnModalDeleteBroadcast");
-    if (modalDeleteBtn && broadcast) {
-      modalDeleteBtn.onclick = async () => {
-        closeAllModals();
-        await handleDeleteBroadcast(broadcast);
       };
     }
   }
@@ -18360,7 +22260,6 @@ function openAdminBroadcastModal(broadcast = null) {
           payload.createdAt = serverTimestamp();
           const docRef = await addDoc(collection(db, "broadcasts"), payload);
 
-          // Write matching notifications_broadcast doc(s)
           if (targetType === "badge") {
             for (const bId of selectedBadgeIds) {
               await addDoc(collection(db, "notifications_broadcast"), {
@@ -18454,7 +22353,6 @@ export async function handleArchiveBroadcast(broadcast, shouldArchive = true) {
       console.warn('Log broadcast archive action:', lErr);
     }
 
-    // Update local state & re-render ONLY after DB resolves
     const target = state.broadcasts.find(b => b.id === broadcast.id);
     if (target) {
       target.isArchived = shouldArchive;
@@ -18485,10 +22383,9 @@ export async function handleDeleteBroadcast(broadcast) {
   if (!confirm) return;
 
   try {
-    // 1. Await actual Firestore database deletion FIRST
+
     await deleteDoc(doc(db, 'broadcasts', broadcast.id));
 
-    // 2. Clean up matching broadcast notification documents
     try {
       const notifSnap = await getDocs(query(collection(db, 'notifications_broadcast'), where('broadcastId', '==', broadcast.id)));
       if (!notifSnap.empty) {
@@ -18500,7 +22397,6 @@ export async function handleDeleteBroadcast(broadcast) {
       console.warn('Cleanup broadcast notifications:', nErr);
     }
 
-    // 3. Log admin audit action
     try {
       const batch = writeBatch(db);
       logAdminAction(batch, {
@@ -18512,7 +22408,6 @@ export async function handleDeleteBroadcast(broadcast) {
       console.warn('Log broadcast delete action:', lErr);
     }
 
-    // 4. Only update local state, re-render, and show toast AFTER DB resolves
     state.broadcasts = state.broadcasts.filter(b => b.id !== broadcast.id);
     renderAdminBroadcasts();
     renderHomeBroadcastBanner();
@@ -18529,7 +22424,7 @@ export async function handleDeleteBroadcast(broadcast) {
 async function importLegacyAnnouncements() {
   let importedCount = 0;
   try {
-    // 1. Check settings/app_config.announcementEn
+
     if (state.settings?.announcementEn) {
       const existing = state.broadcasts.find(b => b.title === state.settings.announcementEn);
       if (!existing) {
@@ -18548,7 +22443,6 @@ async function importLegacyAnnouncements() {
       }
     }
 
-    // 2. Check legacy 'announcements' collection if one exists
     try {
       const snap = await getDocs(collection(db, 'announcements'));
       for (const d of snap.docs) {
@@ -18571,7 +22465,7 @@ async function importLegacyAnnouncements() {
         }
       }
     } catch (collErr) {
-      // Announcements collection might not exist; safe to continue
+
     }
 
     if (importedCount > 0) {
@@ -18614,7 +22508,6 @@ function applySettings() {
     announcementBar.classList.add('hidden');
   }
 
-  // Sync Admin Hub settings fields with current state
   const appNameInput = document.getElementById('input-settings-appname');
   if (appNameInput && state.settings.appName) appNameInput.value = state.settings.appName;
   const logoUrlInput = document.getElementById('input-settings-logourl');
@@ -18631,9 +22524,6 @@ function applySettings() {
   if (defaultPeriodInput && state.settings.defaultLeaderboardPeriod) defaultPeriodInput.value = state.settings.defaultLeaderboardPeriod;
 }
 
-/* ==========================================================================
-   EVENT HANDLERS & INITIALIZATION
-   ========================================================================== */
 export function updateLiveAppLogo(logoUrl) {
   if (!logoUrl) return;
   state.settings.logoUrl = logoUrl;
@@ -18671,16 +22561,1361 @@ export async function handleChangeAppLogo() {
   }
 }
 
+export async function openAdminMemberNotificationCenter(initialUid = null) {
+  const getAllMembersList = () => {
+    const list = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
+    return list.sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  };
+
+  let membersList = getAllMembersList();
+  let selectedUid = initialUid || (membersList[0]?.uid || state.user?.uid || '');
+  let memberSearchQuery = '';
+  let historyItems = [];
+  let loadingHistory = false;
+  let customTitle = '';
+  let customMessage = '';
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4 text-xs';
+
+  function fetchMemberNotificationHistory(uid) {
+    clearFsListener('mnc_sub_notifs');
+    clearFsListener('mnc_root_notifs');
+    if (!uid || !db) {
+      historyItems = [];
+      renderHistorySection();
+      return;
+    }
+    loadingHistory = true;
+    renderHistorySection();
+
+    let subDocs = [];
+    let rootDocs = [];
+    const rebuildHistory = () => {
+      const mergedMap = new Map();
+      subDocs.forEach(d => {
+        const norm = normalizeNotification({ id: d.id, uid, ...d.data() });
+        if (norm) mergedMap.set(norm.id, norm);
+      });
+      rootDocs.forEach(d => {
+        const norm = normalizeNotification({ id: d.id, uid, ...d.data() });
+        if (norm) {
+          const existing = mergedMap.get(norm.id);
+          if (existing) {
+            existing.read = Boolean(existing.read || norm.read);
+          } else {
+            mergedMap.set(norm.id, norm);
+          }
+        }
+      });
+      historyItems = Array.from(mergedMap.values()).sort((a, b) => {
+        const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
+        const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
+        return tB - tA;
+      });
+      loadingHistory = false;
+      renderHistorySection();
+    };
+
+    try {
+      const unsubSub = onSnapshot(query(collection(db, 'users', uid, 'notifications'), limit(100)), (snap) => {
+        subDocs = snap.docs || [];
+        rebuildHistory();
+      }, () => { rebuildHistory(); });
+      setFsListener('mnc_sub_notifs', unsubSub);
+
+      const unsubRoot = onSnapshot(query(collection(db, 'notifications'), where('uid', '==', uid), limit(100)), (snap) => {
+        rootDocs = snap.docs || [];
+        rebuildHistory();
+      }, () => { rebuildHistory(); });
+      setFsListener('mnc_root_notifs', unsubRoot);
+    } catch (err) {
+      console.warn('Error setting up member notification history listeners:', err);
+      loadingHistory = false;
+      renderHistorySection();
+    }
+  }
+
+  function renderMainLayout() {
+    membersList = getAllMembersList();
+    if (!selectedUid && membersList.length > 0) {
+      selectedUid = membersList[0].uid;
+    }
+    const selectedMember = usersMap.get(selectedUid) || membersList.find(m => m.uid === selectedUid) || { uid: selectedUid, displayName: 'Select Member', name: 'Select Member' };
+
+    bodyEl.innerHTML = `
+      <!-- 1. Member Selector & Search -->
+      <div class="ios-card space-y-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">1. Select Target Member</div>
+          <button type="button" id="btn-mnc-open-picker" class="text-[11px] font-semibold text-[#0A84FF] hover:underline">
+            Full Member Picker &rarr;
+          </button>
+        </div>
+
+        <input type="search" id="input-mnc-member-search" class="ios-input text-white text-xs w-full" placeholder="Search member by name or UID..." value="${esc(memberSearchQuery)}" />
+
+        <div id="mnc-member-chips" class="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none"></div>
+
+        <div id="mnc-selected-member-banner" class="p-2.5 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
+            ${renderAvatar(selectedMember, 'w-8 h-8')}
+            <div class="min-w-0">
+              <div class="font-bold text-white text-xs truncate">${esc(selectedMember.displayName || selectedMember.name || 'Member')}</div>
+              <div class="text-[10px] text-neutral-400 font-mono truncate">${esc(selectedMember.uid || 'No member selected')}</div>
+            </div>
+          </div>
+          <button type="button" id="btn-mnc-refresh-history" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 font-semibold text-[11px] transition shrink-0">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- 2. Push Custom Notification Directly to Selected Member -->
+      <div class="ios-card space-y-2.5">
+        <div class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">2. Push Custom Notification</div>
+        <div>
+          <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Notification Title *</label>
+          <input type="text" id="input-mnc-push-title" class="ios-input text-white text-xs w-full" placeholder="e.g. Action Required: Media Upload" value="${esc(customTitle)}" />
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Message Body *</label>
+          <textarea id="input-mnc-push-message" rows="2" class="ios-input text-white text-xs w-full" placeholder="Write a personal message to this member...">${esc(customMessage)}</textarea>
+        </div>
+        <button type="button" id="btn-mnc-send-push" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-sm">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.2" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          <span>Send Custom Notification</span>
+        </button>
+      </div>
+
+      <!-- 3. Chronological Notification History Feed -->
+      <div class="ios-card space-y-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-bold text-neutral-400 tracking-wider uppercase">3. Member Notification History</span>
+          <span id="mnc-history-count" class="text-[11px] font-mono text-neutral-400">0 items</span>
+        </div>
+        <div id="mnc-history-feed" class="space-y-2 max-h-80 overflow-y-auto pr-1"></div>
+      </div>
+    `;
+
+    renderMemberChips();
+    renderHistorySection();
+    wireEvents();
+  }
+
+  function renderMemberChips() {
+    const chipsContainer = bodyEl.querySelector('#mnc-member-chips');
+    if (!chipsContainer) return;
+
+    const q = memberSearchQuery.toLowerCase().trim();
+    const filteredMembers = membersList.filter(m => {
+      if (!q) return true;
+      const name = (m.displayName || m.name || '').toLowerCase();
+      return name.includes(q) || (m.uid || '').toLowerCase().includes(q);
+    }).slice(0, 30);
+
+    if (filteredMembers.length === 0) {
+      chipsContainer.innerHTML = '<span class="text-[11px] text-neutral-500 italic py-1">No matching members</span>';
+      return;
+    }
+
+    chipsContainer.innerHTML = filteredMembers.map(m => {
+      const isSel = m.uid === selectedUid;
+      return `
+        <button type="button" class="btn-mnc-member-chip px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition shrink-0 ${isSel ? 'bg-[#0A84FF] text-white shadow-sm' : 'bg-white/10 text-neutral-300 hover:bg-white/15'}" data-uid="${esc(m.uid)}">
+          ${esc(m.displayName || m.name || 'Member')}
+        </button>
+      `;
+    }).join('');
+
+    chipsContainer.querySelectorAll('.btn-mnc-member-chip').forEach(btn => {
+      btn.onclick = () => {
+        selectedUid = btn.dataset.uid;
+        renderMainLayout();
+        fetchMemberNotificationHistory(selectedUid);
+      };
+    });
+  }
+
+  function renderHistorySection() {
+    const feedEl = bodyEl.querySelector('#mnc-history-feed');
+    const countEl = bodyEl.querySelector('#mnc-history-count');
+    if (!feedEl) return;
+
+    if (countEl) {
+      countEl.textContent = `${historyItems.length} item${historyItems.length === 1 ? '' : 's'}`;
+    }
+
+    if (loadingHistory) {
+      feedEl.innerHTML = `
+        <div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+          <div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div>
+          <span>Loading member notifications...</span>
+        </div>
+      `;
+      return;
+    }
+
+    if (historyItems.length === 0) {
+      feedEl.innerHTML = `
+        <div class="p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-xl">
+          No personal notifications found for this member.
+        </div>
+      `;
+      return;
+    }
+
+    feedEl.innerHTML = historyItems.map(n => {
+      const isRead = Boolean(n.read);
+      const timeStr = formatDateTime(n.timestamp || n.createdAt);
+      const bodyText = n.body || n.message || '';
+
+      return `
+        <div class="p-3 rounded-xl bg-white/5 border ${isRead ? 'border-white/10 opacity-85' : 'border-[#0A84FF]/40 bg-[#0A84FF]/[0.06]'} space-y-2" data-mnc-notif-id="${esc(n.id)}">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${isRead ? 'bg-white/10 text-neutral-400' : 'bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/40'}">
+                  ${isRead ? 'Read' : 'Unread'}
+                </span>
+                <span class="text-[10px] font-mono text-neutral-400">${timeStr}</span>
+              </div>
+              <div class="font-bold text-white text-xs mt-1">${esc(n.title)}</div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" class="btn-mnc-toggle-read px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 font-semibold text-[10px] transition" data-notif-id="${esc(n.id)}">
+                ${isRead ? 'Mark Unread' : 'Mark Read'}
+              </button>
+              <button type="button" class="btn-mnc-delete-notif px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[10px] transition" data-notif-id="${esc(n.id)}">
+                Delete
+              </button>
+            </div>
+          </div>
+          <p class="text-neutral-300 text-[11px] whitespace-pre-line leading-relaxed bg-black/20 p-2 rounded-lg border border-white/5">${esc(bodyText)}</p>
+        </div>
+      `;
+    }).join('');
+
+    feedEl.querySelectorAll('.btn-mnc-toggle-read').forEach(btn => {
+      btn.onclick = async () => {
+        const notifId = btn.dataset.notifId;
+        const item = historyItems.find(x => x.id === notifId);
+        if (!item || !selectedUid) return;
+        const nextRead = !item.read;
+        item.read = nextRead;
+        renderHistorySection();
+        try {
+          await markSingleNotificationReadInFirestore(item, selectedUid, nextRead);
+          if (state.user?.uid === selectedUid) {
+            const localItem = state.notifications.find(x => x.id === notifId);
+            if (localItem) localItem.read = nextRead;
+            updateNotificationBadges();
+            renderNotifications();
+          }
+          toast(`Notification marked as ${nextRead ? 'read' : 'unread'}`, 'info');
+        } catch (err) {
+          toast('Failed to toggle read state: ' + (err.message || err), 'error');
+        }
+      };
+    });
+
+    feedEl.querySelectorAll('.btn-mnc-delete-notif').forEach(btn => {
+      btn.onclick = async () => {
+        const notifId = btn.dataset.notifId;
+        const item = historyItems.find(x => x.id === notifId);
+        if (!item || !selectedUid) return;
+        historyItems = historyItems.filter(x => x.id !== notifId);
+        renderHistorySection();
+        try {
+          await deleteSingleNotificationFromFirestore(item, selectedUid);
+          if (state.user?.uid === selectedUid) {
+            updateNotificationBadges();
+            renderNotifications();
+          }
+          toast('Notification deleted from member history', 'info');
+        } catch (err) {
+          toast('Failed to delete notification: ' + (err.message || err), 'error');
+        }
+      };
+    });
+  }
+
+  function wireEvents() {
+    const searchInp = bodyEl.querySelector('#input-mnc-member-search');
+    if (searchInp) {
+      searchInp.oninput = (e) => {
+        memberSearchQuery = e.target.value;
+        renderMemberChips();
+      };
+    }
+
+    const openPickerBtn = bodyEl.querySelector('#btn-mnc-open-picker');
+    if (openPickerBtn) {
+      openPickerBtn.onclick = () => {
+        openMemberPicker({
+          multi: false,
+          includeAllOption: false,
+          selectedUids: selectedUid ? [selectedUid] : [],
+          onConfirm: (selected) => {
+            if (selected && selected[0]) {
+              selectedUid = selected[0];
+              renderMainLayout();
+              fetchMemberNotificationHistory(selectedUid);
+            }
+          }
+        });
+      };
+    }
+
+    const refreshBtn = bodyEl.querySelector('#btn-mnc-refresh-history');
+    if (refreshBtn) {
+      refreshBtn.onclick = () => {
+        if (selectedUid) fetchMemberNotificationHistory(selectedUid);
+      };
+    }
+
+    const titleInp = bodyEl.querySelector('#input-mnc-push-title');
+    if (titleInp) titleInp.oninput = (e) => { customTitle = e.target.value; };
+
+    const msgInp = bodyEl.querySelector('#input-mnc-push-message');
+    if (msgInp) msgInp.oninput = (e) => { customMessage = e.target.value; };
+
+    const sendBtn = bodyEl.querySelector('#btn-mnc-send-push');
+    if (sendBtn) {
+      sendBtn.onclick = async () => {
+        const cleanTitle = customTitle.trim();
+        const cleanMsg = customMessage.trim();
+        if (!selectedUid) {
+          toast('Please select a target member first', 'error');
+          return;
+        }
+        if (!cleanTitle || !cleanMsg) {
+          toast('Please enter both a Title and Message', 'warning');
+          return;
+        }
+
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sending...';
+
+        try {
+          try {
+            const batch = writeBatch(db);
+            createNotification(batch, {
+              uid: selectedUid,
+              title: cleanTitle,
+              message: cleanMsg,
+              body: cleanMsg,
+              type: 'system',
+              icon: 'bell'
+            });
+            logAdminAction(batch, {
+              action: 'admin_member_custom_notification',
+              targetUid: selectedUid,
+              details: { title: cleanTitle, message: cleanMsg }
+            });
+            await batch.commit();
+          } catch (localErr) {
+            console.warn('Local Firestore write skipped/delegated to GAS backend:', localErr);
+          }
+
+          await callGasBackend({
+            action: 'DISPATCH_NOTIFICATION',
+            targetType: 'member',
+            targetUid: selectedUid,
+            title: cleanTitle,
+            body: cleanMsg,
+            category: 'system',
+            icon: 'bell',
+            adminUid: state.user?.uid || ''
+          });
+
+          customTitle = '';
+          customMessage = '';
+          if (titleInp) titleInp.value = '';
+          if (msgInp) msgInp.value = '';
+
+          toast('Custom notification sent to member!', 'success');
+          await fetchMemberNotificationHistory(selectedUid);
+        } catch (err) {
+          console.error('Error sending custom member notification:', err);
+          toast('Failed to send notification: ' + (err.message || err), 'error');
+        } finally {
+          sendBtn.disabled = false;
+          sendBtn.innerHTML = '<span>Send Custom Notification</span>';
+        }
+      };
+    }
+  }
+
+  renderMainLayout();
+  if (selectedUid) {
+    fetchMemberNotificationHistory(selectedUid);
+  }
+
+  openModal({
+    title: 'Member Notification Center',
+    body: bodyEl,
+    saveLabel: null,
+    cancelLabel: 'Close'
+  });
+}
+
+let _adminNotifSelectedTarget = 'all';
+let _adminNotifSearchQuery = '';
+let _adminNotifHistory = [];
+let _adminNotifLoadingHistory = false;
+
+export async function renderAdminNotifications() {
+  const currentUser = state.user || {};
+  if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
+
+  const rosterContainer = document.getElementById('admin-notif-members-list');
+  const countEl = document.getElementById('admin-notif-member-count');
+  const searchInput = document.getElementById('input-admin-notif-search');
+  const targetAllBtn = document.getElementById('btn-admin-notif-target-all');
+  const allIndicator = document.getElementById('admin-notif-all-indicator');
+  const targetLabel = document.getElementById('admin-notif-target-label');
+  const targetBadge = document.getElementById('admin-notif-target-badge');
+  const form = document.getElementById('form-admin-notifications-page');
+  const historyContainer = document.getElementById('admin-notif-history-container');
+  const refreshHistoryBtn = document.getElementById('btn-admin-notif-refresh-history');
+
+  if (!rosterContainer) return;
+
+  const getAllMembersList = () => {
+    const list = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
+    return list.sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  };
+
+  const members = getAllMembersList();
+  if (countEl) countEl.textContent = `${members.length} Members`;
+
+  function renderRoster() {
+    const q = (_adminNotifSearchQuery || '').toLowerCase().trim();
+    const filtered = members.filter(m => {
+      if (!q) return true;
+      const name = (m.displayName || m.name || '').toLowerCase();
+      const email = (m.email || '').toLowerCase();
+      return name.includes(q) || email.includes(q) || (m.uid || '').toLowerCase().includes(q);
+    });
+
+    if (filtered.length === 0) {
+      rosterContainer.innerHTML = '<div class="p-4 text-center text-xs text-neutral-400">No matching members found</div>';
+      return;
+    }
+
+    rosterContainer.innerHTML = filtered.map(m => {
+      const isSelected = _adminNotifSelectedTarget === m.uid;
+      const roleLabel = (m.isAdmin || m.role === 'admin') ? 'Admin' : 'Member';
+      const subtitle = m.email || roleLabel;
+      return `
+        <div class="apple-member-row ${isSelected ? 'is-selected' : ''}" data-uid="${esc(m.uid)}">
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            ${renderAvatar(m, 'w-10 h-10 shrink-0')}
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="member-full-name text-xs font-bold text-white">${esc(m.displayName || m.name || 'Member')}</span>
+                <span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-semibold ${(m.isAdmin || m.role === 'admin') ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-white/10 text-neutral-300'}">${roleLabel}</span>
+              </div>
+              <div class="text-[11px] text-neutral-400 truncate">${esc(subtitle)} · ${m.points || 0} pts</div>
+            </div>
+          </div>
+          <div class="w-5 h-5 rounded-full ${isSelected ? 'bg-[#0A84FF] text-white' : 'border border-white/20'} flex items-center justify-center shrink-0">
+            ${isSelected ? '<svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    rosterContainer.querySelectorAll('.apple-member-row').forEach(row => {
+      row.onclick = () => {
+        const uid = row.dataset.uid;
+        _adminNotifSelectedTarget = uid;
+        updateTargetUI();
+        renderRoster();
+        fetchHistory();
+      };
+    });
+  }
+
+  function updateTargetUI() {
+    if (_adminNotifSelectedTarget === 'all') {
+      if (allIndicator) {
+        allIndicator.className = 'w-5 h-5 rounded-full bg-[#0A84FF] text-white flex items-center justify-center shadow-sm';
+        allIndicator.innerHTML = '<svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      }
+      if (targetAllBtn) {
+        targetAllBtn.className = 'p-3 rounded-2xl bg-[#0A84FF]/15 border border-[#0A84FF]/40 flex items-center justify-between cursor-pointer transition hover:bg-[#0A84FF]/25 active:scale-[0.99]';
+      }
+      if (targetLabel) targetLabel.textContent = 'Target: All Team Members';
+      if (targetBadge) {
+        targetBadge.textContent = 'Broadcast';
+        targetBadge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30';
+      }
+    } else {
+      if (allIndicator) {
+        allIndicator.className = 'w-5 h-5 rounded-full border border-white/20 flex items-center justify-center shadow-sm';
+        allIndicator.innerHTML = '';
+      }
+      if (targetAllBtn) {
+        targetAllBtn.className = 'p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between cursor-pointer transition hover:bg-white/10 active:scale-[0.99]';
+      }
+      const targetUser = usersMap.get(_adminNotifSelectedTarget) || members.find(m => m.uid === _adminNotifSelectedTarget);
+      const name = targetUser?.displayName || targetUser?.name || 'Selected Member';
+      if (targetLabel) targetLabel.textContent = `Target: ${name}`;
+      if (targetBadge) {
+        targetBadge.textContent = 'Direct Push';
+        targetBadge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+      }
+    }
+  }
+
+  if (targetAllBtn) {
+    targetAllBtn.onclick = () => {
+      _adminNotifSelectedTarget = 'all';
+      updateTargetUI();
+      renderRoster();
+      fetchHistory();
+    };
+  }
+
+  if (searchInput) {
+    searchInput.oninput = (e) => {
+      _adminNotifSearchQuery = e.target.value;
+      renderRoster();
+    };
+  }
+
+  function fetchHistory() {
+    clearFsListener('adm_notif_hist_1');
+    clearFsListener('adm_notif_hist_2');
+    if (!historyContainer || !db) return;
+    _adminNotifLoadingHistory = true;
+    renderHistory();
+
+    try {
+      if (_adminNotifSelectedTarget === 'all') {
+        const qAll = query(collection(db, 'notifications_broadcast'), orderBy('createdAt', 'desc'), limit(100));
+        const unsubAll = onSnapshot(qAll, (snap) => {
+          _adminNotifHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          _adminNotifLoadingHistory = false;
+          renderHistory();
+        }, (err) => {
+          console.warn('Broadcast history listener:', err);
+          _adminNotifLoadingHistory = false;
+          renderHistory();
+        });
+        setFsListener('adm_notif_hist_1', unsubAll);
+      } else {
+        const uid = _adminNotifSelectedTarget;
+        let subDocs = [];
+        let rootDocs = [];
+        const rebuildMemberHistory = () => {
+          const map = new Map();
+          subDocs.forEach(d => {
+            const n = normalizeNotification({ id: d.id, uid, ...d.data() });
+            if (n) map.set(n.id, n);
+          });
+          rootDocs.forEach(d => {
+            const n = normalizeNotification({ id: d.id, uid, ...d.data() });
+            if (n && !map.has(n.id)) map.set(n.id, n);
+          });
+          _adminNotifHistory = Array.from(map.values()).sort((a, b) => {
+            const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
+            const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
+            return tB - tA;
+          });
+          _adminNotifLoadingHistory = false;
+          renderHistory();
+        };
+
+        const unsubSub = onSnapshot(query(collection(db, 'users', uid, 'notifications'), limit(100)), (snap) => {
+          subDocs = snap.docs || [];
+          rebuildMemberHistory();
+        }, () => { rebuildMemberHistory(); });
+        setFsListener('adm_notif_hist_1', unsubSub);
+
+        const unsubRoot = onSnapshot(query(collection(db, 'notifications'), where('uid', '==', uid), limit(100)), (snap) => {
+          rootDocs = snap.docs || [];
+          rebuildMemberHistory();
+        }, () => { rebuildMemberHistory(); });
+        setFsListener('adm_notif_hist_2', unsubRoot);
+      }
+    } catch (err) {
+      console.warn('Fetch admin notification history:', err);
+      _adminNotifHistory = [];
+      _adminNotifLoadingHistory = false;
+      renderHistory();
+    }
+  }
+
+  function renderHistory() {
+    if (!historyContainer) return;
+    if (_adminNotifLoadingHistory) {
+      historyContainer.innerHTML = '<div class="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2"><div class="w-4 h-4 border-2 border-white/20 border-t-[#0A84FF] rounded-full animate-spin"></div><span>Loading history...</span></div>';
+      return;
+    }
+    if (_adminNotifHistory.length === 0) {
+      historyContainer.innerHTML = '<div class="p-6 text-center text-xs text-neutral-400 border border-dashed border-white/10 rounded-xl">No notification history records found.</div>';
+      return;
+    }
+
+    historyContainer.innerHTML = _adminNotifHistory.map(item => {
+      const isRead = Boolean(item.read || (item.readBy && item.readBy.length > 0));
+      const title = item.title || 'Notification';
+      const body = item.body || item.message || '';
+      const timeStr = item.createdAt ? formatDateTime(item.createdAt) : (item.timestamp ? formatDateTime(item.timestamp) : 'Recent');
+      return `
+        <div class="p-3 rounded-xl bg-white/5 border border-white/10 flex items-start justify-between gap-3 text-xs">
+          <div class="space-y-1 min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-white truncate">${esc(title)}</span>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${isRead ? 'bg-neutral-500/20 text-neutral-300' : 'bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30'}">${isRead ? 'Read' : 'Delivered'}</span>
+            </div>
+            <p class="text-neutral-300 text-[11px] line-clamp-2">${esc(body)}</p>
+            <div class="text-[10px] text-neutral-500">${esc(timeStr)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  if (refreshHistoryBtn) {
+    refreshHistoryBtn.onclick = () => fetchHistory();
+  }
+
+  if (form) {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const titleInput = document.getElementById('input-admin-notif-title');
+      const bodyInput = document.getElementById('input-admin-notif-body');
+      const catSelect = document.getElementById('select-admin-notif-category');
+      const iconSelect = document.getElementById('select-admin-notif-icon');
+      const submitBtn = document.getElementById('btn-admin-dispatch-notif');
+
+      const title = titleInput?.value.trim();
+      const body = bodyInput?.value.trim();
+      const category = catSelect?.value || 'system';
+      const icon = iconSelect?.value || 'bell';
+
+      if (!title || !body) {
+        toast('Please enter both Title and Message Body', 'warning');
+        return;
+      }
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Dispatching...';
+      }
+
+      try {
+        const isBroadcastAll = _adminNotifSelectedTarget === 'all';
+        let localWriteSucceeded = false;
+
+        try {
+          if (isBroadcastAll) {
+            const payload = {
+              title,
+              message: body,
+              body,
+              type: category,
+              targetType: 'all',
+              icon,
+              archived: false,
+              isArchived: false,
+              readBy: [],
+              createdAt: serverTimestamp()
+            };
+            await addDoc(collection(db, 'notifications_broadcast'), payload);
+            const batch = writeBatch(db);
+            logAdminAction(batch, {
+              action: 'dispatch_broadcast_notification',
+              details: { title, category }
+            });
+            await batch.commit();
+            localWriteSucceeded = true;
+          } else {
+            const uid = _adminNotifSelectedTarget;
+            const batch = writeBatch(db);
+            createNotification(batch, {
+              uid,
+              title,
+              message: body,
+              body,
+              type: category,
+              icon
+            });
+            logAdminAction(batch, {
+              action: 'dispatch_member_notification',
+              targetUid: uid,
+              details: { title, body }
+            });
+            await batch.commit();
+            localWriteSucceeded = true;
+          }
+        } catch (clientWriteErr) {
+          console.warn('Client Firestore notification write blocked or skipped; routing via GAS Backend:', clientWriteErr);
+        }
+
+        const gasResult = await callGasBackend({
+          action: 'DISPATCH_NOTIFICATION',
+          targetType: isBroadcastAll ? 'all' : 'member',
+          targetUid: isBroadcastAll ? '' : _adminNotifSelectedTarget,
+          title,
+          body,
+          category,
+          icon,
+          skipFirestoreWrite: localWriteSucceeded,
+          adminUid: state.user?.uid || ''
+        });
+
+        if (!localWriteSucceeded && gasResult && gasResult.ok === false) {
+          throw new Error(gasResult?.error || 'Backend notification dispatch failed');
+        }
+
+        toast(
+          isBroadcastAll
+            ? 'Broadcast notification & Web Push dispatched to all members!'
+            : 'Notification & Web Push sent to member!',
+          'success'
+        );
+
+        if (titleInput) titleInput.value = '';
+        if (bodyInput) bodyInput.value = '';
+        await fetchHistory();
+      } catch (err) {
+        console.error('Error dispatching notification:', err);
+        toast('Failed to dispatch notification: ' + (err.message || err), 'error');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24"><path d="M22 2L11 13"></path><path d="M22 2l-7 20-4-9-9-4 20-7z"></path></svg><span>Dispatch Notification</span>';
+        }
+      }
+    };
+  }
+
+  updateTargetUI();
+  renderRoster();
+  fetchHistory();
+}
+
+const WHATS_NEW_IDB_NAME = 'coc_media_drafts_db';
+const WHATS_NEW_IDB_STORE = 'drafts';
+const WHATS_NEW_DRAFT_KEY = 'whats_new_draft';
+const WHATS_NEW_LS_KEY = 'coc_whats_new_draft_v1';
+
+function openWhatsNewDraftDB() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      resolve(null);
+      return;
+    }
+    try {
+      const req = indexedDB.open(WHATS_NEW_IDB_NAME, 1);
+      req.onupgradeneeded = (e) => {
+        const idb = e.target.result;
+        if (!idb.objectStoreNames.contains(WHATS_NEW_IDB_STORE)) {
+          idb.createObjectStore(WHATS_NEW_IDB_STORE);
+        }
+      };
+      req.onsuccess = (e) => resolve(e.target.result);
+      req.onerror = () => resolve(null);
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
+export async function loadWhatsNewLocalDraft() {
+  try {
+    const idb = await openWhatsNewDraftDB();
+    if (idb) {
+      const fromIdb = await new Promise((resolve) => {
+        try {
+          const tx = idb.transaction(WHATS_NEW_IDB_STORE, 'readonly');
+          const store = tx.objectStore(WHATS_NEW_IDB_STORE);
+          const getReq = store.get(WHATS_NEW_DRAFT_KEY);
+          getReq.onsuccess = () => resolve(getReq.result || null);
+          getReq.onerror = () => resolve(null);
+        } catch (e) {
+          resolve(null);
+        }
+      });
+      if (fromIdb && (fromIdb.title || fromIdb.content)) {
+        return fromIdb;
+      }
+    }
+  } catch (e) {  }
+
+  try {
+    const raw = localStorage.getItem(WHATS_NEW_LS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch (e) {  }
+
+  return null;
+}
+
+export async function saveWhatsNewLocalDraft(draftObj) {
+  const payload = {
+    version: draftObj?.version || APP_VERSION,
+    title: draftObj?.title ?? '',
+    content: draftObj?.content ?? '',
+    updatedAtMs: Date.now()
+  };
+
+  try {
+    localStorage.setItem(WHATS_NEW_LS_KEY, JSON.stringify(payload));
+  } catch (e) {  }
+
+  try {
+    const idb = await openWhatsNewDraftDB();
+    if (idb) {
+      await new Promise((resolve) => {
+        try {
+          const tx = idb.transaction(WHATS_NEW_IDB_STORE, 'readwrite');
+          const store = tx.objectStore(WHATS_NEW_IDB_STORE);
+          store.put(payload, WHATS_NEW_DRAFT_KEY);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        } catch (e) {
+          resolve(false);
+        }
+      });
+    }
+  } catch (e) {  }
+
+  return payload;
+}
+
+export async function clearWhatsNewLocalDraft() {
+  try {
+    localStorage.removeItem(WHATS_NEW_LS_KEY);
+  } catch (e) {  }
+
+  try {
+    const idb = await openWhatsNewDraftDB();
+    if (idb) {
+      await new Promise((resolve) => {
+        try {
+          const tx = idb.transaction(WHATS_NEW_IDB_STORE, 'readwrite');
+          const store = tx.objectStore(WHATS_NEW_IDB_STORE);
+          store.delete(WHATS_NEW_DRAFT_KEY);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        } catch (e) {
+          resolve(false);
+        }
+      });
+    }
+  } catch (e) {  }
+}
+
+export const LAST_SEEN_CHANGELOG_KEY = 'coc_last_seen_changelog_id';
+
+let autoWhatsNewPresented = false;
+let autoWhatsNewCheckTimer = null;
+
+export function getWhatsNewFingerprint(data) {
+  if (!data) return null;
+  const content = (data.content || data.notes || data.body || '').trim();
+  const hasPublishedRecord = Boolean(data.publishId || data.publishedAtMs || data.publishedAt || content);
+  if (!hasPublishedRecord) return null;
+
+  if (data.publishId) return String(data.publishId);
+  if (data.publishedAtMs) return `v${data.version || APP_VERSION}_${data.publishedAtMs}`;
+  if (data.updatedAt) {
+    const ms = typeof data.updatedAt.toMillis === 'function' ? data.updatedAt.toMillis() :
+               typeof data.updatedAt.toDate === 'function' ? data.updatedAt.toDate().getTime() :
+               typeof data.updatedAt.seconds === 'number' ? data.updatedAt.seconds * 1000 : null;
+    if (ms) return `v${data.version || APP_VERSION}_${ms}`;
+  }
+  if (data.version && content) {
+    return `v${data.version}_len${content.length}`;
+  }
+  return null;
+}
+
+export function getLastSeenChangelogId() {
+  try {
+    return localStorage.getItem(LAST_SEEN_CHANGELOG_KEY) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function setLastSeenChangelogId(fingerprint) {
+  try {
+    if (fingerprint) {
+      localStorage.setItem(LAST_SEEN_CHANGELOG_KEY, String(fingerprint));
+    }
+  } catch (e) {  }
+}
+
+export function checkAndShowAutoWhatsNew() {
+  if (autoWhatsNewPresented) return;
+  if (!initialAuthResolved) return;
+
+  if (autoWhatsNewCheckTimer) clearTimeout(autoWhatsNewCheckTimer);
+  autoWhatsNewCheckTimer = setTimeout(async () => {
+    if (autoWhatsNewPresented) return;
+
+    if (document.querySelector('.ios-modal-overlay.open, .modal-backdrop.open') || document.getElementById('modal-unauthorized-domain')?.classList.contains('open')) {
+      return;
+    }
+
+    const liveData = state.whatsNew;
+    const content = (liveData?.content || liveData?.notes || liveData?.body || '').trim();
+    if (!liveData || !content) {
+      return;
+    }
+
+    const currentFingerprint = getWhatsNewFingerprint(liveData);
+    if (!currentFingerprint) return;
+
+    const lastSeen = getLastSeenChangelogId();
+
+    if (!lastSeen || lastSeen !== currentFingerprint) {
+      autoWhatsNewPresented = true;
+      openWhatsNewSheet({
+        isAutoPopup: true,
+        fingerprint: currentFingerprint
+      });
+    }
+  }, 750);
+}
+
+export async function openWhatsNewSheet({ isAutoPopup = false, fingerprint = null } = {}) {
+  const liveData = state.whatsNew || null;
+
+  const currentFingerprint = fingerprint || getWhatsNewFingerprint(liveData) || `v${APP_VERSION}`;
+  const displayVersion = liveData?.version || APP_VERSION;
+  const displayTitle = (liveData?.title || '').trim() || `What's New in v${displayVersion}`;
+  const displayContent = (liveData?.content || liveData?.notes || liveData?.body || '').trim();
+  const isAdmin = Boolean(state.user?.isAdmin || state.user?.role === 'admin' || state.isAdminUnlocked);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-4 text-xs';
+  bodyEl.innerHTML = `
+    <div class="p-4 rounded-2xl bg-gradient-to-br from-[#0A84FF]/20 via-[#BF5AF2]/10 to-transparent border border-[#0A84FF]/30 flex items-center justify-between gap-3">
+      <div class="space-y-1">
+        <div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/40">
+          Release v${esc(displayVersion)}
+        </div>
+        <h3 class="text-base font-bold text-white">${esc(displayTitle)}</h3>
+      </div>
+      <div class="w-11 h-11 rounded-2xl bg-[#0A84FF]/20 border border-[#0A84FF]/40 flex items-center justify-center text-[#0A84FF] shrink-0">
+        ${getIconSvg('sparkles', 'w-5 h-5')}
+      </div>
+    </div>
+
+    ${displayContent ? `
+      <div class="ios-card p-4 space-y-2 text-neutral-200 leading-relaxed whitespace-pre-line text-xs h-auto max-h-none overflow-visible">
+        ${esc(displayContent)}
+      </div>
+    ` : `
+      <div class="ios-card p-6 text-center text-neutral-400 space-y-2 text-xs">
+        <div class="w-10 h-10 mx-auto rounded-full bg-white/5 flex items-center justify-center text-neutral-400 mb-1">
+          <svg class="w-5 h-5 stroke-current" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+        </div>
+        <p class="font-bold text-white text-sm">No Release Notes Published</p>
+        <p class="text-[11px] text-neutral-400">Release notes will appear here once an administrator publishes an update from the Admin Hub.</p>
+      </div>
+    `}
+
+    <button type="button" id="btn-whats-new-got-it" class="w-full py-3 px-4 rounded-xl text-xs font-bold text-white bg-[#0A84FF] hover:bg-[#0071E3] transition shadow-sm flex items-center justify-center gap-2 cursor-pointer mt-1">
+      Got it, continue &rarr;
+    </button>
+
+    ${isAdmin ? `
+      <button type="button" id="btn-whats-new-open-admin-editor" class="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[#0A84FF] font-bold text-xs transition">
+        Edit Release Notes (Live &amp; Draft) &rarr;
+      </button>
+    ` : ''}
+  `;
+
+  const gotItBtn = bodyEl.querySelector('#btn-whats-new-got-it');
+  if (gotItBtn) {
+    gotItBtn.onclick = () => {
+      setLastSeenChangelogId(currentFingerprint);
+      closeModal();
+    };
+  }
+
+  const editBtn = bodyEl.querySelector('#btn-whats-new-open-admin-editor');
+  if (editBtn) {
+    editBtn.onclick = () => {
+      setLastSeenChangelogId(currentFingerprint);
+      closeModal();
+      openAdminWhatsNewEditorModal();
+    };
+  }
+
+  openModal({
+    title: "What's New",
+    body: bodyEl,
+    saveLabel: null,
+    cancelLabel: 'Done',
+    onClose: () => {
+      setLastSeenChangelogId(currentFingerprint);
+    }
+  });
+}
+
+export async function openAdminWhatsNewEditorModal() {
+  let activeTab = 'draft';
+  const liveData = state.whatsNew || null;
+
+  let liveVersion = liveData?.version || APP_VERSION;
+  let liveTitle = (liveData?.title || '').trim();
+  let liveContent = (liveData?.content || liveData?.notes || '').trim();
+
+  const savedDraft = await loadWhatsNewLocalDraft();
+  let draftVersion = savedDraft?.version || liveVersion || APP_VERSION;
+  let draftTitle = savedDraft?.title ?? liveTitle;
+  let draftContent = savedDraft?.content ?? '';
+  let lastSavedAtMs = savedDraft?.updatedAtMs || null;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-3.5 text-xs';
+
+  function renderEditor() {
+    bodyEl.innerHTML = `
+      <div id="whats-new-editor-seg-mount"></div>
+
+      <!-- LIVE TAB -->
+      <div id="whats-new-tab-live" class="${activeTab === 'live' ? 'space-y-3' : 'hidden'}">
+        <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-neutral-200 flex items-center justify-between gap-2">
+          <span>Editing <strong>Live Release Notes</strong> in Firestore (<code>/settings/whats_new</code>).</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">LIVE</span>
+        </div>
+
+        <div class="ios-card space-y-3">
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Version</label>
+              <input type="text" id="wn-live-version" class="ios-input text-white font-mono text-xs w-full" value="${esc(liveVersion)}" />
+            </div>
+            <div class="col-span-2">
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Headline Title</label>
+              <input type="text" id="wn-live-title" class="ios-input text-white text-xs w-full" value="${esc(liveTitle)}" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Release Notes (Live)</label>
+            <textarea id="wn-live-content" rows="8" class="ios-input text-white text-xs leading-relaxed w-full" placeholder="Enter live changelog notes...">${esc(liveContent)}</textarea>
+          </div>
+
+          <button type="button" id="btn-wn-save-live" class="w-full py-2.5 rounded-xl bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold text-xs transition shadow-sm">
+            Save Changes to Live
+          </button>
+        </div>
+      </div>
+
+      <!-- DRAFT TAB (Persistent Local Auto-Save via IndexedDB + localStorage) -->
+      <div id="whats-new-tab-draft" class="${activeTab === 'draft' ? 'space-y-3' : 'hidden'}">
+        <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-neutral-200 flex items-center justify-between gap-2">
+          <div>
+            <div class="font-bold text-amber-300">Persistent Device Draft (Auto-Saves Locally)</div>
+            <div id="wn-draft-status" class="text-[10px] text-neutral-400">
+              ${lastSavedAtMs ? `Restored from device storage (${formatDateTime(lastSavedAtMs)})` : 'Auto-saves every keystroke to IndexedDB & localStorage'}
+            </div>
+          </div>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">DRAFT</span>
+        </div>
+
+        <div class="ios-card space-y-3">
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Version</label>
+              <input type="text" id="wn-draft-version" class="ios-input text-white font-mono text-xs w-full" value="${esc(draftVersion)}" />
+            </div>
+            <div class="col-span-2">
+              <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Headline</label>
+              <input type="text" id="wn-draft-title" class="ios-input text-white text-xs w-full" placeholder="e.g. What's New in v3.0.0" value="${esc(draftTitle)}" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Draft Release Notes</label>
+            <textarea id="wn-draft-content" rows="8" class="ios-input text-white text-xs leading-relaxed w-full" placeholder="Write your upcoming release notes here. You can close the browser and return days later—your draft stays saved on this device...">${esc(draftContent)}</textarea>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button type="button" id="btn-wn-clear-draft" class="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-300 font-semibold text-xs transition">
+              Clear Local Draft
+            </button>
+            <button type="button" id="btn-wn-publish-draft" class="py-2.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition shadow-md">
+              Publish to Live &rarr;
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const segMount = bodyEl.querySelector('#whats-new-editor-seg-mount');
+    if (segMount) {
+      segMount.appendChild(renderSegmented({
+        id: 'whats-new-mode-segmented',
+        options: [
+          { value: 'live', label: 'Live (Firestore)' },
+          { value: 'draft', label: 'Draft (Device Auto-Save)' }
+        ],
+        value: activeTab,
+        onChange: (val) => {
+          activeTab = val;
+          renderEditor();
+        }
+      }));
+    }
+
+    const liveVerInp = bodyEl.querySelector('#wn-live-version');
+    const liveTitleInp = bodyEl.querySelector('#wn-live-title');
+    const liveContentInp = bodyEl.querySelector('#wn-live-content');
+    if (liveVerInp) liveVerInp.oninput = (e) => { liveVersion = e.target.value; };
+    if (liveTitleInp) liveTitleInp.oninput = (e) => { liveTitle = e.target.value; };
+    if (liveContentInp) liveContentInp.oninput = (e) => { liveContent = e.target.value; };
+
+    const saveLiveBtn = bodyEl.querySelector('#btn-wn-save-live');
+    if (saveLiveBtn) {
+      saveLiveBtn.onclick = async () => {
+        if (!liveContent.trim()) {
+          toast('Release notes content cannot be empty', 'warning');
+          return;
+        }
+        saveLiveBtn.disabled = true;
+        saveLiveBtn.textContent = 'Saving to Live...';
+        try {
+          const cleanVer = (liveVersion.trim() || APP_VERSION).replace(/[^a-zA-Z0-9._-]/g, '');
+          const publishId = `wn_${cleanVer}_${Date.now()}`;
+          const payload = {
+            version: liveVersion.trim() || APP_VERSION,
+            title: liveTitle.trim() || `What's New in v${APP_VERSION}`,
+            content: liveContent.trim(),
+            notes: liveContent.trim(),
+            publishId,
+            publishedAt: serverTimestamp(),
+            publishedAtMs: Date.now(),
+            updatedAt: serverTimestamp(),
+            updatedBy: state.user?.uid || 'admin'
+          };
+          await setDoc(doc(db, 'settings', 'whats_new'), payload, { merge: true });
+          state.whatsNew = payload;
+          setLastSeenChangelogId(publishId);
+          toast('Live release notes updated!', 'success');
+        } catch (err) {
+          toast('Failed to save live notes: ' + (err.message || err), 'error');
+        } finally {
+          saveLiveBtn.disabled = false;
+          saveLiveBtn.textContent = 'Save Changes to Live';
+        }
+      };
+    }
+
+    const draftVerInp = bodyEl.querySelector('#wn-draft-version');
+    const draftTitleInp = bodyEl.querySelector('#wn-draft-title');
+    const draftContentInp = bodyEl.querySelector('#wn-draft-content');
+    const draftStatusEl = bodyEl.querySelector('#wn-draft-status');
+
+    const triggerDraftAutoSave = async () => {
+      const saved = await saveWhatsNewLocalDraft({
+        version: draftVersion,
+        title: draftTitle,
+        content: draftContent
+      });
+      lastSavedAtMs = saved.updatedAtMs;
+      if (draftStatusEl) {
+        draftStatusEl.textContent = `Auto-saved to device storage at ${new Date(lastSavedAtMs).toLocaleTimeString()}`;
+      }
+    };
+
+    if (draftVerInp) {
+      draftVerInp.oninput = (e) => {
+        draftVersion = e.target.value;
+        triggerDraftAutoSave();
+      };
+    }
+    if (draftTitleInp) {
+      draftTitleInp.oninput = (e) => {
+        draftTitle = e.target.value;
+        triggerDraftAutoSave();
+      };
+    }
+    if (draftContentInp) {
+      draftContentInp.oninput = (e) => {
+        draftContent = e.target.value;
+        triggerDraftAutoSave();
+      };
+    }
+
+    const clearDraftBtn = bodyEl.querySelector('#btn-wn-clear-draft');
+    if (clearDraftBtn) {
+      clearDraftBtn.onclick = async () => {
+        await clearWhatsNewLocalDraft();
+        draftVersion = APP_VERSION;
+        draftTitle = `What's New in v${APP_VERSION}`;
+        draftContent = '';
+        lastSavedAtMs = null;
+        renderEditor();
+        toast('Local draft cleared', 'info');
+      };
+    }
+
+    const publishDraftBtn = bodyEl.querySelector('#btn-wn-publish-draft');
+    if (publishDraftBtn) {
+      publishDraftBtn.onclick = async () => {
+        if (!draftContent.trim()) {
+          toast('Please write release notes in the draft before publishing to Live', 'warning');
+          return;
+        }
+        publishDraftBtn.disabled = true;
+        publishDraftBtn.textContent = 'Publishing...';
+        try {
+          const cleanVer = (draftVersion.trim() || APP_VERSION).replace(/[^a-zA-Z0-9._-]/g, '');
+          const publishId = `wn_${cleanVer}_${Date.now()}`;
+          const payload = {
+            version: draftVersion.trim() || APP_VERSION,
+            title: draftTitle.trim() || `What's New in v${APP_VERSION}`,
+            content: draftContent.trim(),
+            notes: draftContent.trim(),
+            publishId,
+            publishedAt: serverTimestamp(),
+            publishedAtMs: Date.now(),
+            updatedAt: serverTimestamp(),
+            updatedBy: state.user?.uid || 'admin'
+          };
+          await setDoc(doc(db, 'settings', 'whats_new'), payload, { merge: true });
+          state.whatsNew = payload;
+          setLastSeenChangelogId(publishId);
+          liveVersion = payload.version;
+          liveTitle = payload.title;
+          liveContent = payload.content;
+
+          await clearWhatsNewLocalDraft();
+          draftContent = '';
+          lastSavedAtMs = null;
+          activeTab = 'live';
+          renderEditor();
+          toast('Draft published to Live and local draft cleared!', 'success');
+        } catch (err) {
+          console.error('Publish whats_new error:', err);
+          toast('Failed to publish draft: ' + (err.message || err), 'error');
+        } finally {
+          publishDraftBtn.disabled = false;
+          publishDraftBtn.textContent = 'Publish to Live →';
+        }
+      };
+    }
+  }
+
+  renderEditor();
+
+  openModal({
+    title: "Release Notes Editor (What's New)",
+    body: bodyEl,
+    saveLabel: null,
+    cancelLabel: 'Close'
+  });
+}
+
 function attachEventHandlers() {
-  // Navigation & Drawer
+
   const menuBtn = document.getElementById('btn-open-drawer');
-  if (menuBtn) menuBtn.onclick = openDrawer;
+  if (menuBtn) {
+    menuBtn.onclick = () => openDrawer(true);
+    menuBtn.addEventListener('click', () => openDrawer(true));
+  }
 
   const closeDrawerBtn = document.getElementById('btn-close-drawer');
-  if (closeDrawerBtn) closeDrawerBtn.onclick = closeDrawer;
+  if (closeDrawerBtn) {
+    closeDrawerBtn.onclick = () => closeDrawer(true);
+    closeDrawerBtn.addEventListener('click', () => closeDrawer(true));
+  }
 
   const backdrop = document.getElementById('side-drawer-backdrop');
-  if (backdrop) backdrop.onclick = closeDrawer;
+  if (backdrop) {
+    backdrop.onclick = () => closeDrawer(true);
+    backdrop.addEventListener('click', () => closeDrawer(true));
+  }
+
+  // Document-level fail-safe click delegation ensures X button and backdrop ALWAYS close side drawer
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#btn-close-drawer') || e.target.matches('#side-drawer-backdrop')) {
+      closeDrawer(true);
+    }
+  });
+
+  const sideDrawerEl = document.getElementById('side-drawer');
+  if (sideDrawerEl && !sideDrawerEl.__hasGestureListeners) {
+    sideDrawerEl.__hasGestureListeners = true;
+    let startX = 0;
+    let startY = 0;
+    let isTracking = false;
+
+    sideDrawerEl.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches.length === 1) {
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        isTracking = true;
+      }
+    }, { passive: true });
+
+    sideDrawerEl.addEventListener('touchmove', (e) => {
+      if (!isTracking || !e.touches || e.touches.length !== 1) return;
+      const currentX = e.touches[0].clientX;
+      const currentY = e.touches[0].clientY;
+      const deltaX = currentX - startX;
+      const deltaY = currentY - startY;
+      if (deltaX < -45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+        isTracking = false;
+        closeDrawer(true);
+      }
+    }, { passive: true });
+
+    sideDrawerEl.addEventListener('touchend', () => { isTracking = false; }, { passive: true });
+    sideDrawerEl.addEventListener('touchcancel', () => { isTracking = false; }, { passive: true });
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const d = document.getElementById('side-drawer');
+      if (d && (d.classList.contains('drawer-open') || d.classList.contains('is-open') || d.classList.contains('active'))) {
+        closeDrawer(true);
+      }
+    }
+  });
+
+  const drawerRowAbout = document.getElementById('drawer-row-about');
+  if (drawerRowAbout) {
+    drawerRowAbout.onclick = () => {
+      closeDrawer();
+      openWhatsNewSheet();
+    };
+  }
+  const profileFooterVer = document.getElementById('profile-footer-version');
+  if (profileFooterVer) {
+    profileFooterVer.onclick = () => openWhatsNewSheet();
+  }
+  const btnAdminWhatsNew = document.getElementById('btn-admin-whats-new-editor');
+  if (btnAdminWhatsNew) {
+    btnAdminWhatsNew.onclick = () => openAdminWhatsNewEditorModal();
+  }
+
+  const btnAdminMemberNotifCenter = document.getElementById('btn-admin-member-notif-center');
+  if (btnAdminMemberNotifCenter) {
+    btnAdminMemberNotifCenter.onclick = () => openAdminMemberNotificationCenter();
+  }
+  const btnBroadcastsMemberNotifCenter = document.getElementById('btn-broadcasts-member-notif-center');
+  if (btnBroadcastsMemberNotifCenter) {
+    btnBroadcastsMemberNotifCenter.onclick = () => {
+      if (adminPagerInstance) adminPagerInstance.goTo('notifications');
+      else openAdminMemberNotificationCenter();
+    };
+  }
 
   const notifBell = document.getElementById('btn-open-notifications');
   if (notifBell) {
@@ -18689,7 +23924,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Overlay Buttons
   const adminBtn = document.getElementById('drawer-btn-admin');
   if (adminBtn) {
     adminBtn.onclick = () => {
@@ -18701,7 +23935,6 @@ function attachEventHandlers() {
   const closeAdminBtn = document.getElementById('btn-close-admin-dashboard');
   if (closeAdminBtn) closeAdminBtn.onclick = closeAdminDashboard;
 
-  // Floating Bulk Selection Action Bar Handlers
   exitSelectionMode();
   const selectAllBtn = document.getElementById('btn-bulk-select-all');
   if (selectAllBtn) selectAllBtn.onclick = toggleSelectAll;
@@ -18715,7 +23948,6 @@ function attachEventHandlers() {
   const doneBulkBtn = document.getElementById('btn-bulk-done');
   if (doneBulkBtn) doneBulkBtn.onclick = exitSelectionMode;
 
-  // Master Admin Auth Form
   const adminAuthForm = document.getElementById('form-admin-auth');
   if (adminAuthForm) {
     adminAuthForm.onsubmit = (e) => {
@@ -18734,10 +23966,9 @@ function attachEventHandlers() {
     };
   }
 
-  // PWA Install Button Handler
   const pwaBtn = document.getElementById('drawer-btn-pwa');
   if (pwaBtn) {
-    // Hide Install button if already in standalone mode
+
     if (isAppStandalone()) {
       pwaBtn.classList.add('hidden');
     }
@@ -18752,7 +23983,7 @@ function attachEventHandlers() {
         }
         deferredPrompt = null;
       } else {
-        // iOS Safari or browsers without beforeinstallprompt
+
         openModal({
           title: 'Install App (iOS & Android)',
           body: `
@@ -18780,12 +24011,14 @@ function attachEventHandlers() {
     };
   }
 
-  // Profile Auth Buttons (Only Place for Sign In / Sign Out)
   const googleSignInBtn = document.getElementById('drawer-btn-google-signin');
   if (googleSignInBtn) googleSignInBtn.onclick = handleGoogleSignIn;
 
   const authGoogleModalBtn = document.getElementById('btn-auth-google');
   if (authGoogleModalBtn) authGoogleModalBtn.onclick = handleGoogleSignIn;
+
+  const profileLoginBtn = document.getElementById('btn-profile-login');
+  if (profileLoginBtn) profileLoginBtn.onclick = handleGoogleSignIn;
 
   const fallbackGuestBtn = document.getElementById('btn-fallback-guest');
   if (fallbackGuestBtn) {
@@ -18807,7 +24040,6 @@ function attachEventHandlers() {
   const signOutBtn = document.getElementById('drawer-btn-signout');
   if (signOutBtn) signOutBtn.onclick = handleSignOut;
 
-  // Search and Status Filters
   const searchInput = document.getElementById('input-search-tasks');
   if (searchInput) {
     searchInput.oninput = (e) => {
@@ -18824,11 +24056,9 @@ function attachEventHandlers() {
     };
   }
 
-  // Mark all notifications read
   const markReadBtn = document.getElementById('btn-mark-all-read');
   if (markReadBtn) markReadBtn.onclick = markAllNotificationsRead;
 
-  // Close announcement banner
   const closeAnnounceBtn = document.getElementById('btn-close-announcement');
   if (closeAnnounceBtn) {
     closeAnnounceBtn.onclick = () => {
@@ -18837,12 +24067,10 @@ function attachEventHandlers() {
     };
   }
 
-  // Generic modal close buttons
   document.querySelectorAll('.modal-close-btn').forEach(btn => {
     btn.onclick = () => closeAllModals();
   });
 
-  // Task Submission Form
   const submitForm = document.getElementById('form-submit-task');
   if (submitForm) {
     submitForm.onsubmit = async (e) => {
@@ -18871,47 +24099,15 @@ function attachEventHandlers() {
           toast('Saved offline, will sync', 'info');
         }
 
-        const batch = writeBatch(db);
-        const subRef = doc(db, 'submissions', subId);
-        const userRef = doc(db, 'users', state.user.uid);
-
         const answers = answer ? [{
           questionId: 'q_default',
           questionText: 'Proof Answer',
           answer
         }] : [];
 
-        const formPtsInfo = computeTieredTaskPoints(task, now);
-        if (!formPtsInfo.canSubmit) {
-          toast('Submission closed: deadline and grace period have expired.', 'error');
-          return;
-        }
-        const pointsAwarded = formPtsInfo.points;
-
-        batch.set(subRef, {
-          taskId: task.id,
-          taskTitle: task.title,
-          uid: state.user.uid,
-          userName: state.user.name || state.user.displayName || 'Member',
-          userAvatar: state.user.avatarUrl || state.user.photoURL || '',
-          occurrenceKey,
-          answers,
-          comment: notes,
-          pointsAwarded,
-          submittedAt: serverTimestamp(),
-          status: 'approved'
-        });
-
-        const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, pointsAwarded);
-        batch.update(userRef, {
-          ...pointsUpdate,
-          lastOpId: subId,
-          updatedAt: serverTimestamp()
-        });
-
-        await batch.commit();
-
-        toast('Proof submitted! Points awarded.', 'success');
+        const decision = await submitTaskThroughBackend(task, answers, notes);
+        const ptsAwarded = typeof decision?.pointsAwarded === 'number' ? decision.pointsAwarded : 0;
+        toast(`Proof submitted! +${ptsAwarded} pts awarded.`, 'success');
         closeAllModals();
       } catch (err) {
         toast(err.message || 'Submission failed', 'error');
@@ -18919,7 +24115,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Tasks & Categories Management
   const addTaskBtn = document.getElementById('btn-admin-add-task');
   if (addTaskBtn) {
     addTaskBtn.onclick = () => openAdminTaskModal();
@@ -18970,13 +24165,11 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Session Buttons & Segmented Filters
   const btnAdminAddSession = document.getElementById('btn-admin-add-session');
   if (btnAdminAddSession) {
     btnAdminAddSession.onclick = () => openAdminSessionModal();
   }
 
-  // Admin Badges Add Button (Section 3)
   const btnAdminAddBadge = document.getElementById('btn-admin-add-badge');
   if (btnAdminAddBadge) {
     btnAdminAddBadge.onclick = () => openBadgeModal();
@@ -19020,13 +24213,22 @@ function attachEventHandlers() {
     }
   }
 
-  // Waiver Buttons Wiring
   const btnOpenWaiver = document.getElementById('btn-open-waiver-modal');
   if (btnOpenWaiver) btnOpenWaiver.onclick = () => openRequestWaiverModal();
-  // Side Menu Refresh Button Wiring
+
+  const sideMenuReloadBtn = document.getElementById('sideMenuReloadBtn');
+  if (sideMenuReloadBtn) {
+    sideMenuReloadBtn.onclick = () => handleReloadApp();
+  }
+
+  const sideMenuSyncBtn = document.getElementById('sideMenuSyncBtn');
+  if (sideMenuSyncBtn) {
+    sideMenuSyncBtn.onclick = () => handleForceSyncData();
+  }
+
   const sideMenuRefreshBtn = document.getElementById('sideMenuRefreshBtn');
   if (sideMenuRefreshBtn) {
-    sideMenuRefreshBtn.onclick = () => handleManualDataRefresh();
+    sideMenuRefreshBtn.onclick = () => handleForceSyncData();
   }
 
   const drawerBtnWaiver = document.getElementById('drawer-btn-waiver');
@@ -19035,7 +24237,6 @@ function attachEventHandlers() {
     openRequestWaiverModal();
   };
 
-  // Admin Submissions Controls
   const inputSearchSubs = document.getElementById('input-admin-search-submissions');
   if (inputSearchSubs) {
     inputSearchSubs.oninput = (e) => {
@@ -19065,7 +24266,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Members Controls
   const inputSearchMembers = document.getElementById('input-admin-search-members');
   if (inputSearchMembers) {
     inputSearchMembers.oninput = (e) => {
@@ -19090,7 +24290,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Push Sender Icon Picker (Task 8)
   const pushIconPickerBtn = document.getElementById('btn-push-icon-picker');
   const pushIconInput = document.getElementById('input-push-icon');
   const pushIconPreview = document.getElementById('push-icon-preview');
@@ -19108,7 +24307,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Hub App Logo Upload & Reset (Task 3)
   const btnChangeLogo = document.getElementById('btn-change-logo');
   if (btnChangeLogo) btnChangeLogo.onclick = handleChangeAppLogo;
   const btnChangeLogoAction = document.getElementById('btn-change-logo-action');
@@ -19135,7 +24333,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Clear All Notifications from DB (Task 8 Purge)
   const purgeNotifsBtn = document.getElementById('btn-admin-purge-notifications');
   if (purgeNotifsBtn) {
     purgeNotifsBtn.onclick = async () => {
@@ -19153,7 +24350,6 @@ function attachEventHandlers() {
       try {
         let totalDeleted = 0;
 
-        // 1. Delete notifications in chunks of 450
         const personalSnap = await getDocs(collection(db, 'notifications'));
         const personalDocs = personalSnap.docs;
         for (let i = 0; i < personalDocs.length; i += 450) {
@@ -19164,7 +24360,6 @@ function attachEventHandlers() {
           totalDeleted += chunk.length;
         }
 
-        // 2. Delete notifications_broadcast in chunks of 450
         const broadcastSnap = await getDocs(collection(db, 'notifications_broadcast'));
         const broadcastDocs = broadcastSnap.docs;
         for (let i = 0; i < broadcastDocs.length; i += 450) {
@@ -19193,7 +24388,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Reset Local Cache Button (Task 8)
   const resetCacheBtn = document.getElementById('btn-admin-reset-cache');
   if (resetCacheBtn) {
     resetCacheBtn.onclick = async () => {
@@ -19222,13 +24416,11 @@ function attachEventHandlers() {
     };
   }
 
-  // Admin Repair Totals Button
   const btnRepairTotals = document.getElementById('btn-admin-repair-totals');
   if (btnRepairTotals) {
     btnRepairTotals.onclick = handleRepairTotals;
   }
 
-  // Admin Broadcasts Controls (Task 6)
   const btnAdminAddBroadcast = document.getElementById('btn-admin-add-broadcast');
   if (btnAdminAddBroadcast) {
     btnAdminAddBroadcast.onclick = () => openAdminBroadcastModal();
@@ -19255,19 +24447,16 @@ function attachEventHandlers() {
     };
   }
 
-  // Push Notifications Toggle (Task 7)
   const btnTogglePush = document.getElementById('btn-toggle-push');
   if (btnTogglePush) {
     btnTogglePush.onclick = handleTogglePushNotifications;
   }
 
-  // Admin Push Sender Console (Task 7)
   const formAdminSendPush = document.getElementById('form-admin-send-push');
   if (formAdminSendPush) {
     formAdminSendPush.onsubmit = handleAdminSendPush;
   }
 
-  // Universal iOS Member Picker for Push Target
   const pushPickerBtn = document.getElementById('picker-push-target-btn');
   if (pushPickerBtn) {
     pushPickerBtn.onclick = () => {
@@ -19285,7 +24474,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Leaderboard Period Switching (All / Month / Week)
   document.querySelectorAll('.leader-period-btn').forEach(btn => {
     btn.onclick = () => {
       state.leaderboardPeriod = btn.dataset.period || 'all';
@@ -19295,7 +24483,6 @@ function attachEventHandlers() {
     };
   });
 
-  // Admin Settings Form
   const settingsForm = document.getElementById('form-admin-settings');
   if (settingsForm) {
     settingsForm.onsubmit = async (e) => {
@@ -19327,7 +24514,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Edit Profile Form (v2.2.1 Apple HIG)
   const editProfileBtn = document.getElementById('btn-open-edit-profile');
   if (editProfileBtn) {
     editProfileBtn.onclick = () => {
@@ -19345,7 +24531,10 @@ function attachEventHandlers() {
       initEditProfileModal();
 
       document.body.style.overflow = 'hidden';
-      if (modal) modal.classList.add('open');
+      if (modal) {
+        modal.classList.add('open');
+        pushModalHistoryState('modal-edit-profile');
+      }
     };
   }
 
@@ -19414,7 +24603,6 @@ function attachEventHandlers() {
     };
   }
 
-  // Live Digital Clock in Cairo Time
   startLiveClock();
 }
 
@@ -19446,7 +24634,6 @@ function dismissLoader() {
   }
 }
 
-// Automated Zero-Touch Service Worker & Update Architecture (Task 5 / v2.1.2)
 if ('serviceWorker' in navigator) {
   let appSwRegistration = null;
 
@@ -19454,26 +24641,22 @@ if ('serviceWorker' in navigator) {
     try {
       appSwRegistration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
 
-      // Trigger reg.update() on initial load
       if (appSwRegistration && typeof appSwRegistration.update === 'function') {
         appSwRegistration.update().catch(() => {});
       }
 
-      // Trigger reg.update() on visibilitychange (when visible)
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && appSwRegistration && typeof appSwRegistration.update === 'function') {
           appSwRegistration.update().catch(() => {});
         }
       });
 
-      // Trigger reg.update() periodically every 10 mins
       setInterval(() => {
         if (appSwRegistration && typeof appSwRegistration.update === 'function') {
           appSwRegistration.update().catch(() => {});
         }
       }, 10 * 60 * 1000);
 
-      // When a new service worker is installed, tell it to skipWaiting immediately
       appSwRegistration.addEventListener('updatefound', () => {
         const newWorker = appSwRegistration.installing;
         if (newWorker) {
@@ -19495,7 +24678,37 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', registerAppServiceWorker);
   }
 
-  // On controllerchange, guard with sessionStorage and reload page smoothly once
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'NEW_PUSH_NOTIFICATION') {
+      const payload = event.data.payload || {};
+      const notif = payload.notification || (payload.data ? payload.data : payload);
+      const title = notif.title || payload.title || 'New Notification';
+      const body = notif.body || payload.body || payload.message || '';
+      const icon = notif.icon || payload.icon || 'bell';
+
+      showLiveNotificationToast({
+        title,
+        message: body,
+        icon
+      });
+
+      if (title || body) {
+        const tempNotif = normalizeNotification({
+          id: 'sw_' + Date.now(),
+          title,
+          body,
+          message: body,
+          icon,
+          read: false,
+          createdAt: new Date().toISOString()
+        });
+        state.notifications = [tempNotif, ...(state.notifications || []).filter(n => n.id !== tempNotif.id)];
+        updateNotificationBadges();
+        renderNotifications();
+      }
+    }
+  });
+
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!sessionStorage.getItem('sw_controller_reloaded')) {
       sessionStorage.setItem('sw_controller_reloaded', 'true');
@@ -19503,33 +24716,36 @@ if ('serviceWorker' in navigator) {
     }
   });
 
-  // Clear controller reload guard after successful boot
   setTimeout(() => {
     try { sessionStorage.removeItem('sw_controller_reloaded'); } catch (e) {}
   }, 5000);
 }
 
-/* ==========================================================================
-   RELEASE v2.2.0: MANUAL DATA REFRESH & PUBLIC LEADERBOARD SYNC
-   ========================================================================== */
 export async function fetchPublicLeaderboard() {
   if (!db) return;
   try {
-    const snap = await getDocs(query(collection(db, 'users'), where('status', '==', 'approved'), limit(250)));
-    state.members = snap.docs.map(d => normalizeUser({ uid: d.id, ...d.data() }));
+    if (!listeners.has('users')) {
+      setupMembersListeners();
+    }
     renderLeaderboard();
   } catch (err) {
     console.warn('fetchPublicLeaderboard error:', err);
   }
 }
 
-export async function handleManualDataRefresh() {
-  const btn = document.getElementById('sideMenuRefreshBtn');
+export function handleReloadApp() {
+  if (typeof window !== 'undefined' && window.location) {
+    window.location.reload(true);
+  }
+}
+
+export async function handleForceSyncData() {
+  const btn = document.getElementById('sideMenuSyncBtn') || document.getElementById('sideMenuRefreshBtn');
   if (btn && btn.dataset.syncing === 'true') return;
 
-  const iconWrap = btn?.querySelector('.side-menu-refresh-icon');
-  const labelEl = btn?.querySelector('.refresh-btn-label');
-  const originalLabel = labelEl ? labelEl.textContent : 'Refresh / Sync Data';
+  const iconWrap = btn?.querySelector('.side-menu-sync-icon, .side-menu-refresh-icon');
+  const labelEl = btn?.querySelector('.sync-btn-label, .refresh-btn-label');
+  const originalLabel = labelEl ? labelEl.textContent : 'Force Sync Data';
 
   if (btn) {
     btn.dataset.syncing = 'true';
@@ -19538,100 +24754,41 @@ export async function handleManualDataRefresh() {
   }
 
   try {
-    const syncOps = [];
+    initFirestoreListeners();
+    await initServerClock().catch(() => {});
 
-    // 1. Public Member Roster & Leaderboard
-    syncOps.push(fetchPublicLeaderboard());
+    renderLeaderboard();
+    renderTasks();
+    renderAttendanceView();
+    renderHomeBroadcastBanner();
+    mergeAndRenderNotifications();
 
-    // 2. Current User Profile, Points, Quotas & Activity Rings
     if (state.user?.uid) {
-      syncOps.push(
-        getDoc(doc(db, 'users', state.user.uid)).then(snap => {
-          if (snap.exists()) {
-            state.user = { ...state.user, ...snap.data() };
-            updateHeroStats();
-            updateHeroStats(); renderProfileSubmissions(); renderProfileAttendance(); renderProfileTransactions();
-          }
-        }).catch(e => console.warn('User profile sync:', e))
-      );
+      updateProfileUI();
+      updateHeroStats();
+      renderProfileSubmissions();
+      renderProfileAttendance();
+      renderProfileTransactions();
     }
 
-    // 3. Active Tasks & User Submissions
-    syncOps.push(
-      getDocs(query(collection(db, 'tasks'), limit(200))).then(snap => {
-        state.tasks = snap.docs.map(d => normalizeTask({ id: d.id, ...d.data() }));
-        renderTasks();
-        renderAdminTasks();
-      }).catch(e => console.warn('Tasks sync:', e))
-    );
-    if (state.user?.uid) {
-      syncOps.push(
-        getDocs(query(collection(db, 'submissions'), where('uid', '==', state.user.uid), limit(200))).then(snap => {
-          state.mySubmissions = snap.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
-          if (!state.user?.isAdmin) state.submissions = state.mySubmissions;
-          renderTasks();
-          renderProfileSubmissions();
-        }).catch(e => console.warn('Submissions sync:', e))
-      );
+    if (isCurrentUserAdmin()) {
+      renderAdminTasks();
+      renderAdminSessions();
+      renderAdminBroadcasts();
+      renderAdminWaivers();
+      renderAdminMembers();
+      renderAdminMissedTasks();
     }
 
-    // 4. Live Attendance Sessions & Member Check-in Status
-    syncOps.push(
-      getDocs(query(collection(db, 'attendance_sessions'), limit(50))).then(snap => {
-        state.attendanceSessions = snap.docs.map(d => normalizeSession({ id: d.id, ...d.data() }));
-        renderAttendanceView();
-        renderAdminSessions();
-      }).catch(e => console.warn('Sessions sync:', e))
-    );
-    if (state.user?.uid) {
-      syncOps.push(
-        getDocs(query(collection(db, 'attendance_logs'), where('uid', '==', state.user.uid), limit(100))).then(snap => {
-          state.myAttendanceLogs = snap.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-          renderAttendanceView();
-        }).catch(e => console.warn('Attendance logs sync:', e))
-      );
-    }
-
-    // 5. Active Broadcast Banners
-    syncOps.push(
-      getDocs(query(collection(db, 'broadcasts'), limit(50))).then(snap => {
-        state.broadcasts = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(b => b.archived !== true);
-        renderHomeBroadcastBanner();
-        renderAdminBroadcasts();
-      }).catch(e => console.warn('Broadcasts sync:', e))
-    );
-
-    // 6. User Notifications & Unread Counts (plus Admin Waivers if Admin)
-    if (state.user?.uid) {
-      syncOps.push(
-        getDocs(query(collection(db, 'notifications'), where('uid', '==', state.user.uid), limit(100))).then(snap => {
-          state.personalNotifications = snap.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
-          mergeAndRenderNotifications();
-        }).catch(e => console.warn('Notifications sync:', e))
-      );
-      syncOps.push(
-        getDocs(query(collection(db, 'users', state.user.uid, 'notifications'), limit(50))).then(snap => {
-          userNotifications = snap.docs.map(d => normalizeNotification({ id: d.id, ...d.data() }));
-          mergeAndRenderNotifications();
-        }).catch(e => console.warn('User notifications sync:', e))
-      );
-    }
-    if (state.user?.isAdmin) {
-      syncOps.push(
-        getDocs(query(collection(db, 'waiver_requests'), limit(100))).then(snap => {
-          state.waiverRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          renderAdminWaivers();
-        }).catch(e => console.warn('Admin waivers sync:', e))
-      );
-    }
-
-    await Promise.allSettled(syncOps);
+    persistToLocalCache(true);
 
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistration().then(reg => reg?.update()).catch(() => {});
     }
+    toast('All real-time listeners re-synchronized & up to date', 'success');
   } catch (err) {
-    console.warn('Manual refresh error:', err);
+    console.warn('Force sync error:', err);
+    toast('Sync failed: ' + (err.message || 'Network error'), 'error');
   } finally {
     if (btn) {
       btn.dataset.syncing = 'false';
@@ -19639,32 +24796,31 @@ export async function handleManualDataRefresh() {
       if (labelEl) labelEl.textContent = originalLabel;
     }
     closeDrawer();
-    toast('All data synced & up to date', 'success');
   }
 }
 
-// BOOTSTRAP WORKSPACE
+export const handleManualDataRefresh = handleForceSyncData;
+
 window.addEventListener('DOMContentLoaded', () => {
   initErrorBoundary();
   safeInit('offlineBanner', initOfflineBanner);
+  const hadCachedState = hydrateFromLocalCache();
   initNavigation();
   safeInit('sheetGestures', initSheetDragGestures);
-  safeInit('adminPushConsole', initAdminPushConsole);
+  if (isCurrentUserAdmin()) {
+    safeInit('adminPushConsole', initAdminPushConsole);
+  }
   attachEventHandlers();
-  // Cold-start cache: immediately attach listeners so local cache renders instantly before auth/network completes
+  if (hadCachedState || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+    renderHydratedCacheUI();
+    dismissLoader();
+  }
   initFirestoreListeners();
   setupAuthLifecycle();
   safeInit('applySettings', applySettings);
   safeInit('fcm', initFCM);
-
-  setTimeout(() => {
-    safeInit('lucide', () => {
-      if (window.lucide) window.lucide.createIcons();
-    });
-  }, 400);
 });
 
-// Window compatibility exports
 if (typeof window !== 'undefined') {
   window.safeInit = safeInit;
   window.initAdminPushConsole = initAdminPushConsole;
@@ -19711,6 +24867,8 @@ if (typeof window !== 'undefined') {
   window.openBadgePickerSheet = openBadgePickerSheet;
   window.initSheetDragGestures = initSheetDragGestures;
   window.showNotificationToast = showNotificationToast;
+  window.handleReloadApp = handleReloadApp;
+  window.handleForceSyncData = handleForceSyncData;
   window.handleManualDataRefresh = handleManualDataRefresh;
   window.fetchPublicLeaderboard = fetchPublicLeaderboard;
   window.handleWaiverDecision = handleWaiverDecision;
@@ -19722,4 +24880,43 @@ if (typeof window !== 'undefined') {
   window.openAvatarCropper = openAvatarCropper;
   window.getPresetAvatars = getPresetAvatars;
   window.initEditProfileModal = initEditProfileModal;
+  window.openAdminMemberNotificationCenter = openAdminMemberNotificationCenter;
+  window.openWhatsNewSheet = openWhatsNewSheet;
+  window.openAdminWhatsNewEditorModal = openAdminWhatsNewEditorModal;
+  window.openMemberBadgeReorderSheet = openMemberBadgeReorderSheet;
+  window.attachDragReorderList = attachDragReorderList;
+  window.getDeterministicPresetAvatar = getDeterministicPresetAvatar;
+  window.computeMemberRanks = computeMemberRanks;
+  window.getUserRank = getUserRank;
+  window.showUndoSnackbar = showUndoSnackbar;
+  window.attachUniversalSwipeActions = attachUniversalSwipeActions;
+  window.LAST_SEEN_CHANGELOG_KEY = LAST_SEEN_CHANGELOG_KEY;
+  window.getWhatsNewFingerprint = getWhatsNewFingerprint;
+  window.getLastSeenChangelogId = getLastSeenChangelogId;
+  window.setLastSeenChangelogId = setLastSeenChangelogId;
+  window.checkAndShowAutoWhatsNew = checkAndShowAutoWhatsNew;
+  window.safeInsertBefore = safeInsertBefore;
+  window.safeRemoveChild = safeRemoveChild;
+  window.safeReplaceChild = safeReplaceChild;
+  window.isDefaultEmailProfilePic = isDefaultEmailProfilePic;
+  window.renderAdminNotifications = renderAdminNotifications;
+  window.GAS_BACKEND_WEBHOOK_URL = GAS_BACKEND_WEBHOOK_URL;
+  window.callGasBackend = callGasBackend;
+  window.dispatchBackendSessionMutation = dispatchBackendSessionMutation;
+  window.dispatchBackendTaskMutation = dispatchBackendTaskMutation;
+  window.submitTaskThroughBackend = submitTaskThroughBackend;
+  window.formatCheckInExactTime = formatCheckInExactTime;
+  window.renderCheckInMetricsPills = renderCheckInMetricsPills;
+  window.renderUserSessionHistory = renderUserSessionHistory;
+  window.openAdminRosterModal = openAdminRosterModal;
+  window.openSessionBreakdownModal = openSessionBreakdownModal;
+  window.closeSessionBreakdownModal = closeSessionBreakdownModal;
+  window.getLogExactTimeStr = getLogExactTimeStr;
+  window.renderRecentLogs = renderRecentLogs;
+  window.renderAdminAttendanceLogs = renderAdminAttendanceLogs;
+  window.renderTodayCheckIns = renderTodayCheckIns;
+  window.hydrateSessionCardStats = hydrateSessionCardStats;
+  window.openAdminLogEditModal = openAdminLogEditModal;
+  window.deleteAttendanceRecordAndReverseLedger = deleteAttendanceRecordAndReverseLedger;
+  window.openManualAttendanceModal = openManualAttendanceModal;
 }

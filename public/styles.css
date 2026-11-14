@@ -1,10 +1,5 @@
-/* ===================================================================
-   COC Media Team - Apple Design System (iOS 17/18) Stylesheet
-   Static PWA for GitHub Pages - Vanilla CSS & Tokens
-   =================================================================== */
-
 :root {
-  /* iOS System Colors */
+
   --ios-blue: #007AFF;
   --ios-green: #34C759;
   --ios-indigo: #5856D6;
@@ -15,7 +10,6 @@
   --ios-teal: #5AC8FA;
   --ios-yellow: #FFCC00;
 
-  /* Light Theme Tokens */
   --surface-1: #000000;
   --surface-2: #1C1C1E;
   --surface-3: #2C2C2E;
@@ -52,7 +46,7 @@
   --radius-lg: 16px;
   --radius-xl: 22px;
   --radius-full: 9999px;
-  
+
   --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --font-mono: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
 }
@@ -103,7 +97,6 @@
   }
 }
 
-/* CSS Reset & Touch Standards */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -127,7 +120,6 @@ html, body {
   color-scheme: dark light;
 }
 
-/* Typography Scale (SF Pro / iOS Guidelines) */
 .ios-large-title {
   font-size: 34px;
   line-height: 41px;
@@ -198,7 +190,6 @@ html, body {
   font-weight: 400;
 }
 
-/* Mobile-First Centered Shell */
 .app-shell {
   max-width: 480px;
   width: 100%;
@@ -216,7 +207,6 @@ html, body {
   box-shadow: 0 0 50px rgba(0, 0, 0, 0.4);
 }
 
-/* Zero horizontal overflow verification */
 @media (max-width: 320px) {
   .app-shell {
     width: 100%;
@@ -224,7 +214,6 @@ html, body {
   }
 }
 
-/* 44px Minimum Touch Target Rule */
 button, input, select, textarea, .tap-target {
   min-height: 44px;
   min-width: 44px;
@@ -247,7 +236,6 @@ button:active {
   transform: scale(0.97);
 }
 
-/* Translucent Glass Primitives */
 .glass-surface {
   background: var(--bg-glass);
   backdrop-filter: saturate(180%) blur(20px);
@@ -277,7 +265,6 @@ button:active {
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2);
 }
 
-/* Inset Grouped Lists (iOS 17/18 Spec) */
 .inset-group {
   background: var(--bg-grouped-secondary);
   border-radius: 14px;
@@ -313,7 +300,6 @@ button:active {
   background-color: var(--fill-tertiary);
 }
 
-/* Swipe Pager & Floating Glass Dock */
 .pager-container {
   display: flex;
   flex-direction: row;
@@ -354,7 +340,6 @@ button:active {
   display: none;
 }
 
-/* Floating Glass Segmented-Pill Dock */
 .glass-dock {
   position: fixed;
   bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
@@ -426,7 +411,6 @@ button:active {
   stroke-width: 1.75;
 }
 
-/* Admin Dashboard 7-Item Segmented Dock */
 #admin-dock {
   display: flex;
   align-items: center;
@@ -462,9 +446,6 @@ button:active {
   max-width: 72px;
 }
 
-/* ==========================================================================
-   UNIVERSAL iOS PICKER ROW STYLES
-   ========================================================================== */
 .ios-picker-row {
   cursor: pointer;
   user-select: none;
@@ -476,12 +457,6 @@ button:active {
   transform: scale(0.99);
 }
 
-/* ==========================================================================
-   GLOBAL BULK SELECTION MODE STYLES
-   ========================================================================== */
-/* floating-bulk-bar handled in Section 3 */
-
-/* Bulk Selection Card Layout & Shift */
 .bulk-select-card {
   position: relative;
   overflow: hidden;
@@ -517,7 +492,6 @@ button:active {
   fill: none;
 }
 
-/* When selection mode is active on body */
 body.selection-mode-active .bulk-select-card {
   cursor: pointer;
 }
@@ -546,7 +520,6 @@ body.selection-mode-active .bulk-select-card.selected {
   background-color: rgba(10, 132, 255, 0.08) !important;
 }
 
-/* Floating Glass Buttons (Home Screen) */
 .floating-glass-btn {
   width: 44px;
   height: 44px;
@@ -564,7 +537,6 @@ body.selection-mode-active .bulk-select-card.selected {
   position: relative;
 }
 
-/* Side Drawer Transitions */
 #side-drawer-backdrop {
   opacity: 0;
   pointer-events: none;
@@ -578,14 +550,19 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 #side-drawer-backdrop.drawer-open,
-#side-drawer-backdrop.is-open {
+#side-drawer-backdrop.is-open,
+#side-drawer-backdrop.active {
   opacity: 1;
   pointer-events: auto;
 }
 
 #side-drawer {
-  transform: translateX(-100%);
+  transform: translate3d(-100%, 0, 0);
+  -webkit-transform: translate3d(-100%, 0, 0);
   transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
   position: fixed;
   top: 0;
   bottom: 0;
@@ -609,11 +586,12 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 #side-drawer.drawer-open,
-#side-drawer.is-open {
-  transform: translateX(0);
+#side-drawer.is-open,
+#side-drawer.active {
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
 }
 
-/* Full-Screen Admin Dashboard Overlay */
 .admin-overlay,
 #adminOverlay,
 #modal-admin-dashboard {
@@ -650,7 +628,6 @@ body.selection-mode-active .bulk-select-card.selected {
   cursor: pointer;
 }
 
-/* Shared UI Infrastructure: Modal & Bottom Sheet */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -712,13 +689,18 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 .sheet-grabber-hitarea {
-  padding: 10px 0 6px;
+  min-height: 48px;
+  height: 48px;
   cursor: grab;
-  touch-action: none;
+  touch-action: none !important;
   width: 100%;
   display: flex;
   justify-content: center;
   align-items: center;
+  position: relative;
+  z-index: 30;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 @media (min-width: 640px) {
@@ -748,6 +730,9 @@ body.selection-mode-active .bulk-select-card.selected {
   margin: 8px auto 12px;
   flex-shrink: 0;
   cursor: grab;
+  touch-action: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 .modal-header {
@@ -757,6 +742,16 @@ body.selection-mode-active .bulk-select-card.selected {
   justify-content: space-between;
   border-bottom: 0.5px solid var(--separator);
   cursor: grab;
+  touch-action: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.modal-grabber:active,
+.sheet-grabber:active,
+.modal-header:active,
+.sub-modal-toolbar:active {
+  cursor: grabbing;
 }
 
 .modal-title {
@@ -773,7 +768,7 @@ body.selection-mode-active .bulk-select-card.selected {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-/* Action Sheet (confirmSheet) */
+
 .action-sheet-wrapper {
   width: 100%;
   max-width: 450px;
@@ -851,13 +846,13 @@ body.selection-mode-active .bulk-select-card.selected {
   border: 0.5px solid var(--border-glass);
 }
 
-/* Floating Glass Toast System */
-.toast-container {
+.toast-container,
+#toast-container {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 12px);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 2500;
+  z-index: 99999 !important;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -868,6 +863,7 @@ body.selection-mode-active .bulk-select-card.selected {
 }
 
 .toast {
+  z-index: 99999 !important;
   pointer-events: auto;
   cursor: pointer;
   background: var(--bg-dock);
@@ -919,7 +915,6 @@ body.selection-mode-active .bulk-select-card.selected {
   transform: translateY(-16px) scale(0.95) !important;
 }
 
-/* Offline Banner */
 .offline-banner {
   background: var(--ios-orange);
   color: #000000;
@@ -936,7 +931,6 @@ body.selection-mode-active .bulk-select-card.selected {
   gap: 6px;
 }
 
-/* Shimmer Loading Skeleton */
 .skeleton-shimmer {
   background: linear-gradient(
     90deg,
@@ -954,7 +948,6 @@ body.selection-mode-active .bulk-select-card.selected {
   100% { background-position: 200% 0; }
 }
 
-/* Global Error Boundary */
 .error-boundary {
   position: fixed;
   inset: 0;
@@ -969,7 +962,6 @@ body.selection-mode-active .bulk-select-card.selected {
   text-align: center;
 }
 
-/* Notifications Card & Broadcast Carousel (Task 6) */
 .notification-card {
   height: 76px;
   min-height: 76px;
@@ -1029,7 +1021,6 @@ body.selection-mode-active .bulk-select-card.selected {
   background: var(--ios-blue);
 }
 
-/* Utilities */
 .hidden { display: none !important; }
 .truncate {
   overflow: hidden;
@@ -1037,7 +1028,6 @@ body.selection-mode-active .bulk-select-card.selected {
   white-space: nowrap;
 }
 
-/* Accessibility: Focus-Visible Rings */
 :focus-visible {
   outline: 2px solid var(--ios-blue, #0A84FF);
   outline-offset: 2px;
@@ -1052,7 +1042,6 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
-/* Apple Activity-Style Summary Rings */
 .summary-ring-bg {
   opacity: 0.15;
 }
@@ -1064,7 +1053,6 @@ textarea:focus-visible {
   stroke-linecap: round;
 }
 
-/* Admin Overview Bar Chart */
 .chart-bar-rect {
   transition: height 0.6s cubic-bezier(0.16, 1, 0.3, 1), y 0.6s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -1073,7 +1061,6 @@ textarea:focus-visible {
   opacity: 0.85;
 }
 
-/* Respect Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
     animation-duration: 0.001s !important;
@@ -1081,10 +1068,6 @@ textarea:focus-visible {
     transition-duration: 0.001s !important;
   }
 }
-
-/* ==========================================================================
-   TASK 4: BADGE SYSTEM & MINI-PROFILE OVERHANGING SHEET
-   ========================================================================== */
 
 .badge-row-container {
   display: inline-flex;
@@ -1144,10 +1127,6 @@ textarea:focus-visible {
   max-height: none !important;
 }
 
-/* ==========================================================================
-   TASK 5: MEMBER CARD STACK & INSET GROUPED MODAL
-   ========================================================================== */
-
 .member-card-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; }
 .member-identity-col { display:flex; align-items:center; gap:12px; min-width:0; flex:1; }
 .member-right-actions { display:flex; align-items:center; gap:12px; flex-shrink:0; }
@@ -1170,10 +1149,6 @@ textarea:focus-visible {
   color: var(--text-tertiary, #8E8E93);
   padding: 8px 14px 4px 14px;
 }
-
-/* ==========================================================================
-   TASK 6: ATTENDANCE ASSIGNMENTS, IDEMPOTENT ABSENCE & WAIVER BADGES
-   ========================================================================== */
 
 .badge-unprocessed {
   background: rgba(255, 159, 10, 0.15);
@@ -1211,10 +1186,6 @@ textarea:focus-visible {
   border: 1px solid rgba(255, 69, 58, 0.3);
 }
 
-/* ==========================================================================
-   TASK 7: TASK FILTER BAR & LEADERBOARD SEGMENTED CONTROL
-   ========================================================================== */
-
 #category-filter-chips,
 .task-filter-bar {
   display: flex !important;
@@ -1243,10 +1214,6 @@ textarea:focus-visible {
   font-weight: 600 !important;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3) !important;
 }
-
-/* ==========================================================================
-   TASK 8: NOTIFICATION SQUIRCLES, UNIFIED BROADCASTS & ICON PICKER
-   ========================================================================== */
 
 .notification-squircle {
   width: 40px;
@@ -1283,7 +1250,6 @@ textarea:focus-visible {
   border: 1px solid rgba(255, 159, 10, 0.25);
 }
 
-/* Unified Broadcast Notice Card */
 .broadcast-unified-card {
   border-radius: 18px;
   overflow: hidden;
@@ -1313,7 +1279,6 @@ textarea:focus-visible {
   color: #8E8E93;
 }
 
-/* Home Broadcast Single Unified Bottom-Edge Progress Bar (Task 4) */
 .broadcast-progress-track {
   position: absolute;
   bottom: 0;
@@ -1334,7 +1299,6 @@ textarea:focus-visible {
   transition: width 0.1s linear;
 }
 
-/* Icon Picker Grid */
 .icon-picker-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -1364,12 +1328,6 @@ textarea:focus-visible {
   color: #0A84FF;
 }
 
-
-/* ==========================================================================
-   v2.1.0 SHARED iOS COMPONENTS (Task 1)
-   ========================================================================== */
-
-/* iOS Switch */
 .ios-switch-wrapper {
   display: inline-flex;
   align-items: center;
@@ -1440,7 +1398,6 @@ textarea:focus-visible {
   pointer-events: none;
 }
 
-/* iOS Segmented Control */
 .ios-segmented {
   position: relative;
   display: inline-flex;
@@ -1501,7 +1458,6 @@ textarea:focus-visible {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
-/* iOS Stepper */
 .ios-stepper {
   display: inline-flex;
   align-items: center;
@@ -1551,7 +1507,6 @@ textarea:focus-visible {
   line-height: 40px;
 }
 
-/* iOS Wheel Date/Time Picker */
 .ios-wheel-container {
   position: relative;
   display: flex;
@@ -1662,7 +1617,6 @@ textarea:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-/* iOS Image Cropper Viewport & Scrim */
 .ios-cropper-viewport {
   width: 280px;
   height: 280px;
@@ -1694,10 +1648,6 @@ textarea:focus-visible {
   border: 2px solid rgba(255, 255, 255, 0.4);
 }
 
-
-/* ==========================================================================
-   TASK 2: ADMIN HEADER, LEFT DRAWER, PERFORMANCE & OVERHEATING
-   ========================================================================== */
 .admin-glass-header {
   position: relative;
   width: 100%;
@@ -1764,7 +1714,6 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
-/* Drawer rows and styling */
 .drawer-profile-card {
   display: flex;
   align-items: center;
@@ -1789,7 +1738,6 @@ textarea:focus-visible {
   transition: background 0.15s ease;
 }
 
-/* Thermal & Overheating Optimization: Content Visibility for Lists */
 .task-card,
 .submission-card,
 .log-card,
@@ -1800,7 +1748,6 @@ textarea:focus-visible {
   contain-intrinsic-size: 0 84px;
 }
 
-/* Pause infinite animations when hidden */
 [hidden] .skeleton-shimmer,
 .hidden .skeleton-shimmer {
   animation-play-state: paused !important;
@@ -1815,10 +1762,6 @@ textarea:focus-visible {
   }
 }
 
-
-/* ==========================================================================
-   TASK 3: LIVE NOTIFICATION BANNER (iOS Glass Toast)
-   ========================================================================== */
 .notification-banner-container {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 12px);
@@ -1862,7 +1805,6 @@ textarea:focus-visible {
   transition: transform 0.35s cubic-bezier(0.4, 0, 1, 1), opacity 0.3s ease;
 }
 
-/* Utilities for horizontal scrolling tab bars */
 .scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -1871,11 +1813,9 @@ textarea:focus-visible {
   display: none;
 }
 
-/* Cropper and shared modal stacking above all static modal backdrops & admin overlay */
 #shared-modal-root { z-index: 2600 !important; }
 .cropper-modal-sheet, #shared-modal-root.has-cropper { z-index: 2700 !important; }
 
-/* Stepper Control and iOS Stepper Touch Target Fix (Task 2 / Section 2) */
 .stepper-control, .ios-stepper {
   display: inline-flex;
   gap: 12px;
@@ -1910,9 +1850,6 @@ textarea:focus-visible {
   border-radius: 8px;
 }
 
-/* ==========================================================================
-   RELEASE v2.1.5 STYLES
-   ========================================================================== */
 .sub-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1959,8 +1896,6 @@ textarea:focus-visible {
   transform: translateY(-10px);
 }
 
-
-/* iOS Inset-Grouped Card (iOS HIG) */
 .ios-card {
   border-radius: 14px;
   background: #1C1C1E;
@@ -1969,7 +1904,6 @@ textarea:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* iOS Active Press Effect */
 button:active,
 .btn:active,
 .ios-card:active,
@@ -1978,7 +1912,6 @@ button:active,
   transform: scale(0.99);
 }
 
-/* Modal Tabs Horizontal Overflow Fix */
 .modal-tabs,
 #member-ctrl-tab-bar {
   overflow-x: auto;
@@ -1992,8 +1925,6 @@ button:active,
   display: none;
 }
 
-
-/* Apple HIG Modal Sheet Header Buttons */
 .modal-header button {
   background: transparent !important;
   border: none !important;
@@ -2015,8 +1946,6 @@ button:active,
   font-weight: 600;
 }
 
-
-/* 14 iOS System Color Swatches */
 .color-swatch {
   width: 32px;
   height: 32px;
@@ -2039,10 +1968,6 @@ button:active,
   outline: none !important;
 }
 
-
-/* ==========================================================================
-   Global iOS Form Controls Reset (v2.1.9) - single source of truth for inputs
-   ========================================================================== */
 input[type="text"],
 input[type="number"],
 input[type="email"],
@@ -2106,7 +2031,6 @@ select:focus,
   outline: none !important;
 }
 
-/* Waivers admin badge + inbox helpers (v2.1.9) */
 .dock-badge-red {
   position: absolute;
   top: -4px;
@@ -2123,10 +2047,6 @@ select:focus,
   text-align: center;
 }
 
-
-/* ==========================================================================
-   v2.1.10 Additions: .you-badge, Unified Icon Picker & Modal Utilities
-   ========================================================================== */
 .you-badge {
   display: inline-flex;
   align-items: center;
@@ -2242,9 +2162,6 @@ select:focus,
   font-weight: 600;
 }
 
-/* ==========================================================================
-   RELEASE v2.2.0: iOS BANNER TOAST, ADMIN NOTE CALLOUT, SPINNER & BROADCAST HIG
-   ========================================================================== */
 @keyframes iosSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -2345,12 +2262,6 @@ select:focus,
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.1: SEARCH LENS FIX, SETTINGS PALETTE, COMPACT CARDS & CROPPING
-   ========================================================================== */
-
-/* 1. Search Lens Icon Fix & Universal Search Padding */
 .ios-search-wrapper,
 .search-box,
 .search-input-wrap {
@@ -2383,7 +2294,6 @@ input[type="search"],
   padding-left: 42px !important;
 }
 
-/* 2. Side Menu Apple HIG Curated Icon Palette */
 .drawer-icon-push {
   background: rgba(255, 55, 95, 0.18) !important;
   color: #FF375F !important;
@@ -2393,6 +2303,11 @@ input[type="search"],
   background: rgba(50, 173, 230, 0.18) !important;
   color: #32ADE6 !important;
   border: 1px solid rgba(50, 173, 230, 0.28) !important;
+}
+.drawer-icon-sync {
+  background: rgba(10, 132, 255, 0.18) !important;
+  color: #0A84FF !important;
+  border: 1px solid rgba(10, 132, 255, 0.28) !important;
 }
 .drawer-icon-waiver {
   background: rgba(48, 209, 88, 0.18) !important;
@@ -2420,7 +2335,6 @@ input[type="search"],
   border: 1px solid rgba(255, 69, 58, 0.25) !important;
 }
 
-/* 3. Uniform Compact Notification Cards in Updates Tab */
 .notification-card {
   height: 76px !important;
   min-height: 72px !important;
@@ -2441,7 +2355,6 @@ input[type="search"],
   background: rgba(10, 132, 255, 0.06);
 }
 
-/* 4. Permanent Apple 3-Pillar Podium Stage */
 .podium-stage-container {
   display: grid;
   grid-template-columns: 1fr 1.12fr 1fr;
@@ -2495,7 +2408,6 @@ input[type="search"],
   transform: none !important;
 }
 
-/* 5. Avatar Cropper Modal & Controls */
 #avatarCropperOverlay {
   position: fixed;
   inset: 0;
@@ -2574,12 +2486,6 @@ input[type="search"],
   transform: scale(1.1);
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.2: APPLE HIG & INTERACTIVE CONTROLS EXPANSION
-   ========================================================================== */
-
-/* Section 1: Icon Picker Full-Height Flex & 25% Card Reduction */
 .icon-picker-sheet {
   display: flex !important;
   flex-direction: column !important;
@@ -2682,7 +2588,6 @@ input[type="search"],
   max-width: 100% !important;
 }
 
-/* Section 2: Universal Freeform Fluid Sheet Resizing Inner Bodies */
 .modal-body,
 .sheet-body,
 .sub-modal-body,
@@ -2693,7 +2598,6 @@ input[type="search"],
   -webkit-overflow-scrolling: touch;
 }
 
-/* Section 3: Floating Bulk Bar 2-Tier Layout & Segmented Control */
 .floating-bulk-bar.hidden,
 #bulk-selection-bar.hidden,
 body:not(.selection-mode-active) #bulk-selection-bar {
@@ -2753,7 +2657,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   transition: all 0.15s ease;
 }
 
-/* Member row disabled & stat pill wrapping (Task 2) */
 .admin-member-row.member-disabled {
   opacity: 0.55;
 }
@@ -2768,7 +2671,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   flex-shrink: 0;
 }
 
-/* Section 4: Adjustments Hub Interactive Apple HIG Buttons */
 .hub-bucket-btn {
   border: 1px solid transparent;
   transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
@@ -2836,7 +2738,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   border-color: rgba(255, 255, 255, 0.3) !important;
 }
 
-/* Adjustments Hub Member Roster Row */
 .hub-roster-item {
   display: flex;
   align-items: center;
@@ -2858,12 +2759,15 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   border-color: rgba(10, 132, 255, 0.45) !important;
 }
 
-/* Section 5: Leaderboard Badge Unclipped Wrap */
 .leaderboard-member-row .badge-row-container {
   display: flex !important;
-  flex-wrap: wrap !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
   gap: 4px !important;
-  overflow: visible !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  overflow: hidden !important;
 }
 
 .leaderboard-member-row .badge-pill,
@@ -2876,7 +2780,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   border-radius: 999px !important;
 }
 
-/* Section 6: 24 Character Avatars & Edit Profile Header Fix */
 .edit-profile-avatar-section {
   padding-top: 16px !important;
   margin-top: 4px !important;
@@ -2917,16 +2820,10 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   transform: scale(1.1) !important;
 }
 
-
-/* ==========================================================================
-   RELEASE v2.2.3 (TASK 1): FREEFORM SHEETS, CROPPER 1X, MINI-PROFILE & ADJUSTMENTS
-   ========================================================================== */
-
 :root {
   --dock-height: 76px;
 }
 
-/* ITEM 1: Inner Sheet Layout & No Header Clipping */
 .modal-sheet, .sub-modal-sheet {
   display: flex !important;
   flex-direction: column !important;
@@ -2947,12 +2844,36 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   flex: 1 1 auto !important;
   min-height: 0 !important;
   overflow-y: auto !important;
+  overflow-x: hidden !important;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   padding-top: 16px !important;
   padding-bottom: calc(env(safe-area-inset-bottom, 16px) + 24px) !important;
 }
 
-/* ITEM 2: Image Cropper Viewport & Masks */
+.modal-body::-webkit-scrollbar,
+.sheet-body::-webkit-scrollbar,
+.sub-modal-body::-webkit-scrollbar,
+#shared-modal-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.modal-body::-webkit-scrollbar-track,
+.sheet-body::-webkit-scrollbar-track,
+.sub-modal-body::-webkit-scrollbar-track,
+#shared-modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb,
+.sheet-body::-webkit-scrollbar-thumb,
+.sub-modal-body::-webkit-scrollbar-thumb,
+#shared-modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+}
+
 .ios-cropper-viewport {
   position: relative;
   width: 280px;
@@ -2986,7 +2907,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   z-index: 10;
 }
 
-/* ITEM 3: Profile Mini-Sheet Redesign & Unclipped Avatar */
 .modal-sheet.mini-profile-sheet,
 #shared-modal-root .modal-sheet.mini-profile-sheet {
   overflow: visible !important;
@@ -3078,7 +2998,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   padding: 56px 16px 24px 16px;
 }
 
-/* ITEM 4: Dock Overlap Mitigation Across All Pager Pages */
 .pager-page,
 .admin-overlay .pager-page,
 #admin-pager .pager-page,
@@ -3096,7 +3015,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   box-sizing: border-box !important;
 }
 
-/* Clean Authentic Apple HIG Segmented Controls (No Neon Glows) */
 .hub-bucket-btn {
   border: 1px solid transparent;
   transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
@@ -3125,7 +3043,6 @@ body:not(.selection-mode-active) #bulk-selection-bar {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
 }
 
-/* ITEM 5: Search Input 44px Padding & Centered Magnifier */
 input[type="search"],
 .ios-search-wrapper input,
 .search-box input,
@@ -3152,7 +3069,6 @@ input[type="search"],
   z-index: 10 !important;
 }
 
-/* Category Cards & Empty State Cards: Standard 16px Inset Rounded Corners */
 .category-card,
 .admin-category-card,
 [data-cat-id],
@@ -3164,9 +3080,6 @@ input[type="search"],
   overflow: hidden !important;
 }
 
-/* ==========================================================================
-   RELEASE v2.2.6: PRIMARY ACTION BUTTON & UNIFIED ADVANCED COLOR PICKER
-   ========================================================================== */
 .ios-btn-primary,
 #btnHubSubmitAdjustment {
   display: flex !important;
@@ -3205,7 +3118,6 @@ input[type="search"],
   box-shadow: none !important;
 }
 
-/* Unified Advanced Color Picker (Preset Dots + Custom Color Trigger + 10-Item History Queue) */
 .unified-color-picker {
   display: flex;
   flex-direction: column;
@@ -3277,4 +3189,679 @@ input[type="search"],
   min-height: 0 !important;
   min-width: 0 !important;
 }
+
+.notif-swipe-wrapper {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: max-height 0.25s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.22s ease, margin 0.25s ease;
+}
+
+.notif-swipe-wrapper.collapsing {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  pointer-events: none;
+}
+
+.notif-swipe-bg {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(255, 69, 58, 0.85) 0%, #FF453A 100%);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 20px;
+  color: #FFFFFF;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.notif-swipe-wrapper.is-swiping .notif-swipe-bg,
+.notif-swipe-wrapper.is-open .notif-swipe-bg {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.notif-swipe-wrapper .notification-card {
+  position: relative;
+  z-index: 2;
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+  touch-action: pan-y;
+}
+
+.notif-swipe-wrapper.is-swiping .notification-card {
+  transition: none !important;
+}
+
+.drag-reorder-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.42);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.drag-reorder-handle:hover,
+.drag-reorder-handle:active {
+  color: #FFFFFF;
+  background-color: rgba(255, 255, 255, 0.1);
+  cursor: grabbing;
+}
+
+.dragging-reorder-item {
+  z-index: 9999 !important;
+  opacity: 0.98 !important;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 0 2px rgba(10, 132, 255, 0.8) !important;
+}
+
+.dragging-reorder-floating {
+  position: fixed !important;
+  z-index: 9999 !important;
+  pointer-events: none !important;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 0 2px rgba(10, 132, 255, 0.8) !important;
+  opacity: 0.98 !important;
+  will-change: transform, top, left !important;
+}
+
+.drag-reorder-placeholder {
+  box-sizing: border-box !important;
+  border: 2px dashed rgba(10, 132, 255, 0.45) !important;
+  background-color: rgba(10, 132, 255, 0.06) !important;
+  border-radius: 12px !important;
+  pointer-events: none !important;
+  flex-shrink: 0 !important;
+  transition: all 0.18s cubic-bezier(0.2, 0, 0, 1) !important;
+}
+
+.badge-pills-expanded-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge-pill-expanded {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  max-width: 100%;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.badge-pill-expanded svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.badge-strip-compact {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+}
+
+.badge-icon-micro {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+  border-radius: 9999px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  padding: 0 !important;
+}
+
+.badge-icon-micro svg {
+  width: 12px !important;
+  height: 12px !important;
+  flex-shrink: 0 !important;
+}
+
+.drag-reorder-displaced {
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1) !important;
+  will-change: transform;
+}
+
+#leaderboard-list {
+  border-top: none !important;
+}
+
+.leaderboard-list-wrap > .leaderboard-member-row {
+  border-top: none !important;
+  border-bottom: 0.5px solid var(--separator, rgba(255, 255, 255, 0.08)) !important;
+}
+
+.leaderboard-list-wrap > .leaderboard-member-row:last-child {
+  border-bottom: none !important;
+}
+
+.badge-overflow-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+  border-radius: 9999px !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: rgba(255, 255, 255, 0.75) !important;
+  flex-shrink: 0 !important;
+  user-select: none !important;
+  padding: 0 !important;
+}
+
+.universal-swipe-wrapper {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: max-height 0.26s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.22s ease, margin 0.26s ease;
+}
+
+.universal-swipe-wrapper.collapsing,
+.universal-swipe-wrapper.swiped-collapsed {
+  max-height: 0 !important;
+  height: 0 !important;
+  opacity: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+}
+
+.universal-swipe-bg {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.universal-swipe-bg-archive {
+  justify-content: flex-start;
+  padding-left: 20px;
+  color: #FFFFFF;
+}
+
+.universal-swipe-bg-delete {
+  justify-content: flex-end;
+  padding-right: 20px;
+  color: #FFFFFF;
+}
+
+.universal-swipe-icon-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  will-change: transform, opacity;
+  transform: scale(0.5);
+  opacity: 0;
+}
+
+.universal-swipe-wrapper.is-swiping .universal-swipe-bg,
+.universal-swipe-wrapper.is-open .universal-swipe-bg {
+  pointer-events: auto;
+}
+
+.universal-swipe-wrapper > .swipe-target-card,
+.universal-swipe-wrapper > .bulk-select-card,
+.universal-swipe-wrapper > .notification-card,
+.universal-swipe-wrapper > .universal-swipe-card-content,
+.universal-swipe-wrapper > .bulk-card-content {
+  position: relative;
+  z-index: 2;
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+.universal-swipe-wrapper.is-swiping > .swipe-target-card,
+.universal-swipe-wrapper.is-swiping > .bulk-select-card,
+.universal-swipe-wrapper.is-swiping > .notification-card,
+.universal-swipe-wrapper.is-swiping > .universal-swipe-card-content,
+.universal-swipe-wrapper.is-swiping > .bulk-card-content {
+  transition: none !important;
+}
+
+.undo-snackbar-container {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
+  left: 50%;
+  transform: translateX(-50%) translateY(24px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  border-radius: 9999px;
+  background: rgba(28, 28, 30, 0.94);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 0.5px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 500;
+  max-width: calc(100% - 32px);
+  width: auto;
+  min-width: 280px;
+  opacity: 0;
+  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s ease;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.undo-snackbar-container.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+.undo-snackbar-container .undo-btn {
+  background: rgba(255, 255, 255, 0.12);
+  color: #0A84FF;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 9999px;
+  border: 1px solid rgba(10, 132, 255, 0.35);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.12s ease;
+  flex-shrink: 0;
+}
+
+.undo-snackbar-container .undo-btn:hover {
+  background: rgba(10, 132, 255, 0.25);
+}
+
+.undo-snackbar-container .undo-btn:active {
+  transform: scale(0.95);
+}
+
+.undo-snackbar-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-bottom-left-radius: 9999px;
+  border-bottom-right-radius: 9999px;
+  overflow: hidden;
+}
+
+.undo-snackbar-progress-bar {
+  width: 100%;
+  height: 100%;
+  background: #0A84FF;
+  transform-origin: left center;
+  transition: width 5000ms linear;
+}
+
+/* Unified Smart Check-in Hero */
+.smart-checkin-hero-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  padding: 24px 20px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  text-align: center;
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.smart-checkin-hero-card.hero-active {
+  border-color: rgba(16, 185, 129, 0.35);
+  box-shadow: 0 20px 48px rgba(16, 185, 129, 0.15), 0 0 0 1px rgba(16, 185, 129, 0.2);
+}
+
+.smart-checkin-hero-card.hero-late {
+  border-color: rgba(244, 63, 94, 0.35);
+  box-shadow: 0 20px 48px rgba(244, 63, 94, 0.15), 0 0 0 1px rgba(244, 63, 94, 0.2);
+}
+
+.smart-checkin-btn-massive {
+  position: relative;
+  width: 100%;
+  padding: 18px 24px;
+  border-radius: 20px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+.smart-checkin-btn-massive:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.smart-checkin-btn-massive:disabled {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.35);
+  cursor: not-allowed;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.smart-checkin-pulse-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 24px;
+  border: 2px solid rgba(16, 185, 129, 0.5);
+  animation: smartCheckinPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes smartCheckinPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 0;
+  }
+}
+
+.att-member-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.att-member-picker-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.att-member-picker-row:active {
+  transform: scale(0.99);
+}
+
+.apple-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: all 0.16s cubic-bezier(0.2, 0, 0, 1);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.apple-member-row:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.apple-member-row:active {
+  transform: scale(0.985);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.apple-member-row.is-selected {
+  background: rgba(10, 132, 255, 0.18);
+  border-color: rgba(10, 132, 255, 0.45);
+}
+
+.pager-page,
+#user-feed-container,
+.ios-table-view,
+#admin-tasks-list,
+#admin-submissions-list,
+#admin-notif-members-list {
+  contain: layout style;
+}
+
+.modal-sheet,
+.sub-modal-sheet {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* v3.1.0 Notification Manager Mobile Single-Column & Untruncated Member Rows */
+@media (max-width: 768px) {
+  #admin-panel-notifications .notif-manager-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+  }
+
+  #admin-panel-notifications .notif-recipients-panel,
+  #admin-panel-notifications .notif-compose-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  #admin-notif-members-list {
+    max-height: 240px !important;
+  }
+}
+
+#admin-panel-notifications select.glass-input {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  padding-right: 28px;
+}
+
+#admin-notif-members-list .apple-member-row .member-full-name {
+  white-space: normal;
+  word-break: break-word;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.3;
+}
+
+/* v3.1.3 Custom Time Bracket Matrix Builder (Bidirectional: Before/After) */
+.time-bracket-row,
+.early-tier-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 640px) {
+  .time-bracket-row,
+  .early-tier-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .time-bracket-row .tier-type-cell,
+  .early-tier-row .tier-type-cell {
+    grid-column: span 2;
+  }
+  .time-bracket-row .tier-remove-cell,
+  .early-tier-row .tier-remove-cell {
+    grid-column: span 2;
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
+/* v3.1.0 Rich Check-in Timing & Impact Pills */
+.checkin-timing-pill,
+.checkin-impact-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/* v3.1.1 Timing & Impact Pills and Breakdown Modal */
+.pill-early {
+  background: rgba(48, 209, 88, 0.18);
+  color: #30d158;
+  border: 1px solid rgba(48, 209, 88, 0.35);
+}
+
+.pill-ontime {
+  background: rgba(52, 199, 89, 0.15);
+  color: #34c759;
+  border: 1px solid rgba(52, 199, 89, 0.3);
+}
+
+.pill-late {
+  background: rgba(255, 159, 10, 0.18);
+  color: #ff9f0a;
+  border: 1px solid rgba(255, 159, 10, 0.35);
+}
+
+.pill-absent {
+  background: rgba(255, 69, 58, 0.18);
+  color: #ff453a;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+}
+
+.pill-excused {
+  background: rgba(10, 132, 255, 0.18);
+  color: #0a84ff;
+  border: 1px solid rgba(10, 132, 255, 0.35);
+}
+
+.impact-positive {
+  background: rgba(48, 209, 88, 0.2);
+  color: #30d158;
+  border: 1px solid rgba(48, 209, 88, 0.35);
+}
+
+.impact-negative {
+  background: rgba(255, 69, 58, 0.2);
+  color: #ff453a;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+}
+
+.impact-neutral {
+  background: rgba(255, 255, 255, 0.08);
+  color: #a1a1aa;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.exact-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
+#modal-session-breakdown .modal-sheet {
+  max-width: 680px;
+  max-height: 90vh;
+}
+
+.history-occurrence-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.history-occurrence-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+#admin-roster-tab-content,
+.history-occurrences-container {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  overflow-y: auto !important;
+  padding-bottom: 24px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.history-occurrence-card .history-log-row {
+  position: relative !important;
+  box-sizing: border-box !important;
+}
+
+#modal-delete-confirm {
+  z-index: 99998 !important;
+}
+
+#modal-delete-confirm.hidden {
+  display: none !important;
+}
+
+
+
 

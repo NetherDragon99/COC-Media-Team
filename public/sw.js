@@ -1,5 +1,5 @@
-// Service Worker for COC Media Team PWA (v2.2.7) - GitHub Pages Compatible
-const CACHE_NAME = 'coc-media-cache-v2.2.7';
+const CACHE_VERSION = 'v3.1.8';
+const CACHE_NAME = 'coc-media-cache-v3.1.8';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -15,9 +15,7 @@ const ASSETS_TO_PRECACHE = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_PRECACHE).catch((err) => {
-        console.warn('Pre-caching some assets failed (continuing safely):', err);
-      });
+      return cache.addAll(ASSETS_TO_PRECACHE).catch(() => {});
     }).then(() => self.skipWaiting())
   );
 });
@@ -42,24 +40,78 @@ self.addEventListener('message', (event) => {
   }
 });
 
+self.addEventListener('push', (event) => {
+  let data = {
+    title: 'CoC Media Team',
+    body: 'New update available',
+    icon: './pwa-192x192.png',
+    badge: './pwa-192x192.png',
+    url: './'
+  };
+  if (event.data) {
+    try {
+      const parsed = event.data.json();
+      const notif = parsed.notification || (parsed.data ? parsed.data : parsed);
+      data = Object.assign(data, notif, parsed.data || {});
+    } catch (e) {
+      data.body = event.data.text();
+    }
+  }
+
+  const notifyClients = clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    clientList.forEach((client) => {
+      client.postMessage({
+        type: 'NEW_PUSH_NOTIFICATION',
+        payload: data
+      });
+    });
+  });
+
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(data.title || 'CoC Media Team', {
+        body: data.body || 'New update available',
+        icon: data.icon || './pwa-192x192.png',
+        badge: data.badge || './pwa-192x192.png',
+        vibrate: [200, 100, 200],
+        data: { url: data.url || './' }
+      }),
+      notifyClients
+    ])
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification && event.notification.data && event.notification.data.url) || './';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if ('focus' in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(targetUrl);
+    })
+  );
+});
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
 
-  // 1. NEVER intercept or cache auth, firestore, FCM, installation endpoints or messaging worker
   if (
     url.hostname.includes('firestore.googleapis.com') ||
     url.hostname.includes('identitytoolkit.googleapis.com') ||
     url.hostname.includes('securetoken.googleapis.com') ||
     url.hostname.includes('fcmregistrations.googleapis.com') ||
     url.hostname.includes('firebaseinstallations.googleapis.com') ||
+    url.hostname.includes('script.google.com') ||
+    url.hostname.includes('script.googleusercontent.com') ||
     url.pathname.includes('firebase-messaging-sw.js')
   ) {
     return;
   }
 
-  // 2. Cache-First Strategy for versioned Firebase CDN modules
   if (url.origin === 'https://www.gstatic.com' && url.pathname.includes('/firebasejs/10.8.1/')) {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {
@@ -78,8 +130,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Stale-While-Revalidate Strategy for images, icons, and fonts
-  const isImageOrFont = 
+  const isImageOrFont =
     url.pathname.match(/\.(png|jpg|jpeg|svg|gif|webp|woff|woff2|ttf|eot)$/i) ||
     event.request.destination === 'image' ||
     event.request.destination === 'font';
@@ -101,11 +152,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Network-First Strategy for HTML navigation requests and same-origin core code (.js, .css, .json, .html)
-  const isNavigation = event.request.mode === 'navigate';
-  const isSameOriginCode = url.origin === self.location.origin;
+  const isNavigation = event.request.mode === 'navigate' ||
+    url.pathname.endsWith('/index.html') ||
+    url.pathname === '/' ||
+    url.pathname === './';
 
-  if (isNavigation || isSameOriginCode) {
+  // STRICT NETWORK-FIRST STRATEGY FOR NAVIGATION TO PREVENT STALE BOOT/LOADING
+  if (isNavigation) {
     event.respondWith(
       fetch(event.request)
         .then((networkResponse) => {
@@ -116,14 +169,37 @@ self.addEventListener('fetch', (event) => {
           return networkResponse;
         })
         .catch(() => {
-          return caches.match(event.request).then((cached) => {
-            if (cached) return cached;
-            if (isNavigation) {
-              return caches.match('./index.html').then((indexFallback) => indexFallback || caches.match('./'));
-            }
-            return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
+          return caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
+            if (cachedResponse) return cachedResponse;
+            return caches.match('./index.html', { ignoreSearch: true }).then((indexFallback) => {
+              return indexFallback || caches.match('./');
+            });
           });
         })
+    );
+    return;
+  }
+
+  const isSameOriginCode = url.origin === self.location.origin;
+
+  if (isSameOriginCode) {
+    event.respondWith(
+      caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
+        const networkPromise = fetch(event.request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              const clone = networkResponse.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            }
+            return networkResponse;
+          })
+          .catch(() => {
+            if (cachedResponse) return cachedResponse;
+            return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
+          });
+
+        return cachedResponse || networkPromise;
+      })
     );
     return;
   }

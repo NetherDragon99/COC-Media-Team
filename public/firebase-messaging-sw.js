@@ -1,4 +1,3 @@
-// Firebase Cloud Messaging Background Service Worker (v10.8.1 Compat)
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging-compat.js');
 
@@ -25,6 +24,15 @@ messaging.onBackgroundMessage((payload) => {
       url: payload.data?.url || './#notifications'
     }
   };
+
+  clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    clientList.forEach((client) => {
+      client.postMessage({
+        type: 'NEW_PUSH_NOTIFICATION',
+        payload
+      });
+    });
+  });
 
   self.registration.showNotification(notificationTitle, notificationOptions);
 });

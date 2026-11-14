@@ -1911,6 +1911,25 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   const members = [userA, userB, userC, userD];
   const totalFinesSum = members.reduce((sum, m) => sum + getFinesDue(m), 0);
   assert.strictEqual(totalFinesSum, 80, 'Aggregate total fines properly sums legacy and modern debt values');
+
+  // 4. Unified Task Tiers with Optional Grace Penalty/Fine & Missed Fine
+  const tieredTask = normalizeTaskTiers({
+    points: 10,
+    durationMinutes: 120,
+    earlyBonus: { enabled: true, untilMinutes: 60, points: 15 },
+    grace: { enabled: true, untilMinutes: 180, penaltyPoints: 3, fineAmountEGP: 25 },
+    missedPenalty: { enabled: true, points: 8, fineAmountEGP: 50 }
+  });
+  assert.strictEqual(tieredTask.points, 10);
+  assert.strictEqual(tieredTask.earlyBonus.enabled, true);
+  assert.strictEqual(tieredTask.earlyBonus.points, 15);
+  assert.strictEqual(tieredTask.grace.enabled, true);
+  assert.strictEqual(tieredTask.grace.untilMinutes, 180);
+  assert.strictEqual(tieredTask.grace.penaltyPoints, 3, 'Grace penaltyPoints preserved');
+  assert.strictEqual(tieredTask.grace.fineAmountEGP, 25, 'Grace fineAmountEGP preserved');
+  assert.strictEqual(tieredTask.missedPenalty.enabled, true);
+  assert.strictEqual(tieredTask.missedPenalty.points, 8, 'Missed penalty points preserved');
+  assert.strictEqual(tieredTask.missedPenalty.fineAmountEGP, 50, 'Missed fineAmountEGP preserved');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
