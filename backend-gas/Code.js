@@ -2348,6 +2348,7 @@ function sendFcmWebPush(userTokens, title, body, clickTargetUrl) {
   const fcmEndpoint = `https://fcm.googleapis.com/v1/projects/${CONFIG.FIREBASE_PROJECT_ID}/messages:send`;
   const targetLink = clickTargetUrl || CONFIG.PWA_URL;
   let successCount = 0;
+  const staleTokens = new Set();
 
   userTokens.forEach(token => {
     if (!token) return;
@@ -2385,17 +2386,68 @@ function sendFcmWebPush(userTokens, title, body, clickTargetUrl) {
         muteHttpExceptions: true
       });
 
-      if (res.getResponseCode() >= 200 && res.getResponseCode() < 300) {
+      const statusCode = res.getResponseCode();
+      if (statusCode >= 200 && statusCode < 300) {
         successCount++;
       } else {
-        console.warn(`[FCM] Token push non-200 (${res.getResponseCode()}): ${res.getContentText()}`);
+        const respText = res.getContentText() || "";
+        const isStale = statusCode === 404 || statusCode === 410 ||
+          respText.indexOf("UNREGISTERED") !== -1 || respText.indexOf("NotRegistered") !== -1;
+        if (isStale) {
+          staleTokens.add(token);
+        } else {
+          console.warn(`[FCM] Token push non-200 (${statusCode}): ${respText}`);
+        }
       }
     } catch (err) {
       console.error("[FCM] sendFcmWebPush error:", err);
     }
   });
 
+  if (staleTokens.size > 0) {
+    pruneStaleFcmTokens(staleTokens);
+  }
+
   return successCount;
+}
+
+/**
+ * Removes dead/unregistered FCM tokens from Firestore users and users_private docs.
+ */
+function pruneStaleFcmTokens(staleTokenSet) {
+  if (!staleTokenSet || staleTokenSet.size === 0) return;
+  try {
+    const allUsers = firestoreList("users", 300);
+    allUsers.forEach(u => {
+      if (!u || !u.id) return;
+      const hasArray = Array.isArray(u.fcmTokens);
+      const filteredTokens = hasArray
+        ? u.fcmTokens.filter(t => t && !staleTokenSet.has(t))
+        : [];
+      const arrayChanged = hasArray && filteredTokens.length !== u.fcmTokens.length;
+      const singleStale = Boolean(u.fcmToken && staleTokenSet.has(u.fcmToken));
+
+      if (!arrayChanged && !singleStale) return;
+
+      const patch = {};
+      const mask = [];
+      if (arrayChanged) {
+        patch.fcmTokens = filteredTokens;
+        mask.push("fcmTokens");
+      }
+      if (singleStale) {
+        patch.fcmToken = filteredTokens.length > 0 ? filteredTokens[0] : "";
+        mask.push("fcmToken");
+      }
+      patch.updatedAt = new Date().toISOString();
+      mask.push("updatedAt");
+
+      firestorePatch(`users/${u.id}`, patch, mask);
+      firestorePatch(`users_private/${u.id}`, patch, mask);
+    });
+  } catch (err) {
+    console.error("[FCM] pruneStaleFcmTokens error:", err);
+  }
 }
 
 /**
