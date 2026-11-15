@@ -244,8 +244,9 @@ button:active {
 }
 
 .glass-card {
-  background: rgba(28, 28, 30, 0.82);
+  background: linear-gradient(145deg, rgba(28, 28, 32, 0.88), rgba(18, 18, 22, 0.94));
   border: 0.5px solid var(--border-glass);
+  contain: layout style;
 }
 
 .glass-input {
@@ -331,9 +332,14 @@ button:active {
   -webkit-overflow-scrolling: touch;
   position: relative;
   box-sizing: border-box;
+  contain: layout style;
   padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(110px + env(safe-area-inset-bottom, 0px)) 16px;
   padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px));
   scrollbar-width: none;
+}
+
+.pager-container.is-swiping .pager-page {
+  pointer-events: none;
 }
 
 .pager-page::-webkit-scrollbar {
@@ -3925,6 +3931,67 @@ input[type="search"],
 
 #modal-delete-confirm.hidden {
   display: none !important;
+}
+
+/* Mode Transition Loading Spinner & 120fps Containment */
+.mode-switch-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  pointer-events: auto;
+}
+
+.mode-switch-loader.is-visible {
+  opacity: 1;
+}
+
+.mode-switch-loader-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px 28px;
+  border-radius: 20px;
+  background: rgba(24, 24, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+}
+
+.mode-switch-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  border: 2.5px solid rgba(255, 255, 255, 0.14);
+  border-top-color: #0A84FF;
+  animation: modeSwitchSpin 0.65s linear infinite;
+  will-change: transform;
+}
+
+@keyframes modeSwitchSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.attendance-log-card,
+.apple-member-row,
+#admin-submissions-list > *,
+#notifications-container > *,
+#leaderboard-list > *,
+#tasks-grid > *,
+#admin-tasks-tbody > *,
+#admin-members-tbody > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
 }
 
 

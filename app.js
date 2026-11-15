@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.1';
+export const APP_VERSION = '3.2.2';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -430,6 +430,9 @@ const state = {
   userPrivate: null,
   currentFcmToken: null,
   isAdminUnlocked: false,
+  isAdminDashboardOpen: false,
+  activeUserPage: 'home',
+  activeAdminPage: 'overview',
   tasks: [],
   categories: [
     { id: 'video', nameEn: 'Video Editing', color: '#0A84FF', icon: 'film' },
@@ -804,6 +807,44 @@ export function isCurrentUserAdmin() {
   return false;
 }
 
+export function isAdminSessionActive() {
+  return Boolean(state.isAdminDashboardOpen && isCurrentUserAdmin());
+}
+
+const _rafRenderQueue = new Map();
+let _rafFlushHandle = null;
+const _dirtyUserTabs = new Set();
+const _dirtyAdminTabs = new Set();
+let _idlePrewarmHandle = null;
+
+function flushRafRenderQueue() {
+  _rafFlushHandle = null;
+  const entries = Array.from(_rafRenderQueue.entries());
+  _rafRenderQueue.clear();
+  for (let i = 0; i < entries.length; i++) {
+    try { entries[i][1](); } catch (e) { console.warn('[rAF Render]', entries[i][0], e); }
+  }
+}
+
+export function scheduleRafRender(key, fn) {
+  if (typeof fn !== 'function') return;
+  if (typeof requestAnimationFrame !== 'function') {
+    fn();
+    return;
+  }
+  _rafRenderQueue.set(key, fn);
+  if (_rafFlushHandle === null) {
+    _rafFlushHandle = requestAnimationFrame(flushRafRenderQueue);
+  }
+}
+
+function scheduleIdleWork(fn, timeout = 350) {
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    return window.requestIdleCallback(() => fn(), { timeout });
+  }
+  return setTimeout(fn, 16);
+}
+
 export const GAS_BACKEND_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbxtwz2RIT49t1REl-o69IU8TLkqGUiOaDgOyIW8GFTY1_oZUII-1IyBb3DTSpfmtgEp/exec';
 
 export async function callGasBackend(payload = {}) {
@@ -997,7 +1038,13 @@ export function persistToLocalCache(immediate = false) {
     writeCache();
   } else {
     if (_persistTimer) clearTimeout(_persistTimer);
-    _persistTimer = setTimeout(writeCache, 120);
+    _persistTimer = setTimeout(() => {
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(writeCache, { timeout: 600 });
+      } else {
+        writeCache();
+      }
+    }, 220);
   }
 }
 
@@ -7390,6 +7437,35 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   let startTime = 0;
   let swipeDirection = null;
   let isPointerDragging = false;
+  let cachedPageWidth = pagerEl.clientWidth || 1;
+  let cachedDockMetrics = [];
+
+  function measureLayoutCache() {
+    cachedPageWidth = pagerEl.clientWidth || cachedPageWidth || 1;
+    cachedDockMetrics = Array.from(dockItems).map((btn) => ({
+      left: btn.offsetLeft,
+      width: btn.offsetWidth
+    }));
+  }
+
+  function applyInterpolatedThumb(clampedProgress) {
+    const baseIdx = Math.floor(clampedProgress);
+    const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
+    const ratio = clampedProgress - baseIdx;
+    if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
+      if (cachedDockMetrics.length !== dockItems.length) {
+        measureLayoutCache();
+      }
+      const mA = cachedDockMetrics[baseIdx];
+      const mB = cachedDockMetrics[nextIdx];
+      if (mA && mB) {
+        const curX = (mA.left - 4) + ((mB.left - mA.left) * ratio);
+        const curW = mA.width + ((mB.width - mA.width) * ratio);
+        thumbEl.style.transform = `translate3d(${curX}px, 0, 0)`;
+        thumbEl.style.width = `${curW}px`;
+      }
+    }
+  }
 
   function updateDockThumb(index, immediate = false) {
     if (index < 0 || index >= pages.length) return;
@@ -7407,16 +7483,17 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       const targetBtn = dockItems[index];
       const offsetLeft = targetBtn.offsetLeft;
       const width = targetBtn.offsetWidth;
+      cachedDockMetrics[index] = { left: offsetLeft, width };
 
       if (immediate) {
         const prevTransition = thumbEl.style.transition;
         thumbEl.style.transition = 'none';
-        thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
+        thumbEl.style.transform = `translate3d(${offsetLeft - 4}px, 0, 0)`;
         thumbEl.style.width = `${width}px`;
         void thumbEl.offsetWidth;
         thumbEl.style.transition = prevTransition;
       } else {
-        thumbEl.style.transform = `translateX(${offsetLeft - 4}px)`;
+        thumbEl.style.transform = `translate3d(${offsetLeft - 4}px, 0, 0)`;
         thumbEl.style.width = `${width}px`;
       }
 
@@ -7500,6 +7577,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     currentY = coords.y;
     startScrollLeft = pagerEl.scrollLeft;
     startTime = Date.now();
+    measureLayoutCache();
     isTracking = true;
     swipeDirection = null;
     isProgrammatic = false;
@@ -7519,6 +7597,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       if (Math.hypot(dx, dy) > 7) {
         if (Math.abs(dx) > Math.abs(dy)) {
           swipeDirection = 'horizontal';
+          pagerEl.classList.add('is-swiping');
           pagerEl.style.scrollSnapType = 'none';
           if (thumbEl) thumbEl.style.transition = 'none';
         } else {
@@ -7539,25 +7618,13 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
         effectiveDx = dx * 0.35;
       }
 
-      pagerEl.scrollLeft = startScrollLeft - effectiveDx;
+      const nextScrollLeft = startScrollLeft - effectiveDx;
+      pagerEl.scrollLeft = nextScrollLeft;
 
-      const pageWidth = pagerEl.clientWidth || 1;
-      const progress = pagerEl.scrollLeft / pageWidth;
+      const pageWidth = cachedPageWidth || 1;
+      const progress = nextScrollLeft / pageWidth;
       const clamped = Math.max(0, Math.min(pages.length - 1, progress));
-      const baseIdx = Math.floor(clamped);
-      const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
-      const ratio = clamped - baseIdx;
-
-      if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
-        const btnA = dockItems[baseIdx];
-        const btnB = dockItems[nextIdx];
-        const xA = btnA.offsetLeft - 4;
-        const xB = btnB.offsetLeft - 4;
-        const wA = btnA.offsetWidth;
-        const wB = btnB.offsetWidth;
-        thumbEl.style.transform = `translateX(${xA + (xB - xA) * ratio}px)`;
-        thumbEl.style.width = `${wA + (wB - wA) * ratio}px`;
-      }
+      applyInterpolatedThumb(clamped);
 
       const closestIdx = Math.round(clamped);
       if (closestIdx !== activeIndex && closestIdx >= 0 && closestIdx < pages.length) {
@@ -7572,6 +7639,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   function onTouchEnd(e) {
     if (!isTracking) return;
     isTracking = false;
+    pagerEl.classList.remove('is-swiping');
 
     if (swipeDirection === 'horizontal') {
       pagerEl.style.scrollSnapType = '';
@@ -7581,7 +7649,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       const dx = coords.x - startX;
       const dt = Math.max(1, Date.now() - startTime);
       const velocity = dx / dt;
-      const pageWidth = pagerEl.clientWidth || 1;
+      const pageWidth = cachedPageWidth || pagerEl.clientWidth || 1;
 
       const isQuickFlick = dt < 320 && Math.abs(dx) > 30 && Math.abs(velocity) > 0.22;
       const isSignificantDistance = Math.abs(dx) > pageWidth * 0.16;
@@ -7618,6 +7686,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     currentY = e.clientY;
     startScrollLeft = pagerEl.scrollLeft;
     startTime = Date.now();
+    measureLayoutCache();
     isPointerDragging = true;
     swipeDirection = null;
     isProgrammatic = false;
@@ -7635,6 +7704,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       if (Math.hypot(dx, dy) > 8) {
         if (Math.abs(dx) > Math.abs(dy)) {
           swipeDirection = 'horizontal';
+          pagerEl.classList.add('is-swiping');
           pagerEl.style.scrollSnapType = 'none';
           if (thumbEl) thumbEl.style.transition = 'none';
           pagerEl.style.cursor = 'grabbing';
@@ -7646,31 +7716,20 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     }
 
     if (swipeDirection === 'horizontal') {
-      pagerEl.scrollLeft = startScrollLeft - dx;
+      const nextScrollLeft = startScrollLeft - dx;
+      pagerEl.scrollLeft = nextScrollLeft;
 
-      const pageWidth = pagerEl.clientWidth || 1;
-      const progress = pagerEl.scrollLeft / pageWidth;
+      const pageWidth = cachedPageWidth || 1;
+      const progress = nextScrollLeft / pageWidth;
       const clamped = Math.max(0, Math.min(pages.length - 1, progress));
-      const baseIdx = Math.floor(clamped);
-      const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
-      const ratio = clamped - baseIdx;
-
-      if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
-        const btnA = dockItems[baseIdx];
-        const btnB = dockItems[nextIdx];
-        const xA = btnA.offsetLeft - 4;
-        const xB = btnB.offsetLeft - 4;
-        const wA = btnA.offsetWidth;
-        const wB = btnB.offsetWidth;
-        thumbEl.style.transform = `translateX(${xA + (xB - xA) * ratio}px)`;
-        thumbEl.style.width = `${wA + (wB - wA) * ratio}px`;
-      }
+      applyInterpolatedThumb(clamped);
     }
   }
 
   function onPointerUp(e) {
     if (!isPointerDragging || e.pointerType === 'touch') return;
     isPointerDragging = false;
+    pagerEl.classList.remove('is-swiping');
     pagerEl.style.cursor = '';
     pagerEl.style.userSelect = '';
 
@@ -7681,7 +7740,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       const dx = e.clientX - startX;
       const dt = Math.max(1, Date.now() - startTime);
       const velocity = dx / dt;
-      const pageWidth = pagerEl.clientWidth || 1;
+      const pageWidth = cachedPageWidth || pagerEl.clientWidth || 1;
 
       let targetIdx = activeIndex;
       if ((dt < 300 && velocity < -0.22) || dx < -pageWidth * 0.16) {
@@ -7711,27 +7770,13 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
       return;
     }
 
-    const pageWidth = pagerEl.clientWidth || 1;
+    const pageWidth = cachedPageWidth || pagerEl.clientWidth || 1;
     const scrollLeft = pagerEl.scrollLeft;
     const progress = scrollLeft / pageWidth;
     const clampedProgress = Math.max(0, Math.min(pages.length - 1, progress));
-    const baseIdx = Math.floor(clampedProgress);
-    const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
-    const ratio = clampedProgress - baseIdx;
-
-    if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
-      const btnA = dockItems[baseIdx];
-      const btnB = dockItems[nextIdx];
-      const xA = btnA.offsetLeft - 4;
-      const xB = btnB.offsetLeft - 4;
-      const wA = btnA.offsetWidth;
-      const wB = btnB.offsetWidth;
-      const curX = xA + (xB - xA) * ratio;
-      const curW = wA + (wB - wA) * ratio;
-
+    if (thumbEl) {
       thumbEl.style.transition = 'none';
-      thumbEl.style.transform = `translateX(${curX}px)`;
-      thumbEl.style.width = `${curW}px`;
+      applyInterpolatedThumb(clampedProgress);
     }
 
     const closestIdx = Math.round(clampedProgress);
@@ -7804,6 +7849,7 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
   window.addEventListener('pointercancel', onPointerUp);
 
   const onResize = () => {
+    measureLayoutCache();
     const activePageEl = pagerEl.children[activeIndex];
     if (activePageEl) {
       pagerEl.scrollTo({
@@ -8709,7 +8755,17 @@ function initNavigation() {
   const userPages = PAGE_ORDER.map(p => ({ id: p.id, hash: p.hash }));
 
   if (userPagerEl && userDockEl) {
-    userPagerInstance = createPager(userPagerEl, userDockEl, userPages, 'home');
+    userPagerInstance = createPager(userPagerEl, userDockEl, userPages, 'home', (pageId) => {
+      state.activeUserPage = pageId || 'home';
+      if (!state.isAdminDashboardOpen) {
+        if (_dirtyUserTabs.has(state.activeUserPage)) {
+          _dirtyUserTabs.delete(state.activeUserPage);
+          scheduleRafRender(`user_tab_${state.activeUserPage}`, () => renderUserPageById(state.activeUserPage));
+        }
+        scheduleUserNeighborPrewarm(state.activeUserPage);
+      }
+    });
+    state.activeUserPage = userPagerInstance.getActive() || 'home';
   }
 
   const adminPagerEl = document.getElementById('admin-pager');
@@ -8731,13 +8787,10 @@ function initNavigation() {
 
   if (adminPagerEl && adminDockEl) {
     adminPagerInstance = createPager(adminPagerEl, adminDockEl, adminPages, 'overview', (pageId) => {
-      if (pageId === 'waivers') renderAdminWaivers();
-      else if (pageId === 'submissions') renderAdminSubmissions();
-      else if (pageId === 'attendance') renderAttendanceView();
-      else if (pageId === 'members') renderAdminMembers();
-      else if (pageId === 'adjustments') renderAdminAdjustments();
-      else if (pageId === 'broadcasts') renderAdminBroadcasts();
-      else if (pageId === 'notifications') renderAdminNotifications();
+      state.activeAdminPage = pageId || 'overview';
+      if (!state.isAdminDashboardOpen) return;
+      _dirtyAdminTabs.delete(state.activeAdminPage);
+      scheduleRafRender(`admin_tab_${state.activeAdminPage}`, () => renderAdminPageById(state.activeAdminPage));
     });
   }
 
@@ -8977,6 +9030,192 @@ function openAdminPortal() {
   }
 }
 
+const ADMIN_DOM_LIST_IDS = [
+  'admin-tasks-tbody',
+  'admin-categories-list',
+  'admin-badges-list',
+  'admin-sessions-list',
+  'admin-missed-tasks-list',
+  'admin-submissions-list',
+  'admin-waivers-list',
+  'admin-members-tbody',
+  'admin-broadcasts-list',
+  'admin-notif-members-list',
+  'admin-notif-history-container'
+];
+
+const USER_TABS_LIST = ['home', 'tasks', 'attendance', 'notifications', 'profile'];
+const ADMIN_TABS_LIST = ['overview', 'tasks', 'categories', 'badges', 'attendance', 'submissions', 'waivers', 'members', 'adjustments', 'broadcasts', 'notifications'];
+
+function renderUserPageById(pageId) {
+  switch (pageId) {
+    case 'home':
+      updateHeroStats();
+      renderHomeBroadcastBanner();
+      renderLeaderboard();
+      renderTodayCheckIns(state.myAttendanceLogs || state.attendanceLogs || []);
+      break;
+    case 'tasks':
+      populateCategoryFilters();
+      renderTasks();
+      break;
+    case 'attendance':
+      renderAttendanceView();
+      renderProfileAttendance();
+      break;
+    case 'notifications':
+      renderNotifications();
+      break;
+    case 'profile':
+      updateProfileUI();
+      renderProfileSubmissions();
+      renderProfileAttendance();
+      break;
+    default:
+      break;
+  }
+}
+
+function renderAdminPageById(pageId) {
+  switch (pageId) {
+    case 'overview':
+      updateAdminOverviewStats();
+      break;
+    case 'tasks':
+      renderAdminTasks();
+      break;
+    case 'categories':
+      renderAdminCategories();
+      break;
+    case 'badges':
+      renderAdminBadges();
+      break;
+    case 'attendance':
+      renderAdminSessions();
+      if (adminSessionsFilter === 'recent_logs') {
+        renderRecentLogs();
+      }
+      break;
+    case 'submissions':
+      renderAdminSubmissions();
+      break;
+    case 'waivers':
+      renderAdminWaivers();
+      break;
+    case 'members':
+      renderAdminMembers();
+      break;
+    case 'adjustments':
+      renderAdminAdjustments();
+      break;
+    case 'broadcasts':
+      renderAdminBroadcasts();
+      break;
+    case 'notifications':
+      renderAdminNotifications();
+      break;
+    default:
+      break;
+  }
+}
+
+function scheduleUserTabRender(tabId, key, renderFn) {
+  if (state.isAdminDashboardOpen) {
+    if (tabId) _dirtyUserTabs.add(tabId);
+    return;
+  }
+  const activeTab = state.activeUserPage || 'home';
+  if (!tabId || tabId === 'always' || tabId === activeTab) {
+    scheduleRafRender(key, renderFn);
+  } else {
+    _dirtyUserTabs.add(tabId);
+  }
+}
+
+function scheduleAdminTabRender(tabId, key, renderFn) {
+  if (!isAdminSessionActive()) return;
+  const activeTab = state.activeAdminPage || 'overview';
+  if (!tabId || tabId === 'always' || tabId === activeTab) {
+    scheduleRafRender(key, renderFn);
+  } else {
+    _dirtyAdminTabs.add(tabId);
+  }
+}
+
+function scheduleUserNeighborPrewarm(activeTab) {
+  if (_idlePrewarmHandle && typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function') {
+    window.cancelIdleCallback(_idlePrewarmHandle);
+  }
+  const idx = USER_TABS_LIST.indexOf(activeTab);
+  const candidates = [USER_TABS_LIST[idx - 1], USER_TABS_LIST[idx + 1]].filter(Boolean);
+  if (candidates.length === 0) return;
+  _idlePrewarmHandle = scheduleIdleWork(() => {
+    if (state.isAdminDashboardOpen) return;
+    for (const tab of candidates) {
+      if (_dirtyUserTabs.has(tab)) {
+        _dirtyUserTabs.delete(tab);
+        renderUserPageById(tab);
+      }
+    }
+  }, 450);
+}
+
+function scheduleIdleAdminPrewarm(activeTab) {
+  scheduleIdleWork(() => {
+    if (!state.isAdminDashboardOpen) return;
+    const idx = ADMIN_TABS_LIST.indexOf(activeTab);
+    const neighbors = [ADMIN_TABS_LIST[idx - 1], ADMIN_TABS_LIST[idx + 1]].filter(Boolean);
+    for (const tab of neighbors) {
+      if (_dirtyAdminTabs.has(tab)) {
+        _dirtyAdminTabs.delete(tab);
+        renderAdminPageById(tab);
+      }
+    }
+  }, 500);
+}
+
+function unmountAdminDom() {
+  ADMIN_DOM_LIST_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
+  _dirtyAdminTabs.clear();
+}
+
+function runWithModeSwitchSpinner(label, workFn) {
+  const loaderEl = typeof document !== 'undefined' ? document.getElementById('mode-switch-loader') : null;
+  const labelEl = typeof document !== 'undefined' ? document.getElementById('mode-switch-loader-text') : null;
+  if (!loaderEl || typeof requestAnimationFrame !== 'function') {
+    workFn();
+    return;
+  }
+  if (labelEl && label) labelEl.textContent = label;
+  loaderEl.classList.remove('hidden');
+  loaderEl.style.display = 'flex';
+  const startedAt = Date.now();
+  requestAnimationFrame(() => {
+    loaderEl.classList.add('is-visible');
+    setTimeout(() => {
+      try {
+        workFn();
+      } catch (err) {
+        console.warn('[ModeSwitch] work error:', err);
+      }
+      requestAnimationFrame(() => {
+        const elapsed = Date.now() - startedAt;
+        const waitMs = Math.max(0, 140 - elapsed);
+        setTimeout(() => {
+          loaderEl.classList.remove('is-visible');
+          setTimeout(() => {
+            loaderEl.style.display = 'none';
+            loaderEl.classList.add('hidden');
+          }, 160);
+        }, waitMs);
+      });
+    }, 16);
+  });
+}
+
 export function showAdminDashboard(targetPage = 'overview') {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) {
@@ -8984,11 +9223,24 @@ export function showAdminDashboard(targetPage = 'overview') {
     return;
   }
   const overlay = document.getElementById('modal-admin-dashboard');
-  if (overlay) {
+  if (!overlay) return;
+
+  const cleanTarget = targetPage || 'overview';
+  state.isAdminDashboardOpen = true;
+  state.activeAdminPage = cleanTarget;
+  USER_TABS_LIST.forEach((t) => _dirtyUserTabs.add(t));
+  ADMIN_TABS_LIST.forEach((t) => {
+    if (t !== cleanTarget) _dirtyAdminTabs.add(t);
+  });
+
+  runWithModeSwitchSpinner('Loading Admin Hub...', () => {
+    const userPagerEl = document.getElementById('user-pager');
+    if (userPagerEl) userPagerEl.style.contentVisibility = 'hidden';
+
     overlay.style.display = '';
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
-    pushModalHistoryState('admin-' + targetPage, `${window.location.pathname}?tab=admin#admin-${targetPage}`);
+    pushModalHistoryState('admin-' + cleanTarget, `${window.location.pathname}?tab=admin#admin-${cleanTarget}`);
     const backBtn = document.getElementById('adminHubBackBtn') || document.getElementById('btn-exit-admin');
     if (backBtn) {
       backBtn.onclick = (e) => {
@@ -8996,47 +9248,77 @@ export function showAdminDashboard(targetPage = 'overview') {
         closeAdminDashboard();
       };
     }
+
     initAdminPushConsole();
     setupSubmissionsListeners();
     setupAttendanceListeners();
     setupUsersPrivateListener();
     setupWaiverRequestsListener();
-    renderAdminCategories();
-    renderAdminTasks();
-    renderAdminSessions();
-    renderAdminBadges();
-    renderAdminMembers();
-    renderAdminSubmissions();
-    renderAdminBroadcasts();
-    renderAdminNotifications();
-    updateAdminOverviewStats();
+    setupMissedPenaltiesListener();
+    scheduleIdleWork(() => backfillWindowCounters(), 1200);
+
     if (adminPagerInstance) {
-      adminPagerInstance.goTo(targetPage);
+      adminPagerInstance.goTo(cleanTarget, 'instant');
     }
-    if (targetPage === 'waivers') renderAdminWaivers();
-    else if (targetPage === 'adjustments') renderAdminAdjustments();
-    else if (targetPage === 'notifications') renderAdminNotifications();
-  }
+    _dirtyAdminTabs.delete(cleanTarget);
+    renderAdminPageById(cleanTarget);
+    if (cleanTarget !== 'overview') {
+      scheduleIdleWork(() => {
+        if (state.isAdminDashboardOpen) updateAdminOverviewStats();
+      }, 400);
+    }
+    scheduleIdleAdminPrewarm(cleanTarget);
+  });
 }
 
 export function closeAdminDashboard() {
   if (selectionState.active) exitSelectionMode();
   const overlay = document.getElementById('modal-admin-dashboard');
-  if (overlay) {
+  if (!overlay) return;
+
+  state.isAdminDashboardOpen = false;
+  const activeTab = getActiveTabRouteId();
+  const returnTab = (activeTab && activeTab !== 'admin') ? activeTab : (state.activeUserPage || 'home');
+  state.activeUserPage = returnTab;
+
+  runWithModeSwitchSpinner('Loading Member View...', () => {
     overlay.classList.add('hidden');
     overlay.style.display = 'none';
     document.body.style.overflow = '';
-    const activeTab = getActiveTabRouteId();
-    const returnTab = (activeTab && activeTab !== 'admin') ? activeTab : 'home';
-    syncTabHistoryState(returnTab, true);
-    if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.goTo) {
-      userPagerInstance.goTo(returnTab);
-    }
+
     listeners.clear('submissions');
     listeners.clear('attendance_logs');
+    clearFsListener('attendance_logs');
+    listeners.clear('attendance_records');
+    clearFsListener('attendance_records');
+    listeners.clear('waiver_requests');
+    listeners.clear('missed_penalties');
+    listeners.clear('users_private');
+
     state.submissions = state.mySubmissions || [];
     state.attendanceLogs = state.myAttendanceLogs || [];
-  }
+    unmountAdminDom();
+
+    setupSubmissionsListeners();
+    setupAttendanceListeners();
+    setupUsersPrivateListener();
+    setupWaiverRequestsListener();
+
+    const userPagerEl = document.getElementById('user-pager');
+    if (userPagerEl) userPagerEl.style.contentVisibility = '';
+
+    syncTabHistoryState(returnTab, true);
+    if (typeof userPagerInstance !== 'undefined' && userPagerInstance?.goTo) {
+      userPagerInstance.goTo(returnTab, 'instant');
+    }
+
+    USER_TABS_LIST.forEach((t) => {
+      if (t !== returnTab) _dirtyUserTabs.add(t);
+    });
+    _dirtyUserTabs.delete(returnTab);
+    renderUserPageById(returnTab);
+    scheduleUserNeighborPrewarm(returnTab);
+  });
 }
 
 let isFetchingOverviewStats = false;
@@ -9315,9 +9597,6 @@ async function setupAuthLifecycle() {
       initServerClock();
 
       initFirestoreListeners();
-      if (state.user?.isAdmin || state.user?.role === 'admin') {
-        backfillWindowCounters();
-      }
         } else {
       state.user = null;
       state.userPrivate = null;
@@ -9420,6 +9699,13 @@ async function handleSignOut() {
   if (confirmed && auth) {
 
     listeners.clear();
+    clearFsListener('my_attendance_logs');
+    clearFsListener('my_attendance_logs_fallback');
+    clearFsListener('attendance_logs');
+    clearFsListener('attendance_records');
+    clearFsListener('attendance_records_fallback');
+    state.isAdminDashboardOpen = false;
+    unmountAdminDom();
     usersPrivate.clear();
     usersMap.clear();
     state.members = [];
@@ -9485,28 +9771,29 @@ function setupSubmissionsListeners() {
     return;
   }
 
-  try {
-    const qUserSubs = query(
-      collection(db, 'submissions'),
-      where('uid', '==', state.user.uid),
-      orderBy('submittedAt', 'desc'),
-      limit(150)
-    );
-    const unsubMySubs = onSnapshot(qUserSubs, (snapshot) => {
-      state.mySubmissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
-      if (!isCurrentUserAdmin()) {
-        state.submissions = state.mySubmissions;
-      }
-      persistToLocalCache();
-      renderTasks();
-      renderProfileSubmissions();
-      updateHeroStats();
-    }, (err) => console.warn('User submissions listener:', err));
-    listeners.add('my_submissions', unsubMySubs);
-  } catch (e) { console.warn('Error setting up user submissions listener:', e); }
+  if (!listeners.has('my_submissions')) {
+    try {
+      const qUserSubs = query(
+        collection(db, 'submissions'),
+        where('uid', '==', state.user.uid),
+        orderBy('submittedAt', 'desc'),
+        limit(150)
+      );
+      const unsubMySubs = onSnapshot(qUserSubs, (snapshot) => {
+        state.mySubmissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
+        if (!isAdminSessionActive()) {
+          state.submissions = state.mySubmissions;
+        }
+        persistToLocalCache();
+        scheduleUserTabRender('tasks', 'render_tasks', renderTasks);
+        scheduleUserTabRender('profile', 'render_profile_subs', renderProfileSubmissions);
+        scheduleUserTabRender('home', 'update_hero_stats', updateHeroStats);
+      }, (err) => console.warn('User submissions listener:', err));
+      listeners.add('my_submissions', unsubMySubs);
+    } catch (e) { console.warn('Error setting up user submissions listener:', e); }
+  }
 
-  const currentUser = state.user || {};
-  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
+  if (isAdminSessionActive()) {
     try {
       listeners.clear('submissions');
       const qAllSubs = query(
@@ -9517,13 +9804,13 @@ function setupSubmissionsListeners() {
       const unsubAllSubs = onSnapshot(qAllSubs, (snapshot) => {
         state.submissions = snapshot.docs.map(d => normalizeSubmission({ id: d.id, ...d.data() }));
         state.hasMoreSubmissions = snapshot.docs.length >= (state.adminSubmissionsLimit || 50);
-        renderTasks();
-        renderLeaderboard();
-        renderAdminSubmissions();
-        updateAdminOverviewStats();
+        scheduleAdminTabRender('submissions', 'render_admin_subs', renderAdminSubmissions);
+        scheduleAdminTabRender('always', 'update_admin_overview', updateAdminOverviewStats);
       }, (err) => console.warn('Admin submissions listener:', err));
       listeners.add('submissions', unsubAllSubs);
     } catch (e) { console.warn('Error setting up admin submissions listener:', e); }
+  } else {
+    listeners.clear('submissions');
   }
 }
 
@@ -9557,13 +9844,14 @@ function setupAttendanceListeners() {
     );
     const unsubMyLogs = onSnapshot(qMyLogs, (snapshot) => {
       state.myAttendanceLogs = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
-      if (!isCurrentUserAdmin()) {
+      if (!isAdminSessionActive()) {
         state.attendanceLogs = state.myAttendanceLogs;
       }
       persistToLocalCache();
-      renderTodayCheckIns(state.myAttendanceLogs);
-      renderProfileAttendance();
-      updateUserTodayAttendanceBadge();
+      scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(state.myAttendanceLogs));
+      scheduleUserTabRender('profile', 'render_profile_attendance', renderProfileAttendance);
+      scheduleUserTabRender('attendance', 'render_attendance_view', renderAttendanceView);
+      scheduleRafRender('att_badge', updateUserTodayAttendanceBadge);
     }, (err) => {
       console.warn('My attendance logs listener:', err);
       try {
@@ -9576,13 +9864,14 @@ function setupAttendanceListeners() {
           const list = snapshot.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
           list.sort((a, b) => (parseDateTimeToMs(b.checkedInAt || b.timestamp) - parseDateTimeToMs(a.checkedInAt || a.timestamp)));
           state.myAttendanceLogs = list;
-          if (!isCurrentUserAdmin()) {
+          if (!isAdminSessionActive()) {
             state.attendanceLogs = state.myAttendanceLogs;
           }
           persistToLocalCache();
-          renderTodayCheckIns(state.myAttendanceLogs);
-          renderProfileAttendance();
-          updateUserTodayAttendanceBadge();
+          scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(state.myAttendanceLogs));
+          scheduleUserTabRender('profile', 'render_profile_attendance', renderProfileAttendance);
+          scheduleUserTabRender('attendance', 'render_attendance_view', renderAttendanceView);
+          scheduleRafRender('att_badge', updateUserTodayAttendanceBadge);
         }, () => {});
         setFsListener('my_attendance_logs_fallback', unsubFallback);
         listeners.add('my_attendance_logs', unsubFallback);
@@ -9592,8 +9881,7 @@ function setupAttendanceListeners() {
     listeners.add('my_attendance_logs', unsubMyLogs);
   } catch (e) { console.warn('Error setting up my attendance logs listener:', e); }
 
-  const currentUser = state.user || {};
-  if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
+  if (isAdminSessionActive()) {
     try {
       const qAllLogs = query(
         collection(db, 'attendance_logs'),
@@ -9604,14 +9892,14 @@ function setupAttendanceListeners() {
         const mergedMap = new Map((state.attendanceLogs || []).map(l => [l.id, l]));
         logs.forEach(l => mergedMap.set(l.id, { ...(mergedMap.get(l.id) || {}), ...l }));
         state.attendanceLogs = Array.from(mergedMap.values());
-        if (adminSessionsFilter === 'recent_logs') {
-          renderRecentLogs();
+        if (isAdminSessionActive()) {
+          if (adminSessionsFilter === 'recent_logs') {
+            scheduleAdminTabRender('attendance', 'render_recent_logs', renderRecentLogs);
+          }
+          if (typeof window.refreshCurrentRosterView === 'function') {
+            scheduleAdminTabRender('attendance', 'refresh_roster', () => window.refreshCurrentRosterView());
+          }
         }
-        if (typeof window.refreshCurrentRosterView === 'function') {
-          window.refreshCurrentRosterView();
-        }
-        renderTodayCheckIns(state.attendanceLogs);
-        updateUserTodayAttendanceBadge();
       }, (err) => console.warn('Admin attendance logs listener:', err));
       setFsListener('attendance_logs', unsubAllLogs);
       listeners.add('attendance_logs', unsubAllLogs);
@@ -9620,7 +9908,7 @@ function setupAttendanceListeners() {
 
   // Pure onSnapshot sync for attendance_records
   try {
-    const qRecords = (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked)
+    const qRecords = isAdminSessionActive()
       ? query(collection(db, 'attendance_records'), limit(150))
       : query(collection(db, 'attendance_records'), where('uid', '==', state.user.uid), limit(50));
     const unsubRecords = onSnapshot(qRecords, (snapshot) => {
@@ -9631,27 +9919,32 @@ function setupAttendanceListeners() {
       records.forEach(r => mergedMap.set(r.id, { ...(mergedMap.get(r.id) || {}), ...r }));
       state.attendanceLogs = Array.from(mergedMap.values());
 
-      if (!isCurrentUserAdmin()) {
+      if (!isAdminSessionActive()) {
         state.myAttendanceLogs = records;
       }
-      renderTodayCheckIns(records);
-      if (adminSessionsFilter === 'recent_logs') {
-        renderRecentLogs();
+      scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(records));
+      scheduleUserTabRender('attendance', 'render_attendance_view', renderAttendanceView);
+      if (isAdminSessionActive()) {
+        if (adminSessionsFilter === 'recent_logs') {
+          scheduleAdminTabRender('attendance', 'render_recent_logs', renderRecentLogs);
+        }
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          scheduleAdminTabRender('attendance', 'refresh_roster', () => window.refreshCurrentRosterView());
+        }
       }
-      if (typeof window.refreshCurrentRosterView === 'function') {
-        window.refreshCurrentRosterView();
-      }
-      updateUserTodayAttendanceBadge();
+      scheduleRafRender('att_badge', updateUserTodayAttendanceBadge);
     }, (err) => {
       try {
-        const qFallback = query(collection(db, 'attendance_records'), limit(150));
+        const qFallback = query(collection(db, 'attendance_records'), where('uid', '==', state.user.uid), limit(50));
         const unsubFallback = onSnapshot(qFallback, (s) => {
           const records = s.docs.map(d => normalizeAttendanceLog({ id: d.id, ...d.data() }));
           state.attendanceRecords = records;
-          renderTodayCheckIns(records);
-          if (adminSessionsFilter === 'recent_logs') renderRecentLogs();
-          if (typeof window.refreshCurrentRosterView === 'function') {
-            window.refreshCurrentRosterView();
+          scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(records));
+          if (isAdminSessionActive() && adminSessionsFilter === 'recent_logs') {
+            scheduleAdminTabRender('attendance', 'render_recent_logs', renderRecentLogs);
+          }
+          if (isAdminSessionActive() && typeof window.refreshCurrentRosterView === 'function') {
+            scheduleAdminTabRender('attendance', 'refresh_roster', () => window.refreshCurrentRosterView());
           }
         }, () => {});
         setFsListener('attendance_records_fallback', unsubFallback);
@@ -9679,15 +9972,16 @@ function setupMembersListeners() {
       state.members = Array.from(usersMap.values());
       state.hasMoreMembers = false;
       persistToLocalCache();
-      renderLeaderboard();
-      renderTasks();
-      renderAttendanceView();
-      const currentUser = state.user || {};
-      if (currentUser.role === 'admin' || currentUser.isAdmin || state.isAdminUnlocked) {
-        renderAdminMembers();
-        updateAdminOverviewStats();
-        updateAdminPushTargets();
-        if (typeof renderAdminSubmissions === 'function') renderAdminSubmissions();
+      scheduleUserTabRender('home', 'render_leaderboard', renderLeaderboard);
+      scheduleUserTabRender('tasks', 'render_tasks', renderTasks);
+      scheduleUserTabRender('attendance', 'render_attendance', renderAttendanceView);
+      if (isAdminSessionActive()) {
+        scheduleAdminTabRender('members', 'render_admin_members', renderAdminMembers);
+        scheduleAdminTabRender('always', 'update_admin_overview', updateAdminOverviewStats);
+        scheduleAdminTabRender('notifications', 'update_admin_push_targets', updateAdminPushTargets);
+        if (typeof renderAdminSubmissions === 'function') {
+          scheduleAdminTabRender('submissions', 'render_admin_subs', renderAdminSubmissions);
+        }
       }
       if (state.user) {
         const found = usersMap.get(state.user.uid);
@@ -9695,7 +9989,8 @@ function setupMembersListeners() {
           const prevRole = state.user.role;
           state.user = { ...state.user, ...found };
           if (found.isAdmin) state.isAdminUnlocked = true;
-          updateProfileUI();
+          scheduleUserTabRender('profile', 'update_profile_ui', updateProfileUI);
+          scheduleUserTabRender('home', 'update_hero_stats', updateHeroStats);
           if (prevRole !== found.role) {
             setupSubmissionsListeners();
             setupAttendanceListeners();
@@ -9737,16 +10032,11 @@ function setupUsersPrivateListener() {
   }
 
   const uid = state.user.uid;
-  const isAdmin = Boolean(
-    state.user.isAdmin ||
-    state.user.role === 'admin' ||
-    usersMap.get(uid)?.isAdmin ||
-    usersMap.get(uid)?.role === 'admin'
-  );
+  const isAdminSession = isAdminSessionActive();
 
   listeners.clear('users_private');
 
-  if (isAdmin) {
+  if (isAdminSession) {
     try {
       const q = query(collection(db, 'users_private'), limit(500));
       const unsub = onSnapshot(q, (snapshot) => {
@@ -9761,10 +10051,18 @@ function setupUsersPrivateListener() {
         if (state.user?.uid && usersPrivate.has(state.user.uid)) {
           state.userPrivate = usersPrivate.get(state.user.uid);
         }
-        if (typeof renderAdminMembers === 'function') renderAdminMembers();
-        if (typeof updateProfileUI === 'function') updateProfileUI();
-        if (typeof updateActivityRings === 'function') updateActivityRings();
-        if (typeof updateAdminPushTargets === 'function') updateAdminPushTargets();
+        if (typeof renderAdminMembers === 'function') {
+          scheduleAdminTabRender('members', 'render_admin_members', renderAdminMembers);
+        }
+        if (typeof updateProfileUI === 'function') {
+          scheduleUserTabRender('profile', 'update_profile_ui', updateProfileUI);
+        }
+        if (typeof updateActivityRings === 'function') {
+          scheduleUserTabRender('home', 'update_activity_rings', updateActivityRings);
+        }
+        if (typeof updateAdminPushTargets === 'function') {
+          scheduleAdminTabRender('notifications', 'update_admin_push_targets', updateAdminPushTargets);
+        }
       }, (err) => {
         console.warn('Admin users_private listener:', err);
       });
@@ -9793,8 +10091,12 @@ function setupUsersPrivateListener() {
           usersPrivate.set(uid, priv);
           state.userPrivate = priv;
         }
-        if (typeof updateProfileUI === 'function') updateProfileUI();
-        if (typeof updateActivityRings === 'function') updateActivityRings();
+        if (typeof updateProfileUI === 'function') {
+          scheduleUserTabRender('profile', 'update_profile_ui', updateProfileUI);
+        }
+        if (typeof updateActivityRings === 'function') {
+          scheduleUserTabRender('home', 'update_activity_rings', updateActivityRings);
+        }
       }, (err) => {
         console.warn('Member users_private listener:', err);
       });
@@ -9814,32 +10116,27 @@ function setupWaiverRequestsListener() {
     return;
   }
 
-  const isAdmin = Boolean(
-    state.user.isAdmin ||
-    state.user.role === 'admin' ||
-    state.isAdminUnlocked ||
-    usersMap.get(state.user.uid)?.isAdmin ||
-    usersMap.get(state.user.uid)?.role === 'admin'
-  );
+  const isAdminSession = isAdminSessionActive();
 
-  listeners.clear('my_waiver_requests');
   listeners.clear('waiver_requests');
 
-  try {
-    const qMy = query(
-      collection(db, 'waiver_requests'),
-      where('uid', '==', state.user.uid),
-      orderBy('createdAt', 'desc'),
-      limit(50)
-    );
-    const unsubMy = onSnapshot(qMy, (snapshot) => {
-      state.myWaiverRequests = snapshot.docs.map(d => normalizeWaiverRequest({ id: d.id, ...d.data() }));
-      renderAttendanceView();
-    }, (err) => console.warn('My waiver requests listener:', err));
-    listeners.add('my_waiver_requests', unsubMy);
-  } catch (e) { console.warn('Error setting up my waiver requests listener:', e); }
+  if (!listeners.has('my_waiver_requests')) {
+    try {
+      const qMy = query(
+        collection(db, 'waiver_requests'),
+        where('uid', '==', state.user.uid),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+      );
+      const unsubMy = onSnapshot(qMy, (snapshot) => {
+        state.myWaiverRequests = snapshot.docs.map(d => normalizeWaiverRequest({ id: d.id, ...d.data() }));
+        scheduleUserTabRender('attendance', 'render_attendance', renderAttendanceView);
+      }, (err) => console.warn('My waiver requests listener:', err));
+      listeners.add('my_waiver_requests', unsubMy);
+    } catch (e) { console.warn('Error setting up my waiver requests listener:', e); }
+  }
 
-  if (isAdmin) {
+  if (isAdminSession) {
     try {
       const qAll = query(
         collection(db, 'waiver_requests'),
@@ -9850,8 +10147,12 @@ function setupWaiverRequestsListener() {
         state.waiverRequests = snapshot.docs.map(d => normalizeWaiverRequest({ id: d.id, ...d.data() }));
         const pendingCount = state.waiverRequests.filter(w => w.status === 'pending').length;
         updateWaiversBadge(pendingCount);
-        if (typeof renderAdminWaivers === 'function') renderAdminWaivers();
-        if (typeof window.refreshCurrentRosterView === 'function') window.refreshCurrentRosterView();
+        if (typeof renderAdminWaivers === 'function') {
+          scheduleAdminTabRender('waivers', 'render_admin_waivers', renderAdminWaivers);
+        }
+        if (typeof window.refreshCurrentRosterView === 'function') {
+          scheduleAdminTabRender('attendance', 'refresh_roster', () => window.refreshCurrentRosterView());
+        }
       }, (err) => console.warn('Admin waiver requests listener:', err));
       listeners.add('waiver_requests', unsubAll);
     } catch (e) { console.warn('Error setting up admin waiver requests listener:', e); }
@@ -9865,17 +10166,11 @@ function setupMissedPenaltiesListener() {
     return;
   }
 
-  const isAdmin = Boolean(
-    state.user.isAdmin ||
-    state.user.role === 'admin' ||
-    state.isAdminUnlocked ||
-    usersMap.get(state.user.uid)?.isAdmin ||
-    usersMap.get(state.user.uid)?.role === 'admin'
-  );
+  const isAdminSession = isAdminSessionActive();
 
   listeners.clear('missed_penalties');
 
-  if (isAdmin) {
+  if (isAdminSession) {
     try {
       const qMissed = query(
         collection(db, 'missed_penalties'),
@@ -9888,7 +10183,9 @@ function setupMissedPenaltiesListener() {
         list.forEach(item => {
           if (item.id) state.appliedMissedPenalties.add(item.id);
         });
-        if (typeof renderAdminMissedTasks === 'function') renderAdminMissedTasks();
+        if (typeof renderAdminMissedTasks === 'function') {
+          scheduleAdminTabRender('submissions', 'render_admin_missed', renderAdminMissedTasks);
+        }
       }, (err) => console.warn('Admin missed_penalties listener:', err));
       listeners.add('missed_penalties', unsubMissed);
     } catch (e) { console.warn('Error setting up missed_penalties listener:', e); }
@@ -10249,9 +10546,9 @@ function setupBroadcastsListener() {
     const unsubBroadcasts = onSnapshot(qBroadcasts, (snapshot) => {
       state.broadcasts = snapshot.docs.map(d => normalizeBroadcast({ id: d.id, ...d.data() }));
       persistToLocalCache();
-      renderHomeBroadcastBanner();
-      if (isCurrentUserAdmin()) renderAdminBroadcasts();
-      mergeAndRenderNotifications();
+      scheduleUserTabRender('home', 'render_home_broadcast', renderHomeBroadcastBanner);
+      if (isAdminSessionActive()) scheduleAdminTabRender('broadcasts', 'render_admin_broadcasts', renderAdminBroadcasts);
+      scheduleUserTabRender('notifications', 'merge_notifs', mergeAndRenderNotifications);
     }, (err) => console.warn('Broadcasts listener:', err));
     listeners.add('broadcasts', unsubBroadcasts);
   } catch (e) {
@@ -10961,9 +11258,11 @@ function initFirestoreListeners() {
         .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
       state.categories.forEach(c => categoriesMap.set(c.id, c));
       persistToLocalCache();
-      populateCategoryFilters();
-      if (isCurrentUserAdmin()) renderAdminCategories();
-      renderTasks();
+      scheduleUserTabRender('tasks', 'render_tasks_and_cats', () => {
+        populateCategoryFilters();
+        renderTasks();
+      });
+      if (isAdminSessionActive()) scheduleAdminTabRender('categories', 'render_admin_cats', renderAdminCategories);
     }, (err) => console.warn('Categories listener:', err));
     listeners.add('categories', unsubCats);
   } catch (e) { console.warn(e); }
@@ -10975,11 +11274,14 @@ function initFirestoreListeners() {
         .filter(Boolean)
         .sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999));
       persistToLocalCache();
-      renderTasks();
-      updateHeroStats();
-      if (isCurrentUserAdmin()) {
-        renderAdminTasks();
-        updateAdminOverviewStats();
+      scheduleUserTabRender('tasks', 'render_tasks_and_cats', () => {
+        populateCategoryFilters();
+        renderTasks();
+      });
+      scheduleUserTabRender('home', 'update_hero_stats', updateHeroStats);
+      if (isAdminSessionActive()) {
+        scheduleAdminTabRender('tasks', 'render_admin_tasks', renderAdminTasks);
+        scheduleAdminTabRender('always', 'update_admin_overview', updateAdminOverviewStats);
       }
     }, (err) => console.warn('Tasks listener:', err));
     listeners.add('tasks', unsubTasks);
@@ -10989,10 +11291,10 @@ function initFirestoreListeners() {
     const unsubSessions = onSnapshot(query(collection(db, 'attendance_sessions'), limit(50)), (snapshot) => {
       state.attendanceSessions = snapshot.docs.map(d => normalizeSession({ id: d.id, ...d.data() }));
       persistToLocalCache();
-      renderAttendanceView();
-      if (isCurrentUserAdmin()) {
-        renderAdminSessions();
-        updateAdminOverviewStats();
+      scheduleUserTabRender('attendance', 'render_attendance', renderAttendanceView);
+      if (isAdminSessionActive()) {
+        scheduleAdminTabRender('attendance', 'render_admin_sessions', renderAdminSessions);
+        scheduleAdminTabRender('always', 'update_admin_overview', updateAdminOverviewStats);
       }
     }, (err) => console.warn('Attendance sessions listener:', err));
     listeners.add('attendance_sessions', unsubSessions);
@@ -11018,11 +11320,13 @@ function initFirestoreListeners() {
 
       state.badges.forEach(b => badgesMap.set(b.id, b));
       persistToLocalCache();
-      renderLeaderboard();
-      updateProfileUI();
-      if (isCurrentUserAdmin()) {
-        renderAdminBadges();
-        if (typeof renderAdminMembers === 'function') renderAdminMembers();
+      scheduleUserTabRender('home', 'render_leaderboard', renderLeaderboard);
+      scheduleUserTabRender('profile', 'update_profile_ui', updateProfileUI);
+      if (isAdminSessionActive()) {
+        scheduleAdminTabRender('badges', 'render_admin_badges', renderAdminBadges);
+        if (typeof renderAdminMembers === 'function') {
+          scheduleAdminTabRender('members', 'render_admin_members', renderAdminMembers);
+        }
       }
     }, (err) => console.warn('Badges listener:', err));
     listeners.add('badges', unsubBadges);
@@ -12086,6 +12390,8 @@ function renderAttendanceView() {
   }
 
   attendanceTickerInterval = setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (state.isAdminDashboardOpen || (state.activeUserPage && state.activeUserPage !== 'attendance')) return;
     if (heroContainer && userAttendanceActiveTab === 'active') {
       renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
     }
@@ -24679,18 +24985,25 @@ function startLiveClock() {
   const clockEl = document.getElementById('live-clock');
   const dateEl = document.getElementById('live-date');
 
-  const tick = () => {
+  let lastClockDateStr = '';
+  const tick = (force = false) => {
+    if (!force && typeof document !== 'undefined' && document.hidden) return;
+    if (!force && (state.isAdminDashboardOpen || (state.activeUserPage && state.activeUserPage !== 'home'))) return;
     const now = new Date(serverNow());
     if (clockEl) {
       clockEl.textContent = now.toLocaleTimeString([], { timeZone: APP_TIMEZONE, hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
     if (dateEl) {
-      dateEl.textContent = now.toLocaleDateString([], { timeZone: APP_TIMEZONE, weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+      const nextDateStr = now.toLocaleDateString([], { timeZone: APP_TIMEZONE, weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+      if (nextDateStr !== lastClockDateStr) {
+        lastClockDateStr = nextDateStr;
+        dateEl.textContent = nextDateStr;
+      }
     }
   };
 
-  tick();
-  setInterval(tick, 1000);
+  tick(true);
+  setInterval(() => tick(false), 1000);
 }
 
 function dismissLoader() {
