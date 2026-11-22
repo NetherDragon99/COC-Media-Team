@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.2';
+export const APP_VERSION = '3.2.3';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -849,7 +849,7 @@ export const GAS_BACKEND_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfyc
 
 export async function callGasBackend(payload = {}) {
   const webhookUrl = state.settings?.backendWebhookUrl || GAS_BACKEND_WEBHOOK_URL;
-  if (!webhookUrl || typeof fetch !== 'function') return { ok: true, status: 'skipped' };
+  if (!webhookUrl || typeof fetch !== 'function') return { ok: true, status: 'skipped', fallbackRequired: true };
 
   const bodyStr = JSON.stringify({
     timestamp: new Date().toISOString(),
@@ -866,25 +866,13 @@ export async function callGasBackend(payload = {}) {
     });
     if (res && res.ok) {
       const data = await res.json().catch(() => ({ status: 'success', ok: true }));
-      return { ok: true, status: 'success', ...data };
+      return { ok: data.status !== 'error', status: 'success', ...data };
     }
+    return { ok: true, status: 'sent_nonblocking', fallbackRequired: true };
   } catch (corsErr) {
-    try {
-      await fetch(webhookUrl, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8'
-        },
-        body: bodyStr
-      });
-      return { ok: true, status: 'success', sent_opaque: true };
-    } catch (innerErr) {
-      console.warn('[GAS Backend] Request failed:', innerErr);
-      return { ok: true, status: 'sent_nonblocking' };
-    }
+    console.warn('[GAS Backend] Request failed, triggering deterministic Firestore fallback:', corsErr);
+    return { ok: true, status: 'sent_nonblocking', fallbackRequired: true };
   }
-  return { ok: true, status: 'success' };
 }
 
 export async function dispatchBackendSessionMutation(action, sessionId = null, extraPayload = {}) {
@@ -964,6 +952,8 @@ export async function submitTaskThroughBackend(task, answers = [], comment = '')
   }
 
   // Fallback for offline/non-CORS environments where GAS response is opaque/skipped
+  const gracePenPts = currentWin.inGrace ? (Number(task.grace?.penaltyPoints) || 0) : 0;
+  const graceFineEGP = currentWin.inGrace ? (Number(task.grace?.fineAmountEGP) || 0) : 0;
   if (db) {
     const batch = writeBatch(db);
     const subRef = doc(db, 'submissions', subId);
@@ -980,11 +970,26 @@ export async function submitTaskThroughBackend(task, answers = [], comment = '')
       inGrace: Boolean(currentWin.inGrace),
       comment: cleanComment,
       pointsAwarded: fallbackPoints,
+      penaltyPoints: gracePenPts,
+      fineEGP: graceFineEGP,
       status: 'approved',
+      ledgerSynced: true,
       submittedAt: serverTimestamp()
     });
 
-    const pointsUpdate = buildPointsUpdate(usersMap.get(state.user.uid) || state.user, fallbackPoints, serverNow());
+    const targetUserDoc = usersMap.get(state.user.uid) || state.user;
+    const pointsUpdate = buildPointsUpdate(targetUserDoc, fallbackPoints, serverNow());
+    if (gracePenPts > 0) {
+      pointsUpdate.penalties = increment(gracePenPts);
+    }
+    if (graceFineEGP > 0) {
+      pointsUpdate.finesDue = increment(graceFineEGP);
+      pointsUpdate.fines = increment(graceFineEGP);
+      batch.set(doc(db, 'users_private', state.user.uid), {
+        finesEGP: increment(graceFineEGP),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    }
     batch.update(userRef, {
       ...pointsUpdate,
       lastOpId: subId,
@@ -4983,9 +4988,20 @@ export function renderExpandedBadgesHtml(badgesInput, member = null) {
 }
 
 const badgeRowObservers = new WeakMap();
+const activeBadgeObserverSet = new Set();
+
+export function cleanupDetachedBadgeObservers() {
+  activeBadgeObserverSet.forEach(entry => {
+    if (!entry.container || !entry.container.isConnected) {
+      try { entry.ro.disconnect(); } catch (_) {}
+      activeBadgeObserverSet.delete(entry);
+    }
+  });
+}
 
 export function renderBadgeRow(container, badges, member) {
   if (!container) return;
+  cleanupDetachedBadgeObservers();
   const normBadges = resolveOrderedUserBadges(badges, member);
 
   container.classList.add('badge-strip-compact');
@@ -5000,8 +5016,13 @@ export function renderBadgeRow(container, badges, member) {
     return;
   }
 
+  let lastRenderedWidth = -1;
   const updateBadgesLayout = () => {
-    const availableWidth = container.clientWidth;
+    const availableWidth = container.clientWidth || 130;
+    if (availableWidth === lastRenderedWidth && container.children && container.children.length > 0) {
+      return;
+    }
+    lastRenderedWidth = availableWidth;
     const iconSize = 22;
     const gap = 4;
 
@@ -5012,7 +5033,6 @@ export function renderBadgeRow(container, badges, member) {
       const maxFullFit = Math.floor((availableWidth + gap) / (iconSize + gap));
       if (maxFullFit < normBadges.length) {
         hasOverflow = true;
-
         visibleCount = Math.max(0, maxFullFit - 1);
       } else {
         visibleCount = normBadges.length;
@@ -5061,16 +5081,20 @@ export function renderBadgeRow(container, badges, member) {
   };
 
   let ro = badgeRowObservers.get(container);
-  if (!ro) {
+  if (!ro && typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(() => {
+      if (!container.isConnected) {
+        try { ro.disconnect(); } catch (_) {}
+        return;
+      }
       updateBadgesLayout();
     });
     ro.observe(container);
     badgeRowObservers.set(container, ro);
+    activeBadgeObserverSet.add({ container, ro });
   }
 
   updateBadgesLayout();
-  requestAnimationFrame(updateBadgesLayout);
 }
 
 export function openMiniProfileSheet(uidOrMember) {
@@ -7368,10 +7392,21 @@ export function attachUniversalSwipeActions(wrapperEl, {
     endDrag(touch ? touch.clientX : startX, e);
   };
 
+  const detachWindowPointerListeners = () => {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+  };
+
   const onPointerDown = (e) => {
     if (e.pointerType === 'touch') return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     startDrag(e.clientX, e.clientY, e);
+    if (isTracking) {
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
+    }
   };
 
   const onPointerMove = (e) => {
@@ -7381,6 +7416,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
   };
 
   const onPointerUp = (e) => {
+    detachWindowPointerListeners();
     if (!isTracking && !isSwiping) return;
     if (e.pointerType === 'touch') return;
     endDrag(e.clientX, e);
@@ -7392,9 +7428,6 @@ export function attachUniversalSwipeActions(wrapperEl, {
   wrapperEl.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
   wrapperEl.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup', onPointerUp);
-  window.addEventListener('pointercancel', onPointerUp);
 
   return () => {
     wrapperEl.removeEventListener('touchstart', onTouchStart);
@@ -7403,9 +7436,7 @@ export function attachUniversalSwipeActions(wrapperEl, {
     wrapperEl.removeEventListener('touchcancel', onTouchEnd);
 
     wrapperEl.removeEventListener('pointerdown', onPointerDown);
-    window.removeEventListener('pointermove', onPointerMove);
-    window.removeEventListener('pointerup', onPointerUp);
-    window.removeEventListener('pointercancel', onPointerUp);
+    detachWindowPointerListeners();
   };
 }
 function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChange = null) {
@@ -9920,9 +9951,11 @@ function setupAttendanceListeners() {
       state.attendanceLogs = Array.from(mergedMap.values());
 
       if (!isAdminSessionActive()) {
-        state.myAttendanceLogs = records;
+        const myMap = new Map((state.myAttendanceLogs || []).map(l => [l.id, l]));
+        records.forEach(r => myMap.set(r.id, { ...(myMap.get(r.id) || {}), ...r }));
+        state.myAttendanceLogs = Array.from(myMap.values());
       }
-      scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(records));
+      scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(state.myAttendanceLogs));
       scheduleUserTabRender('attendance', 'render_attendance_view', renderAttendanceView);
       if (isAdminSessionActive()) {
         if (adminSessionsFilter === 'recent_logs') {
@@ -10179,9 +10212,13 @@ function setupMissedPenaltiesListener() {
       const unsubMissed = onSnapshot(qMissed, (snapshot) => {
         const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         state.missedPenalties = list;
-        if (!state.appliedMissedPenalties) state.appliedMissedPenalties = new Set();
+        state.appliedMissedPenalties = new Set();
         list.forEach(item => {
           if (item.id) state.appliedMissedPenalties.add(item.id);
+          if (item.taskId && item.uid && item.occurrenceKey) {
+            state.appliedMissedPenalties.add(`${item.taskId}_${item.occurrenceKey}_${item.uid}`);
+            state.appliedMissedPenalties.add(`${item.taskId}_${item.uid}_${item.occurrenceKey}`);
+          }
         });
         if (typeof renderAdminMissedTasks === 'function') {
           scheduleAdminTabRender('submissions', 'render_admin_missed', renderAdminMissedTasks);
@@ -11222,6 +11259,19 @@ async function handleAdminSendPush(e) {
       details: { title, target, icon, type, targetAction }
     });
     await batchLog.commit();
+
+    callGasBackend({
+      action: 'DISPATCH_NOTIFICATION',
+      targetType: target === 'all' ? 'all' : (target.startsWith('badge:') ? 'badge' : 'member'),
+      targetUid: (target !== 'all' && !target.startsWith('badge:')) ? target : '',
+      badgeId: target.startsWith('badge:') ? target.replace('badge:', '') : '',
+      title,
+      body,
+      category: type,
+      icon,
+      skipFirestoreWrite: true,
+      adminUid: state.user?.uid || ''
+    }).catch(err => console.warn('FCM push dispatch warning:', err));
 
     if (titleInput) titleInput.value = '';
     if (bodyInput) bodyInput.value = '';
@@ -12306,7 +12356,13 @@ function renderAttendanceView() {
   }
 
   const allActiveSessions = (state.attendanceSessions || []).filter(s => s.active !== false && !s.archived && s.status !== 'archived');
-  const eligibleSessions = state.user ? allActiveSessions.filter(s => s.status !== 'closed' && isUserEligibleForSession(s, state.user)) : [];
+  const isSessionEligibleAndOpenable = (s) => {
+    if (!isUserEligibleForSession(s, state.user)) return false;
+    const isRecurring = s.schedule && s.schedule.type && s.schedule.type !== 'once';
+    if (isRecurring) return true;
+    return s.status !== 'closed';
+  };
+  const eligibleSessions = state.user ? allActiveSessions.filter(isSessionEligibleAndOpenable) : [];
 
   if (heroContainer) {
     renderSmartCheckInHero(heroContainer, eligibleSessions, isAdmin);
@@ -12324,12 +12380,28 @@ function renderAttendanceView() {
       container.innerHTML = allActiveSessions.map(session => {
         const calc = computeAttendance(session, nowMs);
         const occurrenceKey = calc.occurrenceKey;
-        const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && (l.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && l.occurrenceKey === 'once')));
-        const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && (w.occurrenceKey === occurrenceKey || (session.schedule?.type === 'once' && w.occurrenceKey === 'once')) && w.status === 'approved');
         const S = calc.occurrenceStart || session.schedule?.startDateTime || nowMs;
+        const sDateKey = formatZonedDateKey(parseDateTimeToMs(S) || nowMs, APP_TIMEZONE);
+        const matchesUserOcc = (itemKey, itemStart) => {
+          if (!itemKey) return false;
+          if (itemKey === occurrenceKey || itemKey === sDateKey) return true;
+          if (session.schedule?.type === 'once' && (itemKey === 'once' || itemKey === sDateKey)) return true;
+          if (typeof itemKey === 'string' && itemKey.startsWith('occ_')) {
+            const ms = parseInt(itemKey.slice(4), 10);
+            if (!isNaN(ms) && formatZonedDateKey(ms, APP_TIMEZONE) === sDateKey) return true;
+          }
+          if (itemStart) {
+            const pMs = parseDateTimeToMs(itemStart);
+            if (pMs && formatZonedDateKey(pMs, APP_TIMEZONE) === sDateKey) return true;
+          }
+          return false;
+        };
+        const userLog = state.myAttendanceLogs?.find(l => l.sessionId === session.id && matchesUserOcc(l.occurrenceKey || l.date || l.sessionDate, l.checkedInAt || l.timestamp));
+        const approvedWaiver = state.myWaiverRequests?.find(w => w.sessionId === session.id && w.status === 'approved' && matchesUserOcc(w.occurrenceKey, w.selectedOccurrenceDateMs || w.occurrenceStart));
         const startFormatted = formatDateTime(S);
 
-        const isClosed = session.status === 'closed';
+        const isRecurring = session.schedule && session.schedule.type && session.schedule.type !== 'once';
+        const isClosed = !isRecurring && session.status === 'closed';
         const isBlocked = calc.status === 'blocked';
         const isLate = calc.status === 'late';
         const isOnTime = calc.status === 'on_time';
@@ -12389,6 +12461,10 @@ function renderAttendanceView() {
     }
   }
 
+  if (attendanceTickerInterval) {
+    clearInterval(attendanceTickerInterval);
+    attendanceTickerInterval = null;
+  }
   attendanceTickerInterval = setInterval(() => {
     if (typeof document !== 'undefined' && document.hidden) return;
     if (state.isAdminDashboardOpen || (state.activeUserPage && state.activeUserPage !== 'attendance')) return;
@@ -12485,6 +12561,69 @@ async function handleAttendanceCheckIn(sessionId) {
 
     if (gasRes && gasRes.ok === false) {
       throw new Error(gasRes.error || 'Check-in rejected by server');
+    }
+
+    // Deterministic Firestore Fallback when GAS is unreachable/skipped
+    if ((!gasRes || !gasRes.result || gasRes.fallbackRequired || gasRes.sent_opaque || gasRes.status === 'skipped' || gasRes.status === 'sent_nonblocking') && db) {
+      const batch = writeBatch(db);
+      const checkInIso = new Date(nowMs).toISOString();
+      const occDateKey = formatZonedDateKey(calc.occurrenceStart || nowMs, APP_TIMEZONE);
+      const fallbackStatus = isEarly ? 'early' : calc.status;
+      const logPayload = {
+        id: logId,
+        sessionId: session.id,
+        sessionTitle: session.title,
+        occurrenceKey,
+        occurrenceDate: occDateKey,
+        date: occDateKey,
+        sessionDate: occDateKey,
+        uid: state.user.uid,
+        userId: state.user.uid,
+        userName: state.user.name || state.user.displayName || 'Member',
+        displayName: state.user.name || state.user.displayName || 'Member',
+        userAvatar: state.user.avatarUrl || state.user.photoURL || '',
+        status: fallbackStatus,
+        earlyMinutes: calc.earlyMinutes || 0,
+        lateMinutes: calc.lateMinutes || 0,
+        lateSeconds: calc.lateSeconds || 0,
+        delaySeconds: calc.delaySeconds || 0,
+        earlyBonusPoints,
+        earlyBonusEGP,
+        penalty: penaltyPts,
+        fineEGP,
+        pointsDelta,
+        egpDelta,
+        appliedTierLabel: calc.appliedTierLabel || '',
+        ledgerSynced: true,
+        occurrenceStart: Timestamp.fromMillis(calc.occurrenceStart || nowMs),
+        checkedInAt: serverTimestamp(),
+        timestamp: checkInIso,
+        checkInTimestamp: nowMs,
+        updatedAt: serverTimestamp()
+      };
+      batch.set(doc(db, 'attendance_logs', logId), logPayload, { merge: true });
+
+      const userRef = doc(db, 'users', state.user.uid);
+      const userUpdates = { lastOpId: logId, updatedAt: serverTimestamp() };
+      if (earlyBonusPoints > 0) {
+        Object.assign(userUpdates, buildPointsUpdate(usersMap.get(state.user.uid) || state.user, earlyBonusPoints, nowMs));
+      }
+      if (penaltyPts > 0) {
+        userUpdates.penalties = increment(penaltyPts);
+        userUpdates.totalPenalties = increment(penaltyPts);
+      }
+      if (fineEGP > 0 || earlyBonusEGP > 0) {
+        const curFines = Math.max(0, Number(state.user.finesDue ?? state.user.fines ?? 0));
+        const nextFines = Math.max(0, curFines + fineEGP - earlyBonusEGP);
+        userUpdates.finesDue = nextFines;
+        userUpdates.fines = nextFines;
+        batch.set(doc(db, 'users_private', state.user.uid), {
+          finesEGP: nextFines,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
+      batch.update(userRef, userUpdates);
+      await batch.commit();
     }
 
     const decision = gasRes?.result || {
@@ -16071,63 +16210,23 @@ export async function hydrateSessionCardStats(sessionId, occurrenceKey = null) {
   let targetOccKey = occurrenceKey || (resolvedOcc ? resolvedOcc.key : 'once');
   let targetOccStartMs = resolvedOcc ? resolvedOcc.start : (parseDateTimeToMs(session?.schedule?.startDateTime) || nowMs);
 
-  // 1. Initial fast tally from local state
-  const localLogs = (state.attendanceLogs || []).filter(l => l.sessionId === sessionId);
-  let localFiltered = localLogs.filter(l => !targetOccKey || targetOccKey === 'once' || l.occurrenceKey === targetOccKey || l.occurrenceDate === targetOccKey);
+  // 1. Fast O(1) tally directly from live onSnapshot state (eliminating N+1 Firestore getDocs queries during render)
+  const combinedMap = new Map();
+  (state.attendanceRecords || []).forEach(r => { if (r && r.sessionId === sessionId) combinedMap.set(r.id, r); });
+  (state.attendanceLogs || []).forEach(l => { if (l && l.sessionId === sessionId) combinedMap.set(l.id, { ...(combinedMap.get(l.id) || {}), ...l }); });
+  const localLogs = Array.from(combinedMap.values());
+  const targetDateKey = formatZonedDateKey(targetOccStartMs, APP_TIMEZONE);
+  let localFiltered = localLogs.filter(l => {
+    if (!targetOccKey || targetOccKey === 'once') return true;
+    const lKey = l.occurrenceKey || l.occurrenceDate || l.sessionDate || l.date || '';
+    return lKey === targetOccKey || lKey === targetDateKey || lKey === 'once';
+  });
   if (localFiltered.length === 0 && localLogs.length > 0) {
     localFiltered = localLogs;
   }
-  let stats = computeTallies(localFiltered, targetOccStartMs);
+  const stats = computeTallies(localFiltered, targetOccStartMs);
   sessionCardStatsCache.set(sessionId, stats);
   updateSessionCardStatsDOM(sessionId, stats);
-
-  // 2. Aggressive scan of attendance_records and attendance_logs in Firestore
-  try {
-    const [recSnap, logSnap] = await Promise.all([
-      getDocs(query(collection(db, 'attendance_records'), where('sessionId', '==', sessionId), limit(500))).catch(() => ({ docs: [] })),
-      getDocs(query(collection(db, 'attendance_logs'), where('sessionId', '==', sessionId), limit(500))).catch(() => ({ docs: [] }))
-    ]);
-
-    const logsMap = new Map();
-    recSnap.docs.forEach(d => {
-      const data = d.data();
-      const id = d.id;
-      logsMap.set(id, { id, ...data });
-    });
-    logSnap.docs.forEach(d => {
-      const data = d.data();
-      const id = d.id;
-      if (logsMap.has(id)) {
-        logsMap.set(id, { ...logsMap.get(id), ...data });
-      } else {
-        logsMap.set(id, { id, ...data });
-      }
-    });
-
-    const allDbLogs = Array.from(logsMap.values());
-    if (allDbLogs.length > 0) {
-      const occDateGroups = new Map();
-      allDbLogs.forEach(l => {
-        const dKey = l.occurrenceDate || (l.occurrenceKey && l.occurrenceKey !== 'once' ? l.occurrenceKey : '') || (l.checkedInAt ? new Date(parseDateTimeToMs(l.checkedInAt)).toISOString().slice(0, 10) : 'once');
-        if (!occDateGroups.has(dKey)) occDateGroups.set(dKey, []);
-        occDateGroups.get(dKey).push(l);
-      });
-
-      let targetLogs = [];
-      if (targetOccKey && occDateGroups.has(targetOccKey)) {
-        targetLogs = occDateGroups.get(targetOccKey);
-      } else {
-        const sortedKeys = Array.from(occDateGroups.keys()).sort().reverse();
-        targetLogs = occDateGroups.get(sortedKeys[0]) || allDbLogs;
-      }
-
-      stats = computeTallies(targetLogs, targetOccStartMs);
-      sessionCardStatsCache.set(sessionId, stats);
-      updateSessionCardStatsDOM(sessionId, stats);
-    }
-  } catch (err) {
-    console.warn('[hydrateSessionCardStats] error scanning records & logs:', err);
-  }
 
   return stats;
 }
@@ -17022,9 +17121,14 @@ function openAdminSessionModal(sessionId = null) {
 
       const startTotalMins = (sHour || 0) * 60 + (sMin || 0);
       const openTotalMins = (oHour || 0) * 60 + (oMin || 0);
-      const closeTotalMins = (cHour || 0) * 60 + (cMin || 0);
+      let closeTotalMins = (cHour || 0) * 60 + (cMin || 0);
+      if (closeTotalMins <= startTotalMins && closeTotalMins < 720) {
+        closeTotalMins += 1440;
+      }
 
-      const earlyCheckInMinutes = startTotalMins - openTotalMins;
+      const earlyCheckInMinutes = startTotalMins >= openTotalMins
+        ? (startTotalMins - openTotalMins)
+        : (startTotalMins + 1440 - openTotalMins);
       const lateCutoffMinutes = closeTotalMins - startTotalMins;
 
       // Strict validation on session save: window boundaries and bidirectional non-overlapping tiers
@@ -17506,24 +17610,30 @@ export async function deleteAttendanceRecordAndReverseLedger(logId, logData = nu
     ? Number(targetLog.egpDelta)
     : (targetLog.status === 'early' ? (Number(targetLog.earlyBonusEGP) || 0) : -(Number(targetLog.fineEGP) || 0));
 
+  let gasHandledLedger = false;
   try {
-    await callGasBackend({
+    const gasRes = await callGasBackend({
       action: 'DELETE_LOG',
       logId,
       uid: targetUid,
       pointsDelta: ptsDelta,
       egpDelta: fineDelta
     });
+    if (gasRes && gasRes.result && gasRes.result.success) {
+      gasHandledLedger = true;
+    }
   } catch (gasErr) {
     console.warn('Backend callGasBackend DELETE_LOG failed (continuing Firestore deletion):', gasErr);
   }
 
   await Promise.allSettled([
     deleteDoc(doc(db, 'attendance_logs', logId)),
-    deleteDoc(doc(db, 'attendance_records', logId))
+    deleteDoc(doc(db, 'attendance_records', logId)),
+    deleteDoc(doc(db, 'missed_penalties', `att_${logId}`)),
+    deleteDoc(doc(db, 'adjustments', `att_${logId}`))
   ]);
 
-  if (targetUid) {
+  if (targetUid && !gasHandledLedger) {
     try {
       const uDocSnap = await getDoc(doc(db, 'users', targetUid));
       if (uDocSnap.exists()) {
@@ -17533,9 +17643,9 @@ export async function deleteAttendanceRecordAndReverseLedger(logId, logData = nu
         const curFines = Number(uData.finesDue != null ? uData.finesDue : (uData.fines ?? uData.quotas ?? 0));
 
         const bonusPts = ptsDelta > 0 ? ptsDelta : 0;
-        const penaltyPts = ptsDelta < 0 ? Math.abs(ptsDelta) : 0;
+        const penaltyPts = ptsDelta < 0 ? Math.abs(ptsDelta) : (Number(targetLog.penalty) || 0);
         const bonusEGP = fineDelta > 0 ? fineDelta : 0;
-        const penaltyEGP = fineDelta < 0 ? Math.abs(fineDelta) : 0;
+        const penaltyEGP = fineDelta < 0 ? Math.abs(fineDelta) : (Number(targetLog.fineEGP) || 0);
 
         const revPts = Math.max(0, curPts - bonusPts);
         const revPen = Math.max(0, curPen - penaltyPts);
@@ -17550,6 +17660,12 @@ export async function deleteAttendanceRecordAndReverseLedger(logId, logData = nu
           netPts: revNet,
           updatedAt: serverTimestamp()
         });
+        if (bonusEGP !== 0 || penaltyEGP !== 0) {
+          await setDoc(doc(db, 'users_private', targetUid), {
+            finesEGP: revFines,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
       }
     } catch (fsErr) {
       console.warn('Direct user ledger reverse fallback ignored:', fsErr);
@@ -18330,11 +18446,27 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
     waiversMap.clear();
     (state.waiverRequests || []).forEach(w => {
       if (w && w.sessionId === targetSessionId && w.status === 'approved') {
-        waiversMap.set(w.uid, w);
+        if (!waiversMap.has(w.uid)) waiversMap.set(w.uid, []);
+        waiversMap.get(w.uid).push(w);
       }
     });
     (state.attendanceLogs || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
     (state.attendanceRecords || []).filter(isMatchingLog).forEach(l => addOrUpdateRecord(l));
+  };
+
+  const getApprovedWaiverForOccurrence = (uid, occKey, occStartMs) => {
+    const list = waiversMap.get(uid);
+    if (!Array.isArray(list) || list.length === 0) return null;
+    if (session.schedule?.type === 'once' || occKey === 'once') return list[0];
+    const occDateStr = occStartMs ? formatZonedDateKey(occStartMs, APP_TIMEZONE) : occKey;
+    return list.find(w => {
+      if (!w.occurrenceKey || w.occurrenceKey === 'once') return true;
+      if (w.occurrenceKey === occKey || w.occurrenceKey === occDateStr) return true;
+      if (occStartMs && w.occurrenceKey === `occ_${occStartMs}`) return true;
+      const wMs = parseDateTimeToMs(w.occurrenceStart || w.selectedOccurrenceDateMs);
+      if (wMs && occDateStr && formatZonedDateKey(wMs, APP_TIMEZONE) === occDateStr) return true;
+      return false;
+    }) || null;
   };
 
   syncRosterFromState();
@@ -18404,14 +18536,24 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
         console.warn('Error generating historical occurrences for session:', err);
       }
     } else {
-      const onceKey = sched.startDateTime ? formatZonedDateKey(earliestStartMs, APP_TIMEZONE) : 'once';
-      if (!occGroups.has(onceKey)) {
-        occGroups.set(onceKey, {
-          dateKey: onceKey,
-          startMs: earliestStartMs,
-          logs: []
+      const onceKey = currDateKey || (sched.startDateTime ? formatZonedDateKey(earliestStartMs, APP_TIMEZONE) : 'once');
+      const mergedOnceLogs = [];
+      const seenLogIds = new Set();
+      occGroups.forEach((grp) => {
+        (grp.logs || []).forEach(l => {
+          const lid = l.id || `${l.uid}_${l.occurrenceKey}`;
+          if (!seenLogIds.has(lid)) {
+            seenLogIds.add(lid);
+            mergedOnceLogs.push(l);
+          }
         });
-      }
+      });
+      occGroups.clear();
+      occGroups.set(onceKey, {
+        dateKey: onceKey,
+        startMs: currStartMs || earliestStartMs,
+        logs: mergedOnceLogs
+      });
     }
 
     const sortedOccGroups = Array.from(occGroups.values()).sort((a, b) => (b.startMs || 0) - (a.startMs || 0));
@@ -18487,8 +18629,9 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
             avatarUrl: log.userAvatar || ''
           };
 
-          if (log.status === 'excused' || log.excused === true || waiversMap.has(uid)) {
-            excusedList.push({ member, log, waiver: waiversMap.get(uid) });
+          const matchedWaiver = getApprovedWaiverForOccurrence(uid, selectedOccKey, occStartMs);
+          if (log.status === 'excused' || log.excused === true || matchedWaiver) {
+            excusedList.push({ member, log, waiver: matchedWaiver });
           } else if (log.status === 'absent') {
             penalizedAbsentList.push({ member, log });
           } else {
@@ -18500,8 +18643,9 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
         assignedMembers.forEach(m => {
           if (handledUids.has(m.uid)) return;
           handledUids.add(m.uid);
-          if (waiversMap.has(m.uid)) {
-            excusedList.push({ member: m, waiver: waiversMap.get(m.uid) });
+          const matchedWaiver = getApprovedWaiverForOccurrence(m.uid, selectedOccKey, occStartMs);
+          if (matchedWaiver) {
+            excusedList.push({ member: m, waiver: matchedWaiver });
           } else {
             unprocessedAbsentList.push(m);
           }
@@ -18856,8 +19000,9 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
                   avatarUrl: log.userAvatar || ''
                 };
 
-                if (log.status === 'excused' || log.excused === true || waiversMap.has(uid)) {
-                  excusedMembersList.push({ member, log });
+                const matchedWaiver = getApprovedWaiverForOccurrence(uid, grp.dateKey, grp.startMs);
+                if (log.status === 'excused' || log.excused === true || matchedWaiver) {
+                  excusedMembersList.push({ member, log, waiver: matchedWaiver });
                 } else if (log.status === 'absent') {
                   absentMembersList.push({ member, log, isPenalized: true });
                 } else {
@@ -18868,8 +19013,9 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
               assignedMembers.forEach(m => {
                 if (handledUids.has(m.uid)) return;
                 handledUids.add(m.uid);
-                if (waiversMap.has(m.uid)) {
-                  excusedMembersList.push({ member: m, waiver: waiversMap.get(m.uid) });
+                const matchedWaiver = getApprovedWaiverForOccurrence(m.uid, grp.dateKey, grp.startMs);
+                if (matchedWaiver) {
+                  excusedMembersList.push({ member: m, waiver: matchedWaiver });
                 } else {
                   absentMembersList.push({
                     member: m,
@@ -19547,12 +19693,13 @@ async function renderAdminMissedTasks() {
 
     const missedMembers = [];
     for (const member of targets) {
-      const lockDocId = `${task.id}_${occurrenceKey}_${member.uid}`;
-      if (state.appliedMissedPenalties?.has(lockDocId)) continue;
+      const lockDocId1 = `${task.id}_${occurrenceKey}_${member.uid}`;
+      const lockDocId2 = `${task.id}_${member.uid}_${occurrenceKey}`;
+      if (state.appliedMissedPenalties?.has(lockDocId1) || state.appliedMissedPenalties?.has(lockDocId2)) continue;
 
       const hasSubmitted = (state.submissions || []).some(s =>
         s.taskId === task.id &&
-        (task.schedule?.type === 'once' ? true : s.occurrenceKey === occurrenceKey) &&
+        (task.schedule?.type === 'once' || s.occurrenceKey === 'once' || s.occurrenceKey === occurrenceKey) &&
         (s.uid === member.uid || s.userId === member.uid)
       );
 
@@ -19571,18 +19718,19 @@ async function renderAdminMissedTasks() {
     }
   }
 
+  const appliedPenalties = (state.missedPenalties || []).slice(0, 30);
   const totalMissedCount = missedTasksList.reduce((acc, curr) => acc + curr.missedMembers.length, 0);
 
-  if (totalMissedCount === 0) {
+  if (totalMissedCount === 0 && appliedPenalties.length === 0) {
     container.classList.add('hidden');
     listEl.innerHTML = '';
     return;
   }
 
   container.classList.remove('hidden');
-  if (countBadge) countBadge.textContent = String(totalMissedCount);
+  if (countBadge) countBadge.textContent = String(totalMissedCount || appliedPenalties.length);
 
-  listEl.innerHTML = missedTasksList.map(item => `
+  const pendingHtml = missedTasksList.map(item => `
     <div class="glass-card p-3 rounded-xl border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
       <div class="space-y-0.5 min-w-0">
         <div class="font-bold text-white text-xs flex items-center gap-2">
@@ -19599,6 +19747,62 @@ async function renderAdminMissedTasks() {
       </button>
     </div>
   `).join('');
+
+  const appliedHtml = appliedPenalties.length > 0 ? `
+    <div class="pt-2 space-y-2">
+      <div class="text-[10px] font-bold uppercase tracking-wider text-neutral-400">Applied Missed Task Penalties (${appliedPenalties.length})</div>
+      ${appliedPenalties.map(pen => {
+        const task = (state.tasks || []).find(t => t.id === pen.taskId);
+        const mem = usersMap.get(pen.uid) || (state.members || []).find(m => m.uid === pen.uid) || { displayName: pen.uid || 'Member' };
+        const pts = Number(pen.penaltyPoints ?? pen.points ?? 0);
+        const fine = Number(pen.fineEGP || 0);
+        return `
+          <div class="glass-card missed-penalty-card p-2.5 rounded-xl border border-white/10 flex items-center justify-between gap-2 text-xs" data-pen-id="${esc(pen.id)}">
+            <div class="min-w-0 flex-1">
+              <div class="font-bold text-white truncate">${esc(mem.displayName || mem.name || pen.uid)} · <span class="text-[#0A84FF]">${esc(task?.title || pen.taskTitle || pen.taskId)}</span></div>
+              <div class="text-[10px] text-neutral-400 font-mono">Occurrence: ${esc(pen.occurrenceKey || 'once')} · -${pts} pts${fine > 0 ? ` · -${fine} EGP` : ''}</div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" class="btn-edit-missed-penalty px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold text-[11px] transition" data-pen-id="${esc(pen.id)}">Edit</button>
+              <button type="button" class="btn-revoke-missed-penalty px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[11px] transition" data-pen-id="${esc(pen.id)}">Revoke</button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  ` : '';
+
+  listEl.innerHTML = pendingHtml + appliedHtml;
+
+  listEl.querySelectorAll('.btn-edit-missed-penalty').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const pen = (state.missedPenalties || []).find(p => p.id === btn.dataset.penId);
+      if (pen) openAdminEditMissedPenaltyModal(pen);
+    };
+  });
+
+  listEl.querySelectorAll('.btn-revoke-missed-penalty').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const pen = (state.missedPenalties || []).find(p => p.id === btn.dataset.penId);
+      if (pen) handleRevokeMissedTaskPenalty(pen);
+    };
+  });
+
+  listEl.querySelectorAll('.missed-penalty-card').forEach(card => {
+    const pen = (state.missedPenalties || []).find(p => p.id === card.dataset.penId);
+    if (pen) {
+      attachUniversalSwipeActions(card, {
+        archiveLabel: 'Edit',
+        archiveIcon: 'edit',
+        onArchive: () => openAdminEditMissedPenaltyModal(pen),
+        deleteLabel: 'Revoke',
+        onDelete: () => handleRevokeMissedTaskPenalty(pen),
+        entityName: 'Missed Penalty'
+      });
+    }
+  });
 
   listEl.querySelectorAll('.btn-apply-task-penalty').forEach(btn => {
     btn.onclick = async () => {
@@ -19825,6 +20029,11 @@ function renderAdminSubmissions() {
                 <span class="font-semibold text-neutral-400">Comment:</span> ${esc(comment)}
               </div>
             ` : ''}
+
+            <div class="flex items-center justify-end gap-2 pt-2 border-t border-white/5">
+              <button type="button" class="btn-admin-edit-sub px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold text-[11px] transition" data-sub-id="${esc(s.id)}" data-no-row-tap="true">Edit</button>
+              <button type="button" class="btn-admin-revoke-sub px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[11px] transition" data-sub-id="${esc(s.id)}" data-no-row-tap="true">Revoke</button>
+            </div>
           </div>
 
         </div>
@@ -19833,14 +20042,40 @@ function renderAdminSubmissions() {
   }).join('');
 
   list.querySelectorAll('.bulk-select-card').forEach(card => {
+    const sub = state.submissions.find(x => x.id === card.dataset.subId);
     attachRowGestures(card, {
       bulkType: 'submissions',
       bulkId: card.dataset.bulkId,
       onSingleTap: () => {
-        const sub = state.submissions.find(x => x.id === card.dataset.subId);
         if (sub) openAdminEditSubmissionModal(sub);
       }
     });
+    if (sub) {
+      attachUniversalSwipeActions(card, {
+        archiveLabel: 'Edit',
+        archiveIcon: 'edit',
+        onArchive: () => openAdminEditSubmissionModal(sub),
+        deleteLabel: 'Revoke',
+        onDelete: () => handleAdminRevokeSubmission(sub),
+        entityName: 'Submission'
+      });
+    }
+  });
+
+  list.querySelectorAll('.btn-admin-edit-sub').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const sub = state.submissions.find(x => x.id === btn.dataset.subId);
+      if (sub) openAdminEditSubmissionModal(sub);
+    };
+  });
+
+  list.querySelectorAll('.btn-admin-revoke-sub').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const sub = state.submissions.find(x => x.id === btn.dataset.subId);
+      if (sub) handleAdminRevokeSubmission(sub);
+    };
   });
 
   list.querySelectorAll('.btn-view-sub-member').forEach(el => {
@@ -20293,28 +20528,20 @@ function renderAdminWaivers() {
             <button type="button" class="btn-approve-waiver py-2.5 rounded-xl font-bold text-black text-sm transition" style="background:#30D158" data-id="${esc(w.id)}">Approve</button>
           </div>
         ` : w.status === 'approved' ? `
-          ${isFutureSession ? `
-            <div class="grid grid-cols-2 gap-2">
-              <button type="button" class="btn-reject-waiver py-2 rounded-xl font-bold text-white text-xs transition" style="background:#FF453A" data-id="${esc(w.id)}">Change to Rejected</button>
-              <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
-            </div>
-          ` : `
-            <div class="pt-1 flex items-center justify-between">
-              <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-neutral-800 text-neutral-400">Locked (Past Session)</span>
-            </div>
-          `}
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" class="btn-reject-waiver py-2 rounded-xl font-bold text-white text-xs transition" style="background:#FF453A" data-id="${esc(w.id)}">Change to Rejected</button>
+            <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
+          </div>
         ` : `
-          ${isFutureSession ? `
-            <div class="grid grid-cols-2 gap-2">
-              <button type="button" class="btn-approve-waiver py-2 rounded-xl font-bold text-black text-xs transition" style="background:#30D158" data-id="${esc(w.id)}">Change to Approved</button>
-              <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
-            </div>
-          ` : `
-            <div class="pt-1 flex items-center justify-between">
-              <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-neutral-800 text-neutral-400">Locked (Past Session)</span>
-            </div>
-          `}
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" class="btn-approve-waiver py-2 rounded-xl font-bold text-black text-xs transition" style="background:#30D158" data-id="${esc(w.id)}">Change to Approved</button>
+            <button type="button" class="btn-pending-waiver py-2 rounded-xl font-bold text-neutral-300 text-xs transition bg-white/10 hover:bg-white/15" data-id="${esc(w.id)}">Move to Pending</button>
+          </div>
         `}
+        <div class="flex items-center justify-end gap-2 pt-2 border-t border-white/5">
+          <button type="button" class="btn-edit-waiver px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold text-[11px] transition" data-id="${esc(w.id)}">Edit Excuse</button>
+          <button type="button" class="btn-delete-waiver px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[11px] transition" data-id="${esc(w.id)}">Delete</button>
+        </div>
       </div>`;
   }).join('');
 
@@ -20456,6 +20683,20 @@ function renderAdminWaivers() {
   container.querySelectorAll('.btn-pending-waiver').forEach(btn => {
     btn.onclick = () => resolveWaiver(btn.dataset.id, 'pending', btn.closest('[data-waiver-id]'));
   });
+  container.querySelectorAll('.btn-edit-waiver').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const waiver = (state.waiverRequests || []).find(w => w.id === btn.dataset.id);
+      if (waiver) openAdminEditWaiverModal(waiver);
+    };
+  });
+  container.querySelectorAll('.btn-delete-waiver').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const waiver = (state.waiverRequests || []).find(w => w.id === btn.dataset.id);
+      if (waiver) handleDeleteWaiverRequest(waiver);
+    };
+  });
 
   container.querySelectorAll('.input-waiver-note').forEach(inp => {
     inp.oninput = (e) => {
@@ -20468,24 +20709,319 @@ function renderAdminWaivers() {
   });
 
   container.querySelectorAll('.bulk-select-card').forEach(card => {
+    const waiverId = card.dataset.waiverId || card.dataset.bulkId;
+    const waiverObj = (state.waiverRequests || []).find(w => w.id === waiverId);
     attachRowGestures(card, {
       bulkType: 'waivers',
-      bulkId: card.dataset.bulkId
+      bulkId: card.dataset.bulkId,
+      onSingleTap: () => {
+        if (waiverObj) openAdminEditWaiverModal(waiverObj);
+      }
     });
 
-    const waiverId = card.dataset.waiverId || card.dataset.bulkId;
     attachUniversalSwipeActions(card, {
-      archiveLabel: 'Approve',
+      archiveLabel: waiverObj?.status === 'pending' ? 'Approve' : 'Edit',
+      archiveIcon: waiverObj?.status === 'pending' ? 'check' : 'edit',
       onArchive: async () => {
-        await resolveWaiver(waiverId, 'approved', card);
+        if (waiverObj?.status === 'pending') {
+          await resolveWaiver(waiverId, 'approved', card);
+        } else if (waiverObj) {
+          openAdminEditWaiverModal(waiverObj);
+        }
       },
-      deleteLabel: 'Reject',
+      deleteLabel: waiverObj?.status === 'pending' ? 'Reject' : 'Delete',
       onDelete: async () => {
-        await resolveWaiver(waiverId, 'rejected', card);
+        if (waiverObj?.status === 'pending') {
+          await resolveWaiver(waiverId, 'rejected', card);
+        } else if (waiverObj) {
+          await handleDeleteWaiverRequest(waiverObj);
+        }
       },
       entityName: 'Excuse'
     });
   });
+}
+
+function openAdminEditWaiverModal(waiver) {
+  if (!waiver || !waiver.id) return;
+  openModal({
+    title: 'Edit Excuse / Waiver Request',
+    body: `
+      <div class="space-y-3.5 text-xs">
+        <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1">
+          <div class="font-bold text-white">${esc(waiver.sessionTitle || 'Attendance Session')}</div>
+          <div class="text-neutral-400">Member: <strong class="text-white">${esc(waiver.userName || waiver.uid)}</strong></div>
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Status</label>
+          <select id="input-edit-waiver-status" class="ios-input text-white w-full">
+            <option value="pending" ${waiver.status === 'pending' ? 'selected' : ''}>Pending</option>
+            <option value="approved" ${waiver.status === 'approved' ? 'selected' : ''}>Approved</option>
+            <option value="rejected" ${waiver.status === 'rejected' ? 'selected' : ''}>Rejected</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Category</label>
+          <input id="input-edit-waiver-category" type="text" class="ios-input text-white w-full" value="${esc(waiver.category || 'Other')}" />
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Occurrence Key</label>
+          <input id="input-edit-waiver-occ" type="text" class="ios-input text-white font-mono w-full" value="${esc(waiver.occurrenceKey || 'once')}" />
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Member Reason</label>
+          <textarea id="input-edit-waiver-reason" rows="3" class="ios-input text-white w-full">${esc(waiver.reason || '')}</textarea>
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Admin Note</label>
+          <input id="input-edit-waiver-note" type="text" class="ios-input text-white w-full" value="${esc(waiver.adminNote || '')}" />
+        </div>
+        <div class="pt-2 border-t border-white/10">
+          <button type="button" id="btn-modal-delete-waiver" class="w-full py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-bold text-xs transition">
+            Permanently Delete Excuse Request
+          </button>
+        </div>
+      </div>
+    `,
+    saveLabel: 'Save Changes',
+    onSave: async () => {
+      const newStatus = document.getElementById('input-edit-waiver-status')?.value || waiver.status;
+      const newCategory = document.getElementById('input-edit-waiver-category')?.value?.trim() || 'Other';
+      const newOccKey = document.getElementById('input-edit-waiver-occ')?.value?.trim() || waiver.occurrenceKey || 'once';
+      const newReason = document.getElementById('input-edit-waiver-reason')?.value?.trim() || '';
+      const newNote = document.getElementById('input-edit-waiver-note')?.value?.trim() || '';
+
+      try {
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'waiver_requests', waiver.id), {
+          status: newStatus,
+          excused: newStatus === 'approved',
+          category: newCategory,
+          occurrenceKey: newOccKey,
+          reason: newReason,
+          adminNote: newNote,
+          updatedAt: serverTimestamp()
+        });
+
+        if (waiver.sessionId && newOccKey && waiver.uid) {
+          const logId = `${waiver.sessionId}_${newOccKey}_${waiver.uid}`;
+          const logRef = doc(db, 'attendance_logs', logId);
+          if (newStatus === 'approved') {
+            batch.set(logRef, {
+              sessionId: waiver.sessionId,
+              sessionTitle: waiver.sessionTitle || '',
+              uid: waiver.uid,
+              userName: waiver.userName || '',
+              occurrenceKey: newOccKey,
+              status: 'excused',
+              excused: true,
+              penalty: 0,
+              fineEGP: 0,
+              adminNote: newNote,
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+        }
+
+        await batch.commit();
+        waiver.status = newStatus;
+        waiver.category = newCategory;
+        waiver.occurrenceKey = newOccKey;
+        waiver.reason = newReason;
+        waiver.adminNote = newNote;
+        toast('Excuse request updated', 'success');
+        renderAdminWaivers();
+        return true;
+      } catch (err) {
+        console.error('Error editing waiver:', err);
+        toast(err.message || 'Failed to update excuse request', 'error');
+        return false;
+      }
+    }
+  });
+
+  setTimeout(() => {
+    const delBtn = document.getElementById('btn-modal-delete-waiver');
+    if (delBtn) {
+      delBtn.onclick = async () => {
+        closeAllModals();
+        await handleDeleteWaiverRequest(waiver);
+      };
+    }
+  }, 50);
+}
+
+async function handleDeleteWaiverRequest(waiver) {
+  if (!waiver || !waiver.id) return;
+  const confirmed = await confirmSheet({
+    title: 'Delete Excuse Request?',
+    message: `Permanently delete the excuse request from ${waiver.userName || waiver.uid} for "${waiver.sessionTitle || 'Session'}"?`,
+    confirmLabel: 'Delete Permanently',
+    destructive: true
+  });
+  if (!confirmed) return;
+
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'waiver_requests', waiver.id));
+    if (waiver.sessionId && waiver.occurrenceKey && waiver.uid) {
+      const logId = `${waiver.sessionId}_${waiver.occurrenceKey}_${waiver.uid}`;
+      const existingLog = (state.attendanceLogs || []).find(l => l.id === logId || (l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey));
+      if (existingLog && existingLog.status === 'excused') {
+        batch.delete(doc(db, 'attendance_logs', existingLog.id || logId));
+      }
+    }
+    await batch.commit();
+    state.waiverRequests = (state.waiverRequests || []).filter(w => w.id !== waiver.id);
+    toast('Excuse request deleted', 'info');
+    renderAdminWaivers();
+  } catch (err) {
+    console.error('Error deleting waiver:', err);
+    toast(err.message || 'Failed to delete excuse request', 'error');
+  }
+}
+
+function openAdminEditMissedPenaltyModal(pen) {
+  if (!pen || !pen.id) return;
+  const task = (state.tasks || []).find(t => t.id === pen.taskId);
+  const mem = usersMap.get(pen.uid) || (state.members || []).find(m => m.uid === pen.uid) || { displayName: pen.uid || 'Member' };
+  const oldPts = Number(pen.penaltyPoints ?? pen.points ?? 0);
+  const oldFine = Number(pen.fineEGP || 0);
+
+  openModal({
+    title: 'Edit Missed Task Penalty',
+    body: `
+      <div class="space-y-3.5 text-xs">
+        <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1">
+          <div class="font-bold text-white">${esc(task?.title || pen.taskTitle || pen.taskId)}</div>
+          <div class="text-neutral-400">Member: <strong class="text-white">${esc(mem.displayName || mem.name || pen.uid)}</strong></div>
+          <div class="text-neutral-400">Occurrence: <strong class="text-white font-mono">${esc(pen.occurrenceKey || 'once')}</strong></div>
+        </div>
+        <div class="grid grid-cols-2 gap-2.5">
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Penalty Points</label>
+            <input id="input-edit-missed-pts" type="number" min="0" value="${oldPts}" class="ios-input font-mono text-white w-full" />
+          </div>
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Fine (EGP)</label>
+            <input id="input-edit-missed-fine" type="number" min="0" value="${oldFine}" class="ios-input font-mono text-white w-full" />
+          </div>
+        </div>
+        <div class="pt-2 border-t border-white/10">
+          <button type="button" id="btn-modal-revoke-missed-pen" class="w-full py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-bold text-xs transition">
+            Revoke Penalty &amp; Refund Member
+          </button>
+        </div>
+      </div>
+    `,
+    saveLabel: 'Update Penalty',
+    onSave: async () => {
+      const newPts = Math.max(0, Number(document.getElementById('input-edit-missed-pts')?.value) || 0);
+      const newFine = Math.max(0, Number(document.getElementById('input-edit-missed-fine')?.value) || 0);
+      const ptsDiff = newPts - oldPts;
+      const fineDiff = newFine - oldFine;
+
+      try {
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'missed_penalties', pen.id), {
+          penaltyPoints: newPts,
+          points: newPts,
+          fineEGP: newFine,
+          updatedAt: serverTimestamp()
+        });
+
+        if (pen.uid && (ptsDiff !== 0 || fineDiff !== 0)) {
+          const userUpdate = { updatedAt: serverTimestamp() };
+          if (ptsDiff !== 0) {
+            userUpdate.penalties = increment(ptsDiff);
+            userUpdate.penaltyPoints = increment(ptsDiff);
+            userUpdate.totalPenalties = increment(ptsDiff);
+          }
+          if (fineDiff !== 0) {
+            userUpdate.finesDue = increment(fineDiff);
+            batch.set(doc(db, 'users_private', pen.uid), {
+              finesDue: increment(fineDiff),
+              finesEGP: increment(fineDiff),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+          batch.update(doc(db, 'users', pen.uid), userUpdate);
+        }
+
+        await batch.commit();
+        pen.penaltyPoints = newPts;
+        pen.points = newPts;
+        pen.fineEGP = newFine;
+        toast('Missed task penalty updated', 'success');
+        renderAdminMissedTasks();
+        return true;
+      } catch (err) {
+        console.error('Error updating missed penalty:', err);
+        toast(err.message || 'Failed to update penalty', 'error');
+        return false;
+      }
+    }
+  });
+
+  setTimeout(() => {
+    const revBtn = document.getElementById('btn-modal-revoke-missed-pen');
+    if (revBtn) {
+      revBtn.onclick = async () => {
+        closeAllModals();
+        await handleRevokeMissedTaskPenalty(pen);
+      };
+    }
+  }, 50);
+}
+
+async function handleRevokeMissedTaskPenalty(pen) {
+  if (!pen || !pen.id) return;
+  const task = (state.tasks || []).find(t => t.id === pen.taskId);
+  const mem = usersMap.get(pen.uid) || (state.members || []).find(m => m.uid === pen.uid) || { displayName: pen.uid || 'Member' };
+  const pts = Number(pen.penaltyPoints ?? pen.points ?? 0);
+  const fine = Number(pen.fineEGP || 0);
+
+  const confirmed = await confirmSheet({
+    title: 'Revoke Missed Task Penalty?',
+    message: `Revoke missed task penalty for ${mem.displayName || mem.name || pen.uid} on "${task?.title || pen.taskId}" and refund ${pts} penalty pts${fine > 0 ? ` and ${fine} EGP` : ''}?`,
+    confirmLabel: 'Revoke & Refund',
+    destructive: true
+  });
+  if (!confirmed) return;
+
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'missed_penalties', pen.id));
+    if (pen.uid && (pts > 0 || fine > 0)) {
+      const userUpdate = { updatedAt: serverTimestamp() };
+      if (pts > 0) {
+        userUpdate.penalties = increment(-pts);
+        userUpdate.penaltyPoints = increment(-pts);
+        userUpdate.totalPenalties = increment(-pts);
+      }
+      if (fine > 0) {
+        userUpdate.finesDue = increment(-fine);
+        batch.set(doc(db, 'users_private', pen.uid), {
+          finesDue: increment(-fine),
+          finesEGP: increment(-fine),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
+      batch.update(doc(db, 'users', pen.uid), userUpdate);
+    }
+    await batch.commit();
+    state.missedPenalties = (state.missedPenalties || []).filter(p => p.id !== pen.id);
+    state.appliedMissedPenalties?.delete(pen.id);
+    if (pen.taskId && pen.uid && pen.occurrenceKey) {
+      state.appliedMissedPenalties?.delete(`${pen.taskId}_${pen.occurrenceKey}_${pen.uid}`);
+      state.appliedMissedPenalties?.delete(`${pen.taskId}_${pen.uid}_${pen.occurrenceKey}`);
+    }
+    toast('Missed task penalty revoked and balance refunded', 'success');
+    renderAdminMissedTasks();
+  } catch (err) {
+    console.error('Error revoking missed penalty:', err);
+    toast(err.message || 'Failed to revoke penalty', 'error');
+  }
 }
 
 export async function handleWaiverDecision(waiverId, newStatus) {
@@ -20498,98 +21034,215 @@ export async function handleWaiverDecision(waiverId, newStatus) {
 }
 
 function openAdminEditSubmissionModal(submission) {
+  if (!submission || !submission.id) return;
+  const oldPoints = Number(submission.pointsAwarded) || 0;
+  const oldPenalty = Number(submission.penaltyPoints ?? submission.penaltyPts ?? 0);
+  const oldFine = Number(submission.fineEGP || 0);
+  const task = (state.tasks || []).find(t => t.id === submission.taskId);
+  const answersList = Array.isArray(submission.answers) ? [...submission.answers] : [];
+
+  const answersInputsHtml = answersList.map((a, idx) => {
+    const prompt = typeof a === 'object' && a !== null
+      ? (a.questionText || task?.questions?.[idx]?.questionText || `Question ${idx + 1}`)
+      : (task?.questions?.[idx]?.questionText || `Question ${idx + 1}`);
+    const val = typeof a === 'object' && a !== null ? (a.answer || '') : String(a ?? '');
+    return `
+      <div>
+        <label class="block text-neutral-400 text-[11px] font-semibold mb-1">${esc(prompt)}</label>
+        <input type="text" class="ios-input text-white text-xs w-full input-edit-sub-answer" data-ans-idx="${idx}" value="${esc(val)}" />
+      </div>
+    `;
+  }).join('');
+
   openModal({
-    title: 'Edit Submission Points',
+    title: 'Edit Task Submission',
     body: `
-      <div class="space-y-4 text-xs">
+      <div class="space-y-3.5 text-xs">
         <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1">
           <div class="font-bold text-white">${esc(submission.taskTitle)}</div>
           <div class="text-neutral-400">Member: <strong class="text-white">${esc(submission.userName)}</strong></div>
-          <div class="text-neutral-400">Current Points: <strong class="text-emerald-400">${submission.pointsAwarded || 0} pts</strong></div>
+          <div class="text-neutral-400">Current Score: <strong class="text-emerald-400">+${oldPoints} pts</strong>${oldPenalty > 0 ? ` · <strong class="text-rose-400">-${oldPenalty} pen</strong>` : ''}${oldFine > 0 ? ` · <strong class="text-amber-400">${oldFine} EGP</strong>` : ''}</div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Points Earned</label>
+            <input id="input-edit-sub-points" type="number" min="0" max="10000" value="${oldPoints}" class="ios-input font-mono text-white text-sm w-full" required />
+          </div>
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Penalty Pts</label>
+            <input id="input-edit-sub-penalty" type="number" min="0" max="10000" value="${oldPenalty}" class="ios-input font-mono text-white text-sm w-full" />
+          </div>
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Fine (EGP)</label>
+            <input id="input-edit-sub-fine" type="number" min="0" max="100000" value="${oldFine}" class="ios-input font-mono text-white text-sm w-full" />
+          </div>
         </div>
 
         <div>
-          <label class="block text-neutral-300 font-semibold mb-1">New Points Value</label>
-          <input id="input-edit-sub-points" type="number" min="0" max="1000" value="${submission.pointsAwarded || 0}" class="ios-input font-mono text-white text-base" required />
-          <p class="text-[10px] text-neutral-400 mt-1">Difference will be atomically added or deducted from the member's profile score.</p>
+          <label class="block text-neutral-300 font-semibold mb-1">Occurrence Key</label>
+          <input id="input-edit-sub-occ" type="text" value="${esc(submission.occurrenceKey || 'once')}" class="ios-input font-mono text-white text-xs w-full" />
+        </div>
+
+        ${answersInputsHtml ? `<div class="space-y-2 pt-1 border-t border-white/10"><div class="text-[11px] font-bold text-neutral-300 uppercase">Submitted Answers</div>${answersInputsHtml}</div>` : ''}
+
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Submission Comment / Note</label>
+          <textarea id="input-edit-sub-comment" rows="2" class="ios-input text-white text-xs w-full" placeholder="Member comment or admin note...">${esc(submission.comment || submission.notes || '')}</textarea>
         </div>
 
         <div>
           <label class="block text-neutral-300 font-semibold mb-1">Reason for Adjustment (Optional)</label>
-          <input id="input-edit-sub-reason" type="text" placeholder="e.g. Bonus effort, corrected score" class="ios-input text-white" />
+          <input id="input-edit-sub-reason" type="text" placeholder="e.g. Bonus effort, corrected score" class="ios-input text-white text-xs w-full" />
+        </div>
+
+        <div class="pt-2 border-t border-white/10">
+          <button type="button" id="btn-modal-revoke-submission" class="w-full py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-bold text-xs transition">
+            Revoke &amp; Delete Submission
+          </button>
         </div>
       </div>
     `,
-    saveLabel: 'Update Points',
+    saveLabel: 'Save Submission',
     onSave: async () => {
       const ptsInput = document.getElementById('input-edit-sub-points');
+      const penInput = document.getElementById('input-edit-sub-penalty');
+      const fineInput = document.getElementById('input-edit-sub-fine');
+      const occInput = document.getElementById('input-edit-sub-occ');
+      const commentInput = document.getElementById('input-edit-sub-comment');
       const reasonInput = document.getElementById('input-edit-sub-reason');
-      const newPoints = parseInt(ptsInput?.value, 10);
-      const reason = reasonInput?.value?.trim() || 'Admin score adjustment';
 
-      if (isNaN(newPoints) || newPoints < 0) {
-        toast('Please enter a valid points amount (0 or more).', 'error');
-        return;
-      }
+      const newPoints = Math.max(0, parseInt(ptsInput?.value, 10) || 0);
+      const newPenalty = Math.max(0, parseInt(penInput?.value, 10) || 0);
+      const newFine = Math.max(0, Number(fineInput?.value) || 0);
+      const newOccKey = occInput?.value?.trim() || submission.occurrenceKey || 'once';
+      const newComment = commentInput?.value?.trim() ?? '';
+      const reason = reasonInput?.value?.trim() || 'Admin submission edit';
 
-      const delta = newPoints - (submission.pointsAwarded || 0);
+      const updatedAnswers = answersList.map((a, idx) => {
+        const inp = document.querySelector(`.input-edit-sub-answer[data-ans-idx="${idx}"]`);
+        const newVal = inp ? inp.value.trim() : (typeof a === 'object' && a !== null ? a.answer : a);
+        if (typeof a === 'object' && a !== null) {
+          return { ...a, answer: newVal };
+        }
+        return newVal;
+      });
+
+      const deltaPts = newPoints - oldPoints;
+      const deltaPen = newPenalty - oldPenalty;
+      const deltaFine = newFine - oldFine;
 
       try {
         const batch = writeBatch(db);
         const subRef = doc(db, 'submissions', submission.id);
         batch.update(subRef, {
           pointsAwarded: newPoints,
+          penaltyPoints: newPenalty,
+          penaltyPts: newPenalty,
+          fineEGP: newFine,
+          occurrenceKey: newOccKey,
+          comment: newComment,
+          notes: newComment,
+          answers: updatedAnswers,
           updatedAt: serverTimestamp()
         });
 
-        if (delta !== 0 && submission.uid) {
-          const userRef = doc(db, 'users', submission.uid);
-          const pointsUpdate = buildPointsUpdate(usersMap.get(submission.uid) || { points: 0 }, delta);
-          batch.update(userRef, {
-            ...pointsUpdate,
-            updatedAt: serverTimestamp()
-          });
+        const targetUid = submission.uid || submission.userId;
+        if (targetUid && (deltaPts !== 0 || deltaPen !== 0 || deltaFine !== 0)) {
+          const userRef = doc(db, 'users', targetUid);
+          const userObj = usersMap.get(targetUid) || { points: 0, penalties: 0 };
+          const userUpdate = { updatedAt: serverTimestamp() };
+          if (deltaPts !== 0) {
+            Object.assign(userUpdate, buildPointsUpdate(userObj, deltaPts));
+          }
+          if (deltaPen !== 0) {
+            userUpdate.penalties = increment(deltaPen);
+            userUpdate.penaltyPoints = increment(deltaPen);
+            userUpdate.totalPenalties = increment(deltaPen);
+          }
+          if (deltaFine !== 0) {
+            userUpdate.finesDue = increment(deltaFine);
+            batch.set(doc(db, 'users_private', targetUid), {
+              finesDue: increment(deltaFine),
+              finesEGP: increment(deltaFine),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+          const finalPts = Math.max(0, (Number(userObj.points) || 0) + deltaPts);
+          const finalPen = Math.max(0, (Number(userObj.penalties) || 0) + deltaPen);
+          userUpdate.netPts = Math.max(0, finalPts - finalPen);
+          batch.update(userRef, userUpdate);
         }
 
-        if (submission.uid) {
+        if (targetUid) {
           createNotification(batch, {
-            uid: submission.uid,
-            title: 'Task Score Updated',
-            message: `Your points for "${submission.taskTitle}" were updated to ${newPoints} pts (${delta >= 0 ? '+' : ''}${delta}).`,
+            uid: targetUid,
+            title: 'Task Submission Updated',
+            message: `Your submission for "${submission.taskTitle}" was updated (${newPoints} pts${newPenalty > 0 ? `, -${newPenalty} penalty pts` : ''}${newFine > 0 ? `, ${newFine} EGP fine` : ''}).`,
             type: 'task',
             refId: submission.id
           });
         }
 
         logAdminAction(batch, {
-          action: 'submission_points_edited',
-          targetUid: submission.uid,
+          action: 'submission_edited',
+          targetUid: targetUid,
           details: {
             submissionId: submission.id,
             taskTitle: submission.taskTitle,
-            oldPoints: submission.pointsAwarded || 0,
+            oldPoints,
             newPoints,
-            delta,
+            oldPenalty,
+            newPenalty,
+            oldFine,
+            newFine,
             reason
           }
         });
 
         await batch.commit();
-        toast('Submission points successfully updated!', 'success');
+        submission.pointsAwarded = newPoints;
+        submission.penaltyPoints = newPenalty;
+        submission.penaltyPts = newPenalty;
+        submission.fineEGP = newFine;
+        submission.occurrenceKey = newOccKey;
+        submission.comment = newComment;
+        submission.notes = newComment;
+        submission.answers = updatedAnswers;
+        toast('Submission updated and balance reconciled!', 'success');
         closeAllModals();
+        renderAdminSubmissions();
+        return true;
       } catch (err) {
-        console.error('Error editing submission points:', err);
-        toast(err.message || 'Failed to update points', 'error');
+        console.error('Error editing submission:', err);
+        toast(err.message || 'Failed to update submission', 'error');
+        return false;
       }
     }
   });
+
+  setTimeout(() => {
+    const revBtn = document.getElementById('btn-modal-revoke-submission');
+    if (revBtn) {
+      revBtn.onclick = async () => {
+        closeAllModals();
+        await handleAdminRevokeSubmission(submission);
+      };
+    }
+  }, 50);
 }
 
 async function handleAdminRevokeSubmission(submission) {
+  if (!submission || !submission.id) return;
+  const pts = Number(submission.pointsAwarded) || 0;
+  const pen = Number(submission.penaltyPoints ?? submission.penaltyPts ?? 0);
+  const fine = Number(submission.fineEGP || 0);
+  const targetUid = submission.uid || submission.userId;
+
   const confirm = await confirmSheet({
     title: 'Revoke Submission',
-    message: `Revoke "${submission.taskTitle}" for ${submission.userName}? This permanently removes the submission proof and deducts ${submission.pointsAwarded || 0} points from their balance.`,
-    confirmLabel: 'Revoke & Deduct',
+    message: `Revoke "${submission.taskTitle}" for ${submission.userName}? This permanently removes the submission proof, deducts ${pts} earned points${pen > 0 ? `, and refunds ${pen} penalty pts` : ''}${fine > 0 ? ` and ${fine} EGP fine` : ''}.`,
+    confirmLabel: 'Revoke & Reconcile',
     destructive: true
   });
 
@@ -20599,19 +21252,36 @@ async function handleAdminRevokeSubmission(submission) {
     const batch = writeBatch(db);
     batch.delete(doc(db, 'submissions', submission.id));
 
-    if (submission.uid && submission.pointsAwarded) {
-      const pointsUpdate = buildPointsUpdate(usersMap.get(submission.uid) || { points: 0 }, -submission.pointsAwarded);
-      batch.update(doc(db, 'users', submission.uid), {
-        ...pointsUpdate,
-        updatedAt: serverTimestamp()
-      });
+    if (targetUid && (pts > 0 || pen > 0 || fine > 0)) {
+      const userObj = usersMap.get(targetUid) || { points: 0, penalties: 0 };
+      const userUpdate = { updatedAt: serverTimestamp() };
+      if (pts > 0) {
+        Object.assign(userUpdate, buildPointsUpdate(userObj, -pts));
+      }
+      if (pen > 0) {
+        userUpdate.penalties = increment(-pen);
+        userUpdate.penaltyPoints = increment(-pen);
+        userUpdate.totalPenalties = increment(-pen);
+      }
+      if (fine > 0) {
+        userUpdate.finesDue = increment(-fine);
+        batch.set(doc(db, 'users_private', targetUid), {
+          finesDue: increment(-fine),
+          finesEGP: increment(-fine),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
+      const finalPts = Math.max(0, (Number(userObj.points) || 0) - pts);
+      const finalPen = Math.max(0, (Number(userObj.penalties) || 0) - pen);
+      userUpdate.netPts = Math.max(0, finalPts - finalPen);
+      batch.update(doc(db, 'users', targetUid), userUpdate);
     }
 
-    if (submission.uid) {
+    if (targetUid) {
       createNotification(batch, {
-        uid: submission.uid,
+        uid: targetUid,
         title: 'Task Submission Revoked',
-        message: `Your submission for "${submission.taskTitle}" was revoked by an admin (-${submission.pointsAwarded || 0} pts).`,
+        message: `Your submission for "${submission.taskTitle}" was revoked by an admin (-${pts} pts).`,
         type: 'task',
         refId: submission.id
       });
@@ -20619,16 +21289,20 @@ async function handleAdminRevokeSubmission(submission) {
 
     logAdminAction(batch, {
       action: 'submission_revoked',
-      targetUid: submission.uid,
+      targetUid: targetUid,
       details: {
         submissionId: submission.id,
         taskTitle: submission.taskTitle,
-        pointsDeducted: submission.pointsAwarded || 0
+        pointsDeducted: pts,
+        penaltyRefunded: pen,
+        fineRefunded: fine
       }
     });
 
     await batch.commit();
-    toast('Submission revoked and points deducted', 'info');
+    state.submissions = (state.submissions || []).filter(s => s.id !== submission.id);
+    toast('Submission revoked and member ledger reconciled', 'info');
+    renderAdminSubmissions();
   } catch (err) {
     console.error('Error revoking submission:', err);
     toast(err.message || 'Failed to revoke submission', 'error');
@@ -20836,57 +21510,198 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
         if (txs.length > 0) countBadgeEl.classList.remove('hidden');
       }
 
+      const mem = usersMap.get(uid) || (state.members || []).find(m => m.uid === uid) || {};
+      const priv = usersPrivate.get(uid) || {};
+      const curPoints = Math.max(0, Number(mem.points) || 0);
+      const curPenalties = Math.max(0, Number(mem.penalties) || 0);
+      const curFines = Math.max(0, Number(priv.finesDue ?? priv.finesEGP ?? mem.finesDue ?? mem.fines ?? 0));
+
+      const overrideBarHtml = `
+        <div class="p-3 rounded-xl bg-black/30 border border-white/10 space-y-2.5 mb-3 text-xs">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-[#0A84FF] uppercase tracking-wider">Direct Balance Override</span>
+            <span class="text-[10px] font-mono text-neutral-400">Net: ${Math.max(0, curPoints - curPenalties)} pts</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-[10px] text-emerald-400 font-semibold mb-0.5">Earned Pts</label>
+              <input type="number" min="0" id="inp-override-pts-${esc(uid)}" value="${curPoints}" class="ios-input font-mono text-white text-xs py-1 px-2 w-full" />
+            </div>
+            <div>
+              <label class="block text-[10px] text-rose-400 font-semibold mb-0.5">Penalty Pts</label>
+              <input type="number" min="0" id="inp-override-pen-${esc(uid)}" value="${curPenalties}" class="ios-input font-mono text-white text-xs py-1 px-2 w-full" />
+            </div>
+            <div>
+              <label class="block text-[10px] text-amber-400 font-semibold mb-0.5">Fines (EGP)</label>
+              <input type="number" min="0" id="inp-override-fines-${esc(uid)}" value="${curFines}" class="ios-input font-mono text-white text-xs py-1 px-2 w-full" />
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="text" id="inp-override-reason-${esc(uid)}" placeholder="Reason for direct balance override..." class="ios-input text-white text-xs py-1 px-2.5 flex-1" />
+            <button type="button" id="btn-save-balance-override-${esc(uid)}" class="px-3 py-1.5 rounded-lg bg-[#0A84FF] hover:bg-[#0071E3] text-white font-bold text-xs transition shrink-0">
+              Save Balances
+            </button>
+          </div>
+        </div>
+      `;
+
       if (txs.length === 0) {
         containerEl.innerHTML = `
+          ${overrideBarHtml}
           <div class="p-6 text-center text-xs text-neutral-400">
             No transactions recorded yet.
           </div>
         `;
-        return;
+      } else {
+        containerEl.innerHTML = `
+          ${overrideBarHtml}
+          <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+            ${txs.map(tx => {
+              const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty' || tx.type === 'deduction';
+              let badgeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+              let sign = '+';
+              let unit = isPts ? 'pts' : 'EGP';
+
+              if (tx.type === 'penalty' || tx.type === 'deduction') {
+                badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+                sign = '-';
+              } else if (tx.type === 'fine') {
+                badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+                sign = '+';
+              } else if (tx.type === 'payment') {
+                badgeColor = 'text-blue-400 bg-blue-500/10 border-blue-500/20';
+                sign = '-';
+              } else if (tx.type === 'waive') {
+                badgeColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+                sign = 'Waived ';
+              }
+
+              const dateStr = tx.createdAt ? formatDateTime(tx.createdAt) : 'Just now';
+
+              return `
+                <div class="ledger-tx-row p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs" data-tx-id="${esc(tx.id)}">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
+                    <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
+                      ${sign}${tx.amount} ${unit}
+                    </span>
+                  </div>
+                  <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
+                  <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
+                    <span>By ${esc(tx.adminName || 'Admin')} · ${dateStr}</span>
+                    <div class="flex items-center gap-1.5">
+                      <button type="button" class="btn-edit-ledger-tx px-2 py-0.5 rounded bg-white/10 hover:bg-white/15 text-white font-sans font-semibold text-[10px] transition" data-tx-id="${esc(tx.id)}">Edit</button>
+                      <button type="button" class="btn-delete-ledger-tx px-2 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-sans font-semibold text-[10px] transition" data-tx-id="${esc(tx.id)}">Delete</button>
+                    </div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
       }
 
-      containerEl.innerHTML = `
-        <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-          ${txs.map(tx => {
-            const isPts = tx.category === 'points' || tx.type === 'bonus' || tx.type === 'penalty';
-            let badgeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
-            let sign = '+';
-            let unit = isPts ? 'pts' : 'EGP';
+      const overrideBtn = containerEl.querySelector(`#btn-save-balance-override-${CSS.escape(uid)}`);
+      if (overrideBtn) {
+        overrideBtn.onclick = async () => {
+          const newPts = Math.max(0, Number(containerEl.querySelector(`#inp-override-pts-${CSS.escape(uid)}`)?.value) || 0);
+          const newPen = Math.max(0, Number(containerEl.querySelector(`#inp-override-pen-${CSS.escape(uid)}`)?.value) || 0);
+          const newFines = Math.max(0, Number(containerEl.querySelector(`#inp-override-fines-${CSS.escape(uid)}`)?.value) || 0);
+          const reason = containerEl.querySelector(`#inp-override-reason-${CSS.escape(uid)}`)?.value?.trim() || 'Direct admin balance override';
 
-            if (tx.type === 'penalty') {
-              badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
-              sign = '-';
-            } else if (tx.type === 'fine') {
-              badgeColor = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
-              sign = '+';
-            } else if (tx.type === 'payment') {
-              badgeColor = 'text-blue-400 bg-blue-500/10 border-blue-500/20';
-              sign = '-';
-            } else if (tx.type === 'waive') {
-              badgeColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-              sign = 'Waived ';
+          overrideBtn.disabled = true;
+          overrideBtn.textContent = 'Saving...';
+          try {
+            const batch = writeBatch(db);
+            const netPts = Math.max(0, newPts - newPen);
+            batch.update(doc(db, 'users', uid), {
+              points: newPts,
+              totalPoints: newPts,
+              penalties: newPen,
+              penaltyPoints: newPen,
+              totalPenalties: newPen,
+              netPts,
+              finesDue: newFines,
+              fines: newFines,
+              updatedAt: serverTimestamp()
+            });
+            batch.set(doc(db, 'users_private', uid), {
+              finesDue: newFines,
+              finesEGP: newFines,
+              fines: newFines,
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+            const txRef = doc(collection(db, 'users', uid, 'transactions'));
+            batch.set(txRef, {
+              type: 'override',
+              category: 'override',
+              amount: netPts,
+              reason: `${reason} (Pts: ${curPoints}->${newPts}, Pen: ${curPenalties}->${newPen}, Fines: ${curFines}->${newFines} EGP)`,
+              adminUid: state.user?.uid || '',
+              adminName: state.user?.displayName || 'Admin',
+              createdAt: serverTimestamp()
+            });
+            logAdminAction(batch, {
+              action: 'direct_balance_override',
+              targetUid: uid,
+              details: { oldPoints: curPoints, newPoints: newPts, oldPenalties: curPenalties, newPenalties: newPen, oldFines: curFines, newFines, reason }
+            });
+            await batch.commit();
+            if (usersMap.has(uid)) {
+              const u = usersMap.get(uid);
+              u.points = newPts;
+              u.penalties = newPen;
+              u.netPts = netPts;
+              u.finesDue = newFines;
             }
+            if (usersPrivate.has(uid)) {
+              const p = usersPrivate.get(uid);
+              p.finesDue = newFines;
+              p.finesEGP = newFines;
+            }
+            invalidateEgpCache(uid);
+            renderAdminMembers();
+            renderLeaderboard();
+            toast('Member balances overridden and saved!', 'success');
+          } catch (err) {
+            console.error('Error overriding balances:', err);
+            toast(err.message || 'Failed to override balances', 'error');
+          } finally {
+            overrideBtn.disabled = false;
+            overrideBtn.textContent = 'Save Balances';
+          }
+        };
+      }
 
-            const dateStr = tx.createdAt ? formatDateTime(tx.createdAt) : 'Just now';
+      containerEl.querySelectorAll('.btn-edit-ledger-tx').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const tx = txs.find(t => t.id === btn.dataset.txId);
+          if (tx) openAdminEditTransactionModal(uid, tx);
+        };
+      });
 
-            return `
-              <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs">
-                <div class="flex items-center justify-between gap-2">
-                  <span class="font-bold text-white uppercase text-[10px] tracking-wider px-2 py-0.5 rounded bg-white/10">${esc(tx.type || 'entry')}</span>
-                  <span class="font-mono font-bold text-xs px-2 py-0.5 rounded-md border ${badgeColor}">
-                    ${sign}${tx.amount} ${unit}
-                  </span>
-                </div>
-                <p class="text-neutral-300 text-xs">${esc(tx.reason || 'No description provided')}</p>
-                <div class="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-white/5 font-mono">
-                  <span>By ${esc(tx.adminName || 'Admin')}</span>
-                  <span>${dateStr}</span>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      `;
+      containerEl.querySelectorAll('.btn-delete-ledger-tx').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const tx = txs.find(t => t.id === btn.dataset.txId);
+          if (tx) handleDeleteTransactionAndReverseLedger(uid, tx);
+        };
+      });
+
+      containerEl.querySelectorAll('.ledger-tx-row').forEach(row => {
+        const tx = txs.find(t => t.id === row.dataset.txId);
+        if (tx) {
+          attachUniversalSwipeActions(row, {
+            archiveLabel: 'Edit',
+            archiveIcon: 'edit',
+            onArchive: () => openAdminEditTransactionModal(uid, tx),
+            deleteLabel: 'Delete',
+            onDelete: () => handleDeleteTransactionAndReverseLedger(uid, tx),
+            entityName: 'Transaction'
+          });
+        }
+      });
     }, (err) => {
       console.error('Error in transaction ledger listener:', err);
       containerEl.innerHTML = `
@@ -20906,7 +21721,292 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl) {
   }
 }
 
+function getTransactionLedgerEffect(tx) {
+  if (!tx) return { pts: 0, pen: 0, fine: 0 };
+  const amt = Math.max(0, Number(tx.amount) || 0);
+  const type = String(tx.type || '').toLowerCase();
+  const cat = String(tx.category || '').toLowerCase();
+  if (type === 'bonus' || (cat === 'points' && type !== 'penalty' && type !== 'deduction')) {
+    return { pts: amt, pen: 0, fine: 0 };
+  }
+  if (type === 'penalty' || type === 'deduction' || cat === 'penalty') {
+    return { pts: 0, pen: amt, fine: 0 };
+  }
+  if (type === 'fine') {
+    return { pts: 0, pen: 0, fine: amt };
+  }
+  if (type === 'payment' || type === 'waive') {
+    return { pts: 0, pen: 0, fine: -amt };
+  }
+  return { pts: 0, pen: 0, fine: 0 };
+}
+
+function openAdminEditTransactionModal(uid, tx) {
+  if (!uid || !tx || !tx.id) return;
+  const oldEff = getTransactionLedgerEffect(tx);
+
+  openModal({
+    title: 'Edit Ledger Transaction',
+    body: `
+      <div class="space-y-3.5 text-xs">
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Transaction Type</label>
+          <select id="input-edit-tx-type" class="ios-input text-white w-full">
+            <option value="bonus" ${tx.type === 'bonus' ? 'selected' : ''}>Points Bonus (+Earned Pts)</option>
+            <option value="penalty" ${(tx.type === 'penalty' || tx.type === 'deduction') ? 'selected' : ''}>Points Penalty (+Penalty Pts)</option>
+            <option value="fine" ${tx.type === 'fine' ? 'selected' : ''}>Financial Fine (+EGP Due)</option>
+            <option value="payment" ${tx.type === 'payment' ? 'selected' : ''}>Fine Payment (-EGP Due)</option>
+            <option value="waive" ${tx.type === 'waive' ? 'selected' : ''}>Fine Waived (-EGP Due)</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Amount</label>
+          <input id="input-edit-tx-amount" type="number" min="0" value="${Number(tx.amount) || 0}" class="ios-input font-mono text-white w-full" />
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Reason / Note</label>
+          <input id="input-edit-tx-reason" type="text" value="${esc(tx.reason || '')}" class="ios-input text-white w-full" />
+        </div>
+        <div class="pt-2 border-t border-white/10">
+          <button type="button" id="btn-modal-delete-tx" class="w-full py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-bold text-xs transition">
+            Delete Transaction &amp; Reverse Balance
+          </button>
+        </div>
+      </div>
+    `,
+    saveLabel: 'Save Transaction',
+    onSave: async () => {
+      const newType = document.getElementById('input-edit-tx-type')?.value || tx.type;
+      const newAmount = Math.max(0, Number(document.getElementById('input-edit-tx-amount')?.value) || 0);
+      const newReason = document.getElementById('input-edit-tx-reason')?.value?.trim() || 'Admin ledger adjustment';
+      const newCategory = (newType === 'bonus' || newType === 'penalty') ? 'points' : 'fines';
+      const newEff = getTransactionLedgerEffect({ type: newType, category: newCategory, amount: newAmount });
+
+      const deltaPts = newEff.pts - oldEff.pts;
+      const deltaPen = newEff.pen - oldEff.pen;
+      const deltaFine = newEff.fine - oldEff.fine;
+
+      try {
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'users', uid, 'transactions', tx.id), {
+          type: newType,
+          category: newCategory,
+          amount: newAmount,
+          reason: newReason,
+          updatedAt: serverTimestamp()
+        });
+
+        if (deltaPts !== 0 || deltaPen !== 0 || deltaFine !== 0) {
+          const userObj = usersMap.get(uid) || { points: 0, penalties: 0 };
+          const userUpdate = { updatedAt: serverTimestamp() };
+          if (deltaPts !== 0) Object.assign(userUpdate, buildPointsUpdate(userObj, deltaPts));
+          if (deltaPen !== 0) {
+            userUpdate.penalties = increment(deltaPen);
+            userUpdate.penaltyPoints = increment(deltaPen);
+            userUpdate.totalPenalties = increment(deltaPen);
+          }
+          if (deltaFine !== 0) {
+            userUpdate.finesDue = increment(deltaFine);
+            batch.set(doc(db, 'users_private', uid), {
+              finesDue: increment(deltaFine),
+              finesEGP: increment(deltaFine),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+          const finalPts = Math.max(0, (Number(userObj.points) || 0) + deltaPts);
+          const finalPen = Math.max(0, (Number(userObj.penalties) || 0) + deltaPen);
+          userUpdate.netPts = Math.max(0, finalPts - finalPen);
+          batch.update(doc(db, 'users', uid), userUpdate);
+        }
+
+        await batch.commit();
+        invalidateEgpCache(uid);
+        toast('Transaction updated and balance reconciled', 'success');
+        return true;
+      } catch (err) {
+        console.error('Error updating transaction:', err);
+        toast(err.message || 'Failed to update transaction', 'error');
+        return false;
+      }
+    }
+  });
+
+  setTimeout(() => {
+    const delBtn = document.getElementById('btn-modal-delete-tx');
+    if (delBtn) {
+      delBtn.onclick = async () => {
+        closeModal();
+        await handleDeleteTransactionAndReverseLedger(uid, tx);
+      };
+    }
+  }, 50);
+}
+
+async function handleDeleteTransactionAndReverseLedger(uid, tx) {
+  if (!uid || !tx || !tx.id) return;
+  const eff = getTransactionLedgerEffect(tx);
+  const confirmed = await confirmSheet({
+    title: 'Delete Ledger Transaction?',
+    message: `Delete "${tx.reason || tx.type}" (${tx.amount}) and reverse its effect on member balances?`,
+    confirmLabel: 'Delete & Reverse',
+    destructive: true
+  });
+  if (!confirmed) return;
+
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'users', uid, 'transactions', tx.id));
+
+    if (eff.pts !== 0 || eff.pen !== 0 || eff.fine !== 0) {
+      const userObj = usersMap.get(uid) || { points: 0, penalties: 0 };
+      const userUpdate = { updatedAt: serverTimestamp() };
+      if (eff.pts !== 0) Object.assign(userUpdate, buildPointsUpdate(userObj, -eff.pts));
+      if (eff.pen !== 0) {
+        userUpdate.penalties = increment(-eff.pen);
+        userUpdate.penaltyPoints = increment(-eff.pen);
+        userUpdate.totalPenalties = increment(-eff.pen);
+      }
+      if (eff.fine !== 0) {
+        userUpdate.finesDue = increment(-eff.fine);
+        batch.set(doc(db, 'users_private', uid), {
+          finesDue: increment(-eff.fine),
+          finesEGP: increment(-eff.fine),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
+      const finalPts = Math.max(0, (Number(userObj.points) || 0) - eff.pts);
+      const finalPen = Math.max(0, (Number(userObj.penalties) || 0) - eff.pen);
+      userUpdate.netPts = Math.max(0, finalPts - finalPen);
+      batch.update(doc(db, 'users', uid), userUpdate);
+    }
+
+    await batch.commit();
+    invalidateEgpCache(uid);
+    toast('Transaction deleted and balance reversed', 'info');
+  } catch (err) {
+    console.error('Error deleting transaction:', err);
+    toast(err.message || 'Failed to delete transaction', 'error');
+  }
+}
+
+function openAdminManualTaskSubmissionModal(member) {
+  if (!member || !member.uid) return;
+  const tasks = (state.tasks || []).filter(t => !t.archived);
+  if (tasks.length === 0) {
+    toast('No active tasks available', 'warning');
+    return;
+  }
+
+  openModal({
+    title: `Manual Task Submission: ${member.displayName || member.name || 'Member'}`,
+    body: `
+      <div class="space-y-3.5 text-xs">
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Select Task</label>
+          <select id="inp-manual-sub-task" class="ios-input text-white w-full">
+            ${tasks.map(t => `<option value="${esc(t.id)}" data-pts="${Number(t.points) || 10}">${esc(t.title)} (+${Number(t.points) || 10} pts)</option>`).join('')}
+          </select>
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Points Earned</label>
+            <input id="inp-manual-sub-pts" type="number" min="0" value="${Number(tasks[0]?.points) || 10}" class="ios-input font-mono text-white w-full" />
+          </div>
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Penalty Pts</label>
+            <input id="inp-manual-sub-pen" type="number" min="0" value="0" class="ios-input font-mono text-white w-full" />
+          </div>
+          <div>
+            <label class="block text-neutral-300 font-semibold mb-1">Fine (EGP)</label>
+            <input id="inp-manual-sub-fine" type="number" min="0" value="0" class="ios-input font-mono text-white w-full" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Comment / Proof Note</label>
+          <textarea id="inp-manual-sub-comment" rows="2" class="ios-input text-white w-full" placeholder="Recorded manually by Admin..."></textarea>
+        </div>
+      </div>
+    `,
+    saveLabel: 'Record Submission',
+    onSave: async () => {
+      const taskId = document.getElementById('inp-manual-sub-task')?.value;
+      const task = tasks.find(t => t.id === taskId) || tasks[0];
+      const pts = Math.max(0, Number(document.getElementById('inp-manual-sub-pts')?.value) || 0);
+      const pen = Math.max(0, Number(document.getElementById('inp-manual-sub-pen')?.value) || 0);
+      const fine = Math.max(0, Number(document.getElementById('inp-manual-sub-fine')?.value) || 0);
+      const comment = document.getElementById('inp-manual-sub-comment')?.value?.trim() || 'Recorded manually by Admin';
+      const win = getTaskWindow(task, serverNow());
+      const occKey = win ? win.occurrenceKey : 'once';
+      const subId = `${task.id}_${member.uid}_${occKey}`;
+
+      try {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'submissions', subId), {
+          taskId: task.id,
+          taskTitle: task.title,
+          uid: member.uid,
+          userId: member.uid,
+          userName: member.displayName || member.name || 'Member',
+          userEmail: member.email || '',
+          userAvatar: member.avatarUrl || member.photoURL || '',
+          occurrenceKey: occKey,
+          pointsAwarded: pts,
+          penaltyPoints: pen,
+          penaltyPts: pen,
+          fineEGP: fine,
+          comment,
+          notes: comment,
+          answers: [],
+          submittedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+
+        const userObj = usersMap.get(member.uid) || member;
+        const userUpdate = { updatedAt: serverTimestamp() };
+        if (pts > 0) Object.assign(userUpdate, buildPointsUpdate(userObj, pts));
+        if (pen > 0) {
+          userUpdate.penalties = increment(pen);
+          userUpdate.penaltyPoints = increment(pen);
+          userUpdate.totalPenalties = increment(pen);
+        }
+        if (fine > 0) {
+          userUpdate.finesDue = increment(fine);
+          batch.set(doc(db, 'users_private', member.uid), {
+            finesDue: increment(fine),
+            finesEGP: increment(fine),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
+        const finalPts = Math.max(0, (Number(userObj.points) || 0) + pts);
+        const finalPen = Math.max(0, (Number(userObj.penalties) || 0) + pen);
+        userUpdate.netPts = Math.max(0, finalPts - finalPen);
+        batch.update(doc(db, 'users', member.uid), userUpdate);
+
+        await batch.commit();
+        toast('Manual task submission recorded!', 'success');
+        return true;
+      } catch (err) {
+        console.error('Error recording manual task submission:', err);
+        toast(err.message || 'Failed to record submission', 'error');
+        return false;
+      }
+    }
+  });
+
+  setTimeout(() => {
+    const sel = document.getElementById('inp-manual-sub-task');
+    const ptsInp = document.getElementById('inp-manual-sub-pts');
+    if (sel && ptsInp) {
+      sel.onchange = () => {
+        const opt = sel.options[sel.selectedIndex];
+        if (opt && opt.dataset.pts) ptsInp.value = opt.dataset.pts;
+      };
+    }
+  }, 50);
+}
+
 function openMemberControlModal(member) {
+  if (!member || !member.uid) return;
   let activeTab = 'profile';
   let hasPendingChanges = false;
   let editedName = member.displayName || '';
@@ -21041,23 +22141,25 @@ function openMemberControlModal(member) {
       </div>
     </div>
 
-    <!-- TAB 4: Current Tasks -->
+    <!-- TAB 4: Current Tasks & Member Submissions -->
     <div id="tab-sec-tasks" class="member-tab-panel space-y-3 hidden">
       <div class="ios-card space-y-3">
-        <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between">
-          <span>Tracking active tasks for current occurrence.</span>
-          <span class="font-mono text-neutral-400">${state.tasks.filter(t => !t.archived).length} active</span>
+        <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between gap-2">
+          <span>Active tasks &amp; all member submissions.</span>
+          <button type="button" id="btn-ctrl-add-manual-sub" class="px-2.5 py-1 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold text-[11px] transition shrink-0">
+            + Record Submission
+          </button>
         </div>
 
         <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
           ${state.tasks.filter(t => !t.archived).map(task => {
             const win = getTaskWindow(task, serverNow());
             const occKey = win ? win.occurrenceKey : 'once';
-            const isCompleted = state.submissions.some(s => s.uid === currentMember.uid && s.taskId === task.id && (task.isPermanent || s.occurrenceKey === occKey));
-            const sub = state.submissions.find(s => s.uid === currentMember.uid && s.taskId === task.id && (task.isPermanent || s.occurrenceKey === occKey));
+            const sub = state.submissions.find(s => (s.uid === currentMember.uid || s.userId === currentMember.uid) && s.taskId === task.id && (task.isPermanent || task.schedule?.type === 'once' || s.occurrenceKey === occKey));
+            const isCompleted = Boolean(sub);
 
             return `
-              <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
+              <div class="ctrl-task-sub-row p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs" ${sub ? `data-sub-id="${esc(sub.id)}"` : ''}>
                 <div class="flex items-center justify-between">
                   <div class="flex items-center gap-2">
                     ${isCompleted ? `
@@ -21095,9 +22197,11 @@ function openMemberControlModal(member) {
     <!-- TAB 5: Attendance -->
     <div id="tab-sec-attendance" class="member-tab-panel space-y-3 hidden">
       <div class="ios-card space-y-3">
-        <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between">
+        <div class="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[11px] text-neutral-300 flex items-center justify-between gap-2">
           <span>Tracking attendance logs and penalties.</span>
-          <span class="font-mono text-neutral-400">${state.attendanceSessions.filter(s => !s.archived).length} sessions</span>
+          <button type="button" id="btn-ctrl-add-manual-att" class="px-2.5 py-1 rounded-lg bg-[#0A84FF]/20 hover:bg-[#0A84FF]/30 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold text-[11px] transition shrink-0">
+            + Add Attendance
+          </button>
         </div>
 
         <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
@@ -21107,12 +22211,12 @@ function openMemberControlModal(member) {
             const log = state.attendanceLogs.find(l => l.uid === currentMember.uid && l.sessionId === session.id && matchesOccurrence(l, occKey, occ?.start, session));
 
             return `
-              <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs">
+              <div class="ctrl-att-log-row p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 text-xs" ${log ? `data-log-id="${esc(log.id)}"` : ''}>
                 <div class="flex items-center justify-between">
                   <span class="font-bold text-white">${esc(session.title)}</span>
                   ${log ? `
-                    <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] ${log.status === 'on_time' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
-                      ${log.status === 'on_time' ? 'ON TIME' : 'LATE (-' + (log.penalty || 0) + ' pts)'}
+                    <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] ${(log.status === 'on_time' || log.status === 'early') ? 'bg-emerald-500/20 text-emerald-400' : (log.status === 'excused' ? 'bg-blue-500/20 text-blue-400' : 'bg-rose-500/20 text-rose-400')}">
+                      ${log.status === 'on_time' || log.status === 'early' ? 'ON TIME' : (log.status === 'excused' ? 'EXCUSED' : (log.status === 'absent' ? 'ABSENT' : 'LATE') + ' (-' + (log.penalty || 0) + ' pts)')}
                     </span>
                   ` : `
                     <span class="px-2 py-0.5 rounded-full font-semibold font-mono text-[10px] bg-white/10 text-neutral-400">NOT CHECKED IN</span>
@@ -21122,11 +22226,11 @@ function openMemberControlModal(member) {
                 ${log ? `
                   <div class="pt-1 text-[11px] space-y-1.5 border-t border-white/5">
                     <div class="flex items-center justify-between text-neutral-400">
-                      <span>Checked In: ${formatDateTime(log.checkedInAt)}</span>
+                      <span>Checked In: ${formatDateTime(log.checkedInAt || log.timestamp)}</span>
                       ${log.fineEGP ? `<span class="text-rose-400 font-mono">${log.fineEGP} EGP</span>` : ''}
                     </div>
                     <div class="flex items-center justify-end gap-2 pt-1">
-                      <button type="button" class="btn-ctrl-edit-log px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-log-id="${esc(log.id)}">Edit Penalty</button>
+                      <button type="button" class="btn-ctrl-edit-log px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold transition" data-log-id="${esc(log.id)}">Edit Record</button>
                       <button type="button" class="btn-ctrl-delete-log px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold transition" data-log-id="${esc(log.id)}">Delete Log</button>
                     </div>
                   </div>
@@ -21167,6 +22271,105 @@ function openMemberControlModal(member) {
       loadTransactionLedger(currentMember.uid, modalBody.querySelector('#member-ctrl-ledger-list'));
     };
   }
+
+  const addManualSubBtn = modalBody.querySelector('#btn-ctrl-add-manual-sub');
+  if (addManualSubBtn) {
+    addManualSubBtn.onclick = () => openAdminManualTaskSubmissionModal(currentMember);
+  }
+
+  modalBody.querySelectorAll('.btn-ctrl-edit-sub').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const sub = (state.submissions || []).find(s => s.id === btn.dataset.subId);
+      if (sub) openAdminEditSubmissionModal(sub);
+    };
+  });
+
+  modalBody.querySelectorAll('.btn-ctrl-revoke-sub').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const sub = (state.submissions || []).find(s => s.id === btn.dataset.subId);
+      if (sub) handleAdminRevokeSubmission(sub);
+    };
+  });
+
+  modalBody.querySelectorAll('.ctrl-task-sub-row[data-sub-id]').forEach(row => {
+    const sub = (state.submissions || []).find(s => s.id === row.dataset.subId);
+    if (sub) {
+      attachUniversalSwipeActions(row, {
+        archiveLabel: 'Edit',
+        archiveIcon: 'edit',
+        onArchive: () => openAdminEditSubmissionModal(sub),
+        deleteLabel: 'Revoke',
+        onDelete: () => handleAdminRevokeSubmission(sub),
+        entityName: 'Submission'
+      });
+    }
+  });
+
+  const addManualAttBtn = modalBody.querySelector('#btn-ctrl-add-manual-att');
+  if (addManualAttBtn) {
+    addManualAttBtn.onclick = () => {
+      const firstSess = (state.attendanceSessions || []).find(s => !s.archived);
+      openManualAttendanceModal(firstSess?.id || null);
+    };
+  }
+
+  modalBody.querySelectorAll('.btn-ctrl-edit-log').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const log = (state.attendanceLogs || []).find(l => l.id === btn.dataset.logId);
+      if (log) {
+        const sess = (state.attendanceSessions || []).find(s => s.id === log.sessionId) || { id: log.sessionId, title: log.sessionTitle || 'Session' };
+        openAdminLogEditModal(log, sess);
+      }
+    };
+  });
+
+  modalBody.querySelectorAll('.btn-ctrl-delete-log').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const log = (state.attendanceLogs || []).find(l => l.id === btn.dataset.logId);
+      if (!log) return;
+      const confirmed = await openDeleteConfirmModal({
+        title: 'Delete Attendance Record?',
+        message: 'Delete this attendance log and reverse its points/penalties/fines?',
+        confirmText: 'Delete'
+      });
+      if (!confirmed) return;
+      await deleteAttendanceRecordAndReverseLedger(log.id, log);
+      toast('Attendance log deleted and ledger reversed', 'success');
+      rowRemoveSafe(btn.closest('.ctrl-att-log-row'));
+    };
+  });
+
+  function rowRemoveSafe(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  modalBody.querySelectorAll('.ctrl-att-log-row[data-log-id]').forEach(row => {
+    const log = (state.attendanceLogs || []).find(l => l.id === row.dataset.logId);
+    if (log) {
+      const sess = (state.attendanceSessions || []).find(s => s.id === log.sessionId) || { id: log.sessionId, title: log.sessionTitle || 'Session' };
+      attachUniversalSwipeActions(row, {
+        archiveLabel: 'Edit',
+        archiveIcon: 'edit',
+        onArchive: () => openAdminLogEditModal(log, sess),
+        deleteLabel: 'Delete',
+        onDelete: async () => {
+          const confirmed = await openDeleteConfirmModal({
+            title: 'Delete Attendance Record?',
+            message: 'Delete this attendance log and reverse its points/penalties/fines?',
+            confirmText: 'Delete'
+          });
+          if (!confirmed) return;
+          await deleteAttendanceRecordAndReverseLedger(log.id, log);
+          toast('Attendance log deleted and ledger reversed', 'success');
+        },
+        entityName: 'Attendance Record'
+      });
+    }
+  });
 
   const avatarCropBtn = modalBody.querySelector('#btn-crop-member-avatar');
   if (avatarCropBtn) {
@@ -21582,10 +22785,21 @@ async function handleRepairTotals() {
         }
       });
 
-      const attAgg = await getAggregateFromServer(query(collection(db, 'attendance_logs'), where('uid', '==', u.uid)), {
-        totalPenalty: sum('penalty')
-      }).catch(() => ({ data: () => ({ totalPenalty: 0 }) }));
-      const realPenalties = (attAgg.data().totalPenalty || 0) + txDeductions;
+      const attLogsSnap = await getDocs(query(collection(db, 'attendance_logs'), where('uid', '==', u.uid))).catch(() => ({ docs: [] }));
+      let attPenalties = 0;
+      attLogsSnap.docs.forEach(d => {
+        const l = d.data();
+        attPenalties += Math.max(0, Number(l.penalty) || 0);
+        const earlyPts = Math.max(0, Number(l.earlyBonusPoints) || (Number(l.pointsDelta) > 0 ? Number(l.pointsDelta) : 0));
+        if (earlyPts > 0) {
+          realPoints += earlyPts;
+          const lTime = parseDateTimeToMs(l.checkedInAt || l.timestamp || l.createdAt) || 0;
+          if (monthKeyOf(lTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += earlyPts;
+          if (weekKeyOf(lTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += earlyPts;
+        }
+      });
+
+      const realPenalties = attPenalties + txDeductions;
 
       const curPoints = u.points || 0;
       const curPenalties = u.penalties || 0;
@@ -21708,7 +22922,11 @@ async function handleRepairTotals() {
             const userRef = doc(db, 'users', item.user.uid);
             batch.update(userRef, {
               points: item.realPoints,
+              totalPoints: item.realPoints,
               penalties: item.realPenalties,
+              penaltyPoints: item.realPenalties,
+              totalPenalties: item.realPenalties,
+              netPts: Math.max(0, item.realPoints - item.realPenalties),
               monthBucket: curMonthKey,
               monthPoints: item.realMonthPoints,
               weekBucket: curWeekKey,
@@ -23110,7 +24328,7 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
       const bodyText = n.body || n.message || '';
 
       return `
-        <div class="p-3 rounded-xl bg-white/5 border ${isRead ? 'border-white/10 opacity-85' : 'border-[#0A84FF]/40 bg-[#0A84FF]/[0.06]'} space-y-2" data-mnc-notif-id="${esc(n.id)}">
+        <div class="mnc-notif-card p-3 rounded-xl bg-white/5 border ${isRead ? 'border-white/10 opacity-85' : 'border-[#0A84FF]/40 bg-[#0A84FF]/[0.06]'} space-y-2" data-mnc-notif-id="${esc(n.id)}">
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-1.5 flex-wrap">
@@ -23122,6 +24340,9 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
               <div class="font-bold text-white text-xs mt-1">${esc(n.title)}</div>
             </div>
             <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" class="btn-mnc-edit-notif px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold text-[10px] transition" data-notif-id="${esc(n.id)}">
+                Edit
+              </button>
               <button type="button" class="btn-mnc-toggle-read px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 font-semibold text-[10px] transition" data-notif-id="${esc(n.id)}">
                 ${isRead ? 'Mark Unread' : 'Mark Read'}
               </button>
@@ -23134,6 +24355,34 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
         </div>
       `;
     }).join('');
+
+    feedEl.querySelectorAll('.btn-mnc-edit-notif').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const item = historyItems.find(x => x.id === btn.dataset.notifId);
+        if (item) openAdminEditNotificationModal(item, selectedUid, () => renderHistorySection());
+      };
+    });
+
+    feedEl.querySelectorAll('.mnc-notif-card').forEach(card => {
+      const notifId = card.dataset.mncNotifId;
+      const item = historyItems.find(x => x.id === notifId);
+      if (item) {
+        attachUniversalSwipeActions(card, {
+          archiveLabel: 'Edit',
+          archiveIcon: 'edit',
+          onArchive: () => openAdminEditNotificationModal(item, selectedUid, () => renderHistorySection()),
+          deleteLabel: 'Delete',
+          onDelete: async () => {
+            historyItems = historyItems.filter(x => x.id !== notifId);
+            renderHistorySection();
+            await deleteSingleNotificationFromFirestore(item, selectedUid);
+            toast('Notification deleted from member history', 'info');
+          },
+          entityName: 'Notification'
+        });
+      }
+    });
 
     feedEl.querySelectorAll('.btn-mnc-toggle-read').forEach(btn => {
       btn.onclick = async () => {
@@ -23237,6 +24486,7 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
         sendBtn.textContent = 'Sending...';
 
         try {
+          let localNotifSaved = false;
           try {
             const batch = writeBatch(db);
             createNotification(batch, {
@@ -23253,6 +24503,7 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
               details: { title: cleanTitle, message: cleanMsg }
             });
             await batch.commit();
+            localNotifSaved = true;
           } catch (localErr) {
             console.warn('Local Firestore write skipped/delegated to GAS backend:', localErr);
           }
@@ -23265,6 +24516,7 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
             body: cleanMsg,
             category: 'system',
             icon: 'bell',
+            skipFirestoreWrite: localNotifSaved,
             adminUid: state.user?.uid || ''
           });
 
@@ -23505,7 +24757,7 @@ export async function renderAdminNotifications() {
       const body = item.body || item.message || '';
       const timeStr = item.createdAt ? formatDateTime(item.createdAt) : (item.timestamp ? formatDateTime(item.timestamp) : 'Recent');
       return `
-        <div class="p-3 rounded-xl bg-white/5 border border-white/10 flex items-start justify-between gap-3 text-xs">
+        <div class="adm-notif-hist-card p-3 rounded-xl bg-white/5 border border-white/10 flex items-start justify-between gap-3 text-xs" data-notif-id="${esc(item.id)}">
           <div class="space-y-1 min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <span class="font-bold text-white truncate">${esc(title)}</span>
@@ -23514,9 +24766,46 @@ export async function renderAdminNotifications() {
             <p class="text-neutral-300 text-[11px] line-clamp-2">${esc(body)}</p>
             <div class="text-[10px] text-neutral-500">${esc(timeStr)}</div>
           </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button type="button" class="btn-adm-edit-notif px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold text-[10px] transition" data-notif-id="${esc(item.id)}">Edit</button>
+            <button type="button" class="btn-adm-del-notif px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[10px] transition" data-notif-id="${esc(item.id)}">Delete</button>
+          </div>
         </div>
       `;
     }).join('');
+
+    const targetUidForHist = _adminNotifSelectedTarget === 'all' ? null : _adminNotifSelectedTarget;
+
+    historyContainer.querySelectorAll('.btn-adm-edit-notif').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const item = _adminNotifHistory.find(x => x.id === btn.dataset.notifId);
+        if (item) openAdminEditNotificationModal(item, targetUidForHist, () => renderHistory());
+      };
+    });
+
+    historyContainer.querySelectorAll('.btn-adm-del-notif').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const item = _adminNotifHistory.find(x => x.id === btn.dataset.notifId);
+        if (!item) return;
+        await handleDeleteAdminNotificationItem(item, targetUidForHist);
+      };
+    });
+
+    historyContainer.querySelectorAll('.adm-notif-hist-card').forEach(card => {
+      const item = _adminNotifHistory.find(x => x.id === card.dataset.notifId);
+      if (item) {
+        attachUniversalSwipeActions(card, {
+          archiveLabel: 'Edit',
+          archiveIcon: 'edit',
+          onArchive: () => openAdminEditNotificationModal(item, targetUidForHist, () => renderHistory()),
+          deleteLabel: 'Delete',
+          onDelete: () => handleDeleteAdminNotificationItem(item, targetUidForHist),
+          entityName: 'Notification'
+        });
+      }
+    });
   }
 
   if (refreshHistoryBtn) {
@@ -23673,6 +24962,96 @@ export async function renderAdminNotifications() {
   updateTargetUI();
   renderRoster();
   fetchHistory();
+}
+
+function openAdminEditNotificationModal(notif, targetUid = null, onUpdated = null) {
+  if (!notif || !notif.id) return;
+  const oldTitle = notif.title || '';
+  const oldBody = notif.body || notif.message || '';
+
+  openModal({
+    title: 'Edit Notification',
+    body: `
+      <div class="space-y-3.5 text-xs">
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Notification Title</label>
+          <input id="inp-edit-notif-title" type="text" class="ios-input text-white w-full" value="${esc(oldTitle)}" required />
+        </div>
+        <div>
+          <label class="block text-neutral-300 font-semibold mb-1">Notification Body</label>
+          <textarea id="inp-edit-notif-body" rows="3" class="ios-input text-white w-full" required>${esc(oldBody)}</textarea>
+        </div>
+        <div class="pt-2 border-t border-white/10">
+          <button type="button" id="btn-modal-del-notif" class="w-full py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-bold text-xs transition">
+            Delete Notification Permanently
+          </button>
+        </div>
+      </div>
+    `,
+    saveLabel: 'Save Notification',
+    onSave: async () => {
+      const newTitle = document.getElementById('inp-edit-notif-title')?.value?.trim();
+      const newBody = document.getElementById('inp-edit-notif-body')?.value?.trim();
+      if (!newTitle || !newBody) {
+        toast('Title and body are required', 'warning');
+        return false;
+      }
+
+      try {
+        const updatePayload = {
+          title: newTitle,
+          body: newBody,
+          message: newBody,
+          updatedAt: serverTimestamp()
+        };
+        if (!targetUid) {
+          await updateDoc(doc(db, 'notifications_broadcast', notif.id), updatePayload);
+        } else {
+          await Promise.allSettled([
+            updateDoc(doc(db, 'notifications', notif.id), updatePayload),
+            updateDoc(doc(db, 'users', targetUid, 'notifications', notif.id), updatePayload)
+          ]);
+        }
+        notif.title = newTitle;
+        notif.body = newBody;
+        notif.message = newBody;
+        if (typeof onUpdated === 'function') onUpdated();
+        toast('Notification updated', 'success');
+        return true;
+      } catch (err) {
+        console.error('Error updating notification:', err);
+        toast(err.message || 'Failed to update notification', 'error');
+        return false;
+      }
+    }
+  });
+
+  setTimeout(() => {
+    const delBtn = document.getElementById('btn-modal-del-notif');
+    if (delBtn) {
+      delBtn.onclick = async () => {
+        closeModal();
+        await handleDeleteAdminNotificationItem(notif, targetUid);
+        if (typeof onUpdated === 'function') onUpdated();
+      };
+    }
+  }, 50);
+}
+
+async function handleDeleteAdminNotificationItem(notif, targetUid = null) {
+  if (!notif || !notif.id) return;
+  try {
+    if (!targetUid) {
+      await deleteDoc(doc(db, 'notifications_broadcast', notif.id));
+    } else {
+      await deleteSingleNotificationFromFirestore(notif, targetUid);
+    }
+    _adminNotifHistory = (_adminNotifHistory || []).filter(x => x.id !== notif.id);
+    toast('Notification deleted', 'info');
+  } catch (err) {
+    console.error('Error deleting notification:', err);
+    toast(err.message || 'Failed to delete notification', 'error');
+  }
 }
 
 const WHATS_NEW_IDB_NAME = 'coc_media_drafts_db';

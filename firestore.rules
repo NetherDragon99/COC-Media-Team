@@ -589,6 +589,16 @@ service cloud.firestore {
       );
     }
 
+    match /attendance_records/{recordId} {
+      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('userId', '') == request.auth.uid));
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /adjustments/{adjId} {
+      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUid', '') == request.auth.uid));
+      allow create, update, delete: if isAdmin();
+    }
+
     // ---------------------------------------------------------------
     // Waiver Requests Collection
     // ---------------------------------------------------------------
@@ -613,8 +623,7 @@ service cloud.firestore {
     match /missed_penalties/{penaltyId} {
       allow read: if isAdmin() || (signedIn() && resource.data.get('uid', '') == request.auth.uid);
       allow create: if isAdmin() && !exists(/databases/$(database)/documents/missed_penalties/$(penaltyId));
-      allow update: if false;
-      allow delete: if isAdmin();
+      allow update, delete: if isAdmin();
     }
 
     // ---------------------------------------------------------------
@@ -622,15 +631,15 @@ service cloud.firestore {
     // ---------------------------------------------------------------
 
     match /notifications/{notificationId} {
-      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid));
+      allow read: if isAdmin() || (signedIn() && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid));
       allow create: if isAdmin();
       allow delete: if isAdmin() || (
         isActive() &&
-        (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid)
+        (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid)
       );
       allow update: if isAdmin() || (
         isActive() &&
-        (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid) &&
+        (resource.data.get('uid', '') == request.auth.uid || resource.data.get('targetUid', '') == request.auth.uid || resource.data.get('targetUserId', '') == request.auth.uid) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
       );
     }

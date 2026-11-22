@@ -332,7 +332,10 @@ button:active {
   -webkit-overflow-scrolling: touch;
   position: relative;
   box-sizing: border-box;
-  contain: layout style;
+  contain: layout style paint;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
   padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(110px + env(safe-area-inset-bottom, 0px)) 16px;
   padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px));
   scrollbar-width: none;

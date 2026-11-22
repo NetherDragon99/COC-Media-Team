@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.1)
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.3)
  * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -52,7 +52,7 @@ function runWithScriptLock(label, fn, timeoutMs = 10000) {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.2.0",
+    version: "3.2.3",
     system: "CoC Media Unified Task & Attendance Backend Watchdog",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -740,11 +740,25 @@ function notifySessionWindowOpened(session, occ, allUsers) {
     const tokens = collectFcmTokensForUsers(eligibleMembers);
     const title = "Attendance Check-In Open! 🟢";
     const body = `"${session.title || 'Attendance Session'}" is now open for check-in. Check in early to earn bonus rewards!`;
+    const nowIso = new Date().toISOString();
 
     firestorePatch(`attendance_sessions/${session.id}`, {
       lastOpenNotifiedKey: occ.occurrenceKey,
-      updatedAt: new Date().toISOString()
+      updatedAt: nowIso
     }, ["lastOpenNotifiedKey", "updatedAt"]);
+
+    firestorePost("notifications_broadcast", {
+      title: title,
+      message: body,
+      body: body,
+      type: "attendance",
+      icon: "calendar",
+      targetType: "all",
+      badgeId: null,
+      readBy: [],
+      targetAction: { route: "attendance", itemId: session.id },
+      createdAt: nowIso
+    });
 
     if (tokens.length > 0) {
       sendFcmWebPush(tokens, title, body, CONFIG.PWA_URL + "#attendance");
@@ -775,6 +789,19 @@ function notifyTaskWindowOpened(task, win, allUsers) {
       lastOpenedOccurrenceKey: win.occurrenceKey,
       updatedAt: nowIso
     }, ["lastOpenNotifiedKey", "lastOpenedOccurrenceKey", "updatedAt"]);
+
+    firestorePost("notifications_broadcast", {
+      title: title,
+      message: body,
+      body: body,
+      type: "task",
+      icon: "clipboard",
+      targetType: "all",
+      badgeId: null,
+      readBy: [],
+      targetAction: { route: "tasks", itemId: task.id },
+      createdAt: nowIso
+    });
 
     if (tokens.length > 0) {
       sendFcmWebPush(tokens, title, body, CONFIG.PWA_URL + "#tasks");
@@ -931,11 +958,10 @@ function evaluateTaskOccurrenceInGas(task, occurrenceKey, startMs, nowMs) {
   }
 
   if (graceEndsAt && nowMs < graceEndsAt) {
-    const gracePenaltyPts = Math.max(0, Number(grace.penaltyPoints) || 0);
     const baseGracePts = grace.points != null ? Number(grace.points) : onTimePoints;
     return {
       state: "grace",
-      pointsForNow: Math.max(0, baseGracePts - gracePenaltyPts),
+      pointsForNow: Math.max(0, baseGracePts),
       inGrace: true,
       isEarlyBonus: false,
       isPermanent: false,
@@ -1051,7 +1077,7 @@ function evaluateTaskSubmissionTiming(task, nowMs = Date.now()) {
     const gracePenaltyPts = Math.max(0, Number(tiers.grace.penaltyPoints) || 0);
     const graceFineEgp = Math.max(0, Number(tiers.grace.fineAmountEGP) || 0);
     const baseGracePts = tiers.grace.points != null ? Number(tiers.grace.points) : tiers.onTimePoints;
-    const pointsAwarded = Math.max(0, baseGracePts - gracePenaltyPts);
+    const pointsAwarded = Math.max(0, baseGracePts);
     return {
       canSubmit: true,
       tier: "grace",
@@ -1152,7 +1178,7 @@ function handleProcessTaskSubmission(payload) {
   const occurrenceKey = (task.schedule && task.schedule.type === "once")
     ? "once"
     : (evalResult.occurrenceKey || payload.occurrenceKey || "once");
-  const subId = payload.submissionId || `${taskId}_${uid}_${occurrenceKey}`;
+  const subId = payload.submissionId || payload.subId || `${taskId}_${uid}_${occurrenceKey}`;
 
   const existingSub = firestoreGet(`submissions/${subId}`);
   if (existingSub && existingSub.ledgerSynced === true && !isAdminOverride) {
@@ -1363,7 +1389,8 @@ function closeTaskAndApplyPenalties(taskId, taskObj, occurrenceKey) {
       if (alreadyPenalizedUids.has(uid)) return;
 
       const penaltyDocId = `${taskId}_${uid}_${effOccKey}`;
-      const existingDoc = firestoreGet(`missed_penalties/${penaltyDocId}`);
+      const legacyPenaltyDocId = `${taskId}_${effOccKey}_${uid}`;
+      const existingDoc = firestoreGet(`missed_penalties/${penaltyDocId}`) || firestoreGet(`missed_penalties/${legacyPenaltyDocId}`);
       if (existingDoc) return;
 
       penalizedCount++;
@@ -1385,9 +1412,10 @@ function closeTaskAndApplyPenalties(taskId, taskObj, occurrenceKey) {
       });
 
       // B. Update member profile points, penalties & fines via canonical helper (Guardrail 3)
+      // Canonical Ledger Math: points tracks earned points only; penalties tracks deductions
       const freshUser = firestoreGet(`users/${uid}`) || member;
       applyCanonicalUserLedgerUpdate(uid, freshUser, {
-        pointsChange: -ptsPenalty,
+        pointsChange: 0,
         penaltyChange: ptsPenalty,
         fineChange: finePenalty,
         nowMs: nowMs,
@@ -1560,8 +1588,8 @@ function evaluateCheckInTiming(session, checkInMs, startMs) {
   const lateMinutes = Math.floor(lateTotalSec / 60);
   const lateSeconds = lateTotalSec % 60;
 
-  // Retroactive Grace Period: If gracePeriodMins > 0 and arrival <= gracePeriodMins, 0 penalty, on_time
-  if (gracePeriodMins > 0 && lateMinutes <= gracePeriodMins) {
+  // Exact on-time arrival OR Retroactive Grace Period: 0 penalty, on_time
+  if (lateTotalSec === 0 || (gracePeriodMins > 0 && lateMinutes <= gracePeriodMins)) {
     return {
       status: "on_time",
       earlyMinutes: 0,
@@ -1574,7 +1602,7 @@ function evaluateCheckInTiming(session, checkInMs, startMs) {
       fineEGP: 0,
       pointsDelta: 0,
       egpDelta: 0,
-      appliedTierLabel: `Grace Period (${lateMinutes}m)`
+      appliedTierLabel: lateTotalSec === 0 ? "On Time" : `Grace Period (${lateMinutes}m)`
     };
   }
 
@@ -1603,14 +1631,75 @@ function evaluateCheckInTiming(session, checkInMs, startMs) {
   }
 
   if (!matchedAfterBracket) {
-    const intervalMins = Math.max(1, Number(session.lateIntervalMinutes) || (session.pointsPenalty && session.pointsPenalty.stepSize) || 30);
-    const ptsPerInterval = Number(session.pointsPerInterval != null ? session.pointsPerInterval : (session.pointsPenalty && session.pointsPenalty.perStep) || 1);
-    const egpPerInterval = Number(session.finePerIntervalEGP != null ? session.finePerIntervalEGP : (session.finePenalty && session.finePenalty.perStep) || 5);
-    const maxPenaltyPts = Number(session.maxLatePenaltyPoints != null ? session.maxLatePenaltyPoints : (session.pointsPenalty && session.pointsPenalty.max) || (session.absencePenalty || 5));
+    // Helper matching frontend calculateConfiguredPenalty(cfg, delaySeconds)
+    const calcCfgPenalty = function (cfg, fallbackEnabled, fallbackUnit, fallbackStepSize, fallbackPerStep, fallbackMin, fallbackMax) {
+      const enabled = cfg && cfg.enabled !== undefined ? Boolean(cfg.enabled) : Boolean(fallbackEnabled);
+      if (!enabled || lateTotalSec <= 0) return 0;
+      const mode = (cfg && cfg.mode === "fixed") ? "fixed" : "stepped";
+      const minVal = Math.max(0, Number(cfg && cfg.min != null ? cfg.min : fallbackMin) || 0);
+      const rawMax = Number(cfg && cfg.max != null ? cfg.max : fallbackMax);
+      const maxVal = (!isNaN(rawMax) && rawMax > 0) ? Math.max(minVal, rawMax) : 999999;
 
-    const intervals = Math.ceil(Math.max(1, lateMinutes) / intervalMins);
-    penaltyPts = Math.min(maxPenaltyPts, intervals * ptsPerInterval);
-    fineEGP = intervals * egpPerInterval;
+      let raw = 0;
+      if (mode === "fixed") {
+        raw = Math.max(0, Number(cfg && cfg.fixed) || 0);
+      } else {
+        const unit = (cfg && cfg.stepUnit === "seconds") || fallbackUnit === "seconds" ? "seconds" : "minutes";
+        const stepSize = Math.max(1, Number(cfg && cfg.stepSize != null ? cfg.stepSize : fallbackStepSize) || 1);
+        const perStep = Math.max(0, Number(cfg && cfg.perStep != null ? cfg.perStep : fallbackPerStep) || 0);
+        const stepSeconds = unit === "seconds" ? stepSize : stepSize * 60;
+        const steps = Math.ceil(lateTotalSec / stepSeconds);
+        raw = steps * perStep;
+      }
+      if (raw < minVal) raw = minVal;
+      if (raw > maxVal) raw = maxVal;
+      return raw;
+    };
+
+    const legacyUnit = session.penaltyUnit === "seconds" ? "seconds" : "minutes";
+    const legacyStepSize = Number(session.stepDuration || session.lateIntervalMinutes) || 5;
+    const legacyPtsPerStep = Number(session.penaltyPerStep != null ? session.penaltyPerStep : session.pointsPerInterval) || 1;
+    const legacyMinPts = Number(session.minPenalty) || 0;
+    const legacyMaxPts = Number(session.maxPenalty != null ? session.maxPenalty : (session.maxLatePenaltyPoints != null ? session.maxLatePenaltyPoints : session.absencePenalty)) || 999999;
+
+    const ptsEnabledFallback = session.penaltyPointsEnabled !== undefined
+      ? Boolean(session.penaltyPointsEnabled)
+      : (session.latePenalty && session.latePenalty.enabled !== undefined ? Boolean(session.latePenalty.enabled) : true);
+    const finesEnabledFallback = session.penaltyFinesEnabled !== undefined
+      ? Boolean(session.penaltyFinesEnabled)
+      : Boolean(
+          (session.finePenalty && session.finePenalty.enabled) ||
+          (session.latePenalty && Number(session.latePenalty.fineAmountEGP) > 0) ||
+          Number(session.finePerIntervalEGP) > 0
+        );
+
+    if (session.latePenalty && !session.pointsPenalty && session.latePenalty.points != null && !session.stepDuration && !session.lateIntervalMinutes) {
+      penaltyPts = ptsEnabledFallback ? Math.max(0, Number(session.latePenalty.points) || 0) : 0;
+    } else {
+      penaltyPts = calcCfgPenalty(
+        session.pointsPenalty,
+        ptsEnabledFallback,
+        legacyUnit,
+        legacyStepSize,
+        legacyPtsPerStep,
+        legacyMinPts,
+        legacyMaxPts
+      );
+    }
+
+    if (session.latePenalty && !session.finePenalty && session.latePenalty.fineAmountEGP != null && !session.finePerIntervalEGP) {
+      fineEGP = finesEnabledFallback ? Math.max(0, Number(session.latePenalty.fineAmountEGP) || 0) : 0;
+    } else {
+      fineEGP = calcCfgPenalty(
+        session.finePenalty,
+        finesEnabledFallback,
+        legacyUnit,
+        legacyStepSize,
+        Number(session.finePerIntervalEGP) || 0,
+        0,
+        999999
+      );
+    }
   }
 
   return {
@@ -1736,15 +1825,17 @@ function handleProcessCheckIn(payload) {
   firestorePatch(`attendance_records/${logId}`, logPayload);
 
   // Synchronize member ledger via canonical helper (Guardrail 3)
+  // Canonical Ledger Math: points tracks positive earned points only; penalties tracks deductions
   const userDoc = firestoreGet(`users/${uid}`);
   if (userDoc) {
+    const earnedPts = pointsDelta > 0 ? pointsDelta : 0;
     const penaltyPts = pointsDelta < 0 ? Math.abs(pointsDelta) : Number(evalResult.penaltyPts) || 0;
     const bonusEGP = egpDelta > 0 ? egpDelta : 0;
     const penaltyEGP = egpDelta < 0 ? Math.abs(egpDelta) : Number(evalResult.fineEGP) || 0;
     const netFineChange = penaltyEGP - bonusEGP;
 
     applyCanonicalUserLedgerUpdate(uid, userDoc, {
-      pointsChange: pointsDelta,
+      pointsChange: earnedPts,
       penaltyChange: penaltyPts,
       fineChange: netFineChange,
       nowMs: nowMs,
@@ -1840,12 +1931,13 @@ function deleteAttendanceLogAndReverse(payload) {
     if (userDoc) {
       const nowMs = Date.now();
       const nowIso = new Date(nowMs).toISOString();
+      const bonusPts = pointsDelta > 0 ? pointsDelta : 0;
       const penaltyPts = pointsDelta < 0 ? Math.abs(pointsDelta) : 0;
       const bonusEGP = egpDelta > 0 ? egpDelta : 0;
       const penaltyEGP = egpDelta < 0 ? Math.abs(egpDelta) : 0;
 
       applyCanonicalUserLedgerUpdate(targetUid, userDoc, {
-        pointsChange: -pointsDelta,
+        pointsChange: -bonusPts,
         penaltyChange: -penaltyPts,
         fineChange: bonusEGP - penaltyEGP,
         nowMs: nowMs,
@@ -1957,9 +2049,10 @@ function updateAttendanceLogAndSyncLedger(payload) {
   firestorePatch(`attendance_records/${logId}`, patchData, mask);
 
   // Calculate deltas to adjust member ledger via canonical helper (Guardrail 3)
+  // Canonical Ledger Math: pointsDiff and penDiff are independent (never subtract penDiff from ptsDiff)
   const penDiff = newPenalty - oldPenalty;
   const fineDiff = newFine - oldFine;
-  const ptsDiff = (newPoints - oldPoints) - penDiff;
+  const ptsDiff = newPoints - oldPoints;
 
   if (targetUid && (penDiff !== 0 || fineDiff !== 0 || ptsDiff !== 0)) {
     const userDoc = firestoreGet(`users/${targetUid}`);
@@ -2108,9 +2201,10 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
       firestorePatch(`attendance_records/${logDocId}`, absentLogData);
 
       // B. Update member profile points, penalties & fines via canonical helper (Guardrail 3)
+      // Canonical Ledger Math: points tracks positive earned points only; penalties tracks deductions
       const freshUser = firestoreGet(`users/${uid}`) || member;
       applyCanonicalUserLedgerUpdate(uid, freshUser, {
-        pointsChange: -ptsAbsence,
+        pointsChange: 0,
         penaltyChange: ptsAbsence,
         fineChange: fineAbsence,
         nowMs: nowMs,
@@ -2559,10 +2653,12 @@ function isUserEligibleForSession(session, user) {
   }
 
   if (assignmentType === "by_badge") {
-    const userBadges = Array.isArray(user.badgeIds) ? user.badgeIds : (Array.isArray(user.badges) ? user.badges : []);
+    const rawIds = Array.isArray(user.badgeIds) ? user.badgeIds : [];
+    const rawObjs = Array.isArray(user.badges) ? user.badges.map(x => (x && typeof x === "object") ? x.id : x) : [];
+    const userBadgeSet = new Set(rawIds.concat(rawObjs).filter(Boolean).map(String));
     const bIds = Array.isArray(session.badgeIds) ? session.badgeIds : [];
     if (bIds.length === 0) return true;
-    return bIds.some(b => userBadges.includes(b));
+    return bIds.some(b => userBadgeSet.has(String(b)));
   }
 
   return true;
@@ -2791,11 +2887,27 @@ function hasMemberAttendanceOrExcuseForWindow(uid, sessionId, win, effOccKey, lo
   const activeStatuses = { early: true, on_time: true, late: true, present: true, excused: true };
   const canonicalId = `${sessionId}_${uid}_${effOccKey}`;
   const legacyId = `${sessionId}_${effOccKey}_${uid}`;
+  const onceId1 = `${sessionId}_${uid}_once`;
+  const onceId2 = `${sessionId}_once_${uid}`;
+
+  const matchesOccKey = function (rawKey, rawStartMs) {
+    if (!effOccKey || !rawKey || rawKey === "once" || effOccKey === "once") return true;
+    if (rawKey === effOccKey) return true;
+    if (typeof rawKey === "string" && rawKey.startsWith("occ_")) {
+      const ms = parseInt(rawKey.slice(4), 10);
+      if (!isNaN(ms) && ms > 0 && formatZonedDateKey(ms, CONFIG.TIMEZONE) === effOccKey) return true;
+    }
+    if (rawStartMs) {
+      const parsedMs = parseDateTimeToMs(rawStartMs);
+      if (parsedMs > 0 && formatZonedDateKey(parsedMs, CONFIG.TIMEZONE) === effOccKey) return true;
+    }
+    return false;
+  };
 
   const waiverMatch = (waivers || []).some(w => {
     const wUid = w.uid || w.userId;
     if (wUid !== uid) return false;
-    return !effOccKey || !w.occurrenceKey || w.occurrenceKey === effOccKey;
+    return matchesOccKey(w.occurrenceKey, w.selectedOccurrenceDateMs || w.occurrenceStart);
   });
   if (waiverMatch) return true;
 
@@ -2803,17 +2915,14 @@ function hasMemberAttendanceOrExcuseForWindow(uid, sessionId, win, effOccKey, lo
   return combined.some(rec => {
     if (!rec) return false;
     const st = String(rec.status || "").toLowerCase();
-    if (st && st !== "absent" && !activeStatuses[st] && st !== "") {
-      // Unknown non-absent status still counts as present/handled if it's for this user
-    }
     if (st === "absent") return false;
 
-    if (rec.id === canonicalId || rec.id === legacyId) return true;
+    if (rec.id === canonicalId || rec.id === legacyId || rec.id === onceId1 || rec.id === onceId2) return true;
 
     const rUid = rec.uid || rec.userId;
     if (rec.sessionId !== sessionId || rUid !== uid) return false;
 
-    if (effOccKey && (rec.occurrenceKey === effOccKey || rec.date === effOccKey || rec.sessionDate === effOccKey)) {
+    if (matchesOccKey(rec.occurrenceKey || rec.date || rec.sessionDate, rec.occurrenceStart || rec.checkedInAt || rec.timestamp)) {
       return true;
     }
 
