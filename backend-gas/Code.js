@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.3)
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.4)
  * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -49,10 +49,27 @@ function runWithScriptLock(label, fn, timeoutMs = 10000) {
 // -------------------------------------------------------------
 // HTTP ROUTER (WEBHOOK & HEALTH CHECK)
 // -------------------------------------------------------------
+function ensureWatchdogTriggersInstalled() {
+  try {
+    if (typeof PropertiesService !== "undefined" && PropertiesService) {
+      const props = PropertiesService.getScriptProperties();
+      const lastCheck = Number(props.getProperty("WATCHDOG_TRIGGER_CHECK_MS") || 0);
+      const nowMs = Date.now();
+      if (nowMs - lastCheck > 15 * 60 * 1000) {
+        props.setProperty("WATCHDOG_TRIGGER_CHECK_MS", String(nowMs));
+        setOneMinuteTriggerActive(true);
+      }
+    }
+  } catch (e) {
+    console.warn("[WatchdogTriggerCheck] Warning:", e);
+  }
+}
+
 function doGet(e) {
+  ensureWatchdogTriggersInstalled();
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.2.3",
+    version: "3.2.4",
     system: "CoC Media Unified Task & Attendance Backend Watchdog",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -61,6 +78,7 @@ function doGet(e) {
 
 function doPost(e) {
   try {
+    ensureWatchdogTriggersInstalled();
     const rawData = e && e.postData && e.postData.contents ? e.postData.contents : "{}";
     const payload = JSON.parse(rawData);
     const action = payload.action || "";
@@ -646,38 +664,47 @@ function syncAndEvaluateAll() {
         return;
       }
 
-      const occ = resolveSessionWindow(session, nowMs);
-      if (!occ) return;
+      const createdAtMs = parseDateTimeToMs(session.createdAt) || 0;
+      const closedKeysSet = new Set(Array.isArray(session.autoClosedKeys) ? session.autoClosedKeys : []);
+      if (session.lastAutoClosedKey) closedKeysSet.add(session.lastAutoClosedKey);
 
-      const startMs = occ.startMs;
-      const cutoffMs = occ.cutoffMs;
-      const openWindowMs = occ.openWindowMs;
-      const occurrenceKey = occ.occurrenceKey;
+      const sessionWindows = getSessionWindowsForWatchdog(session, nowMs);
+      sessionWindows.forEach(occ => {
+        if (!occ) return;
 
-      // 1. Check if session has passed cutoff -> Auto-Close & Apply Penalties
-      if (cutoffMs && nowMs >= cutoffMs) {
-        const closedKey = session.lastAutoClosedKey || "";
-        if (session.status !== "closed" && closedKey !== occurrenceKey) {
-          console.log(`[Watchdog] Session ${session.id} reached cutoff (${new Date(cutoffMs).toISOString()}). Closing...`);
-          closeSessionAndApplyPenalties(session.id, session, occurrenceKey);
+        const startMs = occ.startMs;
+        const cutoffMs = occ.cutoffMs;
+        const openWindowMs = occ.openWindowMs;
+        const occurrenceKey = occ.occurrenceKey;
+
+        // 1. Check if session has passed cutoff -> Auto-Close & Apply Penalties
+        if (cutoffMs && nowMs >= cutoffMs) {
+          if (createdAtMs > 0 && cutoffMs < createdAtMs - 60000) {
+            return;
+          }
+          if (session.status !== "closed" && !closedKeysSet.has(occurrenceKey)) {
+            console.log(`[Watchdog] Session ${session.id} (${occurrenceKey}) reached cutoff (${new Date(cutoffMs).toISOString()}). Closing...`);
+            closeSessionAndApplyPenalties(session.id, session, occurrenceKey);
+            closedKeysSet.add(occurrenceKey);
+          }
+          return;
         }
-        return;
-      }
 
-      // 2. Check if session is inside its early check-in opening window -> Send Opening Push once per occurrence
-      if (startMs && nowMs >= openWindowMs && nowMs <= cutoffMs) {
-        hasActiveOrUpcoming = true;
-        const notifiedKey = session.lastOpenNotifiedKey || "";
-        if (notifiedKey !== occurrenceKey) {
-          if (!allUsersCache) allUsersCache = fetchApprovedUsers();
-          notifySessionWindowOpened(session, occ, allUsersCache);
-        }
-      } else if (startMs) {
-        const preBufferMs = startMs - (CONFIG.PRE_SESSION_BUFFER_MINUTES * 60 * 1000);
-        if (nowMs >= preBufferMs && nowMs < cutoffMs) {
+        // 2. Check if session is inside its early check-in opening window -> Send Opening Push once per occurrence
+        if (startMs && nowMs >= openWindowMs && nowMs <= cutoffMs) {
           hasActiveOrUpcoming = true;
+          const notifiedKey = session.lastOpenNotifiedKey || "";
+          if (notifiedKey !== occurrenceKey) {
+            if (!allUsersCache) allUsersCache = fetchApprovedUsers();
+            notifySessionWindowOpened(session, occ, allUsersCache);
+          }
+        } else if (startMs) {
+          const preBufferMs = startMs - (CONFIG.PRE_SESSION_BUFFER_MINUTES * 60 * 1000);
+          if (nowMs >= preBufferMs && nowMs < cutoffMs) {
+            hasActiveOrUpcoming = true;
+          }
         }
-      }
+      });
     });
 
     // B. Evaluate Tasks
@@ -685,6 +712,11 @@ function syncAndEvaluateAll() {
       if (!task || task.archived || task.status === "archived" || task.active === false) {
         return;
       }
+
+      const createdAtMs = parseDateTimeToMs(task.createdAt) || 0;
+      const closedKeysSet = new Set(Array.isArray(task.autoClosedKeys) ? task.autoClosedKeys : []);
+      if (task.lastAutoClosedKey) closedKeysSet.add(task.lastAutoClosedKey);
+      if (task.lastClosedOccurrenceKey) closedKeysSet.add(task.lastClosedOccurrenceKey);
 
       const windowsToInspect = getTaskWindowsForWatchdog(task, nowMs);
       windowsToInspect.forEach(win => {
@@ -695,10 +727,13 @@ function syncAndEvaluateAll() {
 
         // 1. Check if task occurrence has passed deadline/grace cutoff -> Auto-Close & Apply Missed Task Penalties
         if (!win.isPermanent && cutoffMs && nowMs >= cutoffMs) {
-          const closedKey = task.lastAutoClosedKey || task.lastClosedOccurrenceKey || "";
-          if (closedKey !== occurrenceKey) {
+          if (createdAtMs > 0 && cutoffMs < createdAtMs - 60000) {
+            return;
+          }
+          if (!closedKeysSet.has(occurrenceKey)) {
             console.log(`[Watchdog] Task ${task.id} (${occurrenceKey}) reached cutoff (${new Date(cutoffMs).toISOString()}). Applying missed penalties...`);
             closeTaskAndApplyPenalties(task.id, task, occurrenceKey);
+            closedKeysSet.add(occurrenceKey);
           }
           return;
         }
@@ -1340,14 +1375,17 @@ function closeTaskAndApplyPenalties(taskId, taskObj, occurrenceKey) {
     const isRecurring = sched.type !== "once";
 
     // 1. Mark task occurrence closed in Firestore
+    const prevClosedKeys = Array.isArray(task.autoClosedKeys) ? task.autoClosedKeys : [];
+    const updatedClosedKeys = Array.from(new Set(prevClosedKeys.concat([task.lastAutoClosedKey, task.lastClosedOccurrenceKey, effOccKey]).filter(Boolean))).slice(-30);
     const taskPatch = {
       lastAutoClosedKey: effOccKey,
       lastClosedOccurrenceKey: effOccKey,
+      autoClosedKeys: updatedClosedKeys,
       closedAt: nowIso,
       closedBy: "system_watchdog",
       updatedAt: nowIso
     };
-    const taskMask = ["lastAutoClosedKey", "lastClosedOccurrenceKey", "closedAt", "closedBy", "updatedAt"];
+    const taskMask = ["lastAutoClosedKey", "lastClosedOccurrenceKey", "autoClosedKeys", "closedAt", "closedBy", "updatedAt"];
     firestorePatch(`tasks/${taskId}`, taskPatch, taskMask);
 
     const tiers = normalizeTaskTiersInGas(task);
@@ -2114,13 +2152,16 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
     const isRecurring = session.recurrence === "weekly" || session.type === "recurring" || (session.schedule && session.schedule.type && session.schedule.type !== "once");
 
     // 1. Mark session closed in Firestore (or record lastAutoClosedKey for recurring sessions)
+    const prevClosedKeys = Array.isArray(session.autoClosedKeys) ? session.autoClosedKeys : [];
+    const updatedClosedKeys = Array.from(new Set(prevClosedKeys.concat([session.lastAutoClosedKey, effOccKey]).filter(Boolean))).slice(-30);
     const sessionPatch = {
       lastAutoClosedKey: effOccKey,
+      autoClosedKeys: updatedClosedKeys,
       closedAt: nowIso,
       closedBy: "system_watchdog",
       updatedAt: nowIso
     };
-    const sessionMask = ["lastAutoClosedKey", "closedAt", "closedBy", "updatedAt"];
+    const sessionMask = ["lastAutoClosedKey", "autoClosedKeys", "closedAt", "closedBy", "updatedAt"];
     if (!isRecurring) {
       sessionPatch.status = "closed";
       sessionPatch.active = false;
@@ -2950,6 +2991,68 @@ function fetchMissedPenaltiesForTask(taskId) {
 function fetchApprovedWaiversForSession(sessionId) {
   const waivers = firestoreList("waivers", 150).concat(firestoreList("waiver_requests", 150));
   return waivers.filter(w => w.sessionId === sessionId && (w.status === "approved" || w.approved === true));
+}
+
+function buildSessionWindowFromStartMs(session, startMs) {
+  if (!session || !startMs || isNaN(startMs)) return null;
+  const earlyMins = Number(session.earlyWindowMinutes != null ? session.earlyWindowMinutes : (session.earlyCheckInMinutes != null ? session.earlyCheckInMinutes : 60));
+  const cutoffMins = Number(session.lateCutoffMinutes != null ? session.lateCutoffMinutes : (session.durationMinutes != null ? session.durationMinutes : 120));
+
+  let cutoffMs = startMs + cutoffMins * 60000;
+  if (session.endTime) {
+    const parsedEnd = new Date(session.endTime).getTime();
+    if (!isNaN(parsedEnd) && parsedEnd > startMs) {
+      cutoffMs = parsedEnd;
+    }
+  }
+
+  const openWindowMs = startMs - earlyMins * 60000;
+  const sched = normalizeScheduleObject(session.schedule || session);
+  const occurrenceKey = (sched.type && sched.type !== "once")
+    ? formatZonedDateKey(startMs, CONFIG.TIMEZONE)
+    : (session.date || formatZonedDateKey(startMs, CONFIG.TIMEZONE));
+
+  return {
+    startMs: startMs,
+    cutoffMs: cutoffMs,
+    openWindowMs: openWindowMs,
+    occurrenceKey: occurrenceKey
+  };
+}
+
+function getSessionWindowsForWatchdog(session, nowMs = Date.now()) {
+  if (!session) return [];
+  const sched = normalizeScheduleObject(session.schedule || session);
+  if (!sched.type || sched.type === "once") {
+    const single = resolveSessionWindow(session, nowMs);
+    return single ? [single] : [];
+  }
+  const baseStartMs = parseDateTimeToMs(sched.startDateTime);
+  const fromMs = Math.max(baseStartMs, nowMs - 35 * 86400000);
+  const toMs = nowMs + 7 * 86400000;
+  const occs = getOccurrencesInGas(sched, fromMs, toMs);
+  if (occs.length === 0) {
+    const single = resolveSessionWindow(session, nowMs);
+    return single ? [single] : [];
+  }
+  const pastOccs = occs.filter(o => o <= nowMs);
+  const windows = [];
+  if (pastOccs.length >= 2) {
+    const prevWin = buildSessionWindowFromStartMs(session, pastOccs[pastOccs.length - 2]);
+    if (prevWin) windows.push(prevWin);
+  }
+  if (pastOccs.length >= 1) {
+    const currWin = buildSessionWindowFromStartMs(session, pastOccs[pastOccs.length - 1]);
+    if (currWin) windows.push(currWin);
+  }
+  const upcomingIdx = occs.findIndex(o => o > nowMs);
+  if (upcomingIdx !== -1) {
+    const nextWin = buildSessionWindowFromStartMs(session, occs[upcomingIdx]);
+    if (nextWin && !windows.some(w => w.occurrenceKey === nextWin.occurrenceKey)) {
+      windows.push(nextWin);
+    }
+  }
+  return windows;
 }
 
 function resolveSessionWindow(session, nowMs) {

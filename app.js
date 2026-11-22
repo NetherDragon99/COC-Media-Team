@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.3';
+export const APP_VERSION = '3.2.4';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -11434,6 +11434,15 @@ function initFirestoreListeners() {
     }, (err) => console.warn('Whats new listener:', err));
     listeners.add('settings_whats_new', unsubWhatsNew);
   } catch (e) { console.warn(e); }
+
+  if (typeof ticker !== 'undefined' && ticker && typeof ticker.subscribe === 'function') {
+    ticker.subscribe('auto_penalty_watchdog', () => {
+      runAutoPenaltyWatchdog();
+    }, 15000);
+  }
+  setTimeout(() => {
+    runAutoPenaltyWatchdog();
+  }, 1500);
 }
 
 function populateCategoryFilters() {
@@ -18939,6 +18948,20 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
           };
         }
 
+        if (isAdminUser && isClosed && unprocessedAbsentList.length > 0) {
+          const sessCreatedAtMs = parseDateTimeToMs(session.createdAt) || 0;
+          const canAutoPenalizeRoster = !sessCreatedAtMs || occCutoffMs >= sessCreatedAtMs - 60000;
+          const rosterLockKey = `roster_auto_${session.id}_${selectedOccKey}`;
+          if (canAutoPenalizeRoster && !_autoPenaltyInFlight.has(rosterLockKey)) {
+            _autoPenaltyInFlight.add(rosterLockKey);
+            setTimeout(() => {
+              penalizeAbsentMembers([...unprocessedAbsentList], penalizeAllBtn).finally(() => {
+                _autoPenaltyInFlight.delete(rosterLockKey);
+              });
+            }, 50);
+          }
+        }
+
         tabContent.querySelectorAll('.btn-roster-penalize-single').forEach(btn => {
           btn.onclick = (e) => {
             e.stopPropagation();
@@ -19244,17 +19267,31 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
 
     let processedCount = 0;
     try {
+      callGasBackend({
+        action: 'MANUAL_CLOSE_SESSION',
+        sessionId: session.id,
+        occurrenceKey: occKey
+      }).catch(() => {});
+
       for (const m of targetMembers) {
-        const deterministicId = `${session.id}_${occKey}_${m.uid}`;
+        const deterministicId = `${session.id}_${m.uid}_${occKey}`;
+        const legacyId = `${session.id}_${occKey}_${m.uid}`;
+        if (mergedRecordsMap.has(deterministicId) || mergedRecordsMap.has(legacyId)) {
+          continue;
+        }
         const batch = writeBatch(db);
         const logData = {
+          id: deterministicId,
           sessionId: session.id,
           sessionTitle: session.title,
           uid: m.uid,
+          userId: m.uid,
           userName: m.displayName || m.name || 'Member',
+          displayName: m.displayName || m.name || 'Member',
           userAvatar: m.avatarUrl || m.photoURL || '',
           occurrenceKey: occKey,
           occurrenceDate: occKey,
+          sessionDate: occKey,
           occurrenceStart: serverTimestamp(),
           checkedInAt: serverTimestamp(),
           checkInTimestamp: serverTimestamp(),
@@ -19266,23 +19303,32 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
           fineEGP: fineAbsenceDef,
           pointsDelta,
           egpDelta,
+          appliedTierLabel: 'Absent (Auto-Close)',
           ledgerSynced: true,
-          processedBy: state.user?.uid || 'admin'
+          processedBy: state.user?.uid || 'system_watchdog'
         };
 
         batch.set(doc(db, 'attendance_logs', deterministicId), logData);
         batch.set(doc(db, 'attendance_records', deterministicId), logData);
 
-        const userUpdateObj = { updatedAt: serverTimestamp(), lastOpId: deterministicId };
-        if (pointsDelta !== 0) {
-          const targetUserDoc = usersMap.get(m.uid) || m || {};
-          Object.assign(userUpdateObj, buildPointsUpdate(targetUserDoc, pointsDelta));
+        const targetUserDoc = usersMap.get(m.uid) || m || {};
+        const curPts = Math.max(0, Number(targetUserDoc.points) || 0);
+        const curPen = Math.max(0, Number(targetUserDoc.penalties) || 0);
+        const userUpdateObj = {
+          updatedAt: serverTimestamp(),
+          lastOpId: deterministicId,
+          netPts: Math.max(0, curPts - (curPen + penaltyPtsDef))
+        };
+        if (penaltyPtsDef > 0) {
           userUpdateObj.penalties = increment(penaltyPtsDef);
+          userUpdateObj.penaltyPoints = increment(penaltyPtsDef);
+          userUpdateObj.totalPenalties = increment(penaltyPtsDef);
         }
         if (fineAbsenceDef > 0) {
           userUpdateObj.finesDue = increment(fineAbsenceDef);
           userUpdateObj.fines = increment(fineAbsenceDef);
           batch.set(doc(db, 'users_private', m.uid), {
+            finesDue: increment(fineAbsenceDef),
             finesEGP: increment(fineAbsenceDef),
             updatedAt: serverTimestamp()
           }, { merge: true });
@@ -19659,6 +19705,351 @@ function getFilteredAdminSubmissions() {
   });
 }
 
+const _autoPenaltyInFlight = new Set();
+
+async function autoApplyMissedTaskPenalties(targetItem, silent = false) {
+  if (!targetItem || !targetItem.task || !Array.isArray(targetItem.missedMembers) || targetItem.missedMembers.length === 0) return;
+  const lockKey = `task_${targetItem.task.id}_${targetItem.occurrenceKey}`;
+  if (_autoPenaltyInFlight.has(lockKey)) return;
+  _autoPenaltyInFlight.add(lockKey);
+
+  try {
+    const gasRes = await callGasBackend({
+      action: 'MANUAL_CLOSE_TASK',
+      taskId: targetItem.task.id,
+      occurrenceKey: targetItem.occurrenceKey
+    });
+
+    const isAdmin = isCurrentUserAdmin();
+    const needsClientBatch = isAdmin && (
+      gasRes?.fallbackRequired ||
+      gasRes?.sent_opaque ||
+      gasRes?.status === 'skipped' ||
+      gasRes?.status === 'sent_nonblocking' ||
+      gasRes?.ok === false
+    );
+
+    if (needsClientBatch && db) {
+      const batch = writeBatch(db);
+      const processedDocIds = [];
+      const fineEGP = Math.max(0, Number(targetItem.fineEGP ?? targetItem.task.missedPenalty?.fineAmountEGP ?? targetItem.task.missedPenalty?.fineEGP) || 0);
+
+      for (const member of targetItem.missedMembers) {
+        const lockDocId = `${targetItem.task.id}_${member.uid}_${targetItem.occurrenceKey}`;
+        const legacyLockId = `${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`;
+        if (state.appliedMissedPenalties?.has(lockDocId) || state.appliedMissedPenalties?.has(legacyLockId)) {
+          continue;
+        }
+
+        const lockDocRef = doc(db, 'missed_penalties', lockDocId);
+        batch.set(lockDocRef, {
+          id: lockDocId,
+          taskId: targetItem.task.id,
+          taskTitle: targetItem.task.title,
+          occurrenceKey: targetItem.occurrenceKey,
+          uid: member.uid,
+          userId: member.uid,
+          userName: member.displayName || member.name || 'Member',
+          penaltyPoints: targetItem.penaltyPoints,
+          fineEGP,
+          adminUid: state.user?.uid || 'system_watchdog',
+          appliedBy: 'system_watchdog',
+          createdAt: serverTimestamp()
+        });
+
+        const curPts = Math.max(0, Number(member.points) || 0);
+        const curPen = Math.max(0, Number(member.penalties) || 0);
+        const userUpdate = {
+          penalties: increment(targetItem.penaltyPoints),
+          penaltyPoints: increment(targetItem.penaltyPoints),
+          totalPenalties: increment(targetItem.penaltyPoints),
+          netPts: Math.max(0, curPts - (curPen + targetItem.penaltyPoints)),
+          updatedAt: serverTimestamp()
+        };
+        if (fineEGP > 0) {
+          userUpdate.finesDue = increment(fineEGP);
+          userUpdate.fines = increment(fineEGP);
+          batch.set(doc(db, 'users_private', member.uid), {
+            finesDue: increment(fineEGP),
+            finesEGP: increment(fineEGP),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
+        batch.update(doc(db, 'users', member.uid), userUpdate);
+
+        const txRef = doc(collection(db, 'users', member.uid, 'transactions'));
+        batch.set(txRef, {
+          type: 'penalty',
+          category: 'penalty',
+          amount: targetItem.penaltyPoints,
+          pointsDelta: -targetItem.penaltyPoints,
+          egpDelta: -fineEGP,
+          reason: `Missed task penalty: ${targetItem.task.title} (${targetItem.occurrenceKey})`,
+          adminUid: state.user?.uid || 'system_watchdog',
+          adminName: 'Auto Watchdog',
+          createdAt: serverTimestamp()
+        });
+
+        createNotification(batch, {
+          uid: member.uid,
+          title: 'Missed Task Penalty',
+          message: `A penalty of ${targetItem.penaltyPoints} points${fineEGP > 0 ? ` and ${fineEGP} EGP` : ''} was automatically recorded for missing "${targetItem.task.title}".`,
+          type: 'task',
+          refId: lockDocId
+        });
+
+        processedDocIds.push(lockDocId);
+        processedDocIds.push(legacyLockId);
+      }
+
+      if (processedDocIds.length > 0) {
+        await batch.commit();
+        if (!state.appliedMissedPenalties) state.appliedMissedPenalties = new Set();
+        processedDocIds.forEach(id => state.appliedMissedPenalties.add(id));
+      }
+    } else if (gasRes && gasRes.ok !== false) {
+      if (!state.appliedMissedPenalties) state.appliedMissedPenalties = new Set();
+      targetItem.missedMembers.forEach(member => {
+        state.appliedMissedPenalties.add(`${targetItem.task.id}_${member.uid}_${targetItem.occurrenceKey}`);
+        state.appliedMissedPenalties.add(`${targetItem.task.id}_${targetItem.occurrenceKey}_${member.uid}`);
+      });
+    }
+
+    if (!silent) {
+      toast(`Auto-applied missed penalties for "${targetItem.task.title}"`, 'info');
+    }
+    if (isCurrentUserAdmin()) {
+      renderAdminMissedTasks();
+    }
+  } catch (err) {
+    console.warn('[AutoPenalty] Missed task penalty warning:', err);
+  } finally {
+    _autoPenaltyInFlight.delete(lockKey);
+  }
+}
+
+async function runAutoPenaltyWatchdog() {
+  if (!db || !state.user || usersMap.size === 0) return;
+  const nowMs = parseDateTimeToMs(serverNow());
+  if (!nowMs) return;
+
+  // 1. Auto-enforce expired Tasks
+  const candidateTasks = (state.tasks || []).filter(t => t && t.active !== false && !t.archived && t.missedPenalty?.enabled && !t.isPermanent);
+  for (const task of candidateTasks) {
+    const win = getTaskWindow(task, nowMs);
+    if (!win || !win.closesAt) continue;
+    const graceMs = (task.tieredRewards?.enabled ? (Number(task.tieredRewards.graceMinutes) || 120) : 0) * 60000;
+    const deadlineWithGrace = win.graceEndsAt || (win.closesAt + graceMs);
+    if (nowMs <= deadlineWithGrace) continue;
+
+    const createdAtMs = parseDateTimeToMs(task.createdAt) || 0;
+    if (createdAtMs > 0 && deadlineWithGrace < createdAtMs - 60000) continue;
+
+    const occurrenceKey = win.occurrenceKey || 'once';
+    let targets = [];
+    if (Array.isArray(task.assignedUids) && task.assignedUids.length > 0) {
+      targets = task.assignedUids.map(uid => usersMap.get(uid)).filter(m => m && !m.disabled && !m.blocked);
+    } else {
+      targets = Array.from(usersMap.values()).filter(m => m && m.role !== 'archived' && !m.archived && !m.disabled && !m.blocked);
+    }
+    if (Array.isArray(task.excludedUids) && task.excludedUids.length > 0) {
+      targets = targets.filter(m => !task.excludedUids.includes(m.uid));
+    }
+
+    const missedMembers = [];
+    for (const member of targets) {
+      const lockDocId1 = `${task.id}_${occurrenceKey}_${member.uid}`;
+      const lockDocId2 = `${task.id}_${member.uid}_${occurrenceKey}`;
+      if (state.appliedMissedPenalties?.has(lockDocId1) || state.appliedMissedPenalties?.has(lockDocId2)) continue;
+
+      const hasSubmitted = (state.submissions || []).some(s =>
+        s.taskId === task.id &&
+        (task.schedule?.type === 'once' || s.occurrenceKey === 'once' || s.occurrenceKey === occurrenceKey) &&
+        (s.uid === member.uid || s.userId === member.uid)
+      );
+      if (!hasSubmitted) missedMembers.push(member);
+    }
+
+    if (missedMembers.length > 0) {
+      autoApplyMissedTaskPenalties({
+        task,
+        occurrenceKey,
+        missedMembers,
+        penaltyPoints: Number(task.missedPenalty.points) || 5,
+        fineEGP: Number(task.missedPenalty.fineAmountEGP || task.missedPenalty.fineEGP) || 0
+      }, true);
+    }
+  }
+
+  // 2. Auto-enforce expired Attendance Sessions
+  const candidateSessions = (state.attendanceSessions || []).filter(s => s && s.active !== false && !s.archived && s.status !== 'archived');
+  for (const rawSess of candidateSessions) {
+    const session = normalizeSession(rawSess);
+    const occ = resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs);
+    if (!occ || !occ.start) continue;
+    const occStartMs = parseDateTimeToMs(occ.start);
+    const occCutoffMs = occStartMs + (Number(session.lateCutoffMinutes) || 120) * 60000;
+    if (nowMs <= occCutoffMs) continue;
+
+    const createdAtMs = parseDateTimeToMs(session.createdAt) || 0;
+    if (createdAtMs > 0 && occCutoffMs < createdAtMs - 60000) continue;
+
+    const occKey = occ.key || formatZonedDateKey(occStartMs, APP_TIMEZONE);
+    const occDateKey = formatZonedDateKey(occStartMs, APP_TIMEZONE);
+    const lockKey = `sess_${session.id}_${occKey}`;
+    if (_autoPenaltyInFlight.has(lockKey)) continue;
+
+    const allActiveMembers = Array.from(usersMap.values()).filter(m => m && !m.disabled && !m.blocked && !m.archived);
+    const eligibleMembers = allActiveMembers.filter(m => isUserEligibleForSession(session, m));
+
+    const allLogs = [...(state.attendanceLogs || []), ...(state.attendanceRecords || [])];
+    const allWaivers = state.waiverRequests || [];
+
+    const absentMembers = eligibleMembers.filter(m => {
+      const hasLog = allLogs.some(l => {
+        if (!l || l.sessionId !== session.id) return false;
+        if ((l.uid || l.userId) !== m.uid) return false;
+        return matchesOccurrence(l, occKey, occStartMs, session) || l.occurrenceKey === occDateKey;
+      });
+      if (hasLog) return false;
+
+      const hasApprovedWaiver = allWaivers.some(w => {
+        if (!w || w.sessionId !== session.id || w.status !== 'approved') return false;
+        if ((w.uid || w.userId) !== m.uid) return false;
+        if (!w.occurrenceKey || w.occurrenceKey === 'once' || w.occurrenceKey === occKey || w.occurrenceKey === occDateKey) return true;
+        if (w.occurrenceKey === `occ_${occStartMs}`) return true;
+        const wMs = parseDateTimeToMs(w.occurrenceStart || w.selectedOccurrenceDateMs);
+        return Boolean(wMs && formatZonedDateKey(wMs, APP_TIMEZONE) === occDateKey);
+      });
+      return !hasApprovedWaiver;
+    });
+
+    if (absentMembers.length === 0) continue;
+
+    _autoPenaltyInFlight.add(lockKey);
+    (async () => {
+      try {
+        const gasRes = await callGasBackend({
+          action: 'MANUAL_CLOSE_SESSION',
+          sessionId: session.id,
+          occurrenceKey: occKey
+        });
+
+        const isAdmin = isCurrentUserAdmin();
+        const needsClientFallback = isAdmin && (
+          gasRes?.fallbackRequired ||
+          gasRes?.sent_opaque ||
+          gasRes?.status === 'skipped' ||
+          gasRes?.status === 'sent_nonblocking' ||
+          gasRes?.ok === false
+        );
+
+        if (needsClientFallback && db) {
+          const penaltyPtsDef = Number(session.pointsPenalty?.absence ?? session.absencePenalty ?? session.maxPenalty ?? 5);
+          const fineAbsenceDef = Number(session.finePenalty?.absence ?? session.absenceFineEGP ?? 0);
+          const pointsDelta = penaltyPtsDef > 0 ? -penaltyPtsDef : 0;
+          const egpDelta = fineAbsenceDef > 0 ? -fineAbsenceDef : 0;
+
+          for (const m of absentMembers) {
+            const deterministicId = `${session.id}_${m.uid}_${occKey}`;
+            const batch = writeBatch(db);
+            const logData = {
+              id: deterministicId,
+              sessionId: session.id,
+              sessionTitle: session.title,
+              uid: m.uid,
+              userId: m.uid,
+              userName: m.displayName || m.name || 'Member',
+              displayName: m.displayName || m.name || 'Member',
+              userAvatar: m.avatarUrl || m.photoURL || '',
+              occurrenceKey: occKey,
+              occurrenceDate: occDateKey,
+              sessionDate: occDateKey,
+              occurrenceStart: Timestamp.fromMillis(occStartMs),
+              checkedInAt: serverTimestamp(),
+              checkInTimestamp: serverTimestamp(),
+              status: 'absent',
+              earlyMinutes: 0,
+              lateMinutes: 0,
+              lateSeconds: 0,
+              penalty: penaltyPtsDef,
+              fineEGP: fineAbsenceDef,
+              pointsDelta,
+              egpDelta,
+              appliedTierLabel: 'Absent (Auto-Close)',
+              ledgerSynced: true,
+              processedBy: 'system_watchdog'
+            };
+
+            batch.set(doc(db, 'attendance_logs', deterministicId), logData);
+            batch.set(doc(db, 'attendance_records', deterministicId), logData);
+
+            const curPts = Math.max(0, Number(m.points) || 0);
+            const curPen = Math.max(0, Number(m.penalties) || 0);
+            const userUpdateObj = {
+              updatedAt: serverTimestamp(),
+              lastOpId: deterministicId,
+              netPts: Math.max(0, curPts - (curPen + penaltyPtsDef))
+            };
+            if (penaltyPtsDef > 0) {
+              userUpdateObj.penalties = increment(penaltyPtsDef);
+              userUpdateObj.penaltyPoints = increment(penaltyPtsDef);
+              userUpdateObj.totalPenalties = increment(penaltyPtsDef);
+            }
+            if (fineAbsenceDef > 0) {
+              userUpdateObj.finesDue = increment(fineAbsenceDef);
+              userUpdateObj.fines = increment(fineAbsenceDef);
+              batch.set(doc(db, 'users_private', m.uid), {
+                finesDue: increment(fineAbsenceDef),
+                finesEGP: increment(fineAbsenceDef),
+                updatedAt: serverTimestamp()
+              }, { merge: true });
+            }
+            batch.update(doc(db, 'users', m.uid), userUpdateObj);
+
+            if (pointsDelta !== 0 || egpDelta !== 0) {
+              batch.set(doc(collection(db, 'adjustments'), `att_${deterministicId}`), {
+                uid: m.uid,
+                targetUid: m.uid,
+                userName: m.displayName || m.name || 'Member',
+                type: 'penalty',
+                pointsDelta,
+                egpDelta,
+                amountEGP: egpDelta,
+                reason: `Absent: ${session.title} (${occKey})`,
+                source: 'attendance_absence',
+                sessionId: session.id,
+                logId: deterministicId,
+                createdAt: serverTimestamp(),
+                timestamp: serverTimestamp()
+              });
+            }
+
+            createNotification(batch, {
+              uid: m.uid,
+              title: 'Absence Penalty Recorded',
+              message: `Unexcused absence automatically recorded for "${session.title}" (${penaltyPtsDef > 0 ? '-' + penaltyPtsDef + ' pts' : ''}${fineAbsenceDef > 0 ? ' -' + fineAbsenceDef + ' EGP' : ''}).`,
+              type: 'attendance',
+              targetAction: { route: 'attendance' }
+            });
+
+            await batch.commit();
+            state.attendanceLogs = [...(state.attendanceLogs || []), normalizeAttendanceLog(logData)];
+          }
+          hydrateSessionCardStats(session.id);
+          if (typeof window.refreshCurrentRosterView === 'function') {
+            window.refreshCurrentRosterView();
+          }
+        }
+      } catch (err) {
+        console.warn('[AutoPenalty] Session auto-close warning:', err);
+      } finally {
+        _autoPenaltyInFlight.delete(lockKey);
+      }
+    })();
+  }
+}
+
 async function renderAdminMissedTasks() {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
@@ -19678,17 +20069,23 @@ async function renderAdminMissedTasks() {
     if (!win || !win.closesAt) continue;
 
     const graceMs = (task.tieredRewards?.enabled ? (Number(task.tieredRewards.graceMinutes) || 120) : 0) * 60000;
-    const deadlineWithGrace = win.closesAt + graceMs;
+    const deadlineWithGrace = win.graceEndsAt || (win.closesAt + graceMs);
 
     if (nowMs <= deadlineWithGrace) continue;
+
+    const createdAtMs = parseDateTimeToMs(task.createdAt) || 0;
+    if (createdAtMs > 0 && deadlineWithGrace < createdAtMs - 60000) continue;
 
     const occurrenceKey = win.occurrenceKey || 'once';
 
     let targets = [];
     if (Array.isArray(task.assignedUids) && task.assignedUids.length > 0) {
-      targets = task.assignedUids.map(uid => usersMap.get(uid)).filter(Boolean);
+      targets = task.assignedUids.map(uid => usersMap.get(uid)).filter(m => m && !m.disabled && !m.blocked);
     } else {
-      targets = Array.from(usersMap.values()).filter(m => m.role !== 'archived' && !m.archived);
+      targets = Array.from(usersMap.values()).filter(m => m && m.role !== 'archived' && !m.archived && !m.disabled && !m.blocked);
+    }
+    if (Array.isArray(task.excludedUids) && task.excludedUids.length > 0) {
+      targets = targets.filter(m => !task.excludedUids.includes(m.uid));
     }
 
     const missedMembers = [];
@@ -19709,12 +20106,15 @@ async function renderAdminMissedTasks() {
     }
 
     if (missedMembers.length > 0) {
-      missedTasksList.push({
+      const itemObj = {
         task,
         occurrenceKey,
         missedMembers,
-        penaltyPoints: Number(task.missedPenalty.points) || 5
-      });
+        penaltyPoints: Number(task.missedPenalty.points) || 5,
+        fineEGP: Number(task.missedPenalty.fineAmountEGP || task.missedPenalty.fineEGP) || 0
+      };
+      missedTasksList.push(itemObj);
+      autoApplyMissedTaskPenalties(itemObj, true);
     }
   }
 
@@ -20569,41 +20969,75 @@ function renderAdminWaivers() {
       });
 
       if (waiver.sessionId && waiver.occurrenceKey && waiver.uid) {
-        const logId = `${waiver.sessionId}_${waiver.occurrenceKey}_${waiver.uid}`;
+        const wStartMs = parseDateTimeToMs(waiver.occurrenceStart || waiver.selectedOccurrenceDateMs) || (typeof waiver.occurrenceKey === 'string' && waiver.occurrenceKey.startsWith('occ_') ? parseInt(waiver.occurrenceKey.slice(4), 10) : 0);
+        const wDateKey = wStartMs > 0 ? formatZonedDateKey(wStartMs, APP_TIMEZONE) : waiver.occurrenceKey;
+        const matchesWaiverLog = (l) => {
+          if (!l || (l.uid || l.userId) !== waiver.uid || l.sessionId !== waiver.sessionId) return false;
+          if (l.occurrenceKey === waiver.occurrenceKey || l.occurrenceKey === wDateKey || l.occurrenceKey === 'once') return true;
+          const lMs = parseDateTimeToMs(l.occurrenceStart || l.checkedInAt || l.timestamp);
+          return Boolean(lMs > 0 && wDateKey && formatZonedDateKey(lMs, APP_TIMEZONE) === wDateKey);
+        };
+        const existingLog = (state.attendanceLogs || []).find(matchesWaiverLog);
+        const effOccKey = existingLog?.occurrenceKey || wDateKey || waiver.occurrenceKey;
+        const logId = existingLog?.id || `${waiver.sessionId}_${waiver.uid}_${effOccKey}`;
         const logRef = doc(db, 'attendance_logs', logId);
+        const recRef = doc(db, 'attendance_records', logId);
 
         if (newStatus === 'approved') {
-          const existingLog = (state.attendanceLogs || []).find(l => l.uid === waiver.uid && l.sessionId === waiver.sessionId && l.occurrenceKey === waiver.occurrenceKey);
-          if (existingLog && existingLog.penalty > 0) {
-            batch.update(doc(db, 'users', waiver.uid), {
-              penalties: increment(-existingLog.penalty),
+          if (existingLog && (Number(existingLog.penalty) > 0 || Number(existingLog.fineEGP) > 0)) {
+            const penRefund = Math.max(0, Number(existingLog.penalty) || 0);
+            const fineRefund = Math.max(0, Number(existingLog.fineEGP) || 0);
+            const userObj = usersMap.get(waiver.uid) || {};
+            const curPts = Math.max(0, Number(userObj.points) || 0);
+            const curPen = Math.max(0, Number(userObj.penalties) || 0);
+            const userRefundUpdate = {
+              netPts: Math.max(0, curPts - Math.max(0, curPen - penRefund)),
               updatedAt: serverTimestamp()
-            });
+            };
+            if (penRefund > 0) {
+              userRefundUpdate.penalties = increment(-penRefund);
+              userRefundUpdate.penaltyPoints = increment(-penRefund);
+              userRefundUpdate.totalPenalties = increment(-penRefund);
+            }
+            if (fineRefund > 0) {
+              userRefundUpdate.finesDue = increment(-fineRefund);
+              userRefundUpdate.fines = increment(-fineRefund);
+              batch.set(doc(db, 'users_private', waiver.uid), {
+                finesDue: increment(-fineRefund),
+                finesEGP: increment(-fineRefund),
+                updatedAt: serverTimestamp()
+              }, { merge: true });
+            }
+            batch.update(doc(db, 'users', waiver.uid), userRefundUpdate);
           }
-          if (existingLog && existingLog.fineEGP > 0) {
-            batch.set(doc(db, 'users_private', waiver.uid), {
-              finesEGP: increment(-existingLog.fineEGP),
-              updatedAt: serverTimestamp()
-            }, { merge: true });
-          }
-          batch.set(logRef, {
+          const excusedPayload = {
+            id: logId,
             sessionId: waiver.sessionId,
             sessionTitle: waiver.sessionTitle || '',
             uid: waiver.uid,
+            userId: waiver.uid,
             userName: waiver.userName || '',
             userAvatar: waiver.userAvatar || '',
-            occurrenceKey: waiver.occurrenceKey,
+            occurrenceKey: effOccKey,
             status: 'excused',
             excused: true,
             penalty: 0,
             fineEGP: 0,
+            pointsDelta: 0,
+            egpDelta: 0,
             excusedAt: serverTimestamp(),
             adminNote: adminNote || '',
             resolvedBy: state.user.uid
-          }, { merge: true });
+          };
+          batch.set(logRef, excusedPayload, { merge: true });
+          batch.set(recRef, excusedPayload, { merge: true });
         } else {
-
           batch.set(logRef, {
+            status: 'unexcused',
+            excused: false,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+          batch.set(recRef, {
             status: 'unexcused',
             excused: false,
             updatedAt: serverTimestamp()
