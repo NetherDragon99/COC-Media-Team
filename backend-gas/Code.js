@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.4)
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.5)
  * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
@@ -9,7 +9,7 @@ const CONFIG = {
   PRE_SESSION_BUFFER_MINUTES: 15,
   MAX_DAILY_AUTO_CLOSE_CHECK: 50,
   TIMEZONE: "Africa/Cairo",
-  PWA_URL: "https://stevenmario.github.io/COC-Media-Team/"
+  PWA_URL: "https://netherdragon99.github.io/COC-Media-Team/"
 };
 
 let _scriptLockHeld = false;
@@ -69,7 +69,7 @@ function doGet(e) {
   ensureWatchdogTriggersInstalled();
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.2.4",
+    version: "3.2.5",
     system: "CoC Media Unified Task & Attendance Backend Watchdog",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -677,8 +677,11 @@ function syncAndEvaluateAll() {
         const openWindowMs = occ.openWindowMs;
         const occurrenceKey = occ.occurrenceKey;
 
-        // 1. Check if session has passed cutoff -> Auto-Close & Apply Penalties
+        // 1. Check if session has passed cutoff -> Auto-Close & Apply Penalties (only for recently expired windows within last 2 hours)
         if (cutoffMs && nowMs >= cutoffMs) {
+          if (nowMs - cutoffMs > 2 * 3600 * 1000) {
+            return;
+          }
           if (createdAtMs > 0 && cutoffMs < createdAtMs - 60000) {
             return;
           }
@@ -690,11 +693,11 @@ function syncAndEvaluateAll() {
           return;
         }
 
-        // 2. Check if session is inside its early check-in opening window -> Send Opening Push once per occurrence
+        // 2. Check if session is inside its early check-in opening window -> Send Opening Push once per occurrence (only within 30 mins of open)
         if (startMs && nowMs >= openWindowMs && nowMs <= cutoffMs) {
           hasActiveOrUpcoming = true;
           const notifiedKey = session.lastOpenNotifiedKey || "";
-          if (notifiedKey !== occurrenceKey) {
+          if (notifiedKey !== occurrenceKey && (nowMs - openWindowMs <= 30 * 60 * 1000)) {
             if (!allUsersCache) allUsersCache = fetchApprovedUsers();
             notifySessionWindowOpened(session, occ, allUsersCache);
           }
@@ -725,8 +728,11 @@ function syncAndEvaluateAll() {
         const cutoffMs = win.cutoffMs;
         const occurrenceKey = win.occurrenceKey;
 
-        // 1. Check if task occurrence has passed deadline/grace cutoff -> Auto-Close & Apply Missed Task Penalties
+        // 1. Check if task occurrence has passed deadline/grace cutoff -> Auto-Close & Apply Missed Task Penalties (only within last 2 hours)
         if (!win.isPermanent && cutoffMs && nowMs >= cutoffMs) {
+          if (nowMs - cutoffMs > 2 * 3600 * 1000) {
+            return;
+          }
           if (createdAtMs > 0 && cutoffMs < createdAtMs - 60000) {
             return;
           }
@@ -738,13 +744,13 @@ function syncAndEvaluateAll() {
           return;
         }
 
-        // 2. Check if task occurrence is open -> Send Opening Push once per occurrence
+        // 2. Check if task occurrence is open -> Send Opening Push once per occurrence (only within 30 mins of start)
         if (startMs && nowMs >= startMs && (win.isPermanent || !cutoffMs || nowMs < cutoffMs)) {
           if (!win.isPermanent) {
             hasActiveOrUpcoming = true;
           }
           const notifiedKey = task.lastOpenNotifiedKey || task.lastOpenedOccurrenceKey || "";
-          if (notifiedKey !== occurrenceKey) {
+          if (notifiedKey !== occurrenceKey && (nowMs - startMs <= 30 * 60 * 1000)) {
             if (!allUsersCache) allUsersCache = fetchApprovedUsers();
             notifyTaskWindowOpened(task, win, allUsersCache);
           }
@@ -1376,6 +1382,9 @@ function closeTaskAndApplyPenalties(taskId, taskObj, occurrenceKey) {
 
     // 1. Mark task occurrence closed in Firestore
     const prevClosedKeys = Array.isArray(task.autoClosedKeys) ? task.autoClosedKeys : [];
+    if (task.lastAutoClosedKey === effOccKey || task.lastClosedOccurrenceKey === effOccKey || prevClosedKeys.includes(effOccKey)) {
+      return { closed: true, skipped: true, penalizedCount: 0, occurrenceKey: effOccKey, reason: "already_auto_closed" };
+    }
     const updatedClosedKeys = Array.from(new Set(prevClosedKeys.concat([task.lastAutoClosedKey, task.lastClosedOccurrenceKey, effOccKey]).filter(Boolean))).slice(-30);
     const taskPatch = {
       lastAutoClosedKey: effOccKey,
@@ -2153,6 +2162,9 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
 
     // 1. Mark session closed in Firestore (or record lastAutoClosedKey for recurring sessions)
     const prevClosedKeys = Array.isArray(session.autoClosedKeys) ? session.autoClosedKeys : [];
+    if (session.lastAutoClosedKey === effOccKey || prevClosedKeys.includes(effOccKey)) {
+      return { closed: true, skipped: true, absentCount: 0, occurrenceKey: effOccKey, reason: "already_auto_closed" };
+    }
     const updatedClosedKeys = Array.from(new Set(prevClosedKeys.concat([session.lastAutoClosedKey, effOccKey]).filter(Boolean))).slice(-30);
     const sessionPatch = {
       lastAutoClosedKey: effOccKey,
@@ -2202,7 +2214,7 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
         firestoreGet(`attendance_records/${logDocId}`) ||
         firestoreGet(`attendance_logs/${legacyDocId}`) ||
         firestoreGet(`attendance_records/${legacyDocId}`);
-      if (directLog && String(directLog.status || "").toLowerCase() !== "absent") {
+      if (directLog) {
         return;
       }
 
@@ -2546,14 +2558,14 @@ function sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl) {
             url: targetLink
           },
           webpush: {
+            headers: {
+              Urgency: "high"
+            },
             notification: {
               title: title,
               body: body,
               icon: CONFIG.PWA_URL + "pwa-192x192.png",
               badge: CONFIG.PWA_URL + "pwa-192x192.png"
-            },
-            fcm_options: {
-              link: targetLink
             }
           }
         }

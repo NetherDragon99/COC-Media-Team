@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.4';
+export const APP_VERSION = '3.2.5';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -10402,9 +10402,95 @@ let isPersonalInitialLoad = true;
 let isBroadcastAllInitialLoad = true;
 let isBroadcastBadgeInitialLoad = true;
 let isUserNotificationsInitialLoad = true;
+let _notifListenerBootMs = Date.now();
+const _shownLiveNotifKeys = new Set();
+
+export async function triggerDeviceSystemNotification({ id = '', title = 'COC Media Team', body = '', url = './#notifications', tag = '' } = {}) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return false;
+  if (Notification.permission !== 'granted') return false;
+
+  const dedupKey = String(tag || id || `${title}::${body}`).trim();
+  if (dedupKey && _shownLiveNotifKeys.has(`os::${dedupKey}`)) return false;
+  if (dedupKey) _shownLiveNotifKeys.add(`os::${dedupKey}`);
+
+  const notifTitle = String(title || 'COC Media Team');
+  const notifBody = String(body || '');
+  const notifTag = dedupKey || ('coc-notif-' + Date.now());
+
+  try {
+    let swReg = fcmRegistration;
+    if (!swReg && 'serviceWorker' in navigator) {
+      swReg = (await navigator.serviceWorker.getRegistration('./sw.js')) ||
+              (await navigator.serviceWorker.getRegistration()) ||
+              (await navigator.serviceWorker.ready.catch(() => null));
+    }
+    if (swReg && typeof swReg.showNotification === 'function') {
+      await swReg.showNotification(notifTitle, {
+        body: notifBody,
+        icon: './pwa-192x192.png',
+        badge: './pwa-192x192.png',
+        tag: notifTag,
+        renotify: false,
+        vibrate: [200, 100, 200],
+        data: { url: url || './#notifications' }
+      });
+      return true;
+    }
+  } catch (swErr) {
+    console.warn('[OS Notification] Service Worker showNotification fallback:', swErr);
+  }
+
+  try {
+    new Notification(notifTitle, {
+      body: notifBody,
+      icon: './pwa-192x192.png',
+      badge: './pwa-192x192.png',
+      tag: notifTag
+    });
+    return true;
+  } catch (err) {
+    console.warn('[OS Notification] Notification constructor warning:', err);
+    return false;
+  }
+}
+
+function handleIncomingRealtimeNotificationDoc(docId, data, defaultIcon = 'bell') {
+  if (!data) return;
+  if (data.read === true) return;
+  if (Array.isArray(data.readBy) && state.user?.uid && data.readBy.includes(state.user.uid)) return;
+
+  const createdMs = parseDateTimeToMs(data.createdAt || data.timestamp || data.createdAtMs) || 0;
+  if (createdMs > 0 && createdMs < _notifListenerBootMs - 15000) {
+    return;
+  }
+
+  const title = String(data.title || 'Notification').trim();
+  const body = String(data.body || data.message || '').trim();
+  const contentKey = `${title}::${body}`;
+  if ((docId && _shownLiveNotifKeys.has(docId)) || _shownLiveNotifKeys.has(contentKey)) {
+    return;
+  }
+  if (docId) _shownLiveNotifKeys.add(docId);
+  _shownLiveNotifKeys.add(contentKey);
+
+  showLiveNotificationToast({
+    title,
+    message: body,
+    icon: data.icon || defaultIcon
+  });
+
+  triggerDeviceSystemNotification({
+    id: docId,
+    title,
+    body,
+    tag: contentKey,
+    url: './#notifications'
+  });
+}
 
 function setupNotificationsListener() {
   if (!db) return;
+  _notifListenerBootMs = Date.now();
   if (!state.user) {
     listeners.clear('notifications_personal');
     listeners.clear('notifications_broadcast_all');
@@ -10443,10 +10529,7 @@ function setupNotificationsListener() {
       if (!isUserNotificationsInitialLoad) {
         snapshot.docChanges().forEach(change => {
           if (change.type === 'added') {
-            const data = change.doc.data();
-            if (data.read === false || data.read === undefined) {
-              showNotificationToast(data.title || 'Notification', data.body || data.message || '');
-            }
+            handleIncomingRealtimeNotificationDoc(change.doc.id, change.doc.data(), 'bell');
           }
         });
       }
@@ -10470,12 +10553,7 @@ function setupNotificationsListener() {
       if (!isPersonalInitialLoad) {
         snapshot.docChanges().forEach(change => {
           if (change.type === 'added') {
-            const data = change.doc.data();
-            showLiveNotificationToast({
-              title: data.title || 'Personal Notification',
-              message: data.message || data.body || '',
-              icon: data.icon || 'bell'
-            });
+            handleIncomingRealtimeNotificationDoc(change.doc.id, change.doc.data(), 'bell');
           }
         });
       }
@@ -10515,14 +10593,7 @@ function setupNotificationsListener() {
       if (!isBroadcastAllInitialLoad) {
         snapshot.docChanges().forEach(change => {
           if (change.type === 'added') {
-            const data = change.doc.data();
-            if (!data.readBy || !data.readBy.includes(state.user?.uid)) {
-              showLiveNotificationToast({
-                title: data.title || 'Team Broadcast',
-                message: data.message || data.body || '',
-                icon: data.icon || 'megaphone'
-              });
-            }
+            handleIncomingRealtimeNotificationDoc(change.doc.id, change.doc.data(), 'megaphone');
           }
         });
       }
@@ -10549,14 +10620,7 @@ function setupNotificationsListener() {
         if (!isBroadcastBadgeInitialLoad) {
           snapshot.docChanges().forEach(change => {
             if (change.type === 'added') {
-              const data = change.doc.data();
-              if (!data.readBy || !data.readBy.includes(state.user?.uid)) {
-                showLiveNotificationToast({
-                  title: data.title || 'Badge Announcement',
-                  message: data.message || data.body || '',
-                  icon: data.icon || 'star'
-                });
-              }
+              handleIncomingRealtimeNotificationDoc(change.doc.id, change.doc.data(), 'star');
             }
           });
         }
@@ -10628,9 +10692,34 @@ async function initFCM() {
     onMessage(messaging, (payload) => {
       const title = payload.notification?.title || payload.data?.title || 'Team Update';
       const body = payload.notification?.body || payload.data?.body || '';
-      toast(`${title}: ${body}`, 'info');
+      const url = payload.data?.url || './#notifications';
+      showLiveNotificationToast({ title, message: body, icon: 'bell' });
+      triggerDeviceSystemNotification({ title, body, url, tag: `${title}::${body}` });
       updateNotificationBadges();
     });
+
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && fcmRegistration) {
+      getToken(messaging, {
+        vapidKey: FCM_VAPID_KEY,
+        serviceWorkerRegistration: fcmRegistration
+      }).then(async (token) => {
+        if (token && state.user?.uid) {
+          state.currentFcmToken = token;
+          await setDoc(doc(db, 'users_private', state.user.uid), {
+            pushEnabled: true,
+            fcmTokens: arrayUnion(token),
+            fcmToken: token,
+            fcmUpdatedAt: serverTimestamp()
+          }, { merge: true }).catch(() => {});
+          await setDoc(doc(db, 'users', state.user.uid), {
+            pushEnabled: true,
+            fcmTokens: arrayUnion(token),
+            fcmToken: token,
+            fcmUpdatedAt: serverTimestamp()
+          }, { merge: true }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
 
     updatePushNotificationUI();
   } catch (err) {
@@ -18948,20 +19037,6 @@ export async function openAdminRosterModal(sessionOrId, initialOccurrenceKey = n
           };
         }
 
-        if (isAdminUser && isClosed && unprocessedAbsentList.length > 0) {
-          const sessCreatedAtMs = parseDateTimeToMs(session.createdAt) || 0;
-          const canAutoPenalizeRoster = !sessCreatedAtMs || occCutoffMs >= sessCreatedAtMs - 60000;
-          const rosterLockKey = `roster_auto_${session.id}_${selectedOccKey}`;
-          if (canAutoPenalizeRoster && !_autoPenaltyInFlight.has(rosterLockKey)) {
-            _autoPenaltyInFlight.add(rosterLockKey);
-            setTimeout(() => {
-              penalizeAbsentMembers([...unprocessedAbsentList], penalizeAllBtn).finally(() => {
-                _autoPenaltyInFlight.delete(rosterLockKey);
-              });
-            }, 50);
-          }
-        }
-
         tabContent.querySelectorAll('.btn-roster-penalize-single').forEach(btn => {
           btn.onclick = (e) => {
             e.stopPropagation();
@@ -19706,6 +19781,8 @@ function getFilteredAdminSubmissions() {
 }
 
 const _autoPenaltyInFlight = new Set();
+const _observedOpenOccurrences = new Set();
+const _watchdogBootMs = Date.now();
 
 async function autoApplyMissedTaskPenalties(targetItem, silent = false) {
   if (!targetItem || !targetItem.task || !Array.isArray(targetItem.missedMembers) || targetItem.missedMembers.length === 0) return;
@@ -19714,6 +19791,20 @@ async function autoApplyMissedTaskPenalties(targetItem, silent = false) {
   _autoPenaltyInFlight.add(lockKey);
 
   try {
+    if (isCurrentUserAdmin() && db) {
+      await updateDoc(doc(db, 'tasks', targetItem.task.id), {
+        lastAutoClosedKey: targetItem.occurrenceKey,
+        lastClosedOccurrenceKey: targetItem.occurrenceKey,
+        autoClosedKeys: arrayUnion(targetItem.occurrenceKey),
+        updatedAt: serverTimestamp()
+      }).catch(() => {});
+      targetItem.task.lastAutoClosedKey = targetItem.occurrenceKey;
+      if (!Array.isArray(targetItem.task.autoClosedKeys)) targetItem.task.autoClosedKeys = [];
+      if (!targetItem.task.autoClosedKeys.includes(targetItem.occurrenceKey)) {
+        targetItem.task.autoClosedKeys.push(targetItem.occurrenceKey);
+      }
+    }
+
     const gasRes = await callGasBackend({
       action: 'MANUAL_CLOSE_TASK',
       taskId: targetItem.task.id,
@@ -19829,23 +19920,38 @@ async function autoApplyMissedTaskPenalties(targetItem, silent = false) {
 }
 
 async function runAutoPenaltyWatchdog() {
-  if (!db || !state.user || usersMap.size === 0) return;
+  if (!db || !state.user || !isCurrentUserAdmin() || usersMap.size === 0) return;
+  if (Date.now() - _watchdogBootMs < 8000) return;
   const nowMs = parseDateTimeToMs(serverNow());
   if (!nowMs) return;
 
-  // 1. Auto-enforce expired Tasks
+  // 1. Track live open Tasks and auto-enforce ONLY when a live task occurrence transitions to closed
   const candidateTasks = (state.tasks || []).filter(t => t && t.active !== false && !t.archived && t.missedPenalty?.enabled && !t.isPermanent);
   for (const task of candidateTasks) {
     const win = getTaskWindow(task, nowMs);
     if (!win || !win.closesAt) continue;
     const graceMs = (task.tieredRewards?.enabled ? (Number(task.tieredRewards.graceMinutes) || 120) : 0) * 60000;
     const deadlineWithGrace = win.graceEndsAt || (win.closesAt + graceMs);
+    const occurrenceKey = win.occurrenceKey || 'once';
+    const liveKey = `task_${task.id}_${occurrenceKey}`;
+
+    if (nowMs >= (win.start || 0) && nowMs <= deadlineWithGrace) {
+      _observedOpenOccurrences.add(liveKey);
+      continue;
+    }
+
     if (nowMs <= deadlineWithGrace) continue;
 
-    const createdAtMs = parseDateTimeToMs(task.createdAt) || 0;
-    if (createdAtMs > 0 && deadlineWithGrace < createdAtMs - 60000) continue;
+    const closedKeys = new Set(Array.isArray(task.autoClosedKeys) ? task.autoClosedKeys : []);
+    if (task.lastAutoClosedKey) closedKeys.add(task.lastAutoClosedKey);
+    if (task.lastClosedOccurrenceKey) closedKeys.add(task.lastClosedOccurrenceKey);
+    if (closedKeys.has(occurrenceKey)) continue;
 
-    const occurrenceKey = win.occurrenceKey || 'once';
+    // Strict live-expiry guard: only auto-penalize if observed open during this session OR expired within last 5 minutes after boot
+    const justExpiredLive = _observedOpenOccurrences.has(liveKey) || (deadlineWithGrace >= _watchdogBootMs && (nowMs - deadlineWithGrace) <= 5 * 60 * 1000);
+    if (!justExpiredLive) continue;
+    _observedOpenOccurrences.delete(liveKey);
+
     let targets = [];
     if (Array.isArray(task.assignedUids) && task.assignedUids.length > 0) {
       targets = task.assignedUids.map(uid => usersMap.get(uid)).filter(m => m && !m.disabled && !m.blocked);
@@ -19881,23 +19987,36 @@ async function runAutoPenaltyWatchdog() {
     }
   }
 
-  // 2. Auto-enforce expired Attendance Sessions
-  const candidateSessions = (state.attendanceSessions || []).filter(s => s && s.active !== false && !s.archived && s.status !== 'archived');
+  // 2. Track live open Attendance Sessions and auto-enforce ONLY when a live session transitions to closed
+  const candidateSessions = (state.attendanceSessions || []).filter(s => s && s.active !== false && !s.archived && s.status !== 'archived' && s.status !== 'closed');
   for (const rawSess of candidateSessions) {
     const session = normalizeSession(rawSess);
     const occ = resolveSessionOccurrence(session, nowMs) || getOccurrenceFor(session, nowMs);
     if (!occ || !occ.start) continue;
     const occStartMs = parseDateTimeToMs(occ.start);
+    const earlyMins = Number(session.earlyCheckInMinutes) || 30;
+    const occOpenMs = occStartMs - earlyMins * 60000;
     const occCutoffMs = occStartMs + (Number(session.lateCutoffMinutes) || 120) * 60000;
-    if (nowMs <= occCutoffMs) continue;
-
-    const createdAtMs = parseDateTimeToMs(session.createdAt) || 0;
-    if (createdAtMs > 0 && occCutoffMs < createdAtMs - 60000) continue;
-
     const occKey = occ.key || formatZonedDateKey(occStartMs, APP_TIMEZONE);
     const occDateKey = formatZonedDateKey(occStartMs, APP_TIMEZONE);
     const lockKey = `sess_${session.id}_${occKey}`;
+
+    if (nowMs >= occOpenMs && nowMs <= occCutoffMs) {
+      _observedOpenOccurrences.add(lockKey);
+      continue;
+    }
+
+    if (nowMs <= occCutoffMs) continue;
     if (_autoPenaltyInFlight.has(lockKey)) continue;
+
+    const closedKeys = new Set(Array.isArray(rawSess.autoClosedKeys) ? rawSess.autoClosedKeys : []);
+    if (rawSess.lastAutoClosedKey) closedKeys.add(rawSess.lastAutoClosedKey);
+    if (closedKeys.has(occKey) || closedKeys.has(occDateKey)) continue;
+
+    // Strict live-expiry guard: only auto-penalize if observed open during this session OR expired within last 5 minutes after boot
+    const justExpiredLive = _observedOpenOccurrences.has(lockKey) || (occCutoffMs >= _watchdogBootMs && (nowMs - occCutoffMs) <= 5 * 60 * 1000);
+    if (!justExpiredLive) continue;
+    _observedOpenOccurrences.delete(lockKey);
 
     const allActiveMembers = Array.from(usersMap.values()).filter(m => m && !m.disabled && !m.blocked && !m.archived);
     const eligibleMembers = allActiveMembers.filter(m => isUserEligibleForSession(session, m));
@@ -19929,6 +20048,15 @@ async function runAutoPenaltyWatchdog() {
     _autoPenaltyInFlight.add(lockKey);
     (async () => {
       try {
+        await updateDoc(doc(db, 'attendance_sessions', session.id), {
+          lastAutoClosedKey: occKey,
+          autoClosedKeys: arrayUnion(occKey, occDateKey),
+          updatedAt: serverTimestamp()
+        }).catch(() => {});
+        rawSess.lastAutoClosedKey = occKey;
+        if (!Array.isArray(rawSess.autoClosedKeys)) rawSess.autoClosedKeys = [];
+        rawSess.autoClosedKeys.push(occKey, occDateKey);
+
         const gasRes = await callGasBackend({
           action: 'MANUAL_CLOSE_SESSION',
           sessionId: session.id,
@@ -20106,15 +20234,13 @@ async function renderAdminMissedTasks() {
     }
 
     if (missedMembers.length > 0) {
-      const itemObj = {
+      missedTasksList.push({
         task,
         occurrenceKey,
         missedMembers,
         penaltyPoints: Number(task.missedPenalty.points) || 5,
         fineEGP: Number(task.missedPenalty.fineAmountEGP || task.missedPenalty.fineEGP) || 0
-      };
-      missedTasksList.push(itemObj);
-      autoApplyMissedTaskPenalties(itemObj, true);
+      });
     }
   }
 
@@ -23155,6 +23281,296 @@ function openMemberControlModal(member) {
   updateSaveButtonState();
 }
 
+async function handlePurgeWatchdogFlood() {
+  if (!db || !isCurrentUserAdmin()) return;
+
+  const confirmed = await confirmSheet({
+    title: 'Purge Flood Notifications & Penalties?',
+    message: 'This will remove all false automatic watchdog penalty notifications, delete auto-generated "Absent (Auto-Close)" logs and missed task penalties, stamp past sessions/tasks as settled, and recalculate every member\'s exact Points, Penalties, and Fines from real records.',
+    confirmLabel: 'Purge & Recalculate',
+    destructive: true
+  });
+  if (!confirmed) return;
+
+  openModal({
+    title: 'Purging Flood & Recalculating Balances',
+    body: `
+      <div class="py-8 text-center space-y-4">
+        <div class="inline-block animate-spin rounded-full h-8 w-8 border-2 border-amber-400 border-t-transparent"></div>
+        <div class="space-y-1">
+          <p class="font-bold text-white text-sm" id="purge-flood-status-title">Cleaning Flood Notifications &amp; Auto-Penalties...</p>
+          <p class="text-xs text-neutral-400" id="purge-flood-status-sub">Scanning notifications, missed_penalties, attendance_logs, adjustments, and member transactions.</p>
+        </div>
+      </div>
+    `,
+    saveLabel: null
+  });
+
+  const setStatus = (title, sub) => {
+    const tEl = document.getElementById('purge-flood-status-title');
+    const sEl = document.getElementById('purge-flood-status-sub');
+    if (tEl && title) tEl.textContent = title;
+    if (sEl && sub) sEl.textContent = sub;
+  };
+
+  const commitDeleteRefs = async (refs) => {
+    let count = 0;
+    for (let i = 0; i < refs.length; i += 400) {
+      const chunk = refs.slice(i, i + 400);
+      const b = writeBatch(db);
+      chunk.forEach(r => b.delete(r));
+      await b.commit();
+      count += chunk.length;
+    }
+    return count;
+  };
+
+  const isFloodNotification = (d) => {
+    if (!d) return false;
+    const title = String(d.title || '');
+    const body = String(d.body || d.message || '');
+    return (
+      title.includes('Missed Task Penalty') ||
+      title.includes('Absence Penalty Recorded') ||
+      title.includes('Task Deadline Missed') ||
+      title.includes('Session Closed — Absence Recorded') ||
+      title.includes('New Task Window Open') ||
+      title.includes('Attendance Check-In Open') ||
+      body.includes('Unexcused absence automatically recorded') ||
+      body.includes('was automatically recorded for missing') ||
+      body.includes('was recorded for missing the task')
+    );
+  };
+
+  try {
+    let deletedNotifs = 0;
+    let deletedPenalties = 0;
+    let deletedLogs = 0;
+    let deletedTxs = 0;
+
+    // 1. Delete flood notifications from root notifications & notifications_broadcast
+    setStatus('Step 1/5: Removing flood notifications...', 'Scanning root notifications & broadcast collections');
+    const rootNotifsSnap = await getDocs(collection(db, 'notifications')).catch(() => ({ docs: [] }));
+    const rootNotifRefs = rootNotifsSnap.docs.filter(d => isFloodNotification(d.data())).map(d => d.ref);
+    deletedNotifs += await commitDeleteRefs(rootNotifRefs);
+
+    const bcastNotifsSnap = await getDocs(collection(db, 'notifications_broadcast')).catch(() => ({ docs: [] }));
+    const bcastRefs = bcastNotifsSnap.docs.filter(d => isFloodNotification(d.data())).map(d => d.ref);
+    deletedNotifs += await commitDeleteRefs(bcastRefs);
+
+    // 2. Delete auto-watchdog missed_penalties
+    setStatus('Step 2/5: Removing auto-watchdog missed task penalties...', 'Cleaning missed_penalties collection');
+    const missedSnap = await getDocs(collection(db, 'missed_penalties')).catch(() => ({ docs: [] }));
+    const missedRefs = missedSnap.docs.map(d => d.ref);
+    deletedPenalties += await commitDeleteRefs(missedRefs);
+    if (state.appliedMissedPenalties) state.appliedMissedPenalties.clear();
+    state.missedPenalties = [];
+
+    // 3. Delete auto-watchdog absent attendance_logs & attendance_records & adjustments
+    setStatus('Step 3/5: Removing auto-generated absence logs...', 'Cleaning attendance_logs, attendance_records & adjustments');
+    const isAutoAbsentLog = (data) => {
+      if (!data) return false;
+      const st = String(data.status || '').toLowerCase();
+      if (st !== 'absent') return false;
+      return (
+        data.appliedTierLabel === 'Absent (Auto-Close)' ||
+        data.processedBy === 'system_watchdog' ||
+        data.closedBy === 'system_watchdog' ||
+        !data.adminNote
+      );
+    };
+    const attLogsSnap = await getDocs(collection(db, 'attendance_logs')).catch(() => ({ docs: [] }));
+    const attLogRefs = attLogsSnap.docs.filter(d => isAutoAbsentLog(d.data())).map(d => d.ref);
+    deletedLogs += await commitDeleteRefs(attLogRefs);
+
+    const attRecsSnap = await getDocs(collection(db, 'attendance_records')).catch(() => ({ docs: [] }));
+    const attRecRefs = attRecsSnap.docs.filter(d => isAutoAbsentLog(d.data())).map(d => d.ref);
+    await commitDeleteRefs(attRecRefs);
+
+    const adjSnap = await getDocs(collection(db, 'adjustments')).catch(() => ({ docs: [] }));
+    const adjRefs = adjSnap.docs.filter(d => {
+      const a = d.data() || {};
+      return a.adminId === 'system_watchdog' || a.source === 'task_missed_watchdog' || a.source === 'attendance_absence';
+    }).map(d => d.ref);
+    await commitDeleteRefs(adjRefs);
+
+    // 4. Stamp all existing tasks and attendance_sessions with current occurrenceKey as autoClosedKeys so they don't re-trigger
+    setStatus('Step 4/5: Settling past task & session occurrences...', 'Marking past occurrences as settled');
+    const nowMs = parseDateTimeToMs(serverNow());
+    const settleBatch = writeBatch(db);
+    (state.tasks || []).forEach(task => {
+      if (!task || !task.id) return;
+      const win = getTaskWindow(task, nowMs);
+      const occKey = win?.occurrenceKey || 'once';
+      settleBatch.update(doc(db, 'tasks', task.id), {
+        lastAutoClosedKey: occKey,
+        lastClosedOccurrenceKey: occKey,
+        autoClosedKeys: arrayUnion(occKey, 'once'),
+        updatedAt: serverTimestamp()
+      });
+    });
+    (state.attendanceSessions || []).forEach(sess => {
+      if (!sess || !sess.id) return;
+      const occ = resolveSessionOccurrence(normalizeSession(sess), nowMs) || getOccurrenceFor(normalizeSession(sess), nowMs);
+      const occKey = occ?.key || formatZonedDateKey(nowMs, APP_TIMEZONE);
+      settleBatch.update(doc(db, 'attendance_sessions', sess.id), {
+        lastAutoClosedKey: occKey,
+        autoClosedKeys: arrayUnion(occKey, 'once'),
+        updatedAt: serverTimestamp()
+      });
+    });
+    await settleBatch.commit().catch(() => {});
+
+    // 5. Clean per-member subcollection notifications & auto-watchdog transactions, and recalculate exact member balances
+    setStatus('Step 5/5: Recalculating all member balances & cleaning member feeds...', 'Rebuilding points, penalties & EGP fines from verified records');
+    const usersSnap = await getDocs(collection(db, 'users')).catch(() => ({ docs: [] }));
+    const allUsers = usersSnap.docs.map(d => normalizeUser({ uid: d.id, ...d.data() }));
+    const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
+
+    for (const u of allUsers) {
+      // Clean user subcollection notifications
+      const uNotifSnap = await getDocs(collection(db, 'users', u.uid, 'notifications')).catch(() => ({ docs: [] }));
+      const uNotifRefs = uNotifSnap.docs.filter(d => isFloodNotification(d.data())).map(d => d.ref);
+      deletedNotifs += await commitDeleteRefs(uNotifRefs);
+
+      // Clean user auto-watchdog transactions
+      const uTxSnap = await getDocs(collection(db, 'users', u.uid, 'transactions')).catch(() => ({ docs: [] }));
+      const uTxRefsToDel = [];
+      let manualBonusPts = 0;
+      let manualMonthBonusPts = 0;
+      let manualWeekBonusPts = 0;
+      let manualPenPts = 0;
+      let manualFinesEGP = 0;
+
+      uTxSnap.docs.forEach(d => {
+        const t = d.data() || {};
+        const reason = String(t.reason || '');
+        const isAutoFloodTx = (
+          t.adminName === 'Auto Watchdog' ||
+          t.adminUid === 'system_watchdog' ||
+          t.type === 'task_missed_penalty' ||
+          t.type === 'attendance_absence_penalty' ||
+          reason.startsWith('Missed task penalty:') ||
+          reason.startsWith('Missed Task:') ||
+          reason.startsWith('Absent:')
+        );
+        if (isAutoFloodTx) {
+          uTxRefsToDel.push(d.ref);
+          return;
+        }
+        if ((t.category === 'points' || t.type === 'bonus') && t.type !== 'penalty' && t.type !== 'deduction' && !t.taskId && !t.sessionId) {
+          const bPts = Math.max(0, Number(t.amount) || 0);
+          manualBonusPts += bPts;
+          const tTime = parseDateTimeToMs(t.createdAt || t.timestamp) || 0;
+          if (monthKeyOf(tTime, APP_TIMEZONE) === curMonthKey) manualMonthBonusPts += bPts;
+          if (weekKeyOf(tTime, APP_TIMEZONE) === curWeekKey) manualWeekBonusPts += bPts;
+        } else if ((t.type === 'penalty' || t.type === 'deduction') && !t.taskId && !t.sessionId) {
+          manualPenPts += Math.max(0, Number(t.amount) || 0);
+        } else if (t.type === 'fine' && !t.taskId && !t.sessionId) {
+          manualFinesEGP += Math.max(0, Number(t.amount) || 0);
+        } else if (t.type === 'payment' || t.type === 'waive') {
+          manualFinesEGP -= Math.max(0, Number(t.amount) || 0);
+        }
+      });
+      deletedTxs += await commitDeleteRefs(uTxRefsToDel);
+
+      // Sum verified submissions
+      let realPoints = manualBonusPts;
+      let realMonthPoints = manualMonthBonusPts;
+      let realWeekPoints = manualWeekBonusPts;
+      let realPenalties = manualPenPts;
+      let realFinesEGP = manualFinesEGP;
+
+      const subSnap = await getDocs(query(collection(db, 'submissions'), where('uid', '==', u.uid))).catch(() => ({ docs: [] }));
+      subSnap.docs.forEach(d => {
+        const s = d.data() || {};
+        const pts = Math.max(0, Number(s.pointsAwarded) || 0);
+        realPoints += pts;
+        realPenalties += Math.max(0, Number(s.penaltyPoints ?? s.penaltyPts) || 0);
+        realFinesEGP += Math.max(0, Number(s.fineEGP) || 0);
+        const sTime = parseDateTimeToMs(s.submittedAt || s.createdAt) || 0;
+        if (monthKeyOf(sTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += pts;
+        if (weekKeyOf(sTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += pts;
+      });
+
+      // Sum verified remaining attendance_logs
+      const uAttSnap = await getDocs(query(collection(db, 'attendance_logs'), where('uid', '==', u.uid))).catch(() => ({ docs: [] }));
+      uAttSnap.docs.forEach(d => {
+        const l = d.data() || {};
+        if (isAutoAbsentLog(l)) return;
+        realPenalties += Math.max(0, Number(l.penalty) || 0);
+        realFinesEGP += Math.max(0, Number(l.fineEGP) || 0);
+        const earlyPts = Math.max(0, Number(l.earlyBonusPoints) || (Number(l.pointsDelta) > 0 ? Number(l.pointsDelta) : 0));
+        if (earlyPts > 0) {
+          realPoints += earlyPts;
+          const lTime = parseDateTimeToMs(l.checkedInAt || l.timestamp || l.createdAt) || 0;
+          if (monthKeyOf(lTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += earlyPts;
+          if (weekKeyOf(lTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += earlyPts;
+        }
+      });
+
+      realPoints = Math.max(0, realPoints);
+      realPenalties = Math.max(0, realPenalties);
+      realFinesEGP = Math.max(0, realFinesEGP);
+      const netPts = Math.max(0, realPoints - realPenalties);
+
+      const uBatch = writeBatch(db);
+      uBatch.update(doc(db, 'users', u.uid), {
+        points: realPoints,
+        totalPoints: realPoints,
+        penalties: realPenalties,
+        penaltyPoints: realPenalties,
+        totalPenalties: realPenalties,
+        netPts,
+        finesDue: realFinesEGP,
+        fines: realFinesEGP,
+        monthKey: curMonthKey,
+        monthBucket: curMonthKey,
+        monthPoints: realMonthPoints,
+        weekKey: curWeekKey,
+        weekBucket: curWeekKey,
+        weekPoints: realWeekPoints,
+        updatedAt: serverTimestamp()
+      });
+      uBatch.set(doc(db, 'users_private', u.uid), {
+        finesDue: realFinesEGP,
+        finesEGP: realFinesEGP,
+        fines: realFinesEGP,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      await uBatch.commit();
+
+      if (usersMap.has(u.uid)) {
+        const mem = usersMap.get(u.uid);
+        mem.points = realPoints;
+        mem.penalties = realPenalties;
+        mem.netPts = netPts;
+        mem.finesDue = realFinesEGP;
+        mem.monthPoints = realMonthPoints;
+        mem.weekPoints = realWeekPoints;
+      }
+      if (usersPrivate.has(u.uid)) {
+        const priv = usersPrivate.get(u.uid);
+        priv.finesDue = realFinesEGP;
+        priv.finesEGP = realFinesEGP;
+      }
+    }
+
+    invalidateEgpCache();
+    closeAllModals();
+    renderLeaderboard();
+    renderAdminMembers();
+    renderAdminSessions();
+    renderAdminSubmissions();
+    renderAdminNotifications();
+    toast(`Purged ${deletedNotifs} flood notifications, ${deletedPenalties + deletedLogs} auto-penalties, and restored all member balances!`, 'success');
+  } catch (err) {
+    console.error('Error purging watchdog flood:', err);
+    toast('Error during flood purge: ' + (err.message || err), 'error');
+    closeAllModals();
+  }
+}
+
 async function handleRepairTotals() {
   openModal({
     title: 'Repair Account Totals',
@@ -25247,6 +25663,10 @@ export async function renderAdminNotifications() {
   }
 
   const testPushBtn = document.getElementById('btn-admin-test-push');
+  const purgeFloodTabBtn = document.getElementById('btn-admin-purge-flood-notifs-tab');
+  if (purgeFloodTabBtn) {
+    purgeFloodTabBtn.onclick = handlePurgeWatchdogFlood;
+  }
   if (testPushBtn) {
     testPushBtn.onclick = async () => {
       if (!state.user?.uid) {
@@ -26607,6 +27027,16 @@ function attachEventHandlers() {
   const btnRepairTotals = document.getElementById('btn-admin-repair-totals');
   if (btnRepairTotals) {
     btnRepairTotals.onclick = handleRepairTotals;
+  }
+
+  const btnPurgeFloodOverview = document.getElementById('btn-admin-purge-watchdog-flood');
+  if (btnPurgeFloodOverview) {
+    btnPurgeFloodOverview.onclick = handlePurgeWatchdogFlood;
+  }
+
+  const btnPurgeFloodNotifsTab = document.getElementById('btn-admin-purge-flood-notifs-tab');
+  if (btnPurgeFloodNotifsTab) {
+    btnPurgeFloodNotifsTab.onclick = handlePurgeWatchdogFlood;
   }
 
   const btnAdminAddBroadcast = document.getElementById('btn-admin-add-broadcast');
