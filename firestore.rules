@@ -83,9 +83,7 @@ rules_version = '2';
 //   - penalty: int / number
 //   - createdAt: timestamp
 //   - Read: owner or admin
-//   - Create: admin only (document must not already exist)
-//   - Update: false (immutable record)
-//   - Delete: admin only
+//   - Create / Update / Delete: admin only
 //
 // Collection: attendance_sessions/{sessionId}
 //   - active: bool (defaults to true)
@@ -182,9 +180,17 @@ rules_version = '2';
 //   - Read / Create: isAdmin()
 //   - Update / Delete: false
 //
+// Collection: notification_dispatches/{dispatchId}
+//   - Deduplication & 3-stage event notification lifecycle records (GAS / Admin)
+//   - Read / Write (create, update, delete): admin only (isAdmin())
+//
+// Collection: settings/maintenance_jobs
+//   - Real-time Admin maintenance background job progress (observed via onSnapshot)
+//   - Read / Write: admin only (isAdmin())
+//
 // Collection: settings/{settingId}
-//   - Document representing system settings / application config (e.g., 'global')
-//   - Read: public (true) so the client app can load global configuration prior to / during auth
+//   - Document representing system settings / application config (e.g., 'global', 'app_config', 'general', 'whats_new')
+//   - Read: public for non-sensitive settings (settingId != 'maintenance_jobs' || isAdmin()); strictly admin-only for 'maintenance_jobs'
 //   - Write: admin only (isAdmin())
 //
 // ===============================================================
@@ -550,39 +556,38 @@ service cloud.firestore {
 
       allow update, delete: if isAdmin();
 
-      allow create: if (!exists(/databases/$(database)/documents/attendance_logs/$(logId))) && (
-        isAdmin() || (
-          isActive() &&
-          request.resource.data.uid == request.auth.uid &&
+      allow create: if isAdmin() || (
+        !exists(/databases/$(database)/documents/attendance_logs/$(logId)) &&
+        isActive() &&
+        request.resource.data.uid == request.auth.uid &&
+        (
+          logId == (request.resource.data.sessionId + '_' + request.resource.data.occurrenceKey + '_' + request.auth.uid) ||
+          logId == (request.resource.data.sessionId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey)
+        ) &&
+        request.resource.data.checkedInAt == request.time &&
+        exists(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)) &&
+        get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('active', true) != false &&
+        get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('archived', false) == false &&
+        request.time.toMillis() >= request.resource.data.occurrenceStart.toMillis() - (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('earlyCheckInMinutes', 0) * 60 * 1000) &&
+        request.time.toMillis() <= request.resource.data.occurrenceStart.toMillis() + (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('lateCutoffMinutes', 120) * 60 * 1000) &&
+        (
           (
-            logId == (request.resource.data.sessionId + '_' + request.resource.data.occurrenceKey + '_' + request.auth.uid) ||
-            logId == (request.resource.data.sessionId + '_' + request.auth.uid + '_' + request.resource.data.occurrenceKey)
-          ) &&
-          request.resource.data.checkedInAt == request.time &&
-          exists(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)) &&
-          get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('active', true) != false &&
-          get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('archived', false) == false &&
-          request.time.toMillis() >= request.resource.data.occurrenceStart.toMillis() - (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('earlyCheckInMinutes', 0) * 60 * 1000) &&
-          request.time.toMillis() <= request.resource.data.occurrenceStart.toMillis() + (get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data.get('lateCutoffMinutes', 120) * 60 * 1000) &&
+            request.resource.data.status == 'on_time' &&
+            request.time <= request.resource.data.occurrenceStart &&
+            request.resource.data.penalty == 0 &&
+            request.resource.data.get('fineEGP', 0) == 0
+          ) ||
           (
-            (
-              request.resource.data.status == 'on_time' &&
-              request.time <= request.resource.data.occurrenceStart &&
-              request.resource.data.penalty == 0 &&
-              request.resource.data.get('fineEGP', 0) == 0
-            ) ||
-            (
-              request.resource.data.status == 'late' &&
-              request.time > request.resource.data.occurrenceStart &&
-              math.abs(request.time.toMillis() - request.resource.data.occurrenceStart.toMillis() - request.resource.data.delaySeconds * 1000) <= 10000 &&
-              isValidAttendancePoints(
-                get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data,
-                request.resource.data.penalty
-              ) &&
-              isValidAttendanceFine(
-                get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data,
-                request.resource.data.get('fineEGP', 0)
-              )
+            request.resource.data.status == 'late' &&
+            request.time > request.resource.data.occurrenceStart &&
+            math.abs(request.time.toMillis() - request.resource.data.occurrenceStart.toMillis() - request.resource.data.delaySeconds * 1000) <= 10000 &&
+            isValidAttendancePoints(
+              get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data,
+              request.resource.data.penalty
+            ) &&
+            isValidAttendanceFine(
+              get(/databases/$(database)/documents/attendance_sessions/$(request.resource.data.sessionId)).data,
+              request.resource.data.get('fineEGP', 0)
             )
           )
         )
@@ -622,8 +627,7 @@ service cloud.firestore {
 
     match /missed_penalties/{penaltyId} {
       allow read: if isAdmin() || (signedIn() && resource.data.get('uid', '') == request.auth.uid);
-      allow create: if isAdmin() && !exists(/databases/$(database)/documents/missed_penalties/$(penaltyId));
-      allow update, delete: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     // ---------------------------------------------------------------
@@ -711,16 +715,31 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------------
+    // Notification Dispatches Collection (Deduplication & Lifecycle)
+    // ---------------------------------------------------------------
+
+    match /notification_dispatches/{dispatchId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
     // Application Settings Collection
     // ---------------------------------------------------------------
 
+    // Admin maintenance background job progress (observed in real time via onSnapshot):
+    // Strictly restricted to administrators for both read and write.
+    match /settings/maintenance_jobs {
+      allow read, write: if isAdmin();
+    }
+
     // Global application settings (e.g. settings/global, settings/app_config, settings/general):
-    // Public read allows the app to load branding, custom theme colors, and config.
+    // Public read allows the app to load branding, custom theme colors, and config,
+    // while explicitly excluding settings/maintenance_jobs (admin-only).
     // Writes are strictly restricted to administrators.
     // For settingId == 'general', defaultLeaderboardPeriod must be in ['all', 'month', 'week'] if provided,
     // and logoUrl must be a string of <= 64000 characters if present.
     match /settings/{settingId} {
-      allow read: if true;
+      allow read: if settingId != 'maintenance_jobs' || isAdmin();
       allow write: if isAdmin() && (
         request.resource == null ||
         settingId != 'general' ||

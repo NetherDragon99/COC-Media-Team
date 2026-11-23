@@ -47,12 +47,12 @@
   --radius-xl: 22px;
   --radius-full: 9999px;
 
-  --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  --font-mono: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
 }
 
 .font-mono {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif !important;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif !important;
   font-variant-numeric: tabular-nums !important;
 }
 
@@ -68,32 +68,38 @@
     --ios-teal: #64D2FF;
     --ios-yellow: #FFD60A;
 
-    --bg-primary: #000000;
-    --bg-secondary: #1C1C1E;
-    --bg-grouped: #000000;
-    --bg-grouped-secondary: #1C1C1E;
-    --bg-grouped-tertiary: #2C2C2E;
-    --bg-card: rgba(28, 28, 30, 0.75);
-    --bg-glass: rgba(28, 28, 30, 0.78);
-    --bg-dock: rgba(28, 28, 30, 0.85);
+    --surface-0: #08080A;
+    --surface-1: #141418;
+    --surface-2: #1C1C22;
+    --surface-3: #26262E;
+
+    --bg-primary: #08080A;
+    --bg-secondary: #141418;
+    --bg-grouped: #08080A;
+    --bg-grouped-secondary: #141418;
+    --bg-grouped-tertiary: #1C1C22;
+    --bg-card: #141418;
+    --bg-glass: rgba(20, 20, 24, 0.72);
+    --bg-dock: rgba(20, 20, 24, 0.78);
 
     --text-primary: #FFFFFF;
-    --text-secondary: rgba(235, 235, 245, 0.60);
-    --text-tertiary: rgba(235, 235, 245, 0.30);
+    --text-secondary: #98989F;
+    --text-tertiary: #636366;
     --text-quaternary: rgba(235, 235, 245, 0.18);
 
-    --separator: rgba(84, 84, 88, 0.65);
-    --separator-opaque: #38383A;
-    --border-glass: rgba(255, 255, 255, 0.12);
+    --separator: rgba(255, 255, 255, 0.08);
+    --separator-opaque: #26262E;
+    --border-glass: rgba(255, 255, 255, 0.08);
+    --border-nested: rgba(255, 255, 255, 0.06);
 
     --fill-primary: rgba(120, 120, 128, 0.36);
     --fill-secondary: rgba(120, 120, 128, 0.32);
-    --fill-tertiary: rgba(118, 118, 128, 0.24);
+    --fill-tertiary: #1C1C22;
     --fill-quaternary: rgba(116, 116, 128, 0.18);
 
-    --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.4);
-    --shadow-float: 0 10px 36px rgba(0, 0, 0, 0.65), 0 1px 2px rgba(255, 255, 255, 0.08);
-    --shadow-elevated: 0 20px 50px rgba(0, 0, 0, 0.85);
+    --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.36);
+    --shadow-float: 0 10px 36px rgba(0, 0, 0, 0.62), 0 1px 2px rgba(255, 255, 255, 0.06);
+    --shadow-elevated: 0 20px 50px rgba(0, 0, 0, 0.8);
   }
 }
 
@@ -244,8 +250,9 @@ button:active {
 }
 
 .glass-card {
-  background: linear-gradient(145deg, rgba(28, 28, 32, 0.88), rgba(18, 18, 22, 0.94));
-  border: 0.5px solid var(--border-glass);
+  background: #141418;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
   contain: layout style;
 }
 
@@ -3995,6 +4002,238 @@ input[type="search"],
 #admin-members-tbody > * {
   content-visibility: auto;
   contain-intrinsic-size: auto 90px;
+}
+
+/* ============================================================================
+   APPLE HIG DARK MODE: 120 FPS GPU SHIMMER SKELETON SYSTEM
+   ============================================================================ */
+.skel {
+  position: relative;
+  overflow: hidden;
+  background: #1C1C22;
+  border-radius: 10px;
+}
+
+.skel-nested {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.skel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.06) 50%, transparent 100%);
+  animation: higShimmer 1.4s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes higShimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skel::after {
+    animation: none;
+    display: none;
+  }
+}
+
+.skel-circle {
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.skel-pill {
+  border-radius: 9999px;
+  height: 22px;
+}
+
+.skel-line {
+  height: 12px;
+  border-radius: 6px;
+}
+
+.skel-line-lg {
+  height: 15px;
+  border-radius: 7px;
+}
+
+.skel-line-sm {
+  height: 10px;
+  border-radius: 5px;
+}
+
+.skel-card {
+  background: #141418;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  contain: layout style;
+}
+
+/* ============================================================================
+   MEMBER CONTROL SWIPEABLE 4-TAB PAGER & APPLE HIG LEDGER/HISTORY CARDS
+   ============================================================================ */
+.member-ctrl-pager {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  touch-action: pan-x pan-y;
+}
+
+.member-ctrl-pager::-webkit-scrollbar {
+  display: none;
+}
+
+.member-ctrl-slide {
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  box-sizing: border-box;
+  padding-right: 2px;
+}
+
+.member-tab-btn {
+  min-height: 36px;
+  border-radius: 9px;
+  transition: background-color 0.16s cubic-bezier(0.22, 1, 0.36, 1), color 0.16s cubic-bezier(0.22, 1, 0.36, 1), transform 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.member-tab-btn:active {
+  transform: scale(0.97);
+}
+
+.hig-history-card {
+  background: #1C1C22;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: background-color 0.16s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+  contain: layout style;
+}
+
+.hig-history-card:hover {
+  background: #22222A;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.hig-action-btn {
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease;
+}
+
+.hig-action-btn:active {
+  transform: scale(0.97);
+}
+
+/* ============================================================================
+   INLINE MAINTENANCE PROGRESS CARDS (PERSISTENT BACKGROUND JOBS)
+   ============================================================================ */
+.maint-card {
+  background: #1C1C22;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 12px 14px;
+  transition: border-color 0.2s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease;
+}
+
+.maint-card.is-running {
+  border-color: rgba(10, 132, 255, 0.4);
+  background: rgba(10, 132, 255, 0.08);
+}
+
+.maint-card.is-done {
+  border-color: rgba(48, 209, 88, 0.35);
+  background: rgba(48, 209, 88, 0.07);
+}
+
+.maint-card.is-error {
+  border-color: rgba(255, 69, 58, 0.35);
+  background: rgba(255, 69, 58, 0.07);
+}
+
+.maint-progress-track {
+  width: 100%;
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  position: relative;
+}
+
+.maint-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: #0A84FF;
+  transition: width 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.maint-progress-fill.indeterminate {
+  width: 45%;
+  animation: maintIndeterminate 1.2s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes maintIndeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(240%);
+  }
+}
+
+.btn-reactivate-pill {
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(10, 132, 255, 0.14);
+  color: #0A84FF;
+  border: 1px solid rgba(10, 132, 255, 0.3);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease;
+}
+
+.btn-reactivate-pill:hover {
+  background: rgba(10, 132, 255, 0.24);
+}
+
+.btn-reactivate-pill:active {
+  transform: scale(0.97);
 }
 
 

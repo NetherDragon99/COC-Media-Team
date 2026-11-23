@@ -2122,5 +2122,183 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   }
 }
 
+// ---------------------------------------------------------------------------
+// Backend GAS v3.2.6: Deduplicated 3-Stage Notifications, App Logo, Reactivate & Maintenance Jobs
+// ---------------------------------------------------------------------------
+{
+  const gasCode = fs.readFileSync('backend-gas/Code.js', 'utf8');
+  const fcmPayloads = [];
+  const store = new Map();
+
+  const gasSandbox = {
+    console,
+    Intl,
+    Date,
+    Math,
+    String,
+    Number,
+    Boolean,
+    Array,
+    Object,
+    JSON,
+    RegExp,
+    Error,
+    Map,
+    Set,
+    parseInt,
+    parseFloat,
+    isNaN,
+    isFinite,
+    encodeURIComponent,
+    Utilities: {
+      formatDate: (d, tz, fmt) => {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+          timeZone: tz || 'Africa/Cairo',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        }).formatToParts(d);
+        const m = Object.fromEntries(parts.map(p => [p.type, p.value]));
+        if (fmt === 'yyyy-MM-dd') return `${m.year}-${m.month}-${m.day}`;
+        return `${m.year}-${m.month}-${m.day}T${m.hour}:${m.minute}:${m.second}`;
+      }
+    },
+    LockService: {
+      getScriptLock: () => ({
+        tryLock: () => true,
+        waitLock: () => {},
+        releaseLock: () => {}
+      })
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: () => '',
+        setProperty: () => {}
+      })
+    },
+    ScriptApp: {
+      getProjectTriggers: () => [],
+      newTrigger: () => ({ timeBased: () => ({ after: () => ({ create: () => {} }), everyMinutes: () => ({ create: () => {} }) }) }),
+      deleteTrigger: () => {}
+    },
+    UrlFetchApp: {
+      fetch: (url, opts) => {
+        if (String(url).includes('fcm.googleapis.com')) {
+          fcmPayloads.push(JSON.parse(opts.payload));
+        }
+        return { getResponseCode: () => 200, getContentText: () => '{"name":"ok"}' };
+      }
+    },
+    Session: { getScriptTimeZone: () => 'Africa/Cairo' },
+    Logger: { log: () => {} }
+  };
+  vm.createContext(gasSandbox);
+  vm.runInContext(gasCode, gasSandbox);
+
+  const taskStartMs = Date.parse('2026-11-23T16:00:00Z'); // 18:00 Cairo
+  const taskObj = {
+    id: 'task_dedup_1',
+    title: 'Edit Promo Reel',
+    active: true,
+    archived: false,
+    status: 'active',
+    points: 10,
+    assignmentType: 'specific',
+    assignedUids: ['u_done', 'u_pending'],
+    schedule: { type: 'once', startDateTime: taskStartMs, durationMinutes: 60 }
+  };
+  const usersArr = [
+    { id: 'u_done', uid: 'u_done', name: 'Done Member', role: 'member', status: 'active', points: 50, penalties: 0, finesDue: 0, fcmTokens: ['tok_done'] },
+    { id: 'u_pending', uid: 'u_pending', name: 'Pending Member', role: 'member', status: 'active', points: 40, penalties: 0, finesDue: 0, fcmTokens: ['tok_pending'] },
+    { id: 'u_other', uid: 'u_other', name: 'Other Member', role: 'member', status: 'active', points: 30, penalties: 0, finesDue: 0, fcmTokens: ['tok_other'] }
+  ];
+
+  store.set('tasks/task_dedup_1', taskObj);
+  usersArr.forEach(u => store.set(`users/${u.uid}`, u));
+  store.set('submissions/sub_done_1', { id: 'sub_done_1', taskId: 'task_dedup_1', uid: 'u_done', occurrenceKey: 'once', pointsAwarded: 10 });
+  store.set('notifications/old_root_1', { id: 'old_root_1', title: 'Old Root' });
+  store.set('notifications_broadcast/old_bc_1', { id: 'old_bc_1', title: 'Old Broadcast' });
+  store.set('users/u_done/notifications/old_sub_1', { id: 'old_sub_1', title: 'Old Member Feed' });
+
+  gasSandbox.getAuthHeader = () => ({ Authorization: 'Bearer test' });
+  gasSandbox.firestoreGet = (path) => store.get(path) || null;
+  gasSandbox.firestorePatch = (path, data) => {
+    const prev = store.get(path) || {};
+    const merged = { ...prev, ...data };
+    store.set(path, merged);
+    return true;
+  };
+  gasSandbox.firestorePost = (col, data) => {
+    const id = `${col.replace(/\//g, '_')}_${store.size + 1}`;
+    store.set(`${col}/${id}`, { id, ...data });
+    return { id, ...data };
+  };
+  gasSandbox.firestoreDelete = (path) => {
+    return store.delete(path);
+  };
+  const listByPrefix = (col) => {
+    const prefix = col + '/';
+    return Array.from(store.entries())
+      .filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/'))
+      .map(([, v]) => v);
+  };
+  gasSandbox.firestoreList = listByPrefix;
+  gasSandbox.firestoreListAll = listByPrefix;
+
+  // 1. Stage 1 Creation Alert -> notifies ONLY assigned eligible members (u_done & u_pending, NOT u_other)
+  const createRes1 = gasSandbox.notifyTaskCreated('task_dedup_1');
+  assert.strictEqual(createRes1.eligibleCount, 2, 'Creation alert must target only the 2 eligible members');
+  assert.strictEqual(fcmPayloads.length, 2, 'Expected 2 FCM pushes for eligible members');
+  const pushedTokensStage1 = fcmPayloads.map(p => p.message.token).sort();
+  assert.deepStrictEqual(pushedTokensStage1, ['tok_done', 'tok_pending'], 'Non-eligible member must NOT be notified');
+
+  // Verify FCM payload uses valid netherdragon99 logo and data-only structure (no double notification key)
+  assert.strictEqual(
+    fcmPayloads[0].message.data.iconUrl,
+    'https://netherdragon99.github.io/COC-Media-Team/pwa-192x192.png',
+    'FCM iconUrl must point to valid GitHub Pages app logo'
+  );
+  assert.strictEqual(fcmPayloads[0].message.notification, undefined, 'FCM message must be clean data-only for sw.js single display');
+
+  // Duplicate Creation Alert call must be skipped
+  const createRes2 = gasSandbox.notifyTaskCreated('task_dedup_1');
+  assert.strictEqual(createRes2.skipped, true, 'Second creation alert must be deduplicated');
+  assert.strictEqual(fcmPayloads.length, 2, 'No duplicate FCM pushes allowed');
+
+  // 2. Stage 2 10-Min Reminder (5 min before cutoff = 16:55Z) -> notifies ONLY u_pending (NOT u_done)
+  const fiveMinBeforeCutoff = taskStartMs + 55 * 60 * 1000;
+  gasSandbox.syncAndEvaluateAll({ nowMs: fiveMinBeforeCutoff });
+  assert.strictEqual(fcmPayloads.length, 3, 'Expected 1 reminder push for u_pending only');
+  assert.strictEqual(fcmPayloads[2].message.token, 'tok_pending', '10-min reminder must only go to unsubmitted eligible member');
+
+  // Repeated watchdog tick 1 minute later must send ZERO duplicate reminders
+  gasSandbox.syncAndEvaluateAll({ nowMs: fiveMinBeforeCutoff + 60 * 1000 });
+  assert.strictEqual(fcmPayloads.length, 3, 'Repeated watchdog tick must never duplicate 10-min reminder');
+
+  // 3. Reactivate Task (reopen_only keeps existing submission; fresh_reset reverses points & deletes submission)
+  const reopenRes = gasSandbox.handleReactivateTask({ taskId: 'task_dedup_1', mode: 'reopen_only' });
+  assert.strictEqual(reopenRes.mode, 'reopen_only');
+  assert.strictEqual(reopenRes.reversedSubmissions, 0, 'reopen_only must preserve existing submissions');
+  assert.ok(store.has('submissions/sub_done_1'), 'Submission must still exist after reopen_only');
+
+  const freshRes = gasSandbox.handleReactivateTask({ taskId: 'task_dedup_1', mode: 'fresh_reset' });
+  assert.strictEqual(freshRes.mode, 'fresh_reset');
+  assert.strictEqual(freshRes.reversedSubmissions, 1, 'fresh_reset must reverse existing submission');
+  assert.strictEqual(store.has('submissions/sub_done_1'), false, 'Submission must be deleted after fresh_reset');
+  assert.strictEqual(store.get('users/u_done').points, 40, 'u_done points must be reversed from 50 back to 40');
+
+  // 4. Background Maintenance Job (purge_notifications) cleans root, broadcast, dispatches & member subcollections
+  const purgeRes = gasSandbox.handleRunMaintenanceJob({ jobType: 'purge_notifications', adminUid: 'admin_1' });
+  assert.strictEqual(purgeRes.status, 'done');
+  assert.strictEqual(store.has('notifications/old_root_1'), false, 'Root notification must be deleted');
+  assert.strictEqual(store.has('notifications_broadcast/old_bc_1'), false, 'Broadcast notification must be deleted');
+  assert.strictEqual(store.has('users/u_done/notifications/old_sub_1'), false, 'Member subcollection notification must be deleted');
+  assert.strictEqual(store.get('settings/maintenance_jobs').jobs.purge_notifications.status, 'done');
+}
+
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
 

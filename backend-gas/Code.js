@@ -1,6 +1,7 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.5)
- * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync & FCM v1 Web Push
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.6)
+ * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync,
+ * Deduplicated 3-Stage Notifications, Background Maintenance Jobs & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
  */
 
@@ -69,7 +70,7 @@ function doGet(e) {
   ensureWatchdogTriggersInstalled();
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.2.5",
+    version: "3.2.6",
     system: "CoC Media Unified Task & Attendance Backend Watchdog",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -82,6 +83,71 @@ function doPost(e) {
     const rawData = e && e.postData && e.postData.contents ? e.postData.contents : "{}";
     const payload = JSON.parse(rawData);
     const action = payload.action || "";
+
+    if (action === "TASK_CREATED" && payload.taskId) {
+      const notifyRes = notifyTaskCreated(payload.taskId, null, { runTag: payload.runTag || "created" });
+      const evalSummary = syncAndEvaluateAll();
+      return jsonResponse({
+        status: "success",
+        message: "Task creation notification dispatched and schedules synchronized.",
+        result: { notify: notifyRes, eval: evalSummary }
+      });
+    }
+
+    if (action === "SESSION_CREATED" && payload.sessionId) {
+      const notifyRes = notifySessionCreated(payload.sessionId, null, { runTag: payload.runTag || "created" });
+      const evalSummary = syncAndEvaluateAll();
+      return jsonResponse({
+        status: "success",
+        message: "Session creation notification dispatched and schedules synchronized.",
+        result: { notify: notifyRes, eval: evalSummary }
+      });
+    }
+
+    if (action === "REACTIVATE_TASK" && payload.taskId) {
+      const result = handleReactivateTask(payload);
+      return jsonResponse({
+        status: "success",
+        message: `Task ${payload.taskId} reactivated (${result.mode}).`,
+        result: result
+      });
+    }
+
+    if (action === "REACTIVATE_SESSION" && payload.sessionId) {
+      const result = handleReactivateSession(payload);
+      return jsonResponse({
+        status: "success",
+        message: `Session ${payload.sessionId} reactivated (${result.mode}).`,
+        result: result
+      });
+    }
+
+    if (action === "RUN_MAINTENANCE_JOB" && payload.jobType) {
+      const result = handleRunMaintenanceJob(payload);
+      return jsonResponse({
+        status: result.status === "error" ? "error" : "success",
+        message: result.detail || "Maintenance job completed.",
+        result: result
+      });
+    }
+
+    if (action === "DELETE_NOTIFICATION") {
+      const result = handleDeleteNotification(payload);
+      return jsonResponse({
+        status: "success",
+        message: "Notification deleted.",
+        result: result
+      });
+    }
+
+    if (action === "DELETE_USER_HISTORY_ITEM") {
+      const result = handleDeleteUserHistoryItem(payload);
+      return jsonResponse({
+        status: "success",
+        message: "User history item deleted.",
+        result: result
+      });
+    }
 
     if (
       action === "SESSION_UPDATED" ||
@@ -649,10 +715,9 @@ function syncAndEvaluateSessions() {
  * to auto-close expired windows, apply missed penalties/fines, send opening window alerts,
  * and determine if the 1-minute heartbeat trigger should be active.
  */
-function syncAndEvaluateAll() {
+function syncAndEvaluateAll(opts = {}) {
   return runWithScriptLock("syncAndEvaluateAll", function () {
-    const now = new Date();
-    const nowMs = now.getTime();
+    const nowMs = (opts && Number(opts.nowMs)) || Date.now();
     const allSessions = fetchSessionsFromFirestore();
     const allTasks = fetchTasksFromFirestore();
     let hasActiveOrUpcoming = false;
@@ -693,13 +758,14 @@ function syncAndEvaluateAll() {
           return;
         }
 
-        // 2. Check if session is inside its early check-in opening window -> Send Opening Push once per occurrence (only within 30 mins of open)
-        if (startMs && nowMs >= openWindowMs && nowMs <= cutoffMs) {
+        // 2. Active or upcoming session -> keep 1-min heartbeat active & send Stage-2 10-min reminder ONLY to pending eligible members
+        if (startMs && nowMs >= openWindowMs && nowMs < cutoffMs) {
           hasActiveOrUpcoming = true;
-          const notifiedKey = session.lastOpenNotifiedKey || "";
-          if (notifiedKey !== occurrenceKey && (nowMs - openWindowMs <= 30 * 60 * 1000)) {
+          const remainingMs = cutoffMs - nowMs;
+          const remKey = session.lastReminder10mKey || "";
+          if (remainingMs > 0 && remainingMs <= 10 * 60 * 1000 && remKey !== occurrenceKey) {
             if (!allUsersCache) allUsersCache = fetchApprovedUsers();
-            notifySessionWindowOpened(session, occ, allUsersCache);
+            notifySessionClosingSoon10m(session, occ, allUsersCache);
           }
         } else if (startMs) {
           const preBufferMs = startMs - (CONFIG.PRE_SESSION_BUFFER_MINUTES * 60 * 1000);
@@ -744,15 +810,18 @@ function syncAndEvaluateAll() {
           return;
         }
 
-        // 2. Check if task occurrence is open -> Send Opening Push once per occurrence (only within 30 mins of start)
+        // 2. Active non-permanent task -> keep 1-min heartbeat active & send Stage-2 10-min reminder ONLY to unsubmitted eligible members
         if (startMs && nowMs >= startMs && (win.isPermanent || !cutoffMs || nowMs < cutoffMs)) {
           if (!win.isPermanent) {
             hasActiveOrUpcoming = true;
-          }
-          const notifiedKey = task.lastOpenNotifiedKey || task.lastOpenedOccurrenceKey || "";
-          if (notifiedKey !== occurrenceKey && (nowMs - startMs <= 30 * 60 * 1000)) {
-            if (!allUsersCache) allUsersCache = fetchApprovedUsers();
-            notifyTaskWindowOpened(task, win, allUsersCache);
+            if (cutoffMs) {
+              const remainingMs = cutoffMs - nowMs;
+              const remKey = task.lastReminder10mKey || "";
+              if (remainingMs > 0 && remainingMs <= 10 * 60 * 1000 && remKey !== occurrenceKey) {
+                if (!allUsersCache) allUsersCache = fetchApprovedUsers();
+                notifyTaskClosingSoon10m(task, win, allUsersCache);
+              }
+            }
           }
         } else if (startMs && !win.isPermanent) {
           const preBufferMs = startMs - (CONFIG.PRE_SESSION_BUFFER_MINUTES * 60 * 1000);
@@ -772,85 +841,362 @@ function syncAndEvaluateAll() {
   });
 }
 
+// -------------------------------------------------------------
+// DEDUPLICATED 3-STAGE EVENT NOTIFICATION HELPERS
+// -------------------------------------------------------------
+
+function sanitizeFirestoreDocId(raw) {
+  return String(raw || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 140) || ("id_" + Date.now());
+}
+
 /**
- * Sends a native Chrome Web Push and in-app notification when a session enters its check-in window.
+ * Claims a unique dispatch key in `notification_dispatches/{key}` so a notification
+ * stage can NEVER fire twice across concurrent triggers or retries.
  */
-function notifySessionWindowOpened(session, occ, allUsers) {
+function claimNotificationDispatch(dispatchKey, meta = {}) {
+  const safeId = sanitizeFirestoreDocId(dispatchKey);
+  const existing = firestoreGet(`notification_dispatches/${safeId}`);
+  if (existing) {
+    return false;
+  }
+  const nowIso = new Date().toISOString();
+  firestorePatch(`notification_dispatches/${safeId}`, {
+    key: safeId,
+    stage: meta.stage || "event",
+    entityId: meta.entityId || "",
+    occurrenceKey: meta.occurrenceKey || "",
+    createdAt: nowIso
+  });
+  return true;
+}
+
+/**
+ * Writes a single deterministic user notification under `users/{uid}/notifications/{docId}`
+ * (never double-writing to both root `notifications` and subcollection).
+ */
+function writeUserNotificationOnce(uid, deterministicId, payload) {
+  if (!uid || !deterministicId) return false;
+  const safeId = sanitizeFirestoreDocId(deterministicId);
+  const nowIso = payload.createdAt || new Date().toISOString();
+  const nowMs = payload.createdAtMs || Date.now();
+  const bodyText = String(payload.body || payload.message || "").trim();
+  const titleText = String(payload.title || "CoC Media Team").trim();
+
+  return firestorePatch(`users/${uid}/notifications/${safeId}`, {
+    id: safeId,
+    uid: uid,
+    userId: uid,
+    title: titleText,
+    message: bodyText,
+    body: bodyText,
+    type: payload.type || "system",
+    category: payload.category || payload.type || "system",
+    icon: payload.icon || "bell",
+    targetType: payload.targetType || "individual",
+    targetAction: payload.targetAction || null,
+    taskId: payload.taskId || "",
+    sessionId: payload.sessionId || "",
+    stage: payload.stage || "",
+    read: false,
+    createdAt: nowIso,
+    timestamp: nowIso,
+    createdAtMs: nowMs
+  });
+}
+
+/**
+ * Stage 1 (Session Created / Reactivated): Notifies ONLY eligible members.
+ */
+function notifySessionCreated(sessionId, sessionObj, opts = {}) {
   try {
+    const session = sessionObj || fetchSingleSession(sessionId);
+    if (!session || session.archived || session.active === false) {
+      return { sent: 0, skipped: true, reason: "inactive_or_missing" };
+    }
+    const runTag = sanitizeFirestoreDocId(opts.runTag || "created");
+    const dispatchKey = `session_created_${sessionId}_${runTag}`;
+    if (!claimNotificationDispatch(dispatchKey, { stage: "created", entityId: sessionId, occurrenceKey: runTag })) {
+      return { sent: 0, skipped: true, reason: "already_dispatched" };
+    }
+
+    const allUsers = opts.allUsers || fetchApprovedUsers();
     const eligibleMembers = (allUsers || []).filter(u => isUserEligibleForSession(session, u));
-    const tokens = collectFcmTokensForUsers(eligibleMembers);
-    const title = "Attendance Check-In Open! 🟢";
-    const body = `"${session.title || 'Attendance Session'}" is now open for check-in. Check in early to earn bonus rewards!`;
+    if (eligibleMembers.length === 0) {
+      return { sent: 0, eligibleCount: 0 };
+    }
+
+    const isReactivated = runTag !== "created";
+    const title = isReactivated ? "Attendance Session Reopened" : "New Attendance Session";
+    const body = isReactivated
+      ? `"${session.title || "Attendance Session"}" has been reactivated for check-in.`
+      : `"${session.title || "Attendance Session"}" has been scheduled for you.`;
     const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const targetAction = { route: "attendance", itemId: sessionId };
 
-    firestorePatch(`attendance_sessions/${session.id}`, {
-      lastOpenNotifiedKey: occ.occurrenceKey,
-      updatedAt: nowIso
-    }, ["lastOpenNotifiedKey", "updatedAt"]);
-
-    firestorePost("notifications_broadcast", {
-      title: title,
-      message: body,
-      body: body,
-      type: "attendance",
-      icon: "calendar",
-      targetType: "all",
-      badgeId: null,
-      readBy: [],
-      targetAction: { route: "attendance", itemId: session.id },
-      createdAt: nowIso
+    eligibleMembers.forEach(member => {
+      const uid = member.id || member.uid;
+      if (!uid) return;
+      writeUserNotificationOnce(uid, `${dispatchKey}_${uid}`, {
+        title: title,
+        body: body,
+        type: "attendance",
+        category: "attendance",
+        icon: "calendar",
+        sessionId: sessionId,
+        stage: "created",
+        targetAction: targetAction,
+        createdAt: nowIso,
+        createdAtMs: nowMs
+      });
     });
 
+    const tokens = collectFcmTokensForUsers(eligibleMembers);
+    let sentCount = 0;
     if (tokens.length > 0) {
-      sendFcmWebPush(tokens, title, body, CONFIG.PWA_URL + "#attendance");
+      sentCount = sendFcmWebPushDetailed(tokens, title, body, CONFIG.PWA_URL + "#attendance", {
+        inAppIcon: "calendar",
+        targetRoute: "attendance",
+        targetItemId: sessionId,
+        tag: dispatchKey
+      }).sentCount;
     }
-    console.log(`[OpenNotify] Sent opening alert for session ${session.id} (${occ.occurrenceKey}) to ${tokens.length} push token(s).`);
+    return { sent: sentCount, eligibleCount: eligibleMembers.length, dispatchKey: dispatchKey };
   } catch (err) {
-    console.warn("[OpenNotify] Failed:", err);
+    console.warn("[notifySessionCreated] Error:", err);
+    return { sent: 0, error: String(err && err.message || err) };
   }
 }
 
 /**
- * Sends a native Chrome Web Push and in-app notification when a task occurrence window opens.
+ * Stage 1 (Task Created / Reactivated): Notifies ONLY eligible members.
  */
-function notifyTaskWindowOpened(task, win, allUsers) {
+function notifyTaskCreated(taskId, taskObj, opts = {}) {
   try {
+    const task = taskObj || fetchSingleTask(taskId);
+    if (!task || task.archived || task.active === false) {
+      return { sent: 0, skipped: true, reason: "inactive_or_missing" };
+    }
+    const runTag = sanitizeFirestoreDocId(opts.runTag || "created");
+    const dispatchKey = `task_created_${taskId}_${runTag}`;
+    if (!claimNotificationDispatch(dispatchKey, { stage: "created", entityId: taskId, occurrenceKey: runTag })) {
+      return { sent: 0, skipped: true, reason: "already_dispatched" };
+    }
+
+    const allUsers = opts.allUsers || fetchApprovedUsers();
     const eligibleMembers = (allUsers || []).filter(u => isUserEligibleForTask(task, u));
-    const tokens = collectFcmTokensForUsers(eligibleMembers);
+    if (eligibleMembers.length === 0) {
+      return { sent: 0, eligibleCount: 0 };
+    }
+
     const tiers = normalizeTaskTiersInGas(task);
-    const title = "New Task Window Open! 📋";
+    const isReactivated = runTag !== "created";
+    const title = isReactivated ? "Task Reopened" : "New Task Assigned";
     const bonusNote = (tiers.earlyBonus.enabled && tiers.earlyBonus.points > tiers.onTimePoints)
-      ? ` Submit early for +${tiers.earlyBonus.points} pts!`
+      ? ` Early bonus: +${tiers.earlyBonus.points} pts.`
       : ` Reward: +${tiers.onTimePoints} pts.`;
-    const body = `"${task.title || 'Task'}" is now open for submission.${bonusNote}`;
+    const body = isReactivated
+      ? `"${task.title || "Task"}" has been reactivated.${bonusNote}`
+      : `"${task.title || "Task"}" is now assigned to you.${bonusNote}`;
     const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const targetAction = { route: "tasks", itemId: taskId };
 
-    firestorePatch(`tasks/${task.id}`, {
-      lastOpenNotifiedKey: win.occurrenceKey,
-      lastOpenedOccurrenceKey: win.occurrenceKey,
-      updatedAt: nowIso
-    }, ["lastOpenNotifiedKey", "lastOpenedOccurrenceKey", "updatedAt"]);
-
-    firestorePost("notifications_broadcast", {
-      title: title,
-      message: body,
-      body: body,
-      type: "task",
-      icon: "clipboard",
-      targetType: "all",
-      badgeId: null,
-      readBy: [],
-      targetAction: { route: "tasks", itemId: task.id },
-      createdAt: nowIso
+    eligibleMembers.forEach(member => {
+      const uid = member.id || member.uid;
+      if (!uid) return;
+      writeUserNotificationOnce(uid, `${dispatchKey}_${uid}`, {
+        title: title,
+        body: body,
+        type: "task",
+        category: "task",
+        icon: "clipboard",
+        taskId: taskId,
+        stage: "created",
+        targetAction: targetAction,
+        createdAt: nowIso,
+        createdAtMs: nowMs
+      });
     });
 
+    const tokens = collectFcmTokensForUsers(eligibleMembers);
+    let sentCount = 0;
     if (tokens.length > 0) {
-      sendFcmWebPush(tokens, title, body, CONFIG.PWA_URL + "#tasks");
+      sentCount = sendFcmWebPushDetailed(tokens, title, body, CONFIG.PWA_URL + "#tasks", {
+        inAppIcon: "clipboard",
+        targetRoute: "tasks",
+        targetItemId: taskId,
+        tag: dispatchKey
+      }).sentCount;
     }
-    console.log(`[TaskOpenNotify] Sent opening alert for task ${task.id} (${win.occurrenceKey}) to ${tokens.length} push token(s).`);
+    return { sent: sentCount, eligibleCount: eligibleMembers.length, dispatchKey: dispatchKey };
   } catch (err) {
-    console.warn("[TaskOpenNotify] Failed:", err);
+    console.warn("[notifyTaskCreated] Error:", err);
+    return { sent: 0, error: String(err && err.message || err) };
   }
+}
+
+/**
+ * Stage 2 (10-Minute Reminder for Attendance): Notifies ONLY eligible members
+ * who have NOT yet checked in and do NOT have an approved excuse for this occurrence.
+ */
+function notifySessionClosingSoon10m(session, occ, allUsers) {
+  try {
+    if (!session || !occ) return { sent: 0, skipped: true };
+    const sessionId = session.id;
+    const effOccKey = occ.occurrenceKey || "once";
+    const dispatchKey = `session_rem10m_${sessionId}_${effOccKey}`;
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+
+    firestorePatch(`attendance_sessions/${sessionId}`, {
+      lastReminder10mKey: effOccKey,
+      updatedAt: nowIso
+    }, ["lastReminder10mKey", "updatedAt"]);
+
+    if (!claimNotificationDispatch(dispatchKey, { stage: "reminder_10m", entityId: sessionId, occurrenceKey: effOccKey })) {
+      return { sent: 0, skipped: true, reason: "already_dispatched" };
+    }
+
+    const eligibleMembers = (allUsers || []).filter(u => isUserEligibleForSession(session, u));
+    if (eligibleMembers.length === 0) return { sent: 0, pendingCount: 0 };
+
+    const logs = fetchAttendanceLogsForSession(sessionId);
+    const records = fetchAttendanceRecordsForSession(sessionId);
+    const waivers = fetchApprovedWaiversForSession(sessionId);
+
+    const pendingMembers = eligibleMembers.filter(m => {
+      const uid = m.id || m.uid;
+      if (!uid) return false;
+      return !hasMemberAttendanceOrExcuseForWindow(uid, sessionId, occ, effOccKey, logs, records, waivers);
+    });
+
+    if (pendingMembers.length === 0) return { sent: 0, pendingCount: 0 };
+
+    const minsLeft = Math.max(1, Math.min(10, Math.ceil((occ.cutoffMs - nowMs) / 60000)));
+    const title = `Attendance Closing in ${minsLeft}m`;
+    const body = `"${session.title || "Attendance Session"}" check-in closes in ${minsLeft} minute${minsLeft === 1 ? "" : "s"}. Check in now to avoid an absence penalty.`;
+    const targetAction = { route: "attendance", itemId: sessionId };
+
+    pendingMembers.forEach(member => {
+      const uid = member.id || member.uid;
+      if (!uid) return;
+      writeUserNotificationOnce(uid, `${dispatchKey}_${uid}`, {
+        title: title,
+        body: body,
+        type: "alert",
+        category: "attendance",
+        icon: "clock",
+        sessionId: sessionId,
+        stage: "reminder_10m",
+        targetAction: targetAction,
+        createdAt: nowIso,
+        createdAtMs: nowMs
+      });
+    });
+
+    const tokens = collectFcmTokensForUsers(pendingMembers);
+    let sentCount = 0;
+    if (tokens.length > 0) {
+      sentCount = sendFcmWebPushDetailed(tokens, title, body, CONFIG.PWA_URL + "#attendance", {
+        inAppIcon: "clock",
+        targetRoute: "attendance",
+        targetItemId: sessionId,
+        tag: dispatchKey
+      }).sentCount;
+    }
+    return { sent: sentCount, pendingCount: pendingMembers.length, dispatchKey: dispatchKey };
+  } catch (err) {
+    console.warn("[notifySessionClosingSoon10m] Error:", err);
+    return { sent: 0, error: String(err && err.message || err) };
+  }
+}
+
+/**
+ * Stage 2 (10-Minute Reminder for Tasks): Notifies ONLY eligible members
+ * who have NOT yet submitted for this task occurrence.
+ */
+function notifyTaskClosingSoon10m(task, win, allUsers) {
+  try {
+    if (!task || !win || win.isPermanent || !win.cutoffMs) return { sent: 0, skipped: true };
+    const taskId = task.id;
+    const effOccKey = win.occurrenceKey || "once";
+    const dispatchKey = `task_rem10m_${taskId}_${effOccKey}`;
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+
+    firestorePatch(`tasks/${taskId}`, {
+      lastReminder10mKey: effOccKey,
+      updatedAt: nowIso
+    }, ["lastReminder10mKey", "updatedAt"]);
+
+    if (!claimNotificationDispatch(dispatchKey, { stage: "reminder_10m", entityId: taskId, occurrenceKey: effOccKey })) {
+      return { sent: 0, skipped: true, reason: "already_dispatched" };
+    }
+
+    const eligibleMembers = (allUsers || []).filter(u => isUserEligibleForTask(task, u));
+    if (eligibleMembers.length === 0) return { sent: 0, pendingCount: 0 };
+
+    const existingSubs = fetchSubmissionsForTask(taskId);
+    const submittedUids = new Set(
+      existingSubs
+        .filter(s => !effOccKey || effOccKey === "once" || !s.occurrenceKey || s.occurrenceKey === effOccKey)
+        .map(s => s.uid || s.userId)
+        .filter(Boolean)
+    );
+
+    const pendingMembers = eligibleMembers.filter(m => {
+      const uid = m.id || m.uid;
+      return uid && !submittedUids.has(uid);
+    });
+
+    if (pendingMembers.length === 0) return { sent: 0, pendingCount: 0 };
+
+    const minsLeft = Math.max(1, Math.min(10, Math.ceil((win.cutoffMs - nowMs) / 60000)));
+    const title = `Task Deadline in ${minsLeft}m`;
+    const body = `"${task.title || "Task"}" closes in ${minsLeft} minute${minsLeft === 1 ? "" : "s"}. Submit before time runs out.`;
+    const targetAction = { route: "tasks", itemId: taskId };
+
+    pendingMembers.forEach(member => {
+      const uid = member.id || member.uid;
+      if (!uid) return;
+      writeUserNotificationOnce(uid, `${dispatchKey}_${uid}`, {
+        title: title,
+        body: body,
+        type: "alert",
+        category: "task",
+        icon: "clock",
+        taskId: taskId,
+        stage: "reminder_10m",
+        targetAction: targetAction,
+        createdAt: nowIso,
+        createdAtMs: nowMs
+      });
+    });
+
+    const tokens = collectFcmTokensForUsers(pendingMembers);
+    let sentCount = 0;
+    if (tokens.length > 0) {
+      sentCount = sendFcmWebPushDetailed(tokens, title, body, CONFIG.PWA_URL + "#tasks", {
+        inAppIcon: "clock",
+        targetRoute: "tasks",
+        targetItemId: taskId,
+        tag: dispatchKey
+      }).sentCount;
+    }
+    return { sent: sentCount, pendingCount: pendingMembers.length, dispatchKey: dispatchKey };
+  } catch (err) {
+    console.warn("[notifyTaskClosingSoon10m] Error:", err);
+    return { sent: 0, error: String(err && err.message || err) };
+  }
+}
+
+// Legacy aliases retained so any existing test or manual invocation routes safely
+function notifySessionWindowOpened(session, occ, allUsers) {
+  return notifySessionClosingSoon10m(session, occ, allUsers);
+}
+function notifyTaskWindowOpened(task, win, allUsers) {
+  return notifyTaskClosingSoon10m(task, win, allUsers);
 }
 
 // -------------------------------------------------------------
@@ -871,9 +1217,12 @@ function normalizeTaskTiersInGas(task) {
   const onTimePoints = typeof task.points === "number"
     ? task.points
     : (typeof (task.tieredRewards && task.tieredRewards.onTimePoints) === "number" ? task.tieredRewards.onTimePoints : (Number(task.points) || 5));
-  const durationMinutes = (typeof task.durationMinutes === "number" && task.durationMinutes > 0)
+  const rawDur = (typeof task.durationMinutes === "number" && task.durationMinutes > 0)
     ? task.durationMinutes
-    : (Number(task.durationMinutes) > 0 ? Number(task.durationMinutes) : null);
+    : (Number(task.durationMinutes) > 0
+        ? Number(task.durationMinutes)
+        : (task.schedule && Number(task.schedule.durationMinutes) > 0 ? Number(task.schedule.durationMinutes) : null));
+  const durationMinutes = rawDur;
 
   let earlyBonus = { enabled: false, untilMinutes: 0, points: onTimePoints };
   if (task.earlyBonus && typeof task.earlyBonus === "object") {
@@ -1158,12 +1507,39 @@ function isUserEligibleForTask(task, user) {
   if (Array.isArray(task.excludedUids) && task.excludedUids.includes(uid)) {
     return false;
   }
+
+  const assignmentType = task.assignmentType || (task.targetType === "custom" ? "specific" : (task.targetType === "badge" ? "by_badge" : ""));
+  if (assignmentType === "specific") {
+    const list = []
+      .concat(Array.isArray(task.assignedMembers) ? task.assignedMembers : [])
+      .concat(Array.isArray(task.assignedUids) ? task.assignedUids : [])
+      .concat(Array.isArray(task.targetUids) ? task.targetUids : [])
+      .filter(Boolean);
+    if (list.length > 0) return list.includes(uid);
+    return false;
+  }
+
+  if (assignmentType === "by_badge") {
+    const rawIds = Array.isArray(user.badgeIds) ? user.badgeIds : [];
+    const rawObjs = Array.isArray(user.badges) ? user.badges.map(x => (x && typeof x === "object") ? x.id : x) : [];
+    const userBadgeSet = new Set(rawIds.concat(rawObjs).filter(Boolean).map(String));
+    const bIds = Array.isArray(task.badgeIds) ? task.badgeIds : [];
+    if (bIds.length === 0) return true;
+    return bIds.some(b => userBadgeSet.has(String(b)));
+  }
+
   if (task.claimPolicy === "admin_assigned" || task.claimPolicy === "milestone") {
-    if (Array.isArray(task.assignedUids) && task.assignedUids.length > 0) {
-      return task.assignedUids.includes(uid);
+    const list = []
+      .concat(Array.isArray(task.assignedUids) ? task.assignedUids : [])
+      .concat(Array.isArray(task.assignedMembers) ? task.assignedMembers : [])
+      .concat(Array.isArray(task.targetUids) ? task.targetUids : [])
+      .filter(Boolean);
+    if (list.length > 0) {
+      return list.includes(uid);
     }
     return false;
   }
+
   return true;
 }
 
@@ -1341,6 +1717,41 @@ function handleProcessTaskSubmission(payload) {
     });
   }
 
+  // Stage 3 (Task Reward / Penalty Applied): Single deduplicated notification to the member
+  if (evalResult.pointsAwarded > 0 || evalResult.penaltyPts > 0 || evalResult.fineEGP > 0) {
+    const resultKey = `task_result_${subId}`;
+    if (claimNotificationDispatch(resultKey, { stage: "result", entityId: taskId, occurrenceKey: occurrenceKey })) {
+      const parts = [];
+      if (evalResult.pointsAwarded > 0) parts.push(`+${evalResult.pointsAwarded} pts`);
+      if (evalResult.penaltyPts > 0) parts.push(`${evalResult.penaltyPts} Penalty Pts`);
+      if (evalResult.fineEGP > 0) parts.push(`${evalResult.fineEGP} EGP Fine`);
+      const hasPen = evalResult.penaltyPts > 0 || evalResult.fineEGP > 0;
+      const nTitle = hasPen ? "Task Submitted (Grace Penalty)" : "Task Reward Earned";
+      const nBody = `"${taskTitle}" recorded (${evalResult.statusText}): ${parts.join(" · ")}.`;
+      writeUserNotificationOnce(uid, resultKey, {
+        title: nTitle,
+        body: nBody,
+        type: hasPen ? "penalty" : "reward",
+        category: "task",
+        icon: hasPen ? "alert-circle" : "star",
+        taskId: taskId,
+        stage: "result",
+        targetAction: { route: "tasks", itemId: taskId },
+        createdAt: nowIso,
+        createdAtMs: nowMs
+      });
+      const memberTokens = collectFcmTokensForUsers([userDoc]);
+      if (memberTokens.length > 0) {
+        sendFcmWebPushDetailed(memberTokens, nTitle, nBody, CONFIG.PWA_URL + "#tasks", {
+          inAppIcon: hasPen ? "alert-circle" : "star",
+          targetRoute: "tasks",
+          targetItemId: taskId,
+          tag: resultKey
+        });
+      }
+    }
+  }
+
   return {
     submissionId: subId,
     taskId: taskId,
@@ -1512,31 +1923,36 @@ function closeTaskAndApplyPenalties(taskId, taskObj, occurrenceKey) {
         createdAtMs: nowMs
       });
 
-      // E. Dispatch in-app notification
-      const notifTitle = "Task Deadline Missed ⚠️";
-      const notifBody = `You missed the deadline for "${taskTitle}". Penalty: -${ptsPenalty} pts${finePenalty > 0 ? `, -${finePenalty} EGP` : ""}.`;
-      const notifPayload = {
-        uid: uid,
-        userId: uid,
-        title: notifTitle,
-        message: notifBody,
-        body: notifBody,
-        type: "penalty",
-        category: "alert",
-        icon: "alert-circle",
-        taskId: taskId,
-        read: false,
-        createdAt: nowIso,
-        timestamp: nowIso,
-        createdAtMs: nowMs
-      };
-      firestorePost("notifications", notifPayload);
-      firestorePost(`users/${uid}/notifications`, notifPayload);
+      // E. Stage 3 (Penalty Applied): Single deduplicated in-app + Web Push notification
+      const penKey = `task_missed_${penaltyDocId}`;
+      if (claimNotificationDispatch(penKey, { stage: "penalty", entityId: taskId, occurrenceKey: effOccKey })) {
+        const penaltyParts = [];
+        if (ptsPenalty > 0) penaltyParts.push(`${ptsPenalty} Penalty Pts`);
+        if (finePenalty > 0) penaltyParts.push(`${finePenalty} EGP Fine`);
+        const notifTitle = "Task Deadline Missed";
+        const notifBody = `You missed the deadline for "${taskTitle}". Applied: ${penaltyParts.join(" | ")}.`;
+        writeUserNotificationOnce(uid, penKey, {
+          title: notifTitle,
+          body: notifBody,
+          type: "penalty",
+          category: "alert",
+          icon: "alert-circle",
+          taskId: taskId,
+          stage: "penalty",
+          targetAction: { route: "tasks", itemId: taskId },
+          createdAt: nowIso,
+          createdAtMs: nowMs
+        });
 
-      // F. Dispatch external Chrome Web Push
-      const memberTokens = collectFcmTokensForUsers([member]);
-      if (memberTokens.length > 0) {
-        sendFcmWebPush(memberTokens, notifTitle, notifBody, CONFIG.PWA_URL + "#tasks");
+        const memberTokens = collectFcmTokensForUsers([member]);
+        if (memberTokens.length > 0) {
+          sendFcmWebPushDetailed(memberTokens, notifTitle, notifBody, CONFIG.PWA_URL + "#tasks", {
+            inAppIcon: "alert-circle",
+            targetRoute: "tasks",
+            targetItemId: taskId,
+            tag: penKey
+          });
+        }
       }
     });
 
@@ -1929,6 +2345,40 @@ function handleProcessCheckIn(payload) {
         timestamp: nowIso,
         createdAtMs: nowMs
       });
+
+      // Stage 3 (Check-In Reward / Late Penalty Applied): Single deduplicated notification
+      const attResultKey = `att_result_${logId}`;
+      if (claimNotificationDispatch(attResultKey, { stage: "result", entityId: sessionId, occurrenceKey: effOccKey })) {
+        const isReward = earnedPts > 0 || bonusEGP > 0;
+        const summaryParts = [];
+        if (earnedPts > 0) summaryParts.push(`+${earnedPts} pts`);
+        if (bonusEGP > 0) summaryParts.push(`+${bonusEGP} EGP`);
+        if (penaltyPts > 0) summaryParts.push(`${penaltyPts} Penalty Pts`);
+        if (penaltyEGP > 0) summaryParts.push(`${penaltyEGP} EGP Fine`);
+        const nTitle = isReward ? "Early Check-In Reward" : "Late Check-In Penalty";
+        const nBody = `"${sessionTitle}" (${evalResult.appliedTierLabel || evalResult.status}): ${summaryParts.join(" | ")}.`;
+        writeUserNotificationOnce(uid, attResultKey, {
+          title: nTitle,
+          body: nBody,
+          type: isReward ? "reward" : "penalty",
+          category: "attendance",
+          icon: isReward ? "star" : "alert-circle",
+          sessionId: sessionId,
+          stage: "result",
+          targetAction: { route: "attendance", itemId: sessionId },
+          createdAt: nowIso,
+          createdAtMs: nowMs
+        });
+        const memberTokens = collectFcmTokensForUsers([userDoc]);
+        if (memberTokens.length > 0) {
+          sendFcmWebPushDetailed(memberTokens, nTitle, nBody, CONFIG.PWA_URL + "#attendance", {
+            inAppIcon: isReward ? "star" : "alert-circle",
+            targetRoute: "attendance",
+            targetItemId: sessionId,
+            tag: attResultKey
+          });
+        }
+      }
     }
   }
 
@@ -2305,31 +2755,36 @@ function closeSessionAndApplyPenalties(sessionId, sessionObj, occurrenceKey) {
         createdAtMs: nowMs
       });
 
-      // D. Dispatch in-app notification
-      const notifTitle = "Session Closed — Absence Recorded ⚠️";
-      const notifBody = `You missed check-in for "${sessionTitle}". Penalty: -${ptsAbsence} pts${fineAbsence > 0 ? `, -${fineAbsence} EGP` : ""}.`;
-      const notifPayload = {
-        uid: uid,
-        userId: uid,
-        title: notifTitle,
-        message: notifBody,
-        body: notifBody,
-        type: "penalty",
-        category: "alert",
-        icon: "alert-circle",
-        sessionId: sessionId,
-        read: false,
-        createdAt: nowIso,
-        timestamp: nowIso,
-        createdAtMs: nowMs
-      };
-      firestorePost("notifications", notifPayload);
-      firestorePost(`users/${uid}/notifications`, notifPayload);
+      // D. Stage 3 (Absence Penalty Applied): Single deduplicated in-app + Web Push notification
+      const absKey = `att_absent_${logDocId}`;
+      if (claimNotificationDispatch(absKey, { stage: "penalty", entityId: sessionId, occurrenceKey: effOccKey })) {
+        const penaltyParts = [];
+        if (ptsAbsence > 0) penaltyParts.push(`${ptsAbsence} Penalty Pts`);
+        if (fineAbsence > 0) penaltyParts.push(`${fineAbsence} EGP Fine`);
+        const notifTitle = "Session Closed — Absence Recorded";
+        const notifBody = `You missed check-in for "${sessionTitle}". Applied: ${penaltyParts.join(" | ") || "Marked Absent"}.`;
+        writeUserNotificationOnce(uid, absKey, {
+          title: notifTitle,
+          body: notifBody,
+          type: "penalty",
+          category: "alert",
+          icon: "alert-circle",
+          sessionId: sessionId,
+          stage: "penalty",
+          targetAction: { route: "attendance", itemId: sessionId },
+          createdAt: nowIso,
+          createdAtMs: nowMs
+        });
 
-      // E. Dispatch external Chrome Web Push to absent member
-      const memberTokens = collectFcmTokensForUsers([member]);
-      if (memberTokens.length > 0) {
-        sendFcmWebPush(memberTokens, notifTitle, notifBody, CONFIG.PWA_URL + "#attendance");
+        const memberTokens = collectFcmTokensForUsers([member]);
+        if (memberTokens.length > 0) {
+          sendFcmWebPushDetailed(memberTokens, notifTitle, notifBody, CONFIG.PWA_URL + "#attendance", {
+            inAppIcon: "alert-circle",
+            targetRoute: "attendance",
+            targetItemId: sessionId,
+            tag: absKey
+          });
+        }
       }
     });
 
@@ -2363,6 +2818,14 @@ function handleDispatchNotification(payload) {
   const nowIso = now.toISOString();
   const nowMs = now.getTime();
 
+  const targetAction = (payload.targetAction && typeof payload.targetAction === "object")
+    ? payload.targetAction
+    : (payload.targetRoute ? { route: payload.targetRoute, itemId: payload.targetItemId || "", url: payload.clickUrl || "" } : null);
+  const targetRoute = String((targetAction && targetAction.route) || payload.targetRoute || "notifications").trim();
+  const targetItemId = String((targetAction && targetAction.itemId) || payload.targetItemId || "").trim();
+  const clickUrl = String((targetAction && targetAction.url) || payload.clickUrl || (CONFIG.PWA_URL + "#" + targetRoute)).trim();
+  const tag = sanitizeFirestoreDocId(payload.tag || payload.dedupKey || `manual_${nowMs}`);
+
   const allUsers = fetchApprovedUsers();
   let targetUids = Array.isArray(payload.recipients) ? payload.recipients.filter(Boolean) : [];
   if (payload.targetUid) {
@@ -2383,37 +2846,31 @@ function handleDispatchNotification(payload) {
         icon: icon,
         target: "all",
         targetType: "all",
+        targetAction: targetAction,
         senderUid: senderUid,
         senderName: senderName,
+        readBy: [],
         active: true,
         archived: false,
         createdAt: nowIso,
         timestamp: nowIso,
         createdAtMs: nowMs
       });
+    } else {
+      targetUids.forEach(uid => {
+        writeUserNotificationOnce(uid, `${tag}_${uid}`, {
+          title: title,
+          body: body,
+          type: category,
+          category: category,
+          icon: icon,
+          targetType: "individual",
+          targetAction: targetAction,
+          createdAt: nowIso,
+          createdAtMs: nowMs
+        });
+      });
     }
-
-    targetUids.forEach(uid => {
-      const notifData = {
-        uid: uid,
-        userId: uid,
-        title: title,
-        message: body,
-        body: body,
-        type: category,
-        category: category,
-        icon: icon,
-        targetType: isBroadcast ? "all" : "individual",
-        senderUid: senderUid,
-        senderName: senderName,
-        read: false,
-        createdAt: nowIso,
-        timestamp: nowIso,
-        createdAtMs: nowMs
-      };
-      firestorePost("notifications", notifData);
-      firestorePost(`users/${uid}/notifications`, notifData);
-    });
   }
 
   const targetUidSet = new Set(targetUids);
@@ -2423,7 +2880,12 @@ function handleDispatchNotification(payload) {
   try {
     const tokens = collectFcmTokensForUsers(targetUserObjs);
     if (tokens.length > 0) {
-      pushSentCount = sendFcmWebPush(tokens, title, body, CONFIG.PWA_URL + "#notifications");
+      pushSentCount = sendFcmWebPushDetailed(tokens, title, body, clickUrl, {
+        inAppIcon: icon,
+        targetRoute: targetRoute,
+        targetItemId: targetItemId,
+        tag: tag
+      }).sentCount;
     }
   } catch (pushErr) {
     console.warn("[handleDispatchNotification] FCM push dispatch warning:", (pushErr && pushErr.message) || pushErr);
@@ -2529,15 +2991,25 @@ function collectFcmTokensForUsers(users) {
 }
 
 /**
- * Sends Web Push notifications via Firebase Cloud Messaging HTTP v1 API and
- * returns detailed delivery counts and error diagnostics.
+ * Sends Web Push notifications via Firebase Cloud Messaging HTTP v1 API using a
+ * DATA-ONLY payload so ONLY `sw.js` displays the OS banner (preventing duplicate Chrome/FCM banners)
+ * and EVERY notification carries the verified absolute CoC Media Team logo (`pwa-192x192.png`).
  */
-function sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl) {
+function sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl, opts = {}) {
   if (!Array.isArray(userTokens) || userTokens.length === 0) {
     return { sentCount: 0, fcmErrors: [] };
   }
   const fcmEndpoint = `https://fcm.googleapis.com/v1/projects/${CONFIG.FIREBASE_PROJECT_ID}/messages:send`;
   const targetLink = clickTargetUrl || CONFIG.PWA_URL;
+  const logoUrl = CONFIG.PWA_URL + "pwa-192x192.png";
+  const cleanTitle = String(title || "CoC Media Team").trim();
+  const rawBody = String(body || "").trim();
+  const cleanBody = (rawBody.toLowerCase() === cleanTitle.toLowerCase()) ? "" : rawBody;
+  const inAppIcon = String((opts && opts.inAppIcon) || "bell").trim();
+  const targetRoute = String((opts && opts.targetRoute) || "").trim();
+  const targetItemId = String((opts && opts.targetItemId) || "").trim();
+  const tag = String((opts && opts.tag) || `${cleanTitle}::${cleanBody}`).slice(0, 120);
+
   let successCount = 0;
   const fcmErrors = [];
   const staleTokens = new Set();
@@ -2548,24 +3020,21 @@ function sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl) {
       const messagePayload = {
         message: {
           token: token,
-          notification: {
-            title: title,
-            body: body
-          },
           data: {
-            title: title,
-            body: body,
-            url: targetLink
+            title: cleanTitle,
+            body: cleanBody,
+            url: targetLink,
+            iconUrl: logoUrl,
+            badgeUrl: logoUrl,
+            inAppIcon: inAppIcon,
+            targetRoute: targetRoute,
+            targetItemId: targetItemId,
+            tag: tag
           },
           webpush: {
             headers: {
-              Urgency: "high"
-            },
-            notification: {
-              title: title,
-              body: body,
-              icon: CONFIG.PWA_URL + "pwa-192x192.png",
-              badge: CONFIG.PWA_URL + "pwa-192x192.png"
+              Urgency: "high",
+              TTL: "86400"
             }
           }
         }
@@ -2609,8 +3078,8 @@ function sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl) {
 /**
  * Sends Web Push notifications via Firebase Cloud Messaging HTTP v1 API.
  */
-function sendFcmWebPush(userTokens, title, body, clickTargetUrl) {
-  return sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl).sentCount;
+function sendFcmWebPush(userTokens, title, body, clickTargetUrl, opts = {}) {
+  return sendFcmWebPushDetailed(userTokens, title, body, clickTargetUrl, opts).sentCount;
 }
 
 /**
@@ -2834,6 +3303,31 @@ function firestoreList(collectionPath, pageSize = 300) {
   }
 }
 
+function firestoreListAll(collectionPath, maxDocs = 2000) {
+  const all = [];
+  let pageToken = "";
+  try {
+    while (all.length < maxDocs) {
+      let url = `${firestoreUrl(collectionPath)}?pageSize=300`;
+      if (pageToken) url += `&pageToken=${encodeURIComponent(pageToken)}`;
+      const res = UrlFetchApp.fetch(url, {
+        method: "get",
+        headers: getAuthHeader(),
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() !== 200) break;
+      const data = JSON.parse(res.getContentText());
+      const docs = data.documents || [];
+      docs.forEach(d => all.push(fromFirestore(d)));
+      if (!data.nextPageToken || docs.length === 0) break;
+      pageToken = data.nextPageToken;
+    }
+  } catch (err) {
+    console.error("firestoreListAll error:", err);
+  }
+  return all;
+}
+
 function firestorePost(collectionPath, obj) {
   try {
     const url = firestoreUrl(collectionPath);
@@ -2913,6 +3407,10 @@ function fetchTasksFromFirestore() {
 
 function fetchSingleSession(sessionId) {
   return firestoreGet(`attendance_sessions/${sessionId}`);
+}
+
+function fetchSingleTask(taskId) {
+  return firestoreGet(`tasks/${taskId}`);
 }
 
 function fetchApprovedUsers() {
@@ -3197,4 +3695,698 @@ function wrapValue(val) {
     return { mapValue: { fields: fields } };
   }
   return { stringValue: String(val) };
+}
+
+// -------------------------------------------------------------
+// REACTIVATION ENGINE (FRESH RESET & REOPEN ONLY)
+// -------------------------------------------------------------
+
+function handleReactivateTask(payload) {
+  return runWithScriptLock(`reactivateTask_${payload.taskId}`, function () {
+    const taskId = payload.taskId;
+    const mode = payload.mode === "fresh_reset" ? "fresh_reset" : "reopen_only";
+    const task = fetchSingleTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found.`);
+
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const win = getTaskWindowInGas(task, nowMs);
+    const effOccKey = payload.occurrenceKey || (win && win.occurrenceKey) || "once";
+    const runTag = `reactivated_${nowMs}`;
+
+    let reversedSubmissions = 0;
+    let reversedPenalties = 0;
+
+    if (mode === "fresh_reset") {
+      const subs = fetchSubmissionsForTask(taskId).filter(s =>
+        !effOccKey || effOccKey === "once" || !s.occurrenceKey || s.occurrenceKey === effOccKey
+      );
+      subs.forEach(s => {
+        const uid = s.uid || s.userId;
+        const pts = Math.max(0, Number(s.pointsAwarded) || 0);
+        const pen = Math.max(0, Number(s.penaltyPoints != null ? s.penaltyPoints : s.penaltyPts) || 0);
+        const fine = Math.max(0, Number(s.fineEGP) || 0);
+        if (uid && (pts > 0 || pen > 0 || fine > 0)) {
+          const uDoc = firestoreGet(`users/${uid}`);
+          if (uDoc) {
+            applyCanonicalUserLedgerUpdate(uid, uDoc, {
+              pointsChange: -pts,
+              penaltyChange: -pen,
+              fineChange: -fine,
+              nowMs: nowMs,
+              nowIso: nowIso,
+              lastOpId: `reactivate_rev_sub_${s.id}`
+            });
+          }
+        }
+        firestoreDelete(`submissions/${s.id}`);
+        reversedSubmissions++;
+      });
+
+      const missed = fetchMissedPenaltiesForTask(taskId).filter(m =>
+        !effOccKey || effOccKey === "once" || !m.occurrenceKey || m.occurrenceKey === effOccKey
+      );
+      missed.forEach(m => {
+        const uid = m.uid || m.userId;
+        const pen = Math.max(0, Number(m.penaltyPoints != null ? m.penaltyPoints : m.penalty) || 0);
+        const fine = Math.max(0, Number(m.fineEGP) || 0);
+        if (uid && (pen > 0 || fine > 0)) {
+          const uDoc = firestoreGet(`users/${uid}`);
+          if (uDoc) {
+            applyCanonicalUserLedgerUpdate(uid, uDoc, {
+              pointsChange: 0,
+              penaltyChange: -pen,
+              fineChange: -fine,
+              nowMs: nowMs,
+              nowIso: nowIso,
+              lastOpId: `reactivate_rev_pen_${m.id}`
+            });
+          }
+        }
+        firestoreDelete(`missed_penalties/${m.id}`);
+        reversedPenalties++;
+      });
+    }
+
+    const prevClosed = Array.isArray(task.autoClosedKeys) ? task.autoClosedKeys : [];
+    const nextClosed = prevClosed.filter(k => k && k !== effOccKey && k !== "once");
+
+    firestorePatch(`tasks/${taskId}`, {
+      active: true,
+      archived: false,
+      status: "active",
+      lastAutoClosedKey: "",
+      lastClosedOccurrenceKey: "",
+      lastReminder10mKey: "",
+      autoClosedKeys: nextClosed,
+      reactivatedAt: nowIso,
+      reactivationMode: mode,
+      reactivationVersion: (Number(task.reactivationVersion) || 0) + 1,
+      updatedAt: nowIso
+    }, [
+      "active", "archived", "status", "lastAutoClosedKey", "lastClosedOccurrenceKey",
+      "lastReminder10mKey", "autoClosedKeys", "reactivatedAt", "reactivationMode",
+      "reactivationVersion", "updatedAt"
+    ]);
+
+    firestoreDelete(`notification_dispatches/${sanitizeFirestoreDocId(`task_rem10m_${taskId}_${effOccKey}`)}`);
+
+    const freshTask = fetchSingleTask(taskId) || Object.assign({}, task, { active: true, archived: false, status: "active" });
+    const notifyRes = notifyTaskCreated(taskId, freshTask, { runTag: runTag });
+
+    return {
+      taskId: taskId,
+      mode: mode,
+      occurrenceKey: effOccKey,
+      reversedSubmissions: reversedSubmissions,
+      reversedPenalties: reversedPenalties,
+      notify: notifyRes
+    };
+  });
+}
+
+function handleReactivateSession(payload) {
+  return runWithScriptLock(`reactivateSession_${payload.sessionId}`, function () {
+    const sessionId = payload.sessionId;
+    const mode = payload.mode === "fresh_reset" ? "fresh_reset" : "reopen_only";
+    const session = fetchSingleSession(sessionId);
+    if (!session) throw new Error(`Session ${sessionId} not found.`);
+
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const win = resolveSessionWindow(session, nowMs);
+    const effOccKey = payload.occurrenceKey || (win && win.occurrenceKey) || formatZonedDateKey(nowMs, CONFIG.TIMEZONE);
+    const runTag = `reactivated_${nowMs}`;
+
+    let reversedLogs = 0;
+
+    if (mode === "fresh_reset") {
+      const logs = fetchAttendanceLogsForSession(sessionId);
+      const recs = fetchAttendanceRecordsForSession(sessionId);
+      const seenIds = new Set();
+      const targetLogs = [];
+      logs.concat(recs).forEach(l => {
+        if (!l || !l.id || seenIds.has(l.id)) return;
+        const lOcc = l.occurrenceKey || l.date || l.sessionDate || "";
+        if (!effOccKey || effOccKey === "once" || !lOcc || lOcc === effOccKey || lOcc === "once") {
+          seenIds.add(l.id);
+          targetLogs.push(l);
+        }
+      });
+
+      targetLogs.forEach(l => {
+        const uid = l.uid || l.userId;
+        const ptsDelta = Number(l.pointsDelta) || 0;
+        const bonusPts = ptsDelta > 0 ? ptsDelta : Math.max(0, Number(l.earlyBonusPoints != null ? l.earlyBonusPoints : l.points) || 0);
+        const penPts = ptsDelta < 0 ? Math.abs(ptsDelta) : Math.max(0, Number(l.penalty != null ? l.penalty : l.pointsPenalty) || 0);
+        const egpDelta = Number(l.egpDelta) || 0;
+        const bonusEgp = egpDelta > 0 ? egpDelta : Math.max(0, Number(l.earlyBonusEGP) || 0);
+        const fineEgp = egpDelta < 0 ? Math.abs(egpDelta) : Math.max(0, Number(l.fineEGP != null ? l.fineEGP : l.finePenalty) || 0);
+
+        if (uid && (bonusPts > 0 || penPts > 0 || bonusEgp > 0 || fineEgp > 0)) {
+          const uDoc = firestoreGet(`users/${uid}`);
+          if (uDoc) {
+            applyCanonicalUserLedgerUpdate(uid, uDoc, {
+              pointsChange: -bonusPts,
+              penaltyChange: -penPts,
+              fineChange: bonusEgp - fineEgp,
+              nowMs: nowMs,
+              nowIso: nowIso,
+              lastOpId: `reactivate_rev_att_${l.id}`
+            });
+          }
+        }
+        firestoreDelete(`attendance_logs/${l.id}`);
+        firestoreDelete(`attendance_records/${l.id}`);
+        reversedLogs++;
+      });
+    }
+
+    const prevClosed = Array.isArray(session.autoClosedKeys) ? session.autoClosedKeys : [];
+    const nextClosed = prevClosed.filter(k => k && k !== effOccKey && k !== "once");
+
+    firestorePatch(`attendance_sessions/${sessionId}`, {
+      active: true,
+      archived: false,
+      status: "active",
+      lastAutoClosedKey: "",
+      lastReminder10mKey: "",
+      autoClosedKeys: nextClosed,
+      reactivatedAt: nowIso,
+      reactivationMode: mode,
+      reactivationVersion: (Number(session.reactivationVersion) || 0) + 1,
+      updatedAt: nowIso
+    }, [
+      "active", "archived", "status", "lastAutoClosedKey", "lastReminder10mKey",
+      "autoClosedKeys", "reactivatedAt", "reactivationMode", "reactivationVersion", "updatedAt"
+    ]);
+
+    firestoreDelete(`notification_dispatches/${sanitizeFirestoreDocId(`session_rem10m_${sessionId}_${effOccKey}`)}`);
+
+    const freshSess = fetchSingleSession(sessionId) || Object.assign({}, session, { active: true, archived: false, status: "active" });
+    const notifyRes = notifySessionCreated(sessionId, freshSess, { runTag: runTag });
+
+    return {
+      sessionId: sessionId,
+      mode: mode,
+      occurrenceKey: effOccKey,
+      reversedLogs: reversedLogs,
+      notify: notifyRes
+    };
+  });
+}
+
+// -------------------------------------------------------------
+// SERVER-SIDE BACKGROUND MAINTENANCE JOBS & ADMIN DELETE HELPERS
+// -------------------------------------------------------------
+
+function writeMaintenanceJobStatus(jobType, statusPatch) {
+  try {
+    const existing = firestoreGet("settings/maintenance_jobs") || {};
+    const jobs = (existing.jobs && typeof existing.jobs === "object") ? Object.assign({}, existing.jobs) : {};
+    const prev = (jobs[jobType] && typeof jobs[jobType] === "object") ? jobs[jobType] : {};
+    const nowIso = new Date().toISOString();
+    jobs[jobType] = Object.assign({}, prev, statusPatch, {
+      jobType: jobType,
+      updatedAt: nowIso
+    });
+    firestorePatch("settings/maintenance_jobs", {
+      jobs: jobs,
+      updatedAt: nowIso
+    }, ["jobs", "updatedAt"]);
+  } catch (err) {
+    console.warn("[MaintenanceJobStatus] Warning:", err);
+  }
+}
+
+function handleRunMaintenanceJob(payload) {
+  const jobType = String(payload.jobType || "").trim();
+  const startedBy = payload.adminUid || "admin";
+  const startedAt = new Date().toISOString();
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Starting...",
+    detail: "Initializing server-side background job...",
+    progress: 5,
+    startedBy: startedBy,
+    startedAt: startedAt,
+    finishedAt: ""
+  });
+
+  try {
+    if (jobType === "purge_notifications") {
+      return runPurgeAllNotificationsJob(jobType);
+    }
+    if (jobType === "purge_watchdog_flood") {
+      return runPurgeWatchdogFloodJob(jobType);
+    }
+    if (jobType === "repair_totals") {
+      return runRepairTotalsJob(jobType);
+    }
+    throw new Error("Unsupported maintenance jobType: " + jobType);
+  } catch (err) {
+    const errMsg = (err && err.message) ? err.message : String(err);
+    const failObj = {
+      status: "error",
+      step: "Failed",
+      detail: errMsg,
+      progress: 100,
+      finishedAt: new Date().toISOString()
+    };
+    writeMaintenanceJobStatus(jobType, failObj);
+    return failObj;
+  }
+}
+
+function runPurgeAllNotificationsJob(jobType) {
+  let deleted = 0;
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 1/4: Root Notifications",
+    detail: "Scanning and deleting root notifications collection...",
+    progress: 15
+  });
+  const rootNotifs = firestoreListAll("notifications", 2500);
+  rootNotifs.forEach(d => { if (d && d.id && firestoreDelete(`notifications/${d.id}`)) deleted++; });
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 2/4: Broadcast Notifications",
+    detail: `Deleted ${deleted} so far. Cleaning notifications_broadcast...`,
+    progress: 35
+  });
+  const broadcasts = firestoreListAll("notifications_broadcast", 2500);
+  broadcasts.forEach(d => { if (d && d.id && firestoreDelete(`notifications_broadcast/${d.id}`)) deleted++; });
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 3/4: Dispatch Locks",
+    detail: `Deleted ${deleted} so far. Cleaning notification_dispatches...`,
+    progress: 55
+  });
+  const dispatches = firestoreListAll("notification_dispatches", 2500);
+  dispatches.forEach(d => { if (d && d.id && firestoreDelete(`notification_dispatches/${d.id}`)) deleted++; });
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 4/4: Member Subcollections",
+    detail: `Deleted ${deleted} so far. Scanning per-member notification feeds...`,
+    progress: 70
+  });
+  const users = firestoreListAll("users", 500);
+  users.forEach((u, idx) => {
+    if (!u || !u.id) return;
+    const uNotifs = firestoreListAll(`users/${u.id}/notifications`, 1000);
+    uNotifs.forEach(n => {
+      if (n && n.id && firestoreDelete(`users/${u.id}/notifications/${n.id}`)) deleted++;
+    });
+    if ((idx + 1) % 5 === 0 || idx === users.length - 1) {
+      const pct = 70 + Math.round(((idx + 1) / Math.max(1, users.length)) * 28);
+      writeMaintenanceJobStatus(jobType, {
+        status: "running",
+        step: "Step 4/4: Member Subcollections",
+        detail: `Cleaned ${idx + 1}/${users.length} members · ${deleted} total records purged`,
+        progress: Math.min(98, pct)
+      });
+    }
+  });
+
+  const doneObj = {
+    status: "done",
+    step: "Completed",
+    detail: `Purged ${deleted} notification & dispatch record(s) across all collections and member feeds.`,
+    progress: 100,
+    deletedCount: deleted,
+    finishedAt: new Date().toISOString()
+  };
+  writeMaintenanceJobStatus(jobType, doneObj);
+  return doneObj;
+}
+
+function isFloodNotificationDoc(d) {
+  if (!d) return false;
+  const title = String(d.title || "");
+  const body = String(d.body || d.message || "");
+  return (
+    title.indexOf("Missed Task Penalty") !== -1 ||
+    title.indexOf("Absence Penalty Recorded") !== -1 ||
+    title.indexOf("Task Deadline Missed") !== -1 ||
+    title.indexOf("Session Closed — Absence Recorded") !== -1 ||
+    title.indexOf("New Task Window Open") !== -1 ||
+    title.indexOf("Attendance Check-In Open") !== -1 ||
+    body.indexOf("Unexcused absence automatically recorded") !== -1 ||
+    body.indexOf("was automatically recorded for missing") !== -1 ||
+    body.indexOf("was recorded for missing the task") !== -1
+  );
+}
+
+function isAutoAbsentLogDoc(d) {
+  if (!d) return false;
+  if (String(d.status || "").toLowerCase() !== "absent") return false;
+  return (
+    d.appliedTierLabel === "Absent (Auto-Close)" ||
+    d.processedBy === "system_watchdog" ||
+    d.closedBy === "system_watchdog" ||
+    !d.adminNote
+  );
+}
+
+function runPurgeWatchdogFloodJob(jobType) {
+  let deletedNotifs = 0;
+  let deletedPenalties = 0;
+  let deletedLogs = 0;
+  let deletedTxs = 0;
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 1/4: Flood Notifications",
+    detail: "Removing false watchdog notifications from root & broadcast feeds...",
+    progress: 12
+  });
+  firestoreListAll("notifications", 2500).forEach(d => {
+    if (d && d.id && isFloodNotificationDoc(d) && firestoreDelete(`notifications/${d.id}`)) deletedNotifs++;
+  });
+  firestoreListAll("notifications_broadcast", 2500).forEach(d => {
+    if (d && d.id && isFloodNotificationDoc(d) && firestoreDelete(`notifications_broadcast/${d.id}`)) deletedNotifs++;
+  });
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 2/4: Auto-Watchdog Penalties & Logs",
+    detail: "Deleting missed_penalties, auto-absent logs & watchdog adjustments...",
+    progress: 35
+  });
+  firestoreListAll("missed_penalties", 2500).forEach(d => {
+    if (d && d.id && firestoreDelete(`missed_penalties/${d.id}`)) deletedPenalties++;
+  });
+  firestoreListAll("attendance_logs", 2500).forEach(d => {
+    if (d && d.id && isAutoAbsentLogDoc(d) && firestoreDelete(`attendance_logs/${d.id}`)) deletedLogs++;
+  });
+  firestoreListAll("attendance_records", 2500).forEach(d => {
+    if (d && d.id && isAutoAbsentLogDoc(d)) firestoreDelete(`attendance_records/${d.id}`);
+  });
+  firestoreListAll("adjustments", 2500).forEach(d => {
+    if (!d || !d.id) return;
+    if (d.adminId === "system_watchdog" || d.source === "task_missed_watchdog" || d.source === "attendance_absence") {
+      firestoreDelete(`adjustments/${d.id}`);
+    }
+  });
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 3/4: Settling Past Occurrences",
+    detail: "Stamping existing tasks & sessions so past windows do not re-trigger...",
+    progress: 55
+  });
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  firestoreListAll("tasks", 500).forEach(task => {
+    if (!task || !task.id) return;
+    const win = getTaskWindowInGas(task, nowMs);
+    const occKey = (win && win.occurrenceKey) || "once";
+    const keys = Array.from(new Set((Array.isArray(task.autoClosedKeys) ? task.autoClosedKeys : []).concat([occKey, "once"]))).slice(-30);
+    firestorePatch(`tasks/${task.id}`, {
+      lastAutoClosedKey: occKey,
+      lastClosedOccurrenceKey: occKey,
+      autoClosedKeys: keys,
+      updatedAt: nowIso
+    }, ["lastAutoClosedKey", "lastClosedOccurrenceKey", "autoClosedKeys", "updatedAt"]);
+  });
+  firestoreListAll("attendance_sessions", 500).forEach(sess => {
+    if (!sess || !sess.id) return;
+    const win = resolveSessionWindow(sess, nowMs);
+    const occKey = (win && win.occurrenceKey) || formatZonedDateKey(nowMs, CONFIG.TIMEZONE);
+    const keys = Array.from(new Set((Array.isArray(sess.autoClosedKeys) ? sess.autoClosedKeys : []).concat([occKey, "once"]))).slice(-30);
+    firestorePatch(`attendance_sessions/${sess.id}`, {
+      lastAutoClosedKey: occKey,
+      autoClosedKeys: keys,
+      updatedAt: nowIso
+    }, ["lastAutoClosedKey", "autoClosedKeys", "updatedAt"]);
+  });
+
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 4/4: Member Feeds & Balance Recalc",
+    detail: "Cleaning member notifications/transactions and recalculating balances...",
+    progress: 70
+  });
+  const users = firestoreListAll("users", 500);
+  users.forEach(u => {
+    if (!u || !u.id) return;
+    firestoreListAll(`users/${u.id}/notifications`, 1000).forEach(n => {
+      if (n && n.id && isFloodNotificationDoc(n) && firestoreDelete(`users/${u.id}/notifications/${n.id}`)) deletedNotifs++;
+    });
+    firestoreListAll(`users/${u.id}/transactions`, 1000).forEach(t => {
+      if (!t || !t.id) return;
+      const reason = String(t.reason || "");
+      const isAutoFloodTx = (
+        t.adminName === "Auto Watchdog" ||
+        t.adminUid === "system_watchdog" ||
+        t.type === "task_missed_penalty" ||
+        t.type === "attendance_absence_penalty" ||
+        reason.indexOf("Missed task penalty:") === 0 ||
+        reason.indexOf("Missed Task:") === 0 ||
+        reason.indexOf("Absent:") === 0
+      );
+      if (isAutoFloodTx && firestoreDelete(`users/${u.id}/transactions/${t.id}`)) deletedTxs++;
+    });
+  });
+
+  const recalcRes = recalculateAllMemberBalancesInGas(jobType, 75, 98);
+  const doneObj = {
+    status: "done",
+    step: "Completed",
+    detail: `Purged ${deletedNotifs} flood notifs, ${deletedPenalties + deletedLogs} auto-penalties, ${deletedTxs} flood txs, and restored ${recalcRes.repairedCount}/${recalcRes.totalUsers} member balances.`,
+    progress: 100,
+    finishedAt: new Date().toISOString()
+  };
+  writeMaintenanceJobStatus(jobType, doneObj);
+  return doneObj;
+}
+
+function runRepairTotalsJob(jobType) {
+  writeMaintenanceJobStatus(jobType, {
+    status: "running",
+    step: "Step 1/2: Loading Verified Records",
+    detail: "Loading submissions, attendance logs & member transaction ledgers...",
+    progress: 20
+  });
+  const recalcRes = recalculateAllMemberBalancesInGas(jobType, 25, 98);
+  const doneObj = {
+    status: "done",
+    step: "Completed",
+    detail: `Audited ${recalcRes.totalUsers} member(s). Repaired ${recalcRes.repairedCount} mismatched account balance(s).`,
+    progress: 100,
+    totalUsers: recalcRes.totalUsers,
+    repairedCount: recalcRes.repairedCount,
+    finishedAt: new Date().toISOString()
+  };
+  writeMaintenanceJobStatus(jobType, doneObj);
+  return doneObj;
+}
+
+function recalculateAllMemberBalancesInGas(jobType, startPct, endPct) {
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const curMonthKey = monthKeyOf(nowMs, CONFIG.TIMEZONE);
+  const curWeekKey = weekKeyOf(nowMs, CONFIG.TIMEZONE);
+
+  const users = firestoreListAll("users", 500);
+  const allSubs = firestoreListAll("submissions", 3000);
+  const allAttLogs = firestoreListAll("attendance_logs", 3000);
+
+  const subsByUid = {};
+  allSubs.forEach(s => {
+    const uid = s && (s.uid || s.userId);
+    if (!uid) return;
+    if (!subsByUid[uid]) subsByUid[uid] = [];
+    subsByUid[uid].push(s);
+  });
+
+  const attByUid = {};
+  allAttLogs.forEach(l => {
+    const uid = l && (l.uid || l.userId);
+    if (!uid) return;
+    if (!attByUid[uid]) attByUid[uid] = [];
+    attByUid[uid].push(l);
+  });
+
+  let repairedCount = 0;
+
+  users.forEach((u, idx) => {
+    if (!u || !u.id) return;
+    const uid = u.id;
+    let realPoints = 0;
+    let realMonthPoints = 0;
+    let realWeekPoints = 0;
+    let realPenalties = 0;
+    let realFinesEGP = 0;
+
+    (subsByUid[uid] || []).forEach(s => {
+      const pts = Math.max(0, Number(s.pointsAwarded) || 0);
+      realPoints += pts;
+      realPenalties += Math.max(0, Number(s.penaltyPoints != null ? s.penaltyPoints : s.penaltyPts) || 0);
+      realFinesEGP += Math.max(0, Number(s.fineEGP) || 0);
+      const tMs = parseDateTimeToMs(s.submittedAt || s.createdAt) || 0;
+      if (tMs > 0) {
+        if (monthKeyOf(tMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints += pts;
+        if (weekKeyOf(tMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints += pts;
+      }
+    });
+
+    (attByUid[uid] || []).forEach(l => {
+      realPenalties += Math.max(0, Number(l.penalty) || 0);
+      realFinesEGP += Math.max(0, Number(l.fineEGP) || 0);
+      const earlyPts = Math.max(0, Number(l.earlyBonusPoints) || (Number(l.pointsDelta) > 0 ? Number(l.pointsDelta) : 0));
+      if (earlyPts > 0) {
+        realPoints += earlyPts;
+        const lMs = parseDateTimeToMs(l.checkedInAt || l.timestamp || l.createdAt) || 0;
+        if (lMs > 0) {
+          if (monthKeyOf(lMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints += earlyPts;
+          if (weekKeyOf(lMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints += earlyPts;
+        }
+      }
+    });
+
+    const txs = firestoreListAll(`users/${uid}/transactions`, 1000);
+    txs.forEach(t => {
+      if (!t || t.taskId || t.sessionId || t.submissionId || t.logId) return;
+      const type = String(t.type || "").toLowerCase();
+      const amt = Math.max(0, Number(t.amount) || 0);
+      const tMs = parseDateTimeToMs(t.createdAt || t.timestamp) || 0;
+
+      if (type === "bonus" || type === "points_add") {
+        realPoints += amt;
+        if (tMs > 0) {
+          if (monthKeyOf(tMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints += amt;
+          if (weekKeyOf(tMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints += amt;
+        }
+      } else if (type === "points_deduct") {
+        realPoints = Math.max(0, realPoints - amt);
+      } else if (type === "penalty" || type === "deduction" || type === "penalties_add") {
+        realPenalties += amt;
+      } else if (type === "penalties_deduct") {
+        realPenalties = Math.max(0, realPenalties - amt);
+      } else if (type === "fine" || type === "fines_add") {
+        realFinesEGP += amt;
+      } else if (type === "payment" || type === "waive" || type === "fines_deduct") {
+        realFinesEGP = Math.max(0, realFinesEGP - amt);
+      }
+    });
+
+    realPoints = Math.max(0, Math.round(realPoints));
+    realPenalties = Math.max(0, Math.round(realPenalties));
+    realFinesEGP = Math.max(0, Math.round(realFinesEGP));
+    realMonthPoints = Math.max(0, Math.round(realMonthPoints));
+    realWeekPoints = Math.max(0, Math.round(realWeekPoints));
+    const netPts = Math.max(0, realPoints - realPenalties);
+
+    const curPoints = Number(u.points) || 0;
+    const curPen = Number(u.penalties) || 0;
+    const curFines = Number(u.finesDue != null ? u.finesDue : (u.fines || 0));
+    const changed = curPoints !== realPoints || curPen !== realPenalties || curFines !== realFinesEGP ||
+      u.monthKey !== curMonthKey || Number(u.monthPoints || 0) !== realMonthPoints ||
+      u.weekKey !== curWeekKey || Number(u.weekPoints || 0) !== realWeekPoints;
+
+    if (changed) {
+      repairedCount++;
+      firestorePatch(`users/${uid}`, {
+        points: realPoints,
+        totalPoints: realPoints,
+        penalties: realPenalties,
+        penaltyPoints: realPenalties,
+        totalPenalties: realPenalties,
+        netPts: netPts,
+        finesDue: realFinesEGP,
+        fines: realFinesEGP,
+        monthKey: curMonthKey,
+        monthBucket: curMonthKey,
+        monthPoints: realMonthPoints,
+        weekKey: curWeekKey,
+        weekBucket: curWeekKey,
+        weekPoints: realWeekPoints,
+        updatedAt: nowIso
+      }, [
+        "points", "totalPoints", "penalties", "penaltyPoints", "totalPenalties",
+        "netPts", "finesDue", "fines", "monthKey", "monthBucket", "monthPoints",
+        "weekKey", "weekBucket", "weekPoints", "updatedAt"
+      ]);
+      firestorePatch(`users_private/${uid}`, {
+        finesDue: realFinesEGP,
+        finesEGP: realFinesEGP,
+        fines: realFinesEGP,
+        updatedAt: nowIso
+      }, ["finesDue", "finesEGP", "fines", "updatedAt"]);
+    }
+
+    if ((idx + 1) % 5 === 0 || idx === users.length - 1) {
+      const pct = startPct + Math.round(((idx + 1) / Math.max(1, users.length)) * (endPct - startPct));
+      writeMaintenanceJobStatus(jobType, {
+        status: "running",
+        step: "Rebuilding Member Balances",
+        detail: `Processed ${idx + 1}/${users.length} members · ${repairedCount} updated`,
+        progress: Math.min(endPct, pct)
+      });
+    }
+  });
+
+  return { totalUsers: users.length, repairedCount: repairedCount };
+}
+
+function handleDeleteNotification(payload) {
+  const notifId = String(payload.notifId || payload.id || "").trim();
+  const uid = String(payload.uid || payload.targetUid || "").trim();
+  const isBroadcast = Boolean(payload.isBroadcast);
+  if (!notifId) throw new Error("Missing notifId for DELETE_NOTIFICATION");
+
+  let deletedPaths = 0;
+  if (isBroadcast || !uid) {
+    if (firestoreDelete(`notifications_broadcast/${notifId}`)) deletedPaths++;
+  }
+  if (firestoreDelete(`notifications/${notifId}`)) deletedPaths++;
+  if (uid) {
+    if (firestoreDelete(`users/${uid}/notifications/${notifId}`)) deletedPaths++;
+  }
+  return { ok: true, notifId: notifId, deletedPaths: deletedPaths };
+}
+
+function handleDeleteUserHistoryItem(payload) {
+  const uid = String(payload.uid || "").trim();
+  const itemId = String(payload.itemId || payload.id || "").trim();
+  const kind = String(payload.kind || "transaction").trim();
+  if (!itemId) throw new Error("Missing itemId for DELETE_USER_HISTORY_ITEM");
+
+  let deleted = false;
+  if (kind === "transaction") {
+    if (uid && firestoreDelete(`users/${uid}/transactions/${itemId}`)) deleted = true;
+    if (firestoreDelete(`transactions/${itemId}`)) deleted = true;
+  } else if (kind === "submission") {
+    if (firestoreDelete(`submissions/${itemId}`)) deleted = true;
+  } else if (kind === "attendance") {
+    if (firestoreDelete(`attendance_logs/${itemId}`)) deleted = true;
+    if (firestoreDelete(`attendance_records/${itemId}`)) deleted = true;
+  } else if (kind === "missed_penalty") {
+    if (firestoreDelete(`missed_penalties/${itemId}`)) deleted = true;
+  }
+
+  const ptsDelta = Number(payload.pointsChange) || 0;
+  const penDelta = Number(payload.penaltyChange) || 0;
+  const fineDelta = Number(payload.fineChange) || 0;
+  if (uid && (ptsDelta !== 0 || penDelta !== 0 || fineDelta !== 0)) {
+    const uDoc = firestoreGet(`users/${uid}`);
+    if (uDoc) {
+      applyCanonicalUserLedgerUpdate(uid, uDoc, {
+        pointsChange: ptsDelta,
+        penaltyChange: penDelta,
+        fineChange: fineDelta,
+        nowMs: Date.now(),
+        nowIso: new Date().toISOString(),
+        lastOpId: `del_hist_${itemId}`
+      });
+    }
+  }
+
+  return { ok: true, deleted: deleted, kind: kind, itemId: itemId };
 }
