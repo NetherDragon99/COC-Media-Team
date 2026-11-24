@@ -37,10 +37,10 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 const exportsObj = vm.runInContext(`(() => {
 ${engineCode}
-return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession, validateSessionWindowAndBrackets };
+return { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, computeMemberRanks, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession, validateSessionWindowAndBrackets };
 })()`, sandbox);
 
-const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession, validateSessionWindowAndBrackets } = exportsObj;
+const { APP_TIMEZONE, getOccurrences, getOccurrenceFor, formatZonedDateKey, zonedDateToMs, getTaskWindow, computeAttendance, resolveSessionOccurrence, getTimeBucketKeys, buildPointsUpdate, getMemberPeriodPoints, computeMemberRanks, parseDateTimeToMs, msToZonedParts, zonedPartsToMs, startOfZonedDay, addDaysZoned, weekKeyOf, monthKeyOf, offsetFromPickers, pickersFromOffset, normalizeTaskTiers, computeTieredTaskPoints, normalizeSession, calculateSystemPenalty, computeCropRect, createRowGesture, buildRoster, isUserEligibleForSession, validateSessionWindowAndBrackets } = exportsObj;
 assert.strictEqual(typeof computeCropRect, 'function', 'computeCropRect must be a function');
 assert.strictEqual(typeof createRowGesture, 'function', 'createRowGesture must be a function');
 assert.strictEqual(typeof buildRoster, 'function', 'buildRoster must be a function');
@@ -2298,6 +2298,126 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.strictEqual(store.has('notifications_broadcast/old_bc_1'), false, 'Broadcast notification must be deleted');
   assert.strictEqual(store.has('users/u_done/notifications/old_sub_1'), false, 'Member subcollection notification must be deleted');
   assert.strictEqual(store.get('settings/maintenance_jobs').jobs.purge_notifications.status, 'done');
+}
+
+// ---------------------------------------------------------------------------
+// v3.2.7: NET Standardization, All-Time NET Ranking, Bucket Key Parity & Repair Totals
+// ---------------------------------------------------------------------------
+{
+  // 1. computeMemberRanks('all') ranks by NET = Math.max(0, points - penalties) and floors at 0
+  const rankRes = computeMemberRanks([
+    { uid: 'u_clean', displayName: 'Clean Member', points: 30, penalties: 0 },
+    { uid: 'u_penalized', displayName: 'Penalized Member', points: 40, penalties: 25 },
+    { uid: 'u_floored', displayName: 'Floored Member', points: 10, penalties: 50 },
+    { uid: 'u_zero', displayName: 'Zero Member', points: 0, penalties: 0 }
+  ], 'all');
+
+  assert.strictEqual(rankRes.ranked.length, 2, 'Only positive-NET members should be ranked on All Time');
+  assert.strictEqual(rankRes.ranked[0].uid, 'u_clean', '30 NET (30 - 0) must outrank 15 NET (40 - 25)');
+  assert.strictEqual(rankRes.ranked[0].periodPoints, 30);
+  assert.strictEqual(rankRes.ranked[0].netPts, 30);
+  assert.strictEqual(rankRes.ranked[1].uid, 'u_penalized');
+  assert.strictEqual(rankRes.ranked[1].periodPoints, 15);
+  assert.strictEqual(rankRes.ranked[1].netPts, 15);
+  assert.strictEqual(rankRes.unranked.length, 2, 'Floored (0 NET) and Zero members must be unranked');
+  const floored = rankRes.unranked.find(m => m.uid === 'u_floored');
+  assert.ok(floored, 'Floored member must exist in unranked');
+  assert.strictEqual(floored.netPts, 0, 'NET must floor at 0 and never be negative');
+
+  // 2. buildPointsUpdate writes both monthKey/monthBucket and weekKey/weekBucket
+  const refMs = zonedDateToMs(2026, 11, 14, 15, 0, 0, 'Africa/Cairo');
+  const upd = buildPointsUpdate({ points: 0 }, 20, refMs);
+  assert.strictEqual(upd.monthKey, '2026-11');
+  assert.strictEqual(upd.monthBucket, '2026-11', 'buildPointsUpdate must also stamp monthBucket');
+  assert.strictEqual(upd.weekKey, '2026-11-14');
+  assert.strictEqual(upd.weekBucket, '2026-11-14', 'buildPointsUpdate must also stamp weekBucket');
+
+  // 3. GAS recalculateAllMemberBalancesInGas: userId support, missed_penalties, uid repair, override checkpoint & chrono txs
+  const gasCode = fs.readFileSync('backend-gas/Code.js', 'utf8');
+  const store = new Map();
+  const gasSandbox = {
+    console, Intl, Date, Math, String, Number, Boolean, Array, Object, JSON, RegExp, Error, Map, Set,
+    parseInt, parseFloat, isNaN, isFinite, encodeURIComponent,
+    Utilities: {
+      formatDate: (d, tz, fmt) => {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+          timeZone: tz || 'Africa/Cairo',
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+        }).formatToParts(d);
+        const m = Object.fromEntries(parts.map(p => [p.type, p.value]));
+        if (fmt === 'yyyy-MM-dd') return `${m.year}-${m.month}-${m.day}`;
+        return `${m.year}-${m.month}-${m.day}T${m.hour}:${m.minute}:${m.second}`;
+      }
+    },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, waitLock: () => {}, releaseLock: () => {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => '', setProperty: () => {} }) },
+    ScriptApp: { getProjectTriggers: () => [], newTrigger: () => ({ timeBased: () => ({ after: () => ({ create: () => {} }), everyMinutes: () => ({ create: () => {} }) }) }), deleteTrigger: () => {} },
+    UrlFetchApp: { fetch: () => ({ getResponseCode: () => 200, getContentText: '{}' }) },
+    Session: { getScriptTimeZone: () => 'Africa/Cairo' },
+    Logger: { log: () => {} }
+  };
+  vm.createContext(gasSandbox);
+  vm.runInContext(gasCode, gasSandbox);
+
+  const tBase = Date.now() - 3600000;
+  // Member A: had broken/empty uid field, legacy userId records, task missed_penalty + duplicate att missed_penalty, and out-of-order txs
+  store.set('users/u_broken_uid', { id: 'u_broken_uid', uid: '', name: 'Broken UID Member', points: 0, penalties: 0, netPts: 0, finesDue: 0 });
+  store.set('submissions/sub_u1', { id: 'sub_u1', userId: 'u_broken_uid', taskId: 't1', pointsAwarded: 25, submittedAt: new Date(tBase).toISOString() });
+  store.set('attendance_logs/att_u1', { id: 'att_u1', userId: 'u_broken_uid', sessionId: 's1', earlyBonusPoints: 5, penalty: 10, fineEGP: 20, timestamp: new Date(tBase + 1000).toISOString() });
+  store.set('missed_penalties/att_att_u1', { id: 'att_att_u1', uid: 'u_broken_uid', sessionId: 's1', penaltyPoints: 10, fineEGP: 20, appliedAt: new Date(tBase + 1000).toISOString() }); // duplicate of att_u1 -> must be skipped
+  store.set('missed_penalties/mp_task_u1', { id: 'mp_task_u1', userId: 'u_broken_uid', taskId: 't2', penaltyPoints: 8, fineEGP: 15, appliedAt: new Date(tBase + 2000).toISOString() });
+  // Out-of-order manual txs (deduct stored before add by key name, but newer timestamp)
+  store.set('users/u_broken_uid/transactions/aaa_deduct', { id: 'aaa_deduct', type: 'points_deduct', amount: 5, createdAt: new Date(tBase + 6000).toISOString() });
+  store.set('users/u_broken_uid/transactions/zzz_add', { id: 'zzz_add', type: 'points_add', amount: 10, createdAt: new Date(tBase + 4000).toISOString() });
+
+  // Member B: has a Direct Balance Override checkpoint + one post-override submission (pre-override sub must be ignored, override preserved!)
+  store.set('users/u_overridden', { id: 'u_overridden', uid: 'u_overridden', name: 'Overridden Member', points: 0, penalties: 0, netPts: 0, finesDue: 0 });
+  store.set('submissions/sub_pre', { id: 'sub_pre', uid: 'u_overridden', taskId: 't_old', pointsAwarded: 100, submittedAt: new Date(tBase - 10000).toISOString() });
+  store.set('users/u_overridden/transactions/tx_override', {
+    id: 'tx_override', type: 'override', newPoints: 50, newPenalties: 5, newFines: 10,
+    createdAt: new Date(tBase).toISOString()
+  });
+  store.set('submissions/sub_post', { id: 'sub_post', uid: 'u_overridden', taskId: 't_new', pointsAwarded: 15, submittedAt: new Date(tBase + 5000).toISOString() });
+
+  gasSandbox.firestoreGet = (path) => store.get(path) || null;
+  gasSandbox.firestorePatch = (path, data) => {
+    const prev = store.get(path) || {};
+    store.set(path, { ...prev, ...data });
+    return true;
+  };
+  const listByPrefix = (col) => {
+    const prefix = col + '/';
+    return Array.from(store.entries())
+      .filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/'))
+      .map(([, v]) => v);
+  };
+  gasSandbox.firestoreList = listByPrefix;
+  gasSandbox.firestoreListAll = listByPrefix;
+
+  const repairRes = gasSandbox.recalculateAllMemberBalancesInGas('repair_totals', 10, 95);
+  assert.strictEqual(repairRes.repairedCount, 2, 'Both desynced members must be repaired');
+  assert.strictEqual(repairRes.totalUsers, 2, 'Total users processed should be 2');
+
+  const fixedA = store.get('users/u_broken_uid');
+  // Points = 25 (sub) + 5 (earlyBonus) + 10 (add) - 5 (deduct) = 35
+  // Penalties = 10 (att) + 8 (task missed_penalty; duplicate att_ skipped) = 18
+  // Fines = 20 (att) + 15 (task missed_penalty) = 35
+  // NET = max(0, 35 - 18) = 17
+  assert.strictEqual(fixedA.uid, 'u_broken_uid', 'Repair must restore missing/blank uid field');
+  assert.strictEqual(fixedA.points, 35, 'Member A gross points should equal 35');
+  assert.strictEqual(fixedA.penalties, 18, 'Member A penalties should equal 18 (no double-count of att_)');
+  assert.strictEqual(fixedA.netPts, 17, 'Member A NET should equal 17');
+  assert.strictEqual(fixedA.finesDue, 35, 'Member A fines should equal 35 EGP');
+  assert.strictEqual(fixedA.monthKey, fixedA.monthBucket, 'monthKey and monthBucket must stay in sync');
+  assert.strictEqual(fixedA.weekKey, fixedA.weekBucket, 'weekKey and weekBucket must stay in sync');
+
+  const fixedB = store.get('users/u_overridden');
+  // Override (50 pts / 5 pen / 10 fines) + post-override sub (+15 pts) = 65 pts / 5 pen / 60 NET / 10 fines
+  assert.strictEqual(fixedB.points, 65, 'Override checkpoint (50) + post-override sub (15) must equal 65');
+  assert.strictEqual(fixedB.penalties, 5, 'Override penalties (5) must be preserved');
+  assert.strictEqual(fixedB.netPts, 60, 'Override NET must equal 60');
+  assert.strictEqual(fixedB.finesDue, 10, 'Override fines (10) must be preserved');
 }
 
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');

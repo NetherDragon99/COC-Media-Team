@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.6';
+export const APP_VERSION = '3.2.7';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -1353,15 +1353,35 @@ export function isDefaultEmailProfilePic(url) {
 
 export function normalizeUser(raw) {
   if (!raw) return null;
+  const toFiniteNum = (v) => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
   const name = raw.name || raw.displayName || 'Team Member';
   const rawAvatar = raw.avatarUrl || raw.photoURL || '';
-  const uid = raw.uid || '';
+  const uid = String(raw.uid || raw.id || '').trim();
   const isDefault = isDefaultEmailProfilePic(rawAvatar);
   const avatarUrl = isDefault ? getDeterministicPresetAvatar(uid || name) : rawAvatar;
-  const penalties = Math.max(0, typeof raw.penalties === 'number' ? raw.penalties : (typeof raw.totalPenalties === 'number' ? raw.totalPenalties : (typeof raw.penaltyPoints === 'number' ? raw.penaltyPoints : 0)));
-  const points = Math.max(0, typeof raw.points === 'number' ? raw.points : (typeof raw.totalPoints === 'number' ? raw.totalPoints : 0));
+
+  const rawPen = toFiniteNum(raw.penalties);
+  const rawTotPen = toFiniteNum(raw.totalPenalties);
+  const rawPenPts = toFiniteNum(raw.penaltyPoints);
+  const penalties = Math.max(0, rawPen !== null ? rawPen : (rawTotPen !== null ? rawTotPen : (rawPenPts !== null ? rawPenPts : 0)));
+
+  const rawPts = toFiniteNum(raw.points);
+  const rawTotPts = toFiniteNum(raw.totalPoints);
+  const rawTotEarned = toFiniteNum(raw.totalEarned);
+  const points = Math.max(0, rawPts !== null ? rawPts : (rawTotPts !== null ? rawTotPts : (rawTotEarned !== null ? rawTotEarned : 0)));
+
   const finesDue = Math.max(0, Number(raw.finesDue ?? raw.fines ?? raw.quotas ?? 0) || 0);
-  const netPts = Math.max(0, typeof raw.netPts === 'number' ? raw.netPts : (points - penalties));
+  const netPts = Math.max(0, points - penalties);
+
+  const monthKey = String(raw.monthKey || raw.monthBucket || '').trim();
+  const weekKey = String(raw.weekKey || raw.weekBucket || '').trim();
+  const monthPoints = Math.max(0, toFiniteNum(raw.monthPoints) ?? 0);
+  const weekPoints = Math.max(0, toFiniteNum(raw.weekPoints) ?? 0);
+
   const badges = Array.isArray(raw.badges) ? raw.badges : [];
   const badgeIds = Array.isArray(raw.badgeIds)
     ? raw.badgeIds
@@ -1375,22 +1395,25 @@ export function normalizeUser(raw) {
     photoURL: avatarUrl,
     role: raw.role || 'member',
     isAdmin: Boolean(raw.isAdmin || raw.role === 'admin'),
+    disabled: Boolean(raw.disabled),
     points,
     totalPoints: points,
-    totalEarned: Math.max(0, typeof raw.totalEarned === 'number' ? raw.totalEarned : points),
+    totalEarned: Math.max(0, rawTotEarned !== null ? rawTotEarned : points),
     penalties,
     penaltyPoints: penalties,
     totalPenalties: penalties,
     finesDue,
     fines: finesDue,
     netPts,
-    monthBucket: raw.monthBucket || '',
-    monthPoints: typeof raw.monthPoints === 'number' ? raw.monthPoints : 0,
-    weekBucket: raw.weekBucket || '',
-    weekPoints: typeof raw.weekPoints === 'number' ? raw.weekPoints : 0,
+    monthKey,
+    monthBucket: monthKey,
+    monthPoints,
+    weekKey,
+    weekBucket: weekKey,
+    weekPoints,
     badges,
     badgeIds,
-    streakDays: typeof raw.streakDays === 'number' ? raw.streakDays : 0,
+    streakDays: Math.max(0, toFiniteNum(raw.streakDays) ?? 0),
     lastOpId: raw.lastOpId || null,
     lastSeenAt: raw.lastSeenAt || null,
     createdAt: raw.createdAt || null,
@@ -1398,34 +1421,45 @@ export function normalizeUser(raw) {
   };
 }
 
-export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = '') {
-  if (uid && usersMap.has(uid)) {
-    const u = usersMap.get(uid);
+export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = '', fallbackMemberObj = null) {
+  const cleanUid = String(uid || '').trim();
+  const u = (cleanUid && usersMap.has(cleanUid))
+    ? usersMap.get(cleanUid)
+    : (cleanUid ? (state.members || []).find(m => m && (m.uid === cleanUid || m.id === cleanUid)) : null)
+      || (cleanUid && state.user && state.user.uid === cleanUid ? state.user : null)
+      || (fallbackMemberObj && typeof fallbackMemberObj === 'object' ? normalizeUser(fallbackMemberObj) : null);
+
+  if (u) {
     const rawAvatar = u.avatarUrl || u.photoURL || fallbackAvatar;
     const isDefault = isDefaultEmailProfilePic(rawAvatar);
     const resolvedAvatar = !isDefault ? rawAvatar : getDeterministicPresetAvatar(u.uid || u.name || fallbackName);
+    const pts = Math.max(0, Number(u.points) || 0);
+    const pen = Math.max(0, Number(u.penalties) || 0);
     return {
-      uid: u.uid,
+      uid: u.uid || cleanUid,
       name: u.name || u.displayName || fallbackName,
       displayName: u.displayName || u.name || fallbackName,
       avatarUrl: resolvedAvatar,
       photoURL: resolvedAvatar,
       role: u.role || 'member',
-      isAdmin: Boolean(u.isAdmin),
-      points: u.points || 0,
-      penalties: u.penalties || 0,
-      monthBucket: u.monthBucket || '',
-      monthPoints: u.monthPoints || 0,
-      weekBucket: u.weekBucket || '',
-      weekPoints: u.weekPoints || 0,
+      isAdmin: Boolean(u.isAdmin || u.role === 'admin'),
+      points: pts,
+      penalties: pen,
+      netPts: Math.max(0, pts - pen),
+      monthKey: u.monthKey || u.monthBucket || '',
+      monthBucket: u.monthBucket || u.monthKey || '',
+      monthPoints: Number(u.monthPoints) || 0,
+      weekKey: u.weekKey || u.weekBucket || '',
+      weekBucket: u.weekBucket || u.weekKey || '',
+      weekPoints: Number(u.weekPoints) || 0,
       badges: u.badges || [],
       badgeIds: u.badgeIds || []
     };
   }
   const isDefault = isDefaultEmailProfilePic(fallbackAvatar);
-  const resolvedAvatar = !isDefault ? fallbackAvatar : getDeterministicPresetAvatar(uid || fallbackName);
+  const resolvedAvatar = !isDefault ? fallbackAvatar : getDeterministicPresetAvatar(cleanUid || fallbackName);
   return {
-    uid: uid || '',
+    uid: cleanUid,
     name: fallbackName,
     displayName: fallbackName,
     avatarUrl: resolvedAvatar,
@@ -1434,8 +1468,11 @@ export function getUserProfile(uid, fallbackName = 'Member', fallbackAvatar = ''
     isAdmin: false,
     points: 0,
     penalties: 0,
+    netPts: 0,
+    monthKey: '',
     monthBucket: '',
     monthPoints: 0,
+    weekKey: '',
     weekBucket: '',
     weekPoints: 0,
     badges: [],
@@ -1832,6 +1869,7 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof se
       update.weekPoints = increment(delta);
     } else {
       update.weekKey = wk;
+      update.weekBucket = wk;
       update.weekPoints = delta;
     }
 
@@ -1839,6 +1877,7 @@ function buildPointsUpdate(userDocOrMapEntry, deltaPoints, nowInput = (typeof se
       update.monthPoints = increment(delta);
     } else {
       update.monthKey = mo;
+      update.monthBucket = mo;
       update.monthPoints = delta;
     }
   } else {
@@ -1974,14 +2013,18 @@ function getMemberPeriodPoints(userObj, period = 'all', nowInput = (typeof serve
 
 function computeMemberRanks(membersList, period = 'all') {
   const nowMs = typeof serverNow === 'function' ? serverNow() : Date.now();
-  const allMembers = Array.isArray(membersList) ? membersList : (usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state?.members || [])]);
+  const allMembers = Array.isArray(membersList) ? membersList : ((typeof usersMap !== 'undefined' && usersMap.size > 0) ? Array.from(usersMap.values()) : [...(typeof state !== 'undefined' && state?.members ? state.members : [])]);
   const activeMembers = allMembers.filter(m => !m.disabled);
 
   const mapped = activeMembers.map(m => {
-    const prof = typeof getUserProfile === 'function' ? getUserProfile(m.uid, m.displayName, m.photoURL) : {};
-    const periodPoints = Number(getMemberPeriodPoints(m, period, nowMs) || 0);
-    const penalties = typeof m.penalties === 'number' ? m.penalties : (typeof m.totalPenalties === 'number' ? m.totalPenalties : 0);
-    return { ...m, ...prof, periodPoints, penalties, points: periodPoints };
+    const prof = typeof getUserProfile === 'function' ? getUserProfile(m.uid, m.displayName, m.photoURL, m) : {};
+    const grossPoints = Math.max(0, Number(m.points ?? prof.points ?? 0) || 0);
+    const penalties = Math.max(0, Number(m.penalties ?? m.totalPenalties ?? prof.penalties ?? 0) || 0);
+    const netPts = Math.max(0, grossPoints - penalties);
+    const periodPoints = period === 'all'
+      ? netPts
+      : Math.max(0, Number(getMemberPeriodPoints({ ...prof, ...m }, period, nowMs) || 0));
+    return { ...m, ...prof, grossPoints, penalties, netPts, periodPoints, points: grossPoints };
   });
 
   const ranked = mapped
@@ -1989,6 +2032,8 @@ function computeMemberRanks(membersList, period = 'all') {
     .sort((a, b) => {
       const diff = Number(b.periodPoints || 0) - Number(a.periodPoints || 0);
       if (diff !== 0) return diff;
+      const grossDiff = Number(b.grossPoints || 0) - Number(a.grossPoints || 0);
+      if (grossDiff !== 0) return grossDiff;
       const penDiff = (a.penalties || 0) - (b.penalties || 0);
       if (penDiff !== 0) return penDiff;
       return (a.displayName || a.name || '').localeCompare(b.displayName || b.name || '');
@@ -5182,10 +5227,14 @@ export function renderBadgeRow(container, badges, member) {
 }
 
 export function openMiniProfileSheet(uidOrMember) {
-  const uid = typeof uidOrMember === 'string' ? uidOrMember : (uidOrMember?.uid || '');
-  const userProf = getUserProfile(uid, uidOrMember?.displayName || uidOrMember?.name || 'Member', uidOrMember?.photoURL || uidOrMember?.avatarUrl || '');
+  const uid = String(typeof uidOrMember === 'string' ? uidOrMember : (uidOrMember?.uid || uidOrMember?.id || '')).trim();
+  const fallbackObj = (uidOrMember && typeof uidOrMember === 'object') ? uidOrMember : null;
+  const userProf = getUserProfile(uid, fallbackObj?.displayName || fallbackObj?.name || 'Member', fallbackObj?.photoURL || fallbackObj?.avatarUrl || '', fallbackObj);
 
   const resolvedBadges = resolveOrderedUserBadges(userProf.badges, userProf);
+  const initialPts = Math.max(0, Number(userProf.points) || 0);
+  const initialPen = Math.max(0, Number(userProf.penalties) || 0);
+  const initialNet = Math.max(0, initialPts - initialPen);
 
   const wrapperEl = document.createElement('div');
   wrapperEl.className = 'mini-profile-root relative w-full h-full';
@@ -5194,9 +5243,9 @@ export function openMiniProfileSheet(uidOrMember) {
   wrapperEl.style.height = '100%';
 
   wrapperEl.innerHTML = `
-    <div class="sheet-bg absolute inset-0" style="position: absolute; inset: 0; border-radius: 28px 28px 0 0; background: var(--bg-grouped-secondary, #1C1C1E); border: 0.5px solid var(--border-glass, rgba(255,255,255,0.12)); box-shadow: 0 -8px 32px rgba(0,0,0,0.65); z-index: 10;"></div>
+    <div class="sheet-bg absolute inset-0" style="position: absolute; inset: 0; border-radius: 28px 28px 0 0; background: var(--surface-1, #141418); border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 -8px 32px rgba(0,0,0,0.65); z-index: 10;"></div>
 
-    <div class="sheet-avatar absolute" style="position: absolute; top: -44px; left: 50%; transform: translateX(-50%); width: 88px; height: 88px; border-radius: 50%; border: 4px solid #1C1C1E; box-shadow: 0 8px 28px rgba(0,0,0,0.7); background: #1C1C1E; z-index: 50; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+    <div class="sheet-avatar absolute" style="position: absolute; top: -44px; left: 50%; transform: translateX(-50%); width: 88px; height: 88px; border-radius: 50%; border: 4px solid #141418; box-shadow: 0 8px 28px rgba(0,0,0,0.7); background: #141418; z-index: 50; overflow: hidden; display: flex; align-items: center; justify-content: center;">
       ${renderAvatar(userProf, 'w-full h-full text-2xl font-bold')}
     </div>
 
@@ -5215,19 +5264,19 @@ export function openMiniProfileSheet(uidOrMember) {
           </div>
         </div>
 
-        <!-- 3-column grid: POINTS, PENALTIES, and SCORE -->
+        <!-- 3-column Apple HIG grid: POINTS, PENALTIES, and NET -->
         <div class="grid grid-cols-3 gap-2 pt-1">
-          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-            <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Points</span>
-            <span class="text-xl font-bold text-white tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.points || 0}</span>
+          <div class="p-3 rounded-2xl bg-[#1C1C22] border border-white/[0.06] text-center">
+            <span class="text-[10px] uppercase tracking-wider text-[#98989F] block font-semibold">Points</span>
+            <span class="mini-prof-pts text-xl font-bold text-white tracking-tight" style="font-variant-numeric: tabular-nums;">${initialPts}</span>
           </div>
-          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-            <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Penalties</span>
-            <span class="text-xl font-bold text-rose-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${userProf.penalties || 0}</span>
+          <div class="p-3 rounded-2xl bg-[#1C1C22] border border-white/[0.06] text-center">
+            <span class="text-[10px] uppercase tracking-wider text-[#98989F] block font-semibold">Penalties</span>
+            <span class="mini-prof-pen text-xl font-bold text-[#FF453A] tracking-tight" style="font-variant-numeric: tabular-nums;">${initialPen}</span>
           </div>
-          <div class="p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-center">
-            <span class="text-[10px] uppercase tracking-wider text-neutral-400 block font-medium">Score</span>
-            <span class="text-xl font-bold text-emerald-400 tracking-tight" style="font-variant-numeric: tabular-nums;">${Math.max(0, (userProf.points || 0) - (userProf.penalties || 0))}</span>
+          <div class="p-3 rounded-2xl bg-[#1C1C22] border border-white/[0.06] text-center">
+            <span class="text-[10px] uppercase tracking-wider text-[#98989F] block font-semibold">NET</span>
+            <span class="mini-prof-net text-xl font-bold text-[#30D158] tracking-tight" style="font-variant-numeric: tabular-nums;">${initialNet}</span>
           </div>
         </div>
 
@@ -5237,11 +5286,11 @@ export function openMiniProfileSheet(uidOrMember) {
             <span class="text-xs font-bold text-white uppercase tracking-wider">Badges (${resolvedBadges.length})</span>
           </div>
           ${resolvedBadges.length === 0 ? `
-            <div class="p-5 rounded-2xl bg-white/[0.02] border border-white/5 text-center text-xs text-neutral-400">
+            <div class="p-5 rounded-2xl bg-[#1C1C22] border border-white/[0.06] text-center text-xs text-[#98989F]">
               No badges yet.
             </div>
           ` : `
-            <div class="badge-pills-expanded-wrap flex flex-wrap items-center gap-1.5 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+            <div class="badge-pills-expanded-wrap flex flex-wrap items-center gap-1.5 p-3 rounded-2xl bg-[#1C1C22] border border-white/[0.06]">
               ${renderExpandedBadgesHtml(resolvedBadges, userProf)}
             </div>
           `}
@@ -5249,6 +5298,18 @@ export function openMiniProfileSheet(uidOrMember) {
       </div>
     </div>
   `;
+
+  const applyStatsToDom = (pts, pen) => {
+    const cleanPts = Math.max(0, Number(pts) || 0);
+    const cleanPen = Math.max(0, Number(pen) || 0);
+    const cleanNet = Math.max(0, cleanPts - cleanPen);
+    const ptsEl = wrapperEl.querySelector('.mini-prof-pts');
+    const penEl = wrapperEl.querySelector('.mini-prof-pen');
+    const netEl = wrapperEl.querySelector('.mini-prof-net');
+    if (ptsEl) ptsEl.textContent = String(cleanPts);
+    if (penEl) penEl.textContent = String(cleanPen);
+    if (netEl) netEl.textContent = String(cleanNet);
+  };
 
   let modal = null;
   const dismissBtn = wrapperEl.querySelector('.mini-profile-close-btn');
@@ -5263,6 +5324,27 @@ export function openMiniProfileSheet(uidOrMember) {
     body: wrapperEl,
     sheetClass: 'mini-profile-sheet'
   });
+
+  // Live Firestore refresh so stale local caches or missing usersMap entries never display 0
+  if (db && uid) {
+    getDoc(doc(db, 'users', uid)).then((snap) => {
+      if (!snap || !snap.exists()) return;
+      const fresh = normalizeUser({ ...snap.data(), uid: snap.id });
+      if (fresh) {
+        usersMap.set(snap.id, fresh);
+        applyStatsToDom(fresh.points, fresh.penalties);
+      }
+    }).catch(() => {});
+
+    // When an Admin views a member profile, verify & auto-sync desynced ledger totals in background
+    if (isCurrentUserAdmin() && typeof reconcileSingleMemberLedgerInBackground === 'function') {
+      reconcileSingleMemberLedgerInBackground(uid, (reconciled) => {
+        if (reconciled && wrapperEl.isConnected) {
+          applyStatsToDom(reconciled.points, reconciled.penalties);
+        }
+      }).catch(() => {});
+    }
+  }
 }
 
 export function openMemberPicker({ multi = false, includeAllOption = false, filterBadgeIds = null, selectedUids = [], onConfirm }) {
@@ -8566,34 +8648,52 @@ export async function submitHubAdjustment() {
 
         if (bucket === 'points') {
           const currentPts = Number(member.points || 0);
+          const currentPen = Math.max(0, Number(member.penalties || 0));
           const newPts = Math.max(0, currentPts + delta);
-          const curMonthPts = (member.monthKey === curMonthKey) ? (Number(member.monthPoints) || 0) : 0;
-          const curWeekPts = (member.weekKey === curWeekKey) ? (Number(member.weekPoints) || 0) : 0;
+          const curMonthPts = ((member.monthKey || member.monthBucket) === curMonthKey) ? (Number(member.monthPoints) || 0) : 0;
+          const curWeekPts = ((member.weekKey || member.weekBucket) === curWeekKey) ? (Number(member.weekPoints) || 0) : 0;
           const newMonthPts = Math.max(0, curMonthPts + delta);
           const newWeekPts = Math.max(0, curWeekPts + delta);
+          const nextNet = Math.max(0, newPts - currentPen);
 
           batch.update(userRef, {
             points: newPts,
+            totalPoints: newPts,
+            netPts: nextNet,
             monthKey: curMonthKey,
+            monthBucket: curMonthKey,
             monthPoints: newMonthPts,
             weekKey: curWeekKey,
+            weekBucket: curWeekKey,
             weekPoints: newWeekPts,
             updatedAt: serverTimestamp()
           });
 
           member.points = newPts;
+          member.totalPoints = newPts;
+          member.netPts = nextNet;
           member.monthKey = curMonthKey;
+          member.monthBucket = curMonthKey;
           member.monthPoints = newMonthPts;
           member.weekKey = curWeekKey;
+          member.weekBucket = curWeekKey;
           member.weekPoints = newWeekPts;
         } else if (bucket === 'penalties') {
           const curPen = Number(member.penalties || 0);
+          const curPts = Math.max(0, Number(member.points || 0));
           const newPen = Math.max(0, curPen + delta);
+          const nextNet = Math.max(0, curPts - newPen);
           batch.update(userRef, {
             penalties: newPen,
+            penaltyPoints: newPen,
+            totalPenalties: newPen,
+            netPts: nextNet,
             updatedAt: serverTimestamp()
           });
           member.penalties = newPen;
+          member.penaltyPoints = newPen;
+          member.totalPenalties = newPen;
+          member.netPts = nextNet;
         } else if (bucket === 'fines') {
           const curFines = Number(member.finesEGP != null ? member.finesEGP : (member.finesDue || 0));
           const newFines = Math.max(0, curFines + delta);
@@ -9700,23 +9800,25 @@ async function setupAuthLifecycle() {
       try {
         const userSnap = await getDoc(userRef);
         if (userSnap.exists()) {
-          state.user = normalizeUser({ uid: firebaseUser.uid, ...userSnap.data() });
+          state.user = normalizeUser({ ...userSnap.data(), uid: firebaseUser.uid });
         } else {
 
           const rawPhoto = firebaseUser.photoURL || '';
           const initialAvatar = isDefaultEmailProfilePic(rawPhoto) ? getDeterministicPresetAvatar(firebaseUser.uid) : rawPhoto;
           const initialUser = {
+            uid: firebaseUser.uid,
             name: firebaseUser.displayName || 'Team Member',
             avatarUrl: initialAvatar,
             role: 'member',
             points: 0,
             penalties: 0,
+            netPts: 0,
             lastOpId: null,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           };
           await setDoc(userRef, initialUser);
-          state.user = normalizeUser({ uid: firebaseUser.uid, ...initialUser });
+          state.user = normalizeUser({ ...initialUser, uid: firebaseUser.uid });
         }
 
         const privSnap = await getDoc(privRef).catch(() => null);
@@ -10123,7 +10225,7 @@ function setupMembersListeners() {
     const unsubUsers = onSnapshot(qUsers, (snapshot) => {
       usersMap.clear();
       snapshot.docs.forEach(d => {
-        const u = normalizeUser({ uid: d.id, ...d.data() });
+        const u = normalizeUser({ ...d.data(), uid: d.id });
         usersMap.set(d.id, u);
       });
       state.members = Array.from(usersMap.values());
@@ -13206,6 +13308,8 @@ export function renderLeaderboard() {
 
   if (countEl) countEl.textContent = `${sorted.length} Members`;
 
+  const unitLabel = period === 'all' ? 'NET' : 'pts';
+
   function renderStagePillar(member, defaultPlace, pillarClass) {
     if (!member) {
 
@@ -13219,7 +13323,7 @@ export function renderLeaderboard() {
             </svg>
           </div>
           <div class="text-xs font-semibold text-neutral-400">Open Spot</div>
-          <div class="text-[11px] font-mono text-neutral-500 mt-0.5">0 pts</div>
+          <div class="text-[11px] font-mono text-neutral-500 mt-0.5">0 ${unitLabel}</div>
         </div>
       `;
     }
@@ -13261,7 +13365,7 @@ export function renderLeaderboard() {
         </div>
         <div class="mx-auto mb-1.5 flex justify-center">${renderAvatar(member, avatarSize)}</div>
         <div class="font-bold text-xs text-white truncate max-w-[95%]">${esc(name)}</div>
-        <div class="text-xs font-bold font-mono ${rankColor} mt-0.5">${member.periodPoints} pts</div>
+        <div class="text-xs font-bold font-mono ${rankColor} mt-0.5">${member.periodPoints} ${unitLabel}</div>
         ${badgesHtml}
       </div>
     `;
@@ -13317,9 +13421,9 @@ export function renderLeaderboard() {
           </div>
         </div>
 
-        <!-- Col 4: Right Points Column (Fixed width, tabular, right-aligned) -->
+        <!-- Col 4: Right NET / Points Column (Fixed width, tabular, right-aligned) -->
         <div class="w-20 shrink-0 text-right">
-          <span class="font-bold font-mono text-xs tabular-nums ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} pts</span>
+          <span class="font-bold font-mono text-xs tabular-nums ${muted ? 'text-neutral-400' : 'text-amber-400'}">${member.periodPoints || 0} ${unitLabel}</span>
         </div>
       </div>
     `;
@@ -14401,11 +14505,11 @@ function updateProfileUI() {
     const userPenalties = Math.max(0, state.user.penalties || 0);
     if (penEl) penEl.textContent = `${userPenalties} pts`;
 
-    const netScore = Math.max(0, (state.user.points || 0) - userPenalties);
-    if (scoreEl) scoreEl.textContent = netScore;
+    const netVal = Math.max(0, (state.user.points || 0) - userPenalties);
+    if (scoreEl) scoreEl.textContent = netVal;
 
     const myRank = getUserRank(state.user.uid, 'all');
-    if (rankEl) rankEl.textContent = (myRank != null && Number(state.user.points || 0) > 0) ? `#${myRank}` : '--';
+    if (rankEl) rankEl.textContent = (myRank != null && netVal > 0) ? `#${myRank}` : '--';
 
     renderSettingsDrawer();
 
@@ -14518,7 +14622,7 @@ function updateActivityRings() {
 
   const P = Math.max(0, Number(state.user?.points || 0));
   const Pen = Math.max(0, Number(state.user?.penalties || 0));
-  const netPoints = P - Pen;
+  const netPoints = Math.max(0, P - Pen);
 
   const logs = state.myAttendanceLogs || [];
   let attendancePct = 100;
@@ -21830,7 +21934,7 @@ function openAdminEditSubmissionModal(submission, onUpdated = null) {
         <div class="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1">
           <div class="font-bold text-white">${esc(submission.taskTitle)}</div>
           <div class="text-neutral-400">Member: <strong class="text-white">${esc(submission.userName)}</strong></div>
-          <div class="text-neutral-400">Current Score: <strong class="text-emerald-400">+${oldPoints} pts</strong>${oldPenalty > 0 ? ` · <strong class="text-rose-400">-${oldPenalty} pen</strong>` : ''}${oldFine > 0 ? ` · <strong class="text-amber-400">${oldFine} EGP</strong>` : ''}</div>
+          <div class="text-neutral-400">Current NET Impact: <strong class="text-emerald-400">+${oldPoints} pts</strong>${oldPenalty > 0 ? ` · <strong class="text-rose-400">${oldPenalty} Penalty Pts</strong>` : ''}${oldFine > 0 ? ` · <strong class="text-amber-400">${oldFine} EGP</strong>` : ''}</div>
         </div>
 
         <div class="grid grid-cols-3 gap-2">
@@ -21862,7 +21966,7 @@ function openAdminEditSubmissionModal(submission, onUpdated = null) {
 
         <div>
           <label class="block text-neutral-300 font-semibold mb-1">Reason for Adjustment (Optional)</label>
-          <input id="input-edit-sub-reason" type="text" placeholder="e.g. Bonus effort, corrected score" class="ios-input text-white text-xs w-full" />
+          <input id="input-edit-sub-reason" type="text" placeholder="e.g. Bonus effort, corrected NET" class="ios-input text-white text-xs w-full" />
         </div>
 
         <div class="pt-2 border-t border-white/10">
@@ -22332,7 +22436,7 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl, onCh
         <div class="p-3.5 rounded-2xl bg-[#1C1C22] border border-white/[0.08] space-y-3 mb-3 text-xs">
           <div class="flex items-center justify-between gap-2">
             <span class="text-[11px] font-bold text-[#0A84FF] uppercase tracking-wider">Direct Balance Override</span>
-            <span class="text-[11px] font-mono font-semibold text-neutral-300 px-2 py-0.5 rounded-full bg-white/[0.06]">Net: ${Math.max(0, curPoints - curPenalties)} pts</span>
+            <span class="text-[11px] font-mono font-semibold text-neutral-300 px-2 py-0.5 rounded-full bg-white/[0.06]">NET: ${Math.max(0, curPoints - curPenalties)}</span>
           </div>
           <div class="grid grid-cols-3 gap-2">
             <div>
@@ -22369,7 +22473,7 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl, onCh
           let pillText = `+${tx.amount || 0} pts`;
           if (typeRaw === 'override') {
             pillClass = 'text-[#0A84FF] bg-[#0A84FF]/15 border-[#0A84FF]/30';
-            pillText = `Net ${tx.amount ?? 0} pts`;
+            pillText = `NET ${tx.amount ?? 0}`;
           } else if (eff.pen > 0 || eff.fine > 0) {
             pillClass = 'text-[#FF453A] bg-[#FF453A]/12 border-[#FF453A]/25';
             const parts = [];
@@ -22521,7 +22625,7 @@ export async function loadTransactionLedger(uid, containerEl, countBadgeEl, onCh
             if (newPts !== curPoints) deltaParts.push(`Points: ${curPoints} → ${newPts}`);
             if (newPen !== curPenalties) deltaParts.push(`Penalties: ${curPenalties} → ${newPen}`);
             if (newFines !== curFines) deltaParts.push(`Fines: ${curFines} → ${newFines} EGP`);
-            const summaryStr = deltaParts.length > 0 ? deltaParts.join(' · ') : `Net: ${netPts} pts`;
+            const summaryStr = deltaParts.length > 0 ? deltaParts.join(' · ') : `NET: ${netPts}`;
 
             const txRef = doc(collection(db, 'users', uid, 'transactions'));
             batch.set(txRef, {
@@ -23399,6 +23503,12 @@ function openMemberControlModal(member) {
   renderCtrlTasksPanel();
   renderCtrlAttendancePanel();
 
+  if (isCurrentUserAdmin() && typeof reconcileSingleMemberLedgerInBackground === 'function') {
+    reconcileSingleMemberLedgerInBackground(currentMember.uid, () => {
+      refreshAllCtrlPanels();
+    }).catch(() => {});
+  }
+
   const refreshLedgerBtn = modalBody.querySelector('#btn-refresh-ctrl-ledger');
   if (refreshLedgerBtn) {
     refreshLedgerBtn.onclick = () => {
@@ -24103,76 +24213,270 @@ async function runClientFallbackPurgeAllNotifications() {
   return deleted;
 }
 
+const _memberReconcileStampMap = new Map();
+
+export function computeVerifiedMemberBalances({ subs = [], attLogs = [], missedPenalties = [], txs = [], nowMs = serverNow() } = {}) {
+  const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
+
+  // Respect the latest Direct Balance Override checkpoint if one exists
+  let latestOverride = null;
+  let latestOverrideMs = 0;
+  (txs || []).forEach(t => {
+    if (!t || String(t.type || '').toLowerCase() !== 'override') return;
+    if (typeof t.newPoints !== 'number') return;
+    const tMs = parseDateTimeToMs(t.createdAt || t.timestamp || t.createdAtMs) || 0;
+    if (!latestOverride || tMs >= latestOverrideMs) {
+      latestOverride = t;
+      latestOverrideMs = tMs;
+    }
+  });
+
+  let realPoints = latestOverride ? Math.max(0, Number(latestOverride.newPoints) || 0) : 0;
+  let realPenalties = latestOverride ? Math.max(0, Number(latestOverride.newPenalties) || 0) : 0;
+  let realFinesEGP = latestOverride ? Math.max(0, Number(latestOverride.newFines) || 0) : 0;
+  let realMonthPoints = 0;
+  let realWeekPoints = 0;
+
+  const afterOverride = (ms) => (!latestOverride || (ms > 0 && ms > latestOverrideMs + 1000));
+
+  (subs || []).forEach(s => {
+    if (!s) return;
+    const pts = Math.max(0, Number(s.pointsAwarded) || 0);
+    const sTime = parseDateTimeToMs(s.submittedAt || s.createdAt) || 0;
+    if (sTime > 0) {
+      if (monthKeyOf(sTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += pts;
+      if (weekKeyOf(sTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += pts;
+    }
+    if (!afterOverride(sTime)) return;
+    realPoints += pts;
+    realPenalties += Math.max(0, Number(s.penaltyPoints ?? s.penaltyPts) || 0);
+    realFinesEGP += Math.max(0, Number(s.fineEGP) || 0);
+  });
+
+  const attLogIds = new Set();
+  (attLogs || []).forEach(l => {
+    if (!l) return;
+    if (l.id) attLogIds.add(l.id);
+    const lTime = parseDateTimeToMs(l.checkedInAt || l.timestamp || l.createdAt) || 0;
+    const earlyPts = Math.max(0, Number(l.earlyBonusPoints) || (Number(l.pointsDelta) > 0 ? Number(l.pointsDelta) : 0));
+    if (earlyPts > 0 && lTime > 0) {
+      if (monthKeyOf(lTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += earlyPts;
+      if (weekKeyOf(lTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += earlyPts;
+    }
+    if (!afterOverride(lTime)) return;
+    realPenalties += Math.max(0, Number(l.penalty) || 0);
+    realFinesEGP += Math.max(0, Number(l.fineEGP) || 0);
+    if (earlyPts > 0) realPoints += earlyPts;
+  });
+
+  (missedPenalties || []).forEach(m => {
+    if (!m) return;
+    if (m.id && String(m.id).startsWith('att_') && attLogIds.has(String(m.id).slice(4))) return;
+    if (m.sessionId && !m.taskId) return;
+    const mTime = parseDateTimeToMs(m.appliedAt || m.createdAt) || 0;
+    if (!afterOverride(mTime)) return;
+    realPenalties += Math.max(0, Number(m.penaltyPoints ?? m.penalty) || 0);
+    realFinesEGP += Math.max(0, Number(m.fineEGP) || 0);
+  });
+
+  const sortedTxs = [...(txs || [])].sort((a, b) => {
+    const aMs = parseDateTimeToMs(a?.createdAt || a?.timestamp || a?.createdAtMs) || 0;
+    const bMs = parseDateTimeToMs(b?.createdAt || b?.timestamp || b?.createdAtMs) || 0;
+    return aMs - bMs;
+  });
+
+  sortedTxs.forEach(t => {
+    if (!t || t.taskId || t.sessionId || t.submissionId || t.logId) return;
+    const type = String(t.type || '').toLowerCase();
+    if (type === 'override') return;
+    const eff = getTransactionLedgerEffect(t);
+    const tTime = parseDateTimeToMs(t.createdAt || t.timestamp || t.createdAtMs) || 0;
+    if (eff.pts !== 0 && tTime > 0) {
+      if (monthKeyOf(tTime, APP_TIMEZONE) === curMonthKey) realMonthPoints = Math.max(0, realMonthPoints + eff.pts);
+      if (weekKeyOf(tTime, APP_TIMEZONE) === curWeekKey) realWeekPoints = Math.max(0, realWeekPoints + eff.pts);
+    }
+    if (!afterOverride(tTime)) return;
+    if (eff.pts !== 0) realPoints = Math.max(0, realPoints + eff.pts);
+    if (eff.pen !== 0) realPenalties = Math.max(0, realPenalties + eff.pen);
+    if (eff.fine !== 0) realFinesEGP = Math.max(0, realFinesEGP + eff.fine);
+  });
+
+  realPoints = Math.max(0, Math.round(realPoints));
+  realPenalties = Math.max(0, Math.round(realPenalties));
+  realFinesEGP = Math.max(0, Math.round(realFinesEGP));
+  realMonthPoints = Math.max(0, Math.round(realMonthPoints));
+  realWeekPoints = Math.max(0, Math.round(realWeekPoints));
+  if (latestOverride) {
+    realMonthPoints = Math.min(realMonthPoints, realPoints);
+    realWeekPoints = Math.min(realWeekPoints, realPoints);
+  }
+  const netPts = Math.max(0, realPoints - realPenalties);
+
+  return {
+    points: realPoints,
+    penalties: realPenalties,
+    netPts,
+    finesDue: realFinesEGP,
+    monthKey: curMonthKey,
+    monthPoints: realMonthPoints,
+    weekKey: curWeekKey,
+    weekPoints: realWeekPoints
+  };
+}
+
+async function fetchMemberRecordsForReconcile(uid) {
+  const dedupDocs = (snaps) => {
+    const map = new Map();
+    snaps.forEach(snap => {
+      (snap?.docs || []).forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+    });
+    return Array.from(map.values());
+  };
+
+  const [sub1, sub2, att1, att2, mp1, mp2, txSnap] = await Promise.all([
+    getDocs(query(collection(db, 'submissions'), where('uid', '==', uid))).catch(() => null),
+    getDocs(query(collection(db, 'submissions'), where('userId', '==', uid))).catch(() => null),
+    getDocs(query(collection(db, 'attendance_logs'), where('uid', '==', uid))).catch(() => null),
+    getDocs(query(collection(db, 'attendance_logs'), where('userId', '==', uid))).catch(() => null),
+    getDocs(query(collection(db, 'missed_penalties'), where('uid', '==', uid))).catch(() => null),
+    getDocs(query(collection(db, 'missed_penalties'), where('userId', '==', uid))).catch(() => null),
+    getDocs(collection(db, 'users', uid, 'transactions')).catch(() => null)
+  ]);
+
+  return {
+    subs: dedupDocs([sub1, sub2]),
+    attLogs: dedupDocs([att1, att2]),
+    missedPenalties: dedupDocs([mp1, mp2]),
+    txs: dedupDocs([txSnap])
+  };
+}
+
+export async function reconcileSingleMemberLedgerInBackground(uid, onReconciled = null) {
+  if (!db || !uid || !isCurrentUserAdmin()) return null;
+  const nowCheck = Date.now();
+  const lastRun = _memberReconcileStampMap.get(uid) || 0;
+  if (nowCheck - lastRun < 15000) return null;
+  _memberReconcileStampMap.set(uid, nowCheck);
+
+  try {
+    const [userSnap, records] = await Promise.all([
+      getDoc(doc(db, 'users', uid)).catch(() => null),
+      fetchMemberRecordsForReconcile(uid)
+    ]);
+    if (!userSnap || !userSnap.exists()) return null;
+
+    const raw = userSnap.data() || {};
+    const u = normalizeUser({ ...raw, uid: userSnap.id });
+    const verified = computeVerifiedMemberBalances({ ...records, nowMs: serverNow() });
+
+    const curFines = Math.max(0, Number(raw.finesDue ?? raw.fines ?? 0) || 0);
+    const curNet = Number(raw.netPts);
+    const needsSync =
+      u.points !== verified.points ||
+      u.penalties !== verified.penalties ||
+      curNet !== verified.netPts ||
+      curFines !== verified.finesDue ||
+      raw.uid !== uid ||
+      raw.monthKey !== verified.monthKey ||
+      raw.monthBucket !== verified.monthKey ||
+      Number(raw.monthPoints || 0) !== verified.monthPoints ||
+      raw.weekKey !== verified.weekKey ||
+      raw.weekBucket !== verified.weekKey ||
+      Number(raw.weekPoints || 0) !== verified.weekPoints;
+
+    if (!needsSync) return null;
+
+    const b = writeBatch(db);
+    b.update(doc(db, 'users', uid), {
+      uid,
+      points: verified.points,
+      totalPoints: verified.points,
+      penalties: verified.penalties,
+      penaltyPoints: verified.penalties,
+      totalPenalties: verified.penalties,
+      netPts: verified.netPts,
+      finesDue: verified.finesDue,
+      fines: verified.finesDue,
+      monthKey: verified.monthKey,
+      monthBucket: verified.monthKey,
+      monthPoints: verified.monthPoints,
+      weekKey: verified.weekKey,
+      weekBucket: verified.weekKey,
+      weekPoints: verified.weekPoints,
+      updatedAt: serverTimestamp()
+    });
+    b.set(doc(db, 'users_private', uid), {
+      finesDue: verified.finesDue,
+      finesEGP: verified.finesDue,
+      fines: verified.finesDue,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+    await b.commit();
+
+    const updatedUser = normalizeUser({
+      ...raw,
+      ...verified,
+      uid,
+      monthBucket: verified.monthKey,
+      weekBucket: verified.weekKey
+    });
+    usersMap.set(uid, updatedUser);
+    state.members = Array.from(usersMap.values());
+    if (usersPrivate.has(uid)) {
+      const p = usersPrivate.get(uid);
+      p.finesDue = verified.finesDue;
+      p.finesEGP = verified.finesDue;
+    }
+    invalidateEgpCache(uid);
+    renderLeaderboard();
+    renderAdminMembers();
+    if (typeof onReconciled === 'function') onReconciled(updatedUser);
+    return updatedUser;
+  } catch (err) {
+    console.warn('[AutoReconcile] Member ledger check warning:', err);
+    return null;
+  }
+}
+
 async function runClientFallbackRepairTotals() {
   const usersSnap = await getDocs(collection(db, 'users')).catch(() => ({ docs: [] }));
-  const allUsers = usersSnap.docs.map(d => normalizeUser({ uid: d.id, ...d.data() }));
+  const allUsers = usersSnap.docs.map(d => ({ raw: d.data() || {}, user: normalizeUser({ ...d.data(), uid: d.id }) }));
   const nowMs = serverNow();
-  const { curMonthKey, curWeekKey } = getTimeBucketKeys(nowMs, APP_TIMEZONE);
   let repairedCount = 0;
 
   for (let i = 0; i < allUsers.length; i++) {
-    const u = allUsers[i];
-    let realPoints = 0;
-    let realMonthPoints = 0;
-    let realWeekPoints = 0;
-    let realPenalties = 0;
-    let realFinesEGP = 0;
+    const { raw, user: u } = allUsers[i];
+    const records = await fetchMemberRecordsForReconcile(u.uid);
+    const verified = computeVerifiedMemberBalances({ ...records, nowMs });
 
-    const subSnap = await getDocs(query(collection(db, 'submissions'), where('uid', '==', u.uid))).catch(() => ({ docs: [] }));
-    subSnap.docs.forEach(d => {
-      const s = d.data() || {};
-      const pts = Math.max(0, Number(s.pointsAwarded) || 0);
-      realPoints += pts;
-      realPenalties += Math.max(0, Number(s.penaltyPoints ?? s.penaltyPts) || 0);
-      realFinesEGP += Math.max(0, Number(s.fineEGP) || 0);
-      const sTime = parseDateTimeToMs(s.submittedAt || s.createdAt) || 0;
-      if (monthKeyOf(sTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += pts;
-      if (weekKeyOf(sTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += pts;
-    });
+    const curFines = Math.max(0, Number(raw.finesDue ?? raw.fines ?? u.finesDue ?? 0) || 0);
+    const curNet = Number(raw.netPts);
+    const needsSync =
+      u.points !== verified.points ||
+      u.penalties !== verified.penalties ||
+      curNet !== verified.netPts ||
+      curFines !== verified.finesDue ||
+      raw.uid !== u.uid ||
+      raw.monthKey !== verified.monthKey ||
+      raw.monthBucket !== verified.monthKey ||
+      Number(raw.monthPoints || 0) !== verified.monthPoints ||
+      raw.weekKey !== verified.weekKey ||
+      raw.weekBucket !== verified.weekKey ||
+      Number(raw.weekPoints || 0) !== verified.weekPoints;
 
-    const attSnap = await getDocs(query(collection(db, 'attendance_logs'), where('uid', '==', u.uid))).catch(() => ({ docs: [] }));
-    attSnap.docs.forEach(d => {
-      const l = d.data() || {};
-      realPenalties += Math.max(0, Number(l.penalty) || 0);
-      realFinesEGP += Math.max(0, Number(l.fineEGP) || 0);
-      const earlyPts = Math.max(0, Number(l.earlyBonusPoints) || (Number(l.pointsDelta) > 0 ? Number(l.pointsDelta) : 0));
-      if (earlyPts > 0) {
-        realPoints += earlyPts;
-        const lTime = parseDateTimeToMs(l.checkedInAt || l.timestamp || l.createdAt) || 0;
-        if (monthKeyOf(lTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += earlyPts;
-        if (weekKeyOf(lTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += earlyPts;
-      }
-    });
-
-    const txSnap = await getDocs(collection(db, 'users', u.uid, 'transactions')).catch(() => ({ docs: [] }));
-    txSnap.docs.forEach(d => {
-      const t = d.data() || {};
-      if (t.taskId || t.sessionId || t.submissionId || t.logId) return;
-      const eff = getTransactionLedgerEffect(t);
-      if (eff.pts !== 0) {
-        realPoints = Math.max(0, realPoints + eff.pts);
-        const tTime = parseDateTimeToMs(t.createdAt || t.timestamp) || 0;
-        if (eff.pts > 0 && monthKeyOf(tTime, APP_TIMEZONE) === curMonthKey) realMonthPoints += eff.pts;
-        if (eff.pts > 0 && weekKeyOf(tTime, APP_TIMEZONE) === curWeekKey) realWeekPoints += eff.pts;
-      }
-      realPenalties = Math.max(0, realPenalties + eff.pen);
-      realFinesEGP = Math.max(0, realFinesEGP + eff.fine);
-    });
-
-    const netPts = Math.max(0, realPoints - realPenalties);
-    const curFines = Number(u.finesDue ?? u.fines ?? 0);
-    if (u.points !== realPoints || u.penalties !== realPenalties || curFines !== realFinesEGP || u.monthKey !== curMonthKey || u.monthPoints !== realMonthPoints || u.weekKey !== curWeekKey || u.weekPoints !== realWeekPoints) {
+    if (needsSync) {
       repairedCount++;
       const b = writeBatch(db);
       b.update(doc(db, 'users', u.uid), {
-        points: realPoints, totalPoints: realPoints,
-        penalties: realPenalties, penaltyPoints: realPenalties, totalPenalties: realPenalties,
-        netPts, finesDue: realFinesEGP, fines: realFinesEGP,
-        monthKey: curMonthKey, monthBucket: curMonthKey, monthPoints: realMonthPoints,
-        weekKey: curWeekKey, weekBucket: curWeekKey, weekPoints: realWeekPoints,
+        uid: u.uid,
+        points: verified.points, totalPoints: verified.points,
+        penalties: verified.penalties, penaltyPoints: verified.penalties, totalPenalties: verified.penalties,
+        netPts: verified.netPts, finesDue: verified.finesDue, fines: verified.finesDue,
+        monthKey: verified.monthKey, monthBucket: verified.monthKey, monthPoints: verified.monthPoints,
+        weekKey: verified.weekKey, weekBucket: verified.weekKey, weekPoints: verified.weekPoints,
         updatedAt: serverTimestamp()
       });
-      b.set(doc(db, 'users_private', u.uid), { finesDue: realFinesEGP, finesEGP: realFinesEGP, fines: realFinesEGP, updatedAt: serverTimestamp() }, { merge: true });
+      b.set(doc(db, 'users_private', u.uid), { finesDue: verified.finesDue, finesEGP: verified.finesDue, fines: verified.finesDue, updatedAt: serverTimestamp() }, { merge: true });
       await b.commit();
     }
 

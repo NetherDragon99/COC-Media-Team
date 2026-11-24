@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.2.6';
-const CACHE_NAME = 'coc-media-cache-v3.2.6';
+const CACHE_VERSION = 'v3.2.7';
+const CACHE_NAME = 'coc-media-cache-v3.2.7';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
@@ -15,7 +15,7 @@ const ASSETS_TO_PRECACHE = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_PRECACHE).catch(() => {});
+      return cache.addAll(ASSETS_TO_PRECACHE).catch(() => { });
     }).then(() => self.skipWaiting())
   );
 });

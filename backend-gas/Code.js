@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.6)
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.7)
  * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync,
  * Deduplicated 3-Stage Notifications, Background Maintenance Jobs & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
@@ -70,7 +70,7 @@ function doGet(e) {
   ensureWatchdogTriggersInstalled();
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.2.6",
+    version: "3.2.7",
     system: "CoC Media Unified Task & Attendance Backend Watchdog",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -4196,6 +4196,7 @@ function recalculateAllMemberBalancesInGas(jobType, startPct, endPct) {
   const users = firestoreListAll("users", 500);
   const allSubs = firestoreListAll("submissions", 3000);
   const allAttLogs = firestoreListAll("attendance_logs", 3000);
+  const allMissedPenalties = firestoreListAll("missed_penalties", 3000);
 
   const subsByUid = {};
   allSubs.forEach(s => {
@@ -4213,66 +4214,126 @@ function recalculateAllMemberBalancesInGas(jobType, startPct, endPct) {
     attByUid[uid].push(l);
   });
 
+  const missedByUid = {};
+  allMissedPenalties.forEach(m => {
+    const uid = m && (m.uid || m.userId);
+    if (!uid) return;
+    if (!missedByUid[uid]) missedByUid[uid] = [];
+    missedByUid[uid].push(m);
+  });
+
   let repairedCount = 0;
 
   users.forEach((u, idx) => {
     if (!u || !u.id) return;
     const uid = u.id;
-    let realPoints = 0;
+    const txs = firestoreListAll(`users/${uid}/transactions`, 1000);
+
+    // Respect the latest Direct Balance Override checkpoint if one exists
+    let latestOverride = null;
+    let latestOverrideMs = 0;
+    txs.forEach(t => {
+      if (!t || String(t.type || "").toLowerCase() !== "override") return;
+      if (typeof t.newPoints !== "number") return;
+      const tMs = parseDateTimeToMs(t.createdAt || t.timestamp || t.createdAtMs) || 0;
+      if (!latestOverride || tMs >= latestOverrideMs) {
+        latestOverride = t;
+        latestOverrideMs = tMs;
+      }
+    });
+
+    let realPoints = latestOverride ? Math.max(0, Number(latestOverride.newPoints) || 0) : 0;
+    let realPenalties = latestOverride ? Math.max(0, Number(latestOverride.newPenalties) || 0) : 0;
+    let realFinesEGP = latestOverride ? Math.max(0, Number(latestOverride.newFines) || 0) : 0;
     let realMonthPoints = 0;
     let realWeekPoints = 0;
-    let realPenalties = 0;
-    let realFinesEGP = 0;
+
+    const afterOverride = (ms) => (!latestOverride || (ms > 0 && ms > latestOverrideMs + 1000));
 
     (subsByUid[uid] || []).forEach(s => {
       const pts = Math.max(0, Number(s.pointsAwarded) || 0);
-      realPoints += pts;
-      realPenalties += Math.max(0, Number(s.penaltyPoints != null ? s.penaltyPoints : s.penaltyPts) || 0);
-      realFinesEGP += Math.max(0, Number(s.fineEGP) || 0);
       const tMs = parseDateTimeToMs(s.submittedAt || s.createdAt) || 0;
       if (tMs > 0) {
         if (monthKeyOf(tMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints += pts;
         if (weekKeyOf(tMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints += pts;
       }
+      if (!afterOverride(tMs)) return;
+      realPoints += pts;
+      realPenalties += Math.max(0, Number(s.penaltyPoints != null ? s.penaltyPoints : s.penaltyPts) || 0);
+      realFinesEGP += Math.max(0, Number(s.fineEGP) || 0);
     });
 
+    const attLogIds = new Set();
     (attByUid[uid] || []).forEach(l => {
+      if (l && l.id) attLogIds.add(l.id);
+      const lMs = parseDateTimeToMs(l.checkedInAt || l.timestamp || l.createdAt) || 0;
+      const earlyPts = Math.max(0, Number(l.earlyBonusPoints) || (Number(l.pointsDelta) > 0 ? Number(l.pointsDelta) : 0));
+      if (earlyPts > 0 && lMs > 0) {
+        if (monthKeyOf(lMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints += earlyPts;
+        if (weekKeyOf(lMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints += earlyPts;
+      }
+      if (!afterOverride(lMs)) return;
       realPenalties += Math.max(0, Number(l.penalty) || 0);
       realFinesEGP += Math.max(0, Number(l.fineEGP) || 0);
-      const earlyPts = Math.max(0, Number(l.earlyBonusPoints) || (Number(l.pointsDelta) > 0 ? Number(l.pointsDelta) : 0));
-      if (earlyPts > 0) {
-        realPoints += earlyPts;
-        const lMs = parseDateTimeToMs(l.checkedInAt || l.timestamp || l.createdAt) || 0;
-        if (lMs > 0) {
-          if (monthKeyOf(lMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints += earlyPts;
-          if (weekKeyOf(lMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints += earlyPts;
-        }
-      }
+      if (earlyPts > 0) realPoints += earlyPts;
     });
 
-    const txs = firestoreListAll(`users/${uid}/transactions`, 1000);
-    txs.forEach(t => {
+    (missedByUid[uid] || []).forEach(m => {
+      if (!m) return;
+      // Skip attendance-sourced missed_penalties if already recorded in attendance_logs
+      if (m.id && String(m.id).indexOf("att_") === 0 && attLogIds.has(String(m.id).slice(4))) return;
+      if (m.sessionId && !m.taskId) return;
+      const mMs = parseDateTimeToMs(m.appliedAt || m.createdAt) || 0;
+      if (!afterOverride(mMs)) return;
+      realPenalties += Math.max(0, Number(m.penaltyPoints != null ? m.penaltyPoints : m.penalty) || 0);
+      realFinesEGP += Math.max(0, Number(m.fineEGP) || 0);
+    });
+
+    const sortedTxs = txs.slice().sort((a, b) => {
+      const aMs = parseDateTimeToMs(a && (a.createdAt || a.timestamp || a.createdAtMs)) || 0;
+      const bMs = parseDateTimeToMs(b && (b.createdAt || b.timestamp || b.createdAtMs)) || 0;
+      return aMs - bMs;
+    });
+
+    sortedTxs.forEach(t => {
       if (!t || t.taskId || t.sessionId || t.submissionId || t.logId) return;
       const type = String(t.type || "").toLowerCase();
+      const cat = String(t.category || "").toLowerCase();
+      if (type === "override") return;
       const amt = Math.max(0, Number(t.amount) || 0);
-      const tMs = parseDateTimeToMs(t.createdAt || t.timestamp) || 0;
+      const tMs = parseDateTimeToMs(t.createdAt || t.timestamp || t.createdAtMs) || 0;
 
       if (type === "bonus" || type === "points_add") {
-        realPoints += amt;
         if (tMs > 0) {
-          if (monthKeyOf(tMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints += amt;
-          if (weekKeyOf(tMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints += amt;
+          if (monthKeyOf(tMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints = Math.max(0, realMonthPoints + amt);
+          if (weekKeyOf(tMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints = Math.max(0, realWeekPoints + amt);
         }
+        if (afterOverride(tMs)) realPoints += amt;
       } else if (type === "points_deduct") {
-        realPoints = Math.max(0, realPoints - amt);
-      } else if (type === "penalty" || type === "deduction" || type === "penalties_add") {
-        realPenalties += amt;
+        if (tMs > 0) {
+          if (monthKeyOf(tMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints = Math.max(0, realMonthPoints - amt);
+          if (weekKeyOf(tMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints = Math.max(0, realWeekPoints - amt);
+        }
+        if (afterOverride(tMs)) realPoints = Math.max(0, realPoints - amt);
+      } else if (type === "penalty" || type === "deduction" || type === "penalties_add" || cat === "penalty") {
+        const penPts = t.pointsDelta && Number(t.pointsDelta) < 0 ? Math.abs(Number(t.pointsDelta)) : amt;
+        const fineExtra = t.egpDelta && Number(t.egpDelta) < 0 ? Math.abs(Number(t.egpDelta)) : 0;
+        if (afterOverride(tMs)) {
+          realPenalties += penPts;
+          realFinesEGP += fineExtra;
+        }
       } else if (type === "penalties_deduct") {
-        realPenalties = Math.max(0, realPenalties - amt);
+        if (afterOverride(tMs)) realPenalties = Math.max(0, realPenalties - amt);
       } else if (type === "fine" || type === "fines_add") {
-        realFinesEGP += amt;
+        if (afterOverride(tMs)) realFinesEGP += amt;
       } else if (type === "payment" || type === "waive" || type === "fines_deduct") {
-        realFinesEGP = Math.max(0, realFinesEGP - amt);
+        if (afterOverride(tMs)) realFinesEGP = Math.max(0, realFinesEGP - amt);
+      } else if (cat === "points") {
+        if (tMs > 0) {
+          if (monthKeyOf(tMs, CONFIG.TIMEZONE) === curMonthKey) realMonthPoints = Math.max(0, realMonthPoints + amt);
+          if (weekKeyOf(tMs, CONFIG.TIMEZONE) === curWeekKey) realWeekPoints = Math.max(0, realWeekPoints + amt);
+        }
+        if (afterOverride(tMs)) realPoints += amt;
       }
     });
 
@@ -4281,18 +4342,25 @@ function recalculateAllMemberBalancesInGas(jobType, startPct, endPct) {
     realFinesEGP = Math.max(0, Math.round(realFinesEGP));
     realMonthPoints = Math.max(0, Math.round(realMonthPoints));
     realWeekPoints = Math.max(0, Math.round(realWeekPoints));
+    if (latestOverride) {
+      realMonthPoints = Math.min(realMonthPoints, realPoints);
+      realWeekPoints = Math.min(realWeekPoints, realPoints);
+    }
     const netPts = Math.max(0, realPoints - realPenalties);
 
     const curPoints = Number(u.points) || 0;
     const curPen = Number(u.penalties) || 0;
     const curFines = Number(u.finesDue != null ? u.finesDue : (u.fines || 0));
+    const curNet = Number(u.netPts);
     const changed = curPoints !== realPoints || curPen !== realPenalties || curFines !== realFinesEGP ||
-      u.monthKey !== curMonthKey || Number(u.monthPoints || 0) !== realMonthPoints ||
-      u.weekKey !== curWeekKey || Number(u.weekPoints || 0) !== realWeekPoints;
+      curNet !== netPts || u.uid !== uid ||
+      u.monthKey !== curMonthKey || u.monthBucket !== curMonthKey || Number(u.monthPoints || 0) !== realMonthPoints ||
+      u.weekKey !== curWeekKey || u.weekBucket !== curWeekKey || Number(u.weekPoints || 0) !== realWeekPoints;
 
     if (changed) {
       repairedCount++;
       firestorePatch(`users/${uid}`, {
+        uid: uid,
         points: realPoints,
         totalPoints: realPoints,
         penalties: realPenalties,
@@ -4309,7 +4377,7 @@ function recalculateAllMemberBalancesInGas(jobType, startPct, endPct) {
         weekPoints: realWeekPoints,
         updatedAt: nowIso
       }, [
-        "points", "totalPoints", "penalties", "penaltyPoints", "totalPenalties",
+        "uid", "points", "totalPoints", "penalties", "penaltyPoints", "totalPenalties",
         "netPts", "finesDue", "fines", "monthKey", "monthBucket", "monthPoints",
         "weekKey", "weekBucket", "weekPoints", "updatedAt"
       ]);
