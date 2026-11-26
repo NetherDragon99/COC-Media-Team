@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.7';
+export const APP_VERSION = '3.2.8';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -5940,6 +5940,7 @@ function getVisibleCardsForType(type) {
   let container = null;
   if (type === 'tasks') container = document.getElementById('tasks-container');
   else if (type === 'notifications') container = document.getElementById('notifications-container');
+  else if (type === 'notifications_admin') container = document.getElementById('admin-notif-history-container');
   else if (type === 'admin_tasks') container = document.getElementById('admin-tasks-tbody');
   else if (type === 'categories') container = document.getElementById('admin-categories-list');
   else if (type === 'members') container = document.getElementById('admin-members-tbody');
@@ -5980,11 +5981,20 @@ export function getBulkActions(listType) {
 
   if (listType === 'badges') {
     return [
+      { id: 'btn-bulk-duplicate', label: 'Duplicate', type: 'duplicate', class: PRIMARY_CLS },
       { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
   }
 
-  if (listType === 'tasks' || listType === 'admin_tasks' || listType === 'categories' || listType === 'sessions' || listType === 'broadcasts') {
+  if (listType === 'admin_tasks' || listType === 'categories' || listType === 'sessions' || listType === 'broadcasts') {
+    return [
+      { id: 'btn-bulk-duplicate', label: 'Duplicate', type: 'duplicate', class: PRIMARY_CLS },
+      { id: 'btn-bulk-archive', label: isArchivedView ? 'Restore' : 'Archive', type: 'archive', isRestore: isArchivedView, class: isArchivedView ? SUCCESS_CLS : NEUTRAL_CLS },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
+    ];
+  }
+
+  if (listType === 'tasks') {
     return [
       { id: 'btn-bulk-archive', label: isArchivedView ? 'Restore' : 'Archive', type: 'archive', isRestore: isArchivedView, class: isArchivedView ? SUCCESS_CLS : NEUTRAL_CLS },
       { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
@@ -6008,7 +6018,14 @@ export function getBulkActions(listType) {
     ];
   }
 
-  if (listType === 'submissions' || listType === 'attendance_logs' || listType === 'notifications_admin') {
+  if (listType === 'notifications_admin') {
+    return [
+      { id: 'btn-bulk-duplicate', label: 'Duplicate', type: 'duplicate', class: PRIMARY_CLS },
+      { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
+    ];
+  }
+
+  if (listType === 'submissions' || listType === 'attendance_logs') {
     return [
       { id: 'btn-bulk-delete', label: 'Delete', type: 'delete', class: DANGER_CLS }
     ];
@@ -6137,7 +6154,9 @@ export function updateSelectionUI() {
       btn.textContent = act.label;
       btn.disabled = (count === 0);
       btn.onclick = () => {
-        if (act.type === 'archive') {
+        if (act.type === 'duplicate') {
+          handleBulkDuplicate();
+        } else if (act.type === 'archive') {
           handleBulkArchive(act.isRestore);
         } else if (act.type === 'delete') {
           handleBulkDelete();
@@ -6182,6 +6201,148 @@ export function toggleSelectAll() {
     selectionState.visibleIds.forEach(id => selectionState.selectedIds.add(id));
   }
   updateSelectionUI();
+}
+
+export async function handleBulkDuplicate() {
+  const ids = Array.from(selectionState.selectedIds);
+  const type = selectionState.type;
+  if (ids.length === 0) return;
+
+  const stripMeta = (obj, nameKey = 'title') => {
+    const copy = { ...obj };
+    delete copy.id;
+    delete copy.createdAt;
+    delete copy.updatedAt;
+    delete copy.__isDuplicateDraft;
+    copy.archived = false;
+    copy.isArchived = false;
+    if (nameKey === 'title' && copy.title) {
+      copy.title = `${String(copy.title).replace(/\s*\(Copy\)$/i, '')} (Copy)`;
+    } else if (nameKey === 'name') {
+      const base = copy.name || copy.label || copy.nameEn || 'Item';
+      const nextName = `${String(base).replace(/\s*\(Copy\)$/i, '')} (Copy)`;
+      if (copy.name !== undefined) copy.name = nextName;
+      if (copy.nameEn !== undefined) copy.nameEn = nextName;
+      if (copy.label !== undefined) copy.label = nextName;
+    }
+    return copy;
+  };
+
+  if (ids.length === 1) {
+    const singleId = ids[0];
+    exitSelectionMode();
+    if (type === 'admin_tasks' || type === 'tasks') {
+      const item = (state.tasks || []).find(x => x.id === singleId);
+      if (item) openAdminTaskModal(null, stripMeta(item, 'title'));
+      return;
+    }
+    if (type === 'sessions') {
+      const item = (state.attendanceSessions || []).find(x => x.id === singleId);
+      if (item) openAdminSessionModal(null, stripMeta(item, 'title'));
+      return;
+    }
+    if (type === 'categories') {
+      const item = (state.categories || []).find(x => x.id === singleId);
+      if (item) openCategoryModal(null, stripMeta(item, 'name'));
+      return;
+    }
+    if (type === 'badges') {
+      const allB = typeof getAllAvailableBadges === 'function' ? getAllAvailableBadges() : (state.badges || []);
+      const item = allB.find(x => x.id === singleId);
+      if (item) openBadgeModal({ ...stripMeta(item, 'name'), __isDuplicateDraft: true });
+      return;
+    }
+    if (type === 'broadcasts') {
+      const item = (state.broadcasts || []).find(x => x.id === singleId);
+      if (item) openAdminBroadcastModal({ ...stripMeta(item, 'title'), __isDuplicateDraft: true });
+      return;
+    }
+    if (type === 'notifications_admin') {
+      const item = (_adminNotifHistory || []).find(x => x.id === singleId);
+      if (item) prefillAdminNotificationComposerFromItem(item);
+      return;
+    }
+    toast('Duplicate is not supported for this item type', 'info');
+    return;
+  }
+
+  try {
+    let createdCount = 0;
+    if (type === 'admin_tasks' || type === 'tasks') {
+      for (const id of ids) {
+        const item = (state.tasks || []).find(x => x.id === id);
+        if (!item) continue;
+        await addDoc(collection(db, 'tasks'), {
+          ...stripMeta(item, 'title'),
+          order: (state.tasks || []).length + createdCount,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        createdCount++;
+      }
+      renderAdminTasks();
+      renderTasks();
+    } else if (type === 'sessions') {
+      for (const id of ids) {
+        const item = (state.attendanceSessions || []).find(x => x.id === id);
+        if (!item) continue;
+        await addDoc(collection(db, 'attendance_sessions'), {
+          ...stripMeta(item, 'title'),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        createdCount++;
+      }
+      renderAdminSessions();
+    } else if (type === 'categories') {
+      for (const id of ids) {
+        const item = (state.categories || []).find(x => x.id === id);
+        if (!item) continue;
+        await addDoc(collection(db, 'categories'), {
+          ...stripMeta(item, 'name'),
+          order: (state.categories || []).length + createdCount,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        createdCount++;
+      }
+      renderAdminCategories();
+    } else if (type === 'badges') {
+      const allB = typeof getAllAvailableBadges === 'function' ? getAllAvailableBadges() : (state.badges || []);
+      for (const id of ids) {
+        const item = allB.find(x => x.id === id);
+        if (!item) continue;
+        const copy = stripMeta(item, 'name');
+        const newId = `badge_${Date.now()}_${createdCount}`;
+        await setDoc(doc(db, 'badges', newId), {
+          ...copy,
+          id: newId,
+          order: allB.length + createdCount,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        createdCount++;
+      }
+      renderAdminBadges();
+    } else if (type === 'broadcasts') {
+      for (const id of ids) {
+        const item = (state.broadcasts || []).find(x => x.id === id);
+        if (!item) continue;
+        await addDoc(collection(db, 'broadcasts'), {
+          ...stripMeta(item, 'title'),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        createdCount++;
+      }
+      renderAdminBroadcasts();
+    }
+    exitSelectionMode();
+    toast(`Duplicated ${createdCount} independent item(s)`, 'success');
+  } catch (err) {
+    console.error('Bulk duplicate error:', err);
+    toast('Failed to duplicate selected items: ' + (err.message || err), 'error');
+  }
 }
 
 export async function handleBulkArchive(isRestore = false) {
@@ -6627,7 +6788,12 @@ export async function handleBulkDelete() {
           window.refreshCurrentRosterView();
         }
       }
-    } else if (type === 'notifications' || type === 'updates' || type === 'notifications_admin') {
+    } else if (type === 'notifications_admin') {
+      for (const id of ids) {
+        const item = (_adminNotifHistory || []).find(x => x.id === id) || { id };
+        await handleDeleteAdminNotificationItem(item, item.isBroadcast ? null : (item.uid || item.targetUids?.[0] || null));
+      }
+    } else if (type === 'notifications' || type === 'updates') {
       const targetUid = state.user?.uid;
       await Promise.all(ids.map(id => deleteSingleNotificationFromFirestore(id, targetUid)));
       state.notifications = state.notifications.filter(n => !selectionState.selectedIds.has(n.id));
@@ -7659,16 +7825,31 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     }));
   }
 
+  function resolveDockIndex(pageIndex) {
+    const pageObj = pages[pageIndex];
+    if (!pageObj) return 0;
+    const dockArr = Array.from(dockItems);
+    const exactIdx = dockArr.findIndex(btn => btn.dataset.page === pageObj.id);
+    if (exactIdx !== -1) return exactIdx;
+    if (pageObj.group) {
+      const groupIdx = dockArr.findIndex(btn => btn.dataset.hubGroup === pageObj.group);
+      if (groupIdx !== -1) return groupIdx;
+    }
+    return Math.min(pageIndex, Math.max(0, dockItems.length - 1));
+  }
+
   function applyInterpolatedThumb(clampedProgress) {
     const baseIdx = Math.floor(clampedProgress);
     const nextIdx = Math.min(pages.length - 1, baseIdx + 1);
     const ratio = clampedProgress - baseIdx;
-    if (thumbEl && dockItems[baseIdx] && dockItems[nextIdx]) {
+    const dockA = resolveDockIndex(baseIdx);
+    const dockB = resolveDockIndex(nextIdx);
+    if (thumbEl && dockItems[dockA] && dockItems[dockB]) {
       if (cachedDockMetrics.length !== dockItems.length) {
         measureLayoutCache();
       }
-      const mA = cachedDockMetrics[baseIdx];
-      const mB = cachedDockMetrics[nextIdx];
+      const mA = cachedDockMetrics[dockA];
+      const mB = cachedDockMetrics[dockB];
       if (mA && mB) {
         const curX = (mA.left - 4) + ((mB.left - mA.left) * ratio);
         const curW = mA.width + ((mB.width - mA.width) * ratio);
@@ -7685,16 +7866,21 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     }
     activeIndex = index;
 
+    Array.from(pagerEl.children).forEach((el, i) => {
+      el.classList.toggle('page-active', i === index);
+    });
+
+    const dockIdx = resolveDockIndex(index);
     dockItems.forEach((btn, i) => {
-      if (i === index) btn.classList.add('active');
+      if (i === dockIdx) btn.classList.add('active');
       else btn.classList.remove('active');
     });
 
-    if (thumbEl && dockItems[index]) {
-      const targetBtn = dockItems[index];
+    if (thumbEl && dockItems[dockIdx]) {
+      const targetBtn = dockItems[dockIdx];
       const offsetLeft = targetBtn.offsetLeft;
       const width = targetBtn.offsetWidth;
-      cachedDockMetrics[index] = { left: offsetLeft, width };
+      cachedDockMetrics[dockIdx] = { left: offsetLeft, width };
 
       if (immediate) {
         const prevTransition = thumbEl.style.transition;
@@ -7757,13 +7943,29 @@ function createPager(pagerEl, dockEl, pages, defaultPageId = 'home', onPageChang
     }
   }
 
+  const lastGroupPageMap = new Map();
   dockItems.forEach((btn) => {
     btn.onclick = (e) => {
       e.preventDefault();
-      const pageId = btn.dataset.page;
-      goTo(pageId, 'smooth');
+      const grp = btn.dataset.hubGroup;
+      const defaultPage = btn.dataset.page;
+      const curPage = pages[activeIndex];
+      if (grp && curPage && curPage.group === grp) {
+        goTo(defaultPage, 'smooth');
+        return;
+      }
+      const nextTarget = (grp && lastGroupPageMap.get(grp)) || defaultPage;
+      goTo(nextTarget, 'smooth');
     };
   });
+
+  if (pagerEl.id === 'admin-pager') {
+    pages.forEach((p, idx) => {
+      if (idx === activeIndex && p.group) {
+        lastGroupPageMap.set(p.group, p.id);
+      }
+    });
+  }
 
   function getTouchCoords(e) {
     if (e.touches && e.touches.length > 0) {
@@ -9026,22 +9228,24 @@ function initNavigation() {
   const adminDockEl = document.getElementById('admin-dock');
 
   const adminPages = [
-    { id: 'overview', hash: '#admin-overview' },
-    { id: 'tasks', hash: '#admin-tasks' },
-    { id: 'categories', hash: '#admin-categories' },
-    { id: 'badges', hash: '#admin-badges' },
-    { id: 'attendance', hash: '#admin-attendance' },
-    { id: 'submissions', hash: '#admin-submissions' },
-    { id: 'waivers', hash: '#admin-waivers' },
-    { id: 'members', hash: '#admin-members' },
-    { id: 'adjustments', hash: '#admin-adjustments' },
-    { id: 'broadcasts', hash: '#admin-broadcasts' },
-    { id: 'notifications', hash: '#admin-notifications' }
+    { id: 'overview', hash: '#admin-overview', group: 'overview' },
+    { id: 'attendance', hash: '#admin-attendance', group: 'operations' },
+    { id: 'tasks', hash: '#admin-tasks', group: 'operations' },
+    { id: 'submissions', hash: '#admin-submissions', group: 'operations' },
+    { id: 'categories', hash: '#admin-categories', group: 'operations' },
+    { id: 'members', hash: '#admin-members', group: 'people' },
+    { id: 'waivers', hash: '#admin-waivers', group: 'people' },
+    { id: 'badges', hash: '#admin-badges', group: 'people' },
+    { id: 'notifications', hash: '#admin-notifications', group: 'system' },
+    { id: 'broadcasts', hash: '#admin-broadcasts', group: 'system' },
+    { id: 'adjustments', hash: '#admin-adjustments', group: 'system' },
+    { id: 'settings', hash: '#admin-settings', group: 'system' }
   ];
 
   if (adminPagerEl && adminDockEl) {
     adminPagerInstance = createPager(adminPagerEl, adminDockEl, adminPages, 'overview', (pageId) => {
       state.activeAdminPage = pageId || 'overview';
+      renderAdminGroupSubnav(state.activeAdminPage);
       if (!state.isAdminDashboardOpen) return;
       _dirtyAdminTabs.delete(state.activeAdminPage);
       scheduleRafRender(`admin_tab_${state.activeAdminPage}`, () => renderAdminPageById(state.activeAdminPage));
@@ -9299,7 +9503,97 @@ const ADMIN_DOM_LIST_IDS = [
 ];
 
 const USER_TABS_LIST = ['home', 'tasks', 'attendance', 'notifications', 'profile'];
-const ADMIN_TABS_LIST = ['overview', 'tasks', 'categories', 'badges', 'attendance', 'submissions', 'waivers', 'members', 'adjustments', 'broadcasts', 'notifications'];
+const ADMIN_TABS_LIST = ['overview', 'attendance', 'tasks', 'submissions', 'categories', 'members', 'waivers', 'badges', 'notifications', 'broadcasts', 'adjustments', 'settings'];
+
+const ADMIN_HUB_GROUPS = {
+  overview: { label: 'Admin Hub', subs: [] },
+  operations: {
+    label: 'Operations',
+    subs: [
+      { id: 'attendance', label: 'Attendance' },
+      { id: 'tasks', label: 'Tasks' },
+      { id: 'submissions', label: 'Submissions' },
+      { id: 'categories', label: 'Categories' }
+    ]
+  },
+  people: {
+    label: 'People & Excuses',
+    subs: [
+      { id: 'members', label: 'Members' },
+      { id: 'waivers', label: 'Waivers' },
+      { id: 'badges', label: 'Badges' }
+    ]
+  },
+  system: {
+    label: 'System',
+    subs: [
+      { id: 'notifications', label: 'Notifications' },
+      { id: 'broadcasts', label: 'Broadcasts' },
+      { id: 'adjustments', label: 'Direct Adjust' },
+      { id: 'settings', label: 'Settings & DB' }
+    ]
+  }
+};
+
+const ADMIN_PAGE_TO_GROUP = {
+  overview: 'overview',
+  attendance: 'operations',
+  tasks: 'operations',
+  submissions: 'operations',
+  categories: 'operations',
+  members: 'people',
+  waivers: 'people',
+  badges: 'people',
+  notifications: 'system',
+  broadcasts: 'system',
+  adjustments: 'system',
+  settings: 'system'
+};
+
+export function renderAdminGroupSubnav(activePageId = null) {
+  const pageId = activePageId || state?.activeAdminPage || 'overview';
+  const groupKey = ADMIN_PAGE_TO_GROUP[pageId] || 'overview';
+  const groupCfg = ADMIN_HUB_GROUPS[groupKey] || ADMIN_HUB_GROUPS.overview;
+  const subnavBar = document.getElementById('admin-group-subnav');
+  const subnavTrack = document.getElementById('admin-subnav-track');
+  const headerTitle = document.getElementById('admin-header-title');
+
+  if (headerTitle) {
+    headerTitle.textContent = groupCfg.label || 'Admin Hub';
+  }
+
+  if (!subnavBar || !subnavTrack) return;
+  if (!groupCfg.subs || groupCfg.subs.length === 0) {
+    subnavBar.classList.add('hidden');
+    subnavTrack.innerHTML = '';
+    return;
+  }
+
+  const pendingWaiversCount = (state?.waiverRequests || []).filter(w => (w.status || 'pending') === 'pending').length;
+
+  subnavBar.classList.remove('hidden');
+  subnavTrack.innerHTML = groupCfg.subs.map(sub => {
+    const isAct = sub.id === pageId;
+    const badgeHtml = (sub.id === 'waivers' && pendingWaiversCount > 0)
+      ? `<span class="admin-subnav-badge">${pendingWaiversCount}</span>`
+      : '';
+    return `
+      <button type="button" class="admin-subnav-pill ${isAct ? 'active' : ''}" data-subnav-page="${sub.id}">
+        <span>${sub.label}</span>
+        ${badgeHtml}
+      </button>
+    `;
+  }).join('');
+
+  subnavTrack.querySelectorAll('.admin-subnav-pill').forEach(btn => {
+    btn.onclick = () => {
+      const target = btn.dataset.subnavPage;
+      if (target && adminPagerInstance) {
+        adminPagerInstance.goTo(target, 'smooth');
+      }
+    };
+  });
+}
 
 function renderUserPageById(pageId) {
   switch (pageId) {
@@ -9368,9 +9662,14 @@ function renderAdminPageById(pageId) {
     case 'notifications':
       renderAdminNotifications();
       break;
+    case 'settings':
+      if (typeof setupMaintenanceJobsListener === 'function') setupMaintenanceJobsListener();
+      updateAdminNotifSoundToggleUI();
+      break;
     default:
       break;
   }
+  renderAdminGroupSubnav(pageId);
 }
 
 function scheduleUserTabRender(tabId, key, renderFn) {
@@ -9577,10 +9876,64 @@ export function closeAdminDashboard() {
 
 let isFetchingOverviewStats = false;
 
+export function updateAdminPortalModuleCards() {
+  const pendingWaivers = (state?.waiverRequests || []).filter(w => (w.status || 'pending') === 'pending').length;
+  const activeTasks = (state?.tasks || []).filter(t => t.active && !t.archived).length;
+  const attLogsCount = (state?.attendanceLogs || []).length;
+  const subsCount = (state?.submissions || []).length;
+  const membersCount = (state?.members || []).filter(m => !m.disabled).length;
+  const catsCount = (state?.categories || []).filter(c => !c.archived).length;
+  const badgesCount = (typeof getAllAvailableBadges === 'function' ? getAllAvailableBadges() : (state?.badges || [])).length;
+
+  const setText = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  setText('portal-pill-attendance', `${attLogsCount} Logs`);
+  setText('portal-pill-submissions', `${subsCount} Total`);
+  setText('portal-pill-tasks', `${activeTasks} Active`);
+  setText('portal-pill-waivers', `${pendingWaivers} Pending`);
+  setText('portal-pill-members', `${membersCount} Active`);
+  setText('portal-pill-categories', `${catsCount} Groups`);
+  setText('portal-pill-badges', `${badgesCount} Badges`);
+
+  const attBanner = document.getElementById('admin-needs-attention-banner');
+  const attText = document.getElementById('admin-attention-text');
+  const attBtn = document.getElementById('btn-admin-attention-action');
+  if (attBanner && attText && attBtn) {
+    if (pendingWaivers > 0) {
+      attBanner.classList.remove('hidden');
+      attText.textContent = `${pendingWaivers} Pending Waiver Request${pendingWaivers === 1 ? '' : 's'} require review`;
+      attBtn.onclick = () => {
+        if (adminPagerInstance) adminPagerInstance.goTo('waivers', 'smooth');
+      };
+    } else {
+      attBanner.classList.add('hidden');
+    }
+  }
+
+  document.querySelectorAll('#admin-portal-modules-grid [data-admin-nav]').forEach(card => {
+    card.onclick = () => {
+      const target = card.dataset.adminNav;
+      if (target && adminPagerInstance) {
+        adminPagerInstance.goTo(target, 'smooth');
+      }
+    };
+  });
+
+  const portalSettingsBtn = document.getElementById('btn-admin-portal-settings');
+  if (portalSettingsBtn) {
+    portalSettingsBtn.onclick = () => {
+      if (adminPagerInstance) adminPagerInstance.goTo('settings', 'smooth');
+    };
+  }
+}
+
 async function updateAdminOverviewStats() {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
   if (typeof setupMaintenanceJobsListener === 'function') setupMaintenanceJobsListener();
+  updateAdminPortalModuleCards();
   const tEl = document.getElementById('admin-overview-tasks');
   const mEl = document.getElementById('admin-overview-members');
   const sEl = document.getElementById('admin-overview-submissions');
@@ -9591,8 +9944,8 @@ async function updateAdminOverviewStats() {
   const totalFinesLocal = (state.members || []).reduce((sum, m) => sum + Math.max(0, m.finesDue ?? m.fines ?? m.quotas ?? 0), 0);
   if (finesDueEl) finesDueEl.textContent = `${totalFinesLocal} EGP`;
 
-  if (tEl && !tEl.textContent) tEl.textContent = state.tasks.filter(t => t.active).length;
-  if (mEl && !mEl.textContent) mEl.textContent = state.members.length;
+  if (tEl) tEl.textContent = state.tasks.filter(t => t.active && !t.archived).length;
+  if (mEl) mEl.textContent = state.members.filter(m => !m.disabled).length;
   if (sEl && !sEl.textContent) sEl.textContent = state.submissions.length;
   if (sesEl && !sesEl.textContent) sesEl.textContent = state.attendanceSessions.length;
 
@@ -10525,6 +10878,106 @@ function mergeAndRenderNotifications() {
   renderNotifications();
 }
 
+const NOTIF_SOUND_MUTED_KEY = 'coc_notif_sound_muted';
+let _lastNotifSoundAt = 0;
+let _sharedNotifAudioCtx = null;
+
+export function isNotificationSoundMuted() {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(NOTIF_SOUND_MUTED_KEY) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+export function setNotificationSoundMuted(muted) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(NOTIF_SOUND_MUTED_KEY, muted ? '1' : '0');
+    }
+  } catch (e) {}
+  updateAdminNotifSoundToggleUI();
+}
+
+export function updateAdminNotifSoundToggleUI() {
+  const btn = document.getElementById('btn-admin-sound-toggle');
+  if (!btn) return;
+  const muted = isNotificationSoundMuted();
+  btn.innerHTML = muted ? '<span>Sound: OFF</span>' : '<span>Sound: ON</span>';
+  btn.className = muted
+    ? 'px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-neutral-400 border border-white/10 font-semibold text-xs transition flex items-center gap-1.5 shrink-0'
+    : 'px-3 py-1.5 rounded-xl bg-[#0A84FF]/15 hover:bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold text-xs transition flex items-center gap-1.5 shrink-0';
+}
+
+export function detectNotificationSoundKind({ type = '', category = '', title = '' } = {}) {
+  const t = String(type || category || '').toLowerCase();
+  const tl = String(title || '').toLowerCase();
+  if (t.includes('reward') || t.includes('bonus') || t === 'points' || tl.includes('reward') || tl.includes('bonus') || tl.includes('approved')) {
+    return 'reward';
+  }
+  if (t.includes('penalty') || t.includes('fine') || t === 'alert' || t.includes('missed') || t.includes('revocation') || tl.includes('penalty') || tl.includes('urgent') || tl.includes('alert')) {
+    return 'alert';
+  }
+  return 'default';
+}
+
+export function playAppNotificationSound(kind = 'default', { force = false } = {}) {
+  try {
+    if (!force && isNotificationSoundMuted()) return false;
+    const nowMs = Date.now();
+    if (!force && nowMs - _lastNotifSoundAt < 400) return false;
+    _lastNotifSoundAt = nowMs;
+
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate(kind === 'alert' ? [30, 45, 30] : [16, 32, 20]);
+    }
+
+    const AudioCtx = (typeof window !== 'undefined') ? (window.AudioContext || window.webkitAudioContext) : null;
+    if (!AudioCtx) return false;
+    if (!_sharedNotifAudioCtx) {
+      _sharedNotifAudioCtx = new AudioCtx();
+    }
+    const ctx = _sharedNotifAudioCtx;
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      ctx.resume().catch(() => {});
+    }
+
+    const start = ctx.currentTime + 0.015;
+    const playTone = (freq, offset, dur, vol, oscType = 'sine') => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = oscType;
+      osc.frequency.setValueAtTime(freq, start + offset);
+      gain.gain.setValueAtTime(0.0001, start + offset);
+      gain.gain.linearRampToValueAtTime(vol, start + offset + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start + offset);
+      osc.stop(start + offset + dur + 0.02);
+    };
+
+    if (kind === 'reward') {
+      playTone(1318.51, 0, 0.22, 0.12, 'sine');
+      playTone(1661.22, 0.075, 0.24, 0.12, 'sine');
+      playTone(1975.53, 0.15, 0.26, 0.13, 'sine');
+      playTone(2637.02, 0.225, 0.42, 0.1, 'triangle');
+    } else if (kind === 'alert') {
+      playTone(880.0, 0, 0.16, 0.14, 'triangle');
+      playTone(1318.51, 0.09, 0.18, 0.13, 'sine');
+      playTone(880.0, 0.21, 0.26, 0.11, 'triangle');
+    } else {
+      // Signature Apple Glass Tri-Tone Chime (C6 -> G6 -> B6 + soft harmonic)
+      playTone(1046.5, 0, 0.24, 0.12, 'sine');
+      playTone(1567.98, 0.085, 0.28, 0.13, 'sine');
+      playTone(1975.53, 0.175, 0.42, 0.11, 'triangle');
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 export function showNotificationToast(title, body) {
   const toastEl = document.getElementById('live-notification-toast');
   if (!toastEl) return;
@@ -10571,7 +11024,9 @@ export function showNotificationToast(title, body) {
   }
 }
 
-export function showLiveNotificationToast({ title, message, icon = 'bell', onClick = null } = {}) {
+export function showLiveNotificationToast({ title, message, icon = 'bell', type = '', category = '', soundKind = '', onClick = null } = {}) {
+  const chosenKind = soundKind || detectNotificationSoundKind({ type, category, title });
+  playAppNotificationSound(chosenKind);
   showNotificationToast(title, message);
   const toastEl = document.getElementById('live-notification-toast');
   if (!toastEl) return;
@@ -10797,6 +11252,8 @@ function handleIncomingRealtimeNotificationDoc(docId, data, defaultIcon = 'bell'
     title,
     message: body,
     icon: data.icon || defaultIcon,
+    type: data.type || '',
+    category: data.category || '',
     onClick: targetAction ? () => handleNotificationDeepLink(targetAction) : null
   });
 
@@ -15052,9 +15509,9 @@ export function openMemberBadgeReorderSheet() {
   });
 }
 
-function openCategoryModal(categoryId = null) {
+function openCategoryModal(categoryId = null, prefillDraft = null) {
   state.editingCategoryId = categoryId;
-  const existingCat = categoryId ? state.categories.find(c => c.id === categoryId) : null;
+  const existingCat = categoryId ? state.categories.find(c => c.id === categoryId) : (prefillDraft || null);
 
   let currentName = existingCat ? (existingCat.name || existingCat.nameEn || '') : '';
   let currentColor = existingCat ? (existingCat.color || '#0A84FF') : '#0A84FF';
@@ -15152,9 +15609,9 @@ function openCategoryModal(categoryId = null) {
   renderCategoryModalContent();
 
   openModal({
-    title: existingCat ? 'Edit Category' : 'New Category',
+    title: state.editingCategoryId ? 'Edit Category' : 'New Category',
     body: bodyEl,
-    saveLabel: existingCat ? 'Save Changes' : 'Create Category',
+    saveLabel: state.editingCategoryId ? 'Save Changes' : 'Create Category',
     isDirty: () => isDirty,
     onClose: () => {
       state.editingCategoryId = null;
@@ -15437,9 +15894,9 @@ export function openBadgePickerSheet({ onSelect }) {
   });
 }
 
-function openAdminTaskModal(taskId = null) {
+function openAdminTaskModal(taskId = null, prefillDraft = null) {
   state.editingTaskId = taskId;
-  const task = taskId ? state.tasks.find(t => t.id === taskId) : null;
+  const task = taskId ? state.tasks.find(t => t.id === taskId) : (prefillDraft || null);
 
   let currentTitle = task ? task.title : '';
   let currentDesc = task ? task.description : '';
@@ -16895,9 +17352,9 @@ function renderAdminSessions() {
   });
 }
 
-function openAdminSessionModal(sessionId = null) {
+function openAdminSessionModal(sessionId = null, prefillDraft = null) {
   editingSessionId = sessionId;
-  const rawSession = sessionId ? state.attendanceSessions.find(s => s.id === sessionId) : null;
+  const rawSession = sessionId ? state.attendanceSessions.find(s => s.id === sessionId) : (prefillDraft || null);
   const session = rawSession ? normalizeSession(rawSession) : null;
 
   let currentTitle = session ? session.title : '';
@@ -17822,6 +18279,7 @@ function renderAdminBadges() {
 }
 
 function openBadgeModal(badge = null) {
+  const isEditBadge = Boolean(badge && badge.id && !badge.__isDuplicateDraft);
   let name = badge ? (badge.label || badge.name || '') : '';
   let description = badge ? (badge.description || '') : '';
   let selectedColor = badge ? (badge.color || '#0A84FF') : '#0A84FF';
@@ -17921,9 +18379,9 @@ function openBadgeModal(badge = null) {
   renderForm();
 
   openModal({
-    title: badge ? 'Edit Badge' : 'New Badge',
+    title: isEditBadge ? 'Edit Badge' : 'New Badge',
     body: bodyEl,
-    saveLabel: badge ? 'Save Changes' : 'Create Badge',
+    saveLabel: isEditBadge ? 'Save Changes' : 'Create Badge',
     onSave: async () => {
       const trimmedName = name.trim();
       if (!trimmedName) {
@@ -17931,7 +18389,7 @@ function openBadgeModal(badge = null) {
         return false;
       }
 
-      const badgeId = badge ? badge.id : (trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `badge_${Date.now()}`);
+      const badgeId = isEditBadge ? badge.id : (trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `badge_${Date.now()}`);
 
       const payload = {
         id: badgeId,
@@ -17955,7 +18413,7 @@ function openBadgeModal(badge = null) {
         }
 
         renderAdminBadges();
-        toast(badge ? 'Badge updated' : 'Badge created', 'success');
+        toast(isEditBadge ? 'Badge updated' : 'Badge created', 'success');
         closeModal();
         return true;
       } catch (err) {
@@ -25164,7 +25622,8 @@ function renderAdminBroadcasts() {
 }
 
 function openAdminBroadcastModal(broadcast = null) {
-  state.editingBroadcastId = broadcast ? broadcast.id : null;
+  const isEditBroadcast = Boolean(broadcast && broadcast.id && !broadcast.__isDuplicateDraft);
+  state.editingBroadcastId = isEditBroadcast ? broadcast.id : null;
   const now = typeof serverNow === "function" ? serverNow() : Date.now();
 
   function parseEpoch(v, fallback) {
@@ -25423,9 +25882,9 @@ function openAdminBroadcastModal(broadcast = null) {
   renderForm();
 
   openModal({
-    title: broadcast ? "Edit Broadcast" : "New Broadcast",
+    title: isEditBroadcast ? "Edit Broadcast" : "New Broadcast",
     body: modalBody,
-    saveLabel: broadcast ? "Save Changes" : "Publish Broadcast",
+    saveLabel: isEditBroadcast ? "Save Changes" : "Publish Broadcast",
     onClose: () => {
       state.editingBroadcastId = null;
     },
@@ -25836,6 +26295,7 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
   let loadingHistory = false;
   let customTitle = '';
   let customMessage = '';
+  let customIcon = 'notification-bell';
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'space-y-4 text-xs';
@@ -25939,6 +26399,16 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
         <div>
           <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Notification Title *</label>
           <input type="text" id="input-mnc-push-title" class="ios-input text-white text-xs w-full" placeholder="e.g. Action Required: Media Upload" value="${esc(customTitle)}" />
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Notification Icon</label>
+          <button type="button" id="btn-mnc-pick-icon" class="w-full min-h-[40px] px-3 py-2 rounded-xl bg-[#1C1C22] hover:bg-[#26262E] border border-white/10 flex items-center justify-between gap-2 text-left transition">
+            <span class="flex items-center gap-2 min-w-0">
+              <span id="mnc-icon-preview" class="w-6 h-6 rounded-lg bg-[#0A84FF]/15 text-[#0A84FF] flex items-center justify-center shrink-0">${getIconSvg(customIcon, 'w-3.5 h-3.5 stroke-current')}</span>
+              <span id="mnc-icon-label" class="text-xs font-semibold text-white truncate">${esc(customIcon.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))}</span>
+            </span>
+            <span class="text-[11px] font-semibold text-[#0A84FF] shrink-0">Choose Icon</span>
+          </button>
         </div>
         <div>
           <label class="block text-[11px] font-semibold text-neutral-300 mb-1">Message Body *</label>
@@ -26162,6 +26632,19 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
       };
     }
 
+    const mncIconBtn = bodyEl.querySelector('#btn-mnc-pick-icon');
+    if (mncIconBtn) {
+      mncIconBtn.onclick = () => {
+        openUnifiedIconPicker(customIcon, (picked) => {
+          customIcon = picked || 'notification-bell';
+          const prev = bodyEl.querySelector('#mnc-icon-preview');
+          const lbl = bodyEl.querySelector('#mnc-icon-label');
+          if (prev) prev.innerHTML = getIconSvg(customIcon, 'w-3.5 h-3.5 stroke-current');
+          if (lbl) lbl.textContent = customIcon.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        });
+      };
+    }
+
     const titleInp = bodyEl.querySelector('#input-mnc-push-title');
     if (titleInp) titleInp.oninput = (e) => { customTitle = e.target.value; };
 
@@ -26195,12 +26678,12 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
               message: cleanMsg,
               body: cleanMsg,
               type: 'system',
-              icon: 'bell'
+              icon: customIcon || 'notification-bell'
             });
             logAdminAction(batch, {
               action: 'admin_member_custom_notification',
               targetUid: selectedUid,
-              details: { title: cleanTitle, message: cleanMsg }
+              details: { title: cleanTitle, message: cleanMsg, icon: customIcon || 'notification-bell' }
             });
             await batch.commit();
             localNotifSaved = true;
@@ -26215,7 +26698,7 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
             title: cleanTitle,
             body: cleanMsg,
             category: 'system',
-            icon: 'bell',
+            icon: customIcon || 'notification-bell',
             skipFirestoreWrite: localNotifSaved,
             adminUid: state.user?.uid || ''
           });
@@ -26251,19 +26734,82 @@ export async function openAdminMemberNotificationCenter(initialUid = null) {
   });
 }
 
-let _adminNotifSelectedTarget = 'all';
+let _adminNotifTargetMode = 'all';
+let _adminNotifSelectedUids = new Set();
+let _adminNotifSelectedBadgeIds = new Set();
 let _adminNotifSearchQuery = '';
 let _adminNotifHistory = [];
 let _adminNotifLoadingHistory = false;
+
+function memberHasBadgeId(member, badgeId) {
+  if (!member || !badgeId) return false;
+  if (Array.isArray(member.badgeIds) && member.badgeIds.includes(badgeId)) return true;
+  if (Array.isArray(member.badges)) {
+    return member.badges.some(b => (typeof b === 'string' ? b : b?.id) === badgeId);
+  }
+  return false;
+}
+
+function formatNotifRecipientsSummary(uids = [], isBroadcast = false, explicitNames = []) {
+  if (isBroadcast || !Array.isArray(uids) || uids.length === 0 || uids.includes('all')) {
+    return 'All Team Members (Broadcast)';
+  }
+  const names = uids.map((uid, idx) => {
+    const u = usersMap.get(uid) || (state.members || []).find(m => m.uid === uid);
+    return u?.displayName || u?.name || (Array.isArray(explicitNames) ? explicitNames[idx] : '') || uid;
+  }).filter(Boolean);
+  if (names.length === 0) return 'Selected Member';
+  if (names.length <= 2) return names.join(', ');
+  return `${names[0]}, ${names[1]} (+${names.length - 2} more)`;
+}
+
+function prefillAdminNotificationComposerFromItem(item) {
+  if (!item) return;
+  const titleInp = document.getElementById('input-admin-notif-title');
+  const bodyInp = document.getElementById('input-admin-notif-body');
+  const catSel = document.getElementById('select-admin-notif-category');
+  const iconInp = document.getElementById('select-admin-notif-icon');
+  const iconPrev = document.getElementById('admin-notif-icon-preview');
+  const iconLbl = document.getElementById('admin-notif-icon-label');
+
+  const baseTitle = String(item.title || '').replace(/\s*\(Copy\)$/i, '').trim();
+  if (titleInp) titleInp.value = baseTitle ? `${baseTitle} (Copy)` : '';
+  if (bodyInp) bodyInp.value = item.body || item.message || '';
+  if (catSel && item.category) catSel.value = item.category;
+
+  const iconKey = item.icon || 'notification-bell';
+  if (iconInp) iconInp.value = iconKey;
+  if (iconPrev) iconPrev.innerHTML = getIconSvg(iconKey, 'w-4 h-4 stroke-current');
+  if (iconLbl) iconLbl.textContent = iconKey.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+  if (item.isBroadcast || item.targetType === 'all') {
+    _adminNotifTargetMode = 'all';
+    _adminNotifSelectedUids.clear();
+  } else {
+    const uids = Array.isArray(item.targetUids) && item.targetUids.length > 0
+      ? item.targetUids.filter(u => u && u !== 'all')
+      : (item.uid ? [item.uid] : []);
+    if (uids.length > 0) {
+      _adminNotifTargetMode = 'custom';
+      _adminNotifSelectedUids = new Set(uids);
+    }
+  }
+  _adminNotifSelectedBadgeIds.clear();
+  renderAdminNotifications();
+  if (titleInp) titleInp.focus();
+}
 
 export async function renderAdminNotifications() {
   const currentUser = state.user || {};
   if (currentUser.role !== 'admin' && !currentUser.isAdmin && !state.isAdminUnlocked) return;
 
   const rosterContainer = document.getElementById('admin-notif-members-list');
+  const badgeChipsEl = document.getElementById('admin-notif-badge-chips');
   const countEl = document.getElementById('admin-notif-member-count');
   const searchInput = document.getElementById('input-admin-notif-search');
   const targetAllBtn = document.getElementById('btn-admin-notif-target-all');
+  const clearSelBtn = document.getElementById('btn-admin-notif-clear-selection');
+  const selectVisibleBtn = document.getElementById('btn-admin-notif-select-visible');
   const allIndicator = document.getElementById('admin-notif-all-indicator');
   const targetLabel = document.getElementById('admin-notif-target-label');
   const targetBadge = document.getElementById('admin-notif-target-badge');
@@ -26275,29 +26821,80 @@ export async function renderAdminNotifications() {
 
   const getAllMembersList = () => {
     const list = usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])];
-    return list.sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+    return list.filter(m => !m.disabled).sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
   };
 
   const members = getAllMembersList();
   if (countEl) countEl.textContent = `${members.length} Members`;
 
-  function renderRoster() {
+  const getFilteredMembers = () => {
     const q = (_adminNotifSearchQuery || '').toLowerCase().trim();
-    const filtered = members.filter(m => {
+    return members.filter(m => {
       if (!q) return true;
       const name = (m.displayName || m.name || '').toLowerCase();
       const email = (m.email || '').toLowerCase();
       return name.includes(q) || email.includes(q) || (m.uid || '').toLowerCase().includes(q);
     });
+  };
 
+  function renderBadgeChips() {
+    if (!badgeChipsEl) return;
+    const allBadges = typeof getAllAvailableBadges === 'function' ? getAllAvailableBadges() : (state.badges || []);
+    if (allBadges.length === 0) {
+      badgeChipsEl.innerHTML = '<span class="text-[10px] text-neutral-500">No badges created yet</span>';
+      return;
+    }
+    badgeChipsEl.innerHTML = allBadges.map(b => {
+      const holders = members.filter(m => memberHasBadgeId(m, b.id));
+      const allHoldersSelected = holders.length > 0 && _adminNotifTargetMode === 'custom' && holders.every(h => _adminNotifSelectedUids.has(h.uid));
+      const isAct = _adminNotifSelectedBadgeIds.has(b.id) || allHoldersSelected;
+      const color = b.color || '#0A84FF';
+      return `
+        <button type="button" class="notif-badge-chip ${isAct ? 'is-active' : ''}" data-badge-id="${esc(b.id)}">
+          <span class="w-2 h-2 rounded-full shrink-0" style="background-color: ${esc(color)};"></span>
+          <span>${esc(b.label || b.name || b.id)}</span>
+          <span class="text-[10px] text-neutral-400">(${holders.length})</span>
+        </button>
+      `;
+    }).join('');
+
+    badgeChipsEl.querySelectorAll('.notif-badge-chip').forEach(btn => {
+      btn.onclick = () => {
+        const bId = btn.dataset.badgeId;
+        const holders = members.filter(m => memberHasBadgeId(m, bId));
+        if (holders.length === 0) {
+          toast('No members currently hold this badge', 'info');
+          return;
+        }
+        const alreadyOn = _adminNotifTargetMode === 'custom' && holders.every(h => _adminNotifSelectedUids.has(h.uid));
+        _adminNotifTargetMode = 'custom';
+        if (alreadyOn) {
+          _adminNotifSelectedBadgeIds.delete(bId);
+          holders.forEach(h => _adminNotifSelectedUids.delete(h.uid));
+          if (_adminNotifSelectedUids.size === 0) _adminNotifTargetMode = 'all';
+        } else {
+          _adminNotifSelectedBadgeIds.add(bId);
+          holders.forEach(h => _adminNotifSelectedUids.add(h.uid));
+        }
+        updateTargetUI();
+        renderBadgeChips();
+        renderRoster();
+        fetchHistory();
+      };
+    });
+  }
+
+  function renderRoster() {
+    const filtered = getFilteredMembers();
     if (filtered.length === 0) {
       rosterContainer.innerHTML = '<div class="p-4 text-center text-xs text-neutral-400">No matching members found</div>';
       return;
     }
 
     rosterContainer.innerHTML = filtered.map(m => {
-      const isSelected = _adminNotifSelectedTarget === m.uid;
+      const isSelected = _adminNotifTargetMode === 'custom' && _adminNotifSelectedUids.has(m.uid);
       const roleLabel = (m.isAdmin || m.role === 'admin') ? 'Admin' : 'Member';
+      const netPts = Math.max(0, (Number(m.points) || 0) - (Number(m.penalties) || 0));
       const subtitle = m.email || roleLabel;
       return `
         <div class="apple-member-row ${isSelected ? 'is-selected' : ''}" data-uid="${esc(m.uid)}">
@@ -26308,7 +26905,7 @@ export async function renderAdminNotifications() {
                 <span class="member-full-name text-xs font-bold text-white">${esc(m.displayName || m.name || 'Member')}</span>
                 <span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-semibold ${(m.isAdmin || m.role === 'admin') ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-white/10 text-neutral-300'}">${roleLabel}</span>
               </div>
-              <div class="text-[11px] text-neutral-400 truncate">${esc(subtitle)} · ${m.points || 0} pts</div>
+              <div class="text-[11px] text-neutral-400 truncate">${esc(subtitle)} · ${netPts} NET</div>
             </div>
           </div>
           <div class="w-5 h-5 rounded-full ${isSelected ? 'bg-[#0A84FF] text-white' : 'border border-white/20'} flex items-center justify-center shrink-0">
@@ -26321,8 +26918,18 @@ export async function renderAdminNotifications() {
     rosterContainer.querySelectorAll('.apple-member-row').forEach(row => {
       row.onclick = () => {
         const uid = row.dataset.uid;
-        _adminNotifSelectedTarget = uid;
+        _adminNotifTargetMode = 'custom';
+        if (_adminNotifSelectedUids.has(uid)) {
+          _adminNotifSelectedUids.delete(uid);
+          if (_adminNotifSelectedUids.size === 0) {
+            _adminNotifSelectedBadgeIds.clear();
+            _adminNotifTargetMode = 'all';
+          }
+        } else {
+          _adminNotifSelectedUids.add(uid);
+        }
         updateTargetUI();
+        renderBadgeChips();
         renderRoster();
         fetchHistory();
       };
@@ -26330,7 +26937,9 @@ export async function renderAdminNotifications() {
   }
 
   function updateTargetUI() {
-    if (_adminNotifSelectedTarget === 'all') {
+    const isAll = _adminNotifTargetMode === 'all' || _adminNotifSelectedUids.size === 0;
+    if (clearSelBtn) clearSelBtn.classList.toggle('hidden', isAll);
+    if (isAll) {
       if (allIndicator) {
         allIndicator.className = 'w-5 h-5 rounded-full bg-[#0A84FF] text-white flex items-center justify-center shadow-sm';
         allIndicator.innerHTML = '<svg class="w-3.5 h-3.5 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>';
@@ -26351,11 +26960,11 @@ export async function renderAdminNotifications() {
       if (targetAllBtn) {
         targetAllBtn.className = 'p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between cursor-pointer transition hover:bg-white/10 active:scale-[0.99]';
       }
-      const targetUser = usersMap.get(_adminNotifSelectedTarget) || members.find(m => m.uid === _adminNotifSelectedTarget);
-      const name = targetUser?.displayName || targetUser?.name || 'Selected Member';
-      if (targetLabel) targetLabel.textContent = `Target: ${name}`;
+      const selArr = Array.from(_adminNotifSelectedUids);
+      const summary = formatNotifRecipientsSummary(selArr, false);
+      if (targetLabel) targetLabel.textContent = `Target: ${summary}`;
       if (targetBadge) {
-        targetBadge.textContent = 'Direct Push';
+        targetBadge.textContent = selArr.length === 1 ? '1 Member' : `${selArr.length} Selected`;
         targetBadge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
       }
     }
@@ -26363,14 +26972,49 @@ export async function renderAdminNotifications() {
 
   if (targetAllBtn) {
     targetAllBtn.onclick = () => {
-      _adminNotifSelectedTarget = 'all';
+      _adminNotifTargetMode = 'all';
+      _adminNotifSelectedUids.clear();
+      _adminNotifSelectedBadgeIds.clear();
       updateTargetUI();
+      renderBadgeChips();
+      renderRoster();
+      fetchHistory();
+    };
+  }
+
+  if (clearSelBtn) {
+    clearSelBtn.onclick = () => {
+      _adminNotifTargetMode = 'all';
+      _adminNotifSelectedUids.clear();
+      _adminNotifSelectedBadgeIds.clear();
+      updateTargetUI();
+      renderBadgeChips();
+      renderRoster();
+      fetchHistory();
+    };
+  }
+
+  if (selectVisibleBtn) {
+    selectVisibleBtn.onclick = () => {
+      const vis = getFilteredMembers();
+      if (vis.length === 0) return;
+      const allVisSelected = _adminNotifTargetMode === 'custom' && vis.every(m => _adminNotifSelectedUids.has(m.uid));
+      _adminNotifTargetMode = 'custom';
+      if (allVisSelected) {
+        vis.forEach(m => _adminNotifSelectedUids.delete(m.uid));
+        if (_adminNotifSelectedUids.size === 0) _adminNotifTargetMode = 'all';
+      } else {
+        vis.forEach(m => _adminNotifSelectedUids.add(m.uid));
+      }
+      updateTargetUI();
+      renderBadgeChips();
       renderRoster();
       fetchHistory();
     };
   }
 
   if (searchInput) {
+    searchInput.value = _adminNotifSearchQuery || '';
     searchInput.oninput = (e) => {
       _adminNotifSearchQuery = e.target.value;
       renderRoster();
@@ -26380,57 +27024,132 @@ export async function renderAdminNotifications() {
   function fetchHistory() {
     clearFsListener('adm_notif_hist_1');
     clearFsListener('adm_notif_hist_2');
+    clearFsListener('adm_notif_hist_3');
     if (!historyContainer || !db) return;
     _adminNotifLoadingHistory = true;
     renderHistory();
 
-    try {
-      if (_adminNotifSelectedTarget === 'all') {
-        const qAll = query(collection(db, 'notifications_broadcast'), orderBy('createdAt', 'desc'), limit(100));
-        const unsubAll = onSnapshot(qAll, (snap) => {
-          _adminNotifHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          _adminNotifLoadingHistory = false;
-          renderHistory();
-        }, (err) => {
-          console.warn('Broadcast history listener:', err);
-          _adminNotifLoadingHistory = false;
-          renderHistory();
+    let broadcastDocs = [];
+    let rootDocs = [];
+    let singleUserSubDocs = [];
+    const filterUids = (_adminNotifTargetMode === 'custom' && _adminNotifSelectedUids.size > 0)
+      ? Array.from(_adminNotifSelectedUids)
+      : null;
+
+    const rebuildCombinedHistory = () => {
+      const groupMap = new Map();
+
+      broadcastDocs.forEach(d => {
+        const data = d.data() || {};
+        const key = `bc::${data.dispatchId || d.id}`;
+        const ms = parseDateTimeToMs(data.createdAt || data.timestamp || data.createdAtMs) || 0;
+        const readBy = Array.isArray(data.readBy) ? data.readBy : [];
+        groupMap.set(key, {
+          id: d.id,
+          dispatchId: data.dispatchId || d.id,
+          isBroadcast: true,
+          title: data.title || 'Notification',
+          body: data.body || data.message || '',
+          icon: data.icon || data.type || 'notification-bell',
+          category: data.category || data.type || 'system',
+          type: data.type || 'system',
+          targetType: 'all',
+          targetUids: ['all'],
+          targetNames: ['All Team Members'],
+          docIdsByUid: {},
+          readByUids: readBy,
+          read: readBy.length > 0,
+          createdAt: data.createdAt || data.timestamp || ms,
+          createdAtMs: ms
         });
-        setFsListener('adm_notif_hist_1', unsubAll);
-      } else {
-        const uid = _adminNotifSelectedTarget;
-        let subDocs = [];
-        let rootDocs = [];
-        const rebuildMemberHistory = () => {
-          const map = new Map();
-          subDocs.forEach(d => {
-            const n = normalizeNotification({ id: d.id, uid, ...d.data() });
-            if (n) map.set(n.id, n);
-          });
-          rootDocs.forEach(d => {
-            const n = normalizeNotification({ id: d.id, uid, ...d.data() });
-            if (n && !map.has(n.id)) map.set(n.id, n);
-          });
-          _adminNotifHistory = Array.from(map.values()).sort((a, b) => {
-            const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp || a.createdAt || 0).getTime());
-            const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp || b.createdAt || 0).getTime());
-            return tB - tA;
-          });
-          _adminNotifLoadingHistory = false;
-          renderHistory();
-        };
+      });
 
-        const unsubSub = onSnapshot(query(collection(db, 'users', uid, 'notifications'), limit(100)), (snap) => {
-          subDocs = snap.docs || [];
-          rebuildMemberHistory();
-        }, () => { rebuildMemberHistory(); });
-        setFsListener('adm_notif_hist_1', unsubSub);
+      const addPersonalDoc = (docSnap, fallbackUid = '') => {
+        const data = docSnap.data() || {};
+        const uid = data.uid || data.userId || fallbackUid;
+        if (!uid) return;
+        const rawId = docSnap.id;
+        let inferredGroup = data.dispatchId || '';
+        if (!inferredGroup) {
+          const suffix = `_${uid}`;
+          inferredGroup = rawId.endsWith(suffix) ? rawId.slice(0, -suffix.length) : rawId;
+        }
+        const key = `ind::${inferredGroup}`;
+        const ms = parseDateTimeToMs(data.createdAt || data.timestamp || data.createdAtMs) || 0;
 
-        const unsubRoot = onSnapshot(query(collection(db, 'notifications'), where('uid', '==', uid), limit(100)), (snap) => {
-          rootDocs = snap.docs || [];
-          rebuildMemberHistory();
-        }, () => { rebuildMemberHistory(); });
-        setFsListener('adm_notif_hist_2', unsubRoot);
+        if (!groupMap.has(key)) {
+          const initialUids = Array.isArray(data.targetUids) && data.targetUids.length > 0
+            ? data.targetUids.filter(Boolean)
+            : [uid];
+          groupMap.set(key, {
+            id: rawId,
+            dispatchId: inferredGroup,
+            isBroadcast: false,
+            uid,
+            title: data.title || 'Notification',
+            body: data.body || data.message || '',
+            icon: data.icon || data.type || 'notification-bell',
+            category: data.category || data.type || 'system',
+            type: data.type || 'system',
+            targetType: data.targetType || (initialUids.length > 1 ? 'custom' : 'individual'),
+            targetUids: [...initialUids],
+            targetNames: Array.isArray(data.targetNames) ? [...data.targetNames] : [],
+            docIdsByUid: { [uid]: rawId },
+            readByUids: data.read ? [uid] : [],
+            read: Boolean(data.read),
+            createdAt: data.createdAt || data.timestamp || ms,
+            createdAtMs: ms
+          });
+        } else {
+          const entry = groupMap.get(key);
+          if (!entry.targetUids.includes(uid)) entry.targetUids.push(uid);
+          entry.docIdsByUid[uid] = rawId;
+          if (data.read && !entry.readByUids.includes(uid)) {
+            entry.readByUids.push(uid);
+          }
+          entry.read = entry.readByUids.length > 0;
+          if (ms > entry.createdAtMs) entry.createdAtMs = ms;
+        }
+      };
+
+      singleUserSubDocs.forEach(d => addPersonalDoc(d, filterUids && filterUids.length === 1 ? filterUids[0] : ''));
+      rootDocs.forEach(d => addPersonalDoc(d));
+
+      let list = Array.from(groupMap.values());
+      if (filterUids && filterUids.length > 0) {
+        const selSet = new Set(filterUids);
+        list = list.filter(item => {
+          if (item.isBroadcast) return false;
+          return item.targetUids.some(u => selSet.has(u));
+        });
+      }
+
+      list.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+      _adminNotifHistory = list.slice(0, 120);
+      _adminNotifLoadingHistory = false;
+      renderHistory();
+    };
+
+    try {
+      const unsubBc = onSnapshot(query(collection(db, 'notifications_broadcast'), orderBy('createdAt', 'desc'), limit(80)), (snap) => {
+        broadcastDocs = snap.docs || [];
+        rebuildCombinedHistory();
+      }, () => { rebuildCombinedHistory(); });
+      setFsListener('adm_notif_hist_1', unsubBc);
+
+      const unsubRoot = onSnapshot(query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(150)), (snap) => {
+        rootDocs = snap.docs || [];
+        rebuildCombinedHistory();
+      }, () => { rebuildCombinedHistory(); });
+      setFsListener('adm_notif_hist_2', unsubRoot);
+
+      if (filterUids && filterUids.length === 1) {
+        const singleUid = filterUids[0];
+        const unsubSub = onSnapshot(query(collection(db, 'users', singleUid, 'notifications'), limit(100)), (snap) => {
+          singleUserSubDocs = snap.docs || [];
+          rebuildCombinedHistory();
+        }, () => { rebuildCombinedHistory(); });
+        setFsListener('adm_notif_hist_3', unsubSub);
       }
     } catch (err) {
       console.warn('Fetch admin notification history:', err);
@@ -26452,35 +27171,60 @@ export async function renderAdminNotifications() {
     }
 
     historyContainer.innerHTML = _adminNotifHistory.map(item => {
-      const isRead = Boolean(item.read || (item.readBy && item.readBy.length > 0));
+      const recipientSummary = formatNotifRecipientsSummary(item.targetUids, item.isBroadcast, item.targetNames);
+      const readCount = (item.readByUids || []).length;
+      const totalRecip = item.isBroadcast ? (members.length || 1) : Math.max(1, (item.targetUids || []).length);
+      const statusLabel = item.isBroadcast
+        ? (readCount > 0 ? `Broadcast · ${readCount} Read` : 'Broadcast')
+        : (totalRecip > 1 ? `Read ${readCount}/${totalRecip}` : (readCount > 0 ? 'Read' : 'Delivered'));
+      const isRead = readCount > 0;
       const title = item.title || 'Notification';
       const body = item.body || item.message || '';
-      const timeStr = item.createdAt ? formatDateTime(item.createdAt) : (item.timestamp ? formatDateTime(item.timestamp) : 'Recent');
+      const timeStr = item.createdAt ? formatDateTime(item.createdAt) : 'Recent';
+      const iconSvg = getIconSvg(item.icon || item.type || 'notification-bell', 'w-4 h-4 stroke-current');
+      const isSelected = selectionState.active && selectionState.type === 'notifications_admin' && selectionState.selectedIds.has(item.id);
+
       return `
-        <div class="adm-notif-hist-card p-3 rounded-xl bg-white/5 border border-white/10 flex items-start justify-between gap-3 text-xs" data-notif-id="${esc(item.id)}">
-          <div class="space-y-1 min-w-0 flex-1">
-            <div class="flex items-center gap-2">
-              <span class="font-bold text-white truncate">${esc(title)}</span>
-              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${isRead ? 'bg-neutral-500/20 text-neutral-300' : 'bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30'}">${isRead ? 'Read' : 'Delivered'}</span>
+        <div class="adm-notif-hist-card bulk-select-card p-3 rounded-xl bg-[#1C1C22] border border-white/[0.07] space-y-2 text-xs${isSelected ? ' selected' : ''}" data-notif-id="${esc(item.id)}" data-bulk-id="${esc(item.id)}">
+          ${BULK_INDICATOR_HTML}
+          <div class="bulk-card-content flex items-start justify-between gap-2.5">
+            <div class="flex items-start gap-2.5 min-w-0 flex-1">
+              <div class="w-8 h-8 rounded-lg bg-[#0A84FF]/15 text-[#0A84FF] border border-[#0A84FF]/25 flex items-center justify-center shrink-0 mt-0.5">
+                ${iconSvg}
+              </div>
+              <div class="space-y-1 min-w-0 flex-1">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="font-bold text-white truncate">${esc(title)}</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${isRead ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' : 'bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30'}">${esc(statusLabel)}</span>
+                </div>
+                <div class="text-[11px] font-semibold text-[#0A84FF] truncate">To: ${esc(recipientSummary)}</div>
+                <p class="text-neutral-300 text-[11px] line-clamp-2">${esc(body)}</p>
+                <div class="text-[10px] text-neutral-500">${esc(timeStr)}</div>
+              </div>
             </div>
-            <p class="text-neutral-300 text-[11px] line-clamp-2">${esc(body)}</p>
-            <div class="text-[10px] text-neutral-500">${esc(timeStr)}</div>
-          </div>
-          <div class="flex items-center gap-1.5 shrink-0">
-            <button type="button" class="btn-adm-edit-notif px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold text-[10px] transition" data-notif-id="${esc(item.id)}">Edit</button>
-            <button type="button" class="btn-adm-del-notif px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[10px] transition" data-notif-id="${esc(item.id)}">Delete</button>
+            <div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+              <button type="button" class="btn-adm-edit-notif px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold text-[10px] transition" data-notif-id="${esc(item.id)}">Edit</button>
+              <button type="button" class="btn-adm-dup-notif px-2 py-1 rounded-lg bg-[#0A84FF]/15 hover:bg-[#0A84FF]/25 text-[#0A84FF] border border-[#0A84FF]/30 font-semibold text-[10px] transition" data-notif-id="${esc(item.id)}">Copy</button>
+              <button type="button" class="btn-adm-del-notif px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-[10px] transition" data-notif-id="${esc(item.id)}">Delete</button>
+            </div>
           </div>
         </div>
       `;
     }).join('');
 
-    const targetUidForHist = _adminNotifSelectedTarget === 'all' ? null : _adminNotifSelectedTarget;
-
     historyContainer.querySelectorAll('.btn-adm-edit-notif').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const item = _adminNotifHistory.find(x => x.id === btn.dataset.notifId);
-        if (item) openAdminEditNotificationModal(item, targetUidForHist, () => renderHistory());
+        if (item) openAdminEditNotificationModal(item, item.isBroadcast ? null : (item.uid || item.targetUids?.[0] || null), () => renderHistory());
+      };
+    });
+
+    historyContainer.querySelectorAll('.btn-adm-dup-notif').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const item = _adminNotifHistory.find(x => x.id === btn.dataset.notifId);
+        if (item) prefillAdminNotificationComposerFromItem(item);
       };
     });
 
@@ -26489,19 +27233,24 @@ export async function renderAdminNotifications() {
         e.stopPropagation();
         const item = _adminNotifHistory.find(x => x.id === btn.dataset.notifId);
         if (!item) return;
-        await handleDeleteAdminNotificationItem(item, targetUidForHist);
+        await handleDeleteAdminNotificationItem(item, item.isBroadcast ? null : (item.uid || item.targetUids?.[0] || null));
       };
     });
 
     historyContainer.querySelectorAll('.adm-notif-hist-card').forEach(card => {
       const item = _adminNotifHistory.find(x => x.id === card.dataset.notifId);
       if (item) {
+        attachRowGestures(card, {
+          bulkType: 'notifications_admin',
+          bulkId: card.dataset.bulkId,
+          onSingleTap: () => openAdminEditNotificationModal(item, item.isBroadcast ? null : (item.uid || item.targetUids?.[0] || null), () => renderHistory())
+        });
         attachUniversalSwipeActions(card, {
           archiveLabel: 'Edit',
           archiveIcon: 'edit',
-          onArchive: () => openAdminEditNotificationModal(item, targetUidForHist, () => renderHistory()),
+          onArchive: () => openAdminEditNotificationModal(item, item.isBroadcast ? null : (item.uid || item.targetUids?.[0] || null), () => renderHistory()),
           deleteLabel: 'Delete',
-          onDelete: () => handleDeleteAdminNotificationItem(item, targetUidForHist),
+          onDelete: () => handleDeleteAdminNotificationItem(item, item.isBroadcast ? null : (item.uid || item.targetUids?.[0] || null)),
           entityName: 'Notification'
         });
       }
@@ -26511,6 +27260,25 @@ export async function renderAdminNotifications() {
   if (refreshHistoryBtn) {
     refreshHistoryBtn.onclick = () => fetchHistory();
   }
+
+  const testChimeBtn = document.getElementById('btn-admin-test-chime');
+  if (testChimeBtn) {
+    testChimeBtn.onclick = () => {
+      playAppNotificationSound('default', { force: true });
+      toast('Playing Apple Glass notification chime', 'info');
+    };
+  }
+
+  const soundToggleBtn = document.getElementById('btn-admin-sound-toggle');
+  if (soundToggleBtn) {
+    soundToggleBtn.onclick = () => {
+      const nextMuted = !isNotificationSoundMuted();
+      setNotificationSoundMuted(nextMuted);
+      if (!nextMuted) playAppNotificationSound('default', { force: true });
+      toast(nextMuted ? 'In-app notification sound muted' : 'In-app notification sound enabled', 'info');
+    };
+  }
+  updateAdminNotifSoundToggleUI();
 
   const testPushBtn = document.getElementById('btn-admin-test-push');
   const purgeFloodTabBtn = document.getElementById('btn-admin-purge-flood-notifs-tab');
@@ -26552,23 +27320,23 @@ export async function renderAdminNotifications() {
     };
   }
 
-  // Wire Visual Icon Picker (all app SVG icons via openUnifiedIconPicker)
+  // Wire Visual Icon Picker (all 100 SVG icons via openUnifiedIconPicker)
   const pickIconBtn = document.getElementById('btn-admin-notif-pick-icon');
   const iconHiddenInput = document.getElementById('select-admin-notif-icon');
   const iconPreviewEl = document.getElementById('admin-notif-icon-preview');
   const iconLabelEl = document.getElementById('admin-notif-icon-label');
   const syncNotifIconPreview = (key) => {
-    const cleanKey = key || 'bell';
+    const cleanKey = key || 'notification-bell';
     if (iconHiddenInput) iconHiddenInput.value = cleanKey;
     if (iconPreviewEl) iconPreviewEl.innerHTML = getIconSvg(cleanKey, 'w-4 h-4 stroke-current');
     if (iconLabelEl) {
       iconLabelEl.textContent = cleanKey.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     }
   };
-  syncNotifIconPreview(iconHiddenInput?.value || 'bell');
+  syncNotifIconPreview(iconHiddenInput?.value || 'notification-bell');
   if (pickIconBtn) {
     pickIconBtn.onclick = () => {
-      openUnifiedIconPicker(iconHiddenInput?.value || 'bell', (pickedKey) => {
+      openUnifiedIconPicker(iconHiddenInput?.value || 'notification-bell', (pickedKey) => {
         syncNotifIconPreview(pickedKey);
       });
     };
@@ -26622,7 +27390,7 @@ export async function renderAdminNotifications() {
       const title = titleInput?.value.trim();
       const body = bodyInput?.value.trim();
       const category = catSelect?.value || 'system';
-      const icon = iconSelect?.value || 'bell';
+      const icon = iconSelect?.value || 'notification-bell';
       const routeVal = routeSelect?.value || 'notifications';
 
       if (!title || !body) {
@@ -26667,19 +27435,30 @@ export async function renderAdminNotifications() {
       }
 
       try {
-        const isBroadcastAll = _adminNotifSelectedTarget === 'all';
+        const isBroadcastAll = _adminNotifTargetMode === 'all' || _adminNotifSelectedUids.size === 0;
+        const targetUidsArr = isBroadcastAll ? ['all'] : Array.from(_adminNotifSelectedUids);
+        const targetNamesArr = isBroadcastAll
+          ? ['All Team Members']
+          : targetUidsArr.map(uId => {
+              const usr = usersMap.get(uId) || members.find(m => m.uid === uId);
+              return usr?.displayName || usr?.name || uId;
+            });
         const nowMs = serverNow();
-        const dedupTag = `manual_${nowMs}`;
+        const dispatchId = `manual_${nowMs}`;
         let localWriteSucceeded = false;
 
         try {
           if (isBroadcastAll) {
-            const payload = {
+            await setDoc(doc(db, 'notifications_broadcast', dispatchId), {
+              dispatchId,
               title,
               message: body,
               body,
               type: category,
+              category,
               targetType: 'all',
+              targetUids: ['all'],
+              targetNames: ['All Team Members'],
               icon,
               targetAction,
               archived: false,
@@ -26687,41 +27466,53 @@ export async function renderAdminNotifications() {
               readBy: [],
               createdAt: serverTimestamp(),
               createdAtMs: nowMs
-            };
-            await addDoc(collection(db, 'notifications_broadcast'), payload);
+            });
             const batch = writeBatch(db);
             logAdminAction(batch, {
               action: 'dispatch_broadcast_notification',
-              details: { title, category, targetRoute, targetItemId }
+              details: { title, category, icon, targetRoute, targetItemId }
             });
             await batch.commit();
             localWriteSucceeded = true;
           } else {
-            const uid = _adminNotifSelectedTarget;
-            const batch = writeBatch(db);
-            const notifRef = doc(db, 'users', uid, 'notifications', `${dedupTag}_${uid}`);
-            batch.set(notifRef, {
-              uid,
-              userId: uid,
-              title,
-              message: body,
-              body,
-              type: category,
-              category,
-              icon,
-              targetAction,
-              targetType: 'individual',
-              read: false,
-              createdAt: serverTimestamp(),
-              timestamp: serverTimestamp(),
-              createdAtMs: nowMs
-            });
-            logAdminAction(batch, {
-              action: 'dispatch_member_notification',
-              targetUid: uid,
-              details: { title, body, targetRoute, targetItemId }
-            });
-            await batch.commit();
+            const CHUNK = 150;
+            for (let i = 0; i < targetUidsArr.length; i += CHUNK) {
+              const chunkUids = targetUidsArr.slice(i, i + CHUNK);
+              const batch = writeBatch(db);
+              chunkUids.forEach(uid => {
+                const docId = `${dispatchId}_${uid}`;
+                const basePayload = {
+                  id: docId,
+                  dispatchId,
+                  uid,
+                  userId: uid,
+                  title,
+                  message: body,
+                  body,
+                  type: category,
+                  category,
+                  icon,
+                  targetAction,
+                  targetType: targetUidsArr.length > 1 ? 'custom' : 'individual',
+                  targetUids: targetUidsArr,
+                  targetNames: targetNamesArr,
+                  read: false,
+                  createdAt: serverTimestamp(),
+                  timestamp: serverTimestamp(),
+                  createdAtMs: nowMs
+                };
+                batch.set(doc(db, 'users', uid, 'notifications', docId), basePayload);
+                batch.set(doc(db, 'notifications', docId), basePayload);
+              });
+              if (i === 0) {
+                logAdminAction(batch, {
+                  action: 'dispatch_multi_member_notification',
+                  targetUid: targetUidsArr[0],
+                  details: { title, body, icon, targetUids: targetUidsArr, targetRoute, targetItemId }
+                });
+              }
+              await batch.commit();
+            }
             localWriteSucceeded = true;
           }
         } catch (clientWriteErr) {
@@ -26730,8 +27521,10 @@ export async function renderAdminNotifications() {
 
         const gasResult = await callGasBackend({
           action: 'DISPATCH_NOTIFICATION',
-          targetType: isBroadcastAll ? 'all' : 'member',
-          targetUid: isBroadcastAll ? '' : _adminNotifSelectedTarget,
+          dispatchId,
+          targetType: isBroadcastAll ? 'all' : (targetUidsArr.length > 1 ? 'multi' : 'member'),
+          targetUid: isBroadcastAll ? '' : targetUidsArr[0],
+          targetUids: isBroadcastAll ? [] : targetUidsArr,
           title,
           body,
           category,
@@ -26740,7 +27533,7 @@ export async function renderAdminNotifications() {
           targetRoute,
           targetItemId,
           clickUrl,
-          tag: dedupTag,
+          tag: dispatchId,
           skipFirestoreWrite: localWriteSucceeded,
           adminUid: state.user?.uid || ''
         });
@@ -26752,7 +27545,7 @@ export async function renderAdminNotifications() {
         toast(
           isBroadcastAll
             ? 'Broadcast notification & Web Push dispatched to all members!'
-            : 'Notification & Web Push sent to member!',
+            : `Notification & Web Push sent to ${targetUidsArr.length} member(s)!`,
           'success'
         );
 
@@ -26773,6 +27566,7 @@ export async function renderAdminNotifications() {
   }
 
   updateTargetUI();
+  renderBadgeChips();
   renderRoster();
   fetchHistory();
 }
@@ -26781,55 +27575,337 @@ function openAdminEditNotificationModal(notif, targetUid = null, onUpdated = nul
   if (!notif || !notif.id) return;
   const oldTitle = notif.title || '';
   const oldBody = notif.body || notif.message || '';
+  let selectedIcon = notif.icon || notif.type || 'notification-bell';
+
+  const wasBroadcast = Boolean(notif.isBroadcast || (!targetUid && (!Array.isArray(notif.targetUids) || notif.targetUids.includes('all'))));
+  const initialUids = wasBroadcast
+    ? []
+    : Array.from(new Set(
+        (Array.isArray(notif.targetUids) && notif.targetUids.length > 0)
+          ? notif.targetUids.filter(u => u && u !== 'all')
+          : [notif.uid || targetUid].filter(Boolean)
+      ));
+  let editTargetMode = wasBroadcast ? 'all' : 'custom';
+  const editSelectedUids = new Set(initialUids);
+  let editSearchQ = '';
+
+  const allMembers = (usersMap.size > 0 ? Array.from(usersMap.values()) : [...(state.members || [])])
+    .filter(m => !m.disabled)
+    .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
+  const allBadges = typeof getAllAvailableBadges === 'function' ? getAllAvailableBadges() : (state.badges || []);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'space-y-3.5 text-xs';
+  bodyEl.innerHTML = `
+    <div>
+      <label class="block text-neutral-300 font-semibold mb-1">Notification Title *</label>
+      <input id="inp-edit-notif-title" type="text" class="ios-input text-white w-full" value="${esc(oldTitle)}" required />
+    </div>
+    <div>
+      <label class="block text-neutral-300 font-semibold mb-1">Notification Body *</label>
+      <textarea id="inp-edit-notif-body" rows="3" class="ios-input text-white w-full" required>${esc(oldBody)}</textarea>
+    </div>
+    <div>
+      <label class="block text-neutral-300 font-semibold mb-1">Notification Icon</label>
+      <button type="button" id="btn-edit-notif-pick-icon" class="w-full min-h-[42px] px-3 py-2 rounded-xl bg-[#1C1C22] hover:bg-[#26262E] border border-white/10 flex items-center justify-between gap-2 text-left transition">
+        <span class="flex items-center gap-2.5 min-w-0">
+          <span id="edit-notif-icon-preview" class="w-7 h-7 rounded-lg bg-[#0A84FF]/15 text-[#0A84FF] border border-[#0A84FF]/30 flex items-center justify-center shrink-0">
+            ${getIconSvg(selectedIcon, 'w-4 h-4 stroke-current')}
+          </span>
+          <span id="edit-notif-icon-label" class="text-xs font-semibold text-white truncate">${esc(selectedIcon.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))}</span>
+        </span>
+        <span class="text-[11px] font-semibold text-[#0A84FF] shrink-0">Choose Icon</span>
+      </button>
+    </div>
+    <div class="space-y-2 p-3 rounded-xl bg-[#141418] border border-white/10">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">Recipients</span>
+        <span id="edit-notif-recip-summary" class="text-[11px] font-semibold text-[#0A84FF]">All Team Members</span>
+      </div>
+      <button type="button" id="btn-edit-notif-all" class="w-full p-2.5 rounded-xl border text-left flex items-center justify-between transition">
+        <span class="text-xs font-bold text-white">All Team Members (Broadcast)</span>
+        <span id="edit-notif-all-dot" class="w-4 h-4 rounded-full border border-white/25 flex items-center justify-center"></span>
+      </button>
+      <div id="edit-notif-badge-chips" class="flex items-center gap-1.5 flex-wrap pt-1"></div>
+      <input type="search" id="inp-edit-notif-member-search" class="ios-input text-xs w-full" placeholder="Filter members..." />
+      <div id="edit-notif-members-list" class="space-y-1 max-h-40 overflow-y-auto pr-1"></div>
+    </div>
+    <div class="pt-2 border-t border-white/10">
+      <button type="button" id="btn-modal-del-notif" class="w-full py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-bold text-xs transition">
+        Delete Notification Permanently
+      </button>
+    </div>
+  `;
+
+  function syncEditRecipientsUI() {
+    const allBtn = bodyEl.querySelector('#btn-edit-notif-all');
+    const allDot = bodyEl.querySelector('#edit-notif-all-dot');
+    const sumEl = bodyEl.querySelector('#edit-notif-recip-summary');
+    const badgeWrap = bodyEl.querySelector('#edit-notif-badge-chips');
+    const listWrap = bodyEl.querySelector('#edit-notif-members-list');
+    const isAll = editTargetMode === 'all' || editSelectedUids.size === 0;
+
+    if (sumEl) {
+      sumEl.textContent = isAll ? 'All Team Members' : formatNotifRecipientsSummary(Array.from(editSelectedUids), false);
+    }
+    if (allBtn) {
+      allBtn.className = isAll
+        ? 'w-full p-2.5 rounded-xl bg-[#0A84FF]/15 border border-[#0A84FF]/40 text-left flex items-center justify-between transition'
+        : 'w-full p-2.5 rounded-xl bg-[#1C1C22] border border-white/10 text-left flex items-center justify-between transition';
+    }
+    if (allDot) {
+      allDot.className = isAll
+        ? 'w-4 h-4 rounded-full bg-[#0A84FF] text-white flex items-center justify-center'
+        : 'w-4 h-4 rounded-full border border-white/25 flex items-center justify-center';
+      allDot.innerHTML = isAll ? '<svg class="w-3 h-3 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : '';
+    }
+
+    if (badgeWrap) {
+      badgeWrap.innerHTML = allBadges.map(b => {
+        const holders = allMembers.filter(m => memberHasBadgeId(m, b.id));
+        const active = !isAll && holders.length > 0 && holders.every(h => editSelectedUids.has(h.uid));
+        return `<button type="button" class="edit-notif-bchip notif-badge-chip ${active ? 'is-active' : ''}" data-badge-id="${esc(b.id)}"><span class="w-2 h-2 rounded-full" style="background:${esc(b.color || '#0A84FF')}"></span><span>${esc(b.label || b.name || b.id)}</span></button>`;
+      }).join('');
+      badgeWrap.querySelectorAll('.edit-notif-bchip').forEach(btn => {
+        btn.onclick = () => {
+          const holders = allMembers.filter(m => memberHasBadgeId(m, btn.dataset.badgeId));
+          if (holders.length === 0) return;
+          const allOn = editTargetMode === 'custom' && holders.every(h => editSelectedUids.has(h.uid));
+          editTargetMode = 'custom';
+          if (allOn) {
+            holders.forEach(h => editSelectedUids.delete(h.uid));
+            if (editSelectedUids.size === 0) editTargetMode = 'all';
+          } else {
+            holders.forEach(h => editSelectedUids.add(h.uid));
+          }
+          syncEditRecipientsUI();
+        };
+      });
+    }
+
+    if (listWrap) {
+      const q = editSearchQ.toLowerCase().trim();
+      const filtered = allMembers.filter(m => !q || (m.displayName || m.name || '').toLowerCase().includes(q) || (m.email || '').toLowerCase().includes(q));
+      listWrap.innerHTML = filtered.map(m => {
+        const isSel = editTargetMode === 'custom' && editSelectedUids.has(m.uid);
+        return `
+          <div class="edit-notif-mrow p-2 rounded-lg flex items-center justify-between gap-2 cursor-pointer transition ${isSel ? 'bg-[#0A84FF]/15 border border-[#0A84FF]/40' : 'bg-[#1C1C22] border border-white/5'}" data-uid="${esc(m.uid)}">
+            <div class="flex items-center gap-2 min-w-0">
+              ${renderAvatar(m, 'w-7 h-7 shrink-0')}
+              <span class="text-xs font-semibold text-white truncate">${esc(m.displayName || m.name || 'Member')}</span>
+            </div>
+            <div class="w-4 h-4 rounded-full ${isSel ? 'bg-[#0A84FF] text-white' : 'border border-white/25'} flex items-center justify-center shrink-0">
+              ${isSel ? '<svg class="w-3 h-3 stroke-current fill-none" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+      listWrap.querySelectorAll('.edit-notif-mrow').forEach(row => {
+        row.onclick = () => {
+          const uid = row.dataset.uid;
+          editTargetMode = 'custom';
+          if (editSelectedUids.has(uid)) {
+            editSelectedUids.delete(uid);
+            if (editSelectedUids.size === 0) editTargetMode = 'all';
+          } else {
+            editSelectedUids.add(uid);
+          }
+          syncEditRecipientsUI();
+        };
+      });
+    }
+  }
+
+  const pickIconBtn = bodyEl.querySelector('#btn-edit-notif-pick-icon');
+  if (pickIconBtn) {
+    pickIconBtn.onclick = () => {
+      openUnifiedIconPicker(selectedIcon, (picked) => {
+        selectedIcon = picked || 'notification-bell';
+        const prev = bodyEl.querySelector('#edit-notif-icon-preview');
+        const lbl = bodyEl.querySelector('#edit-notif-icon-label');
+        if (prev) prev.innerHTML = getIconSvg(selectedIcon, 'w-4 h-4 stroke-current');
+        if (lbl) lbl.textContent = selectedIcon.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      });
+    };
+  }
+  const allToggleBtn = bodyEl.querySelector('#btn-edit-notif-all');
+  if (allToggleBtn) {
+    allToggleBtn.onclick = () => {
+      editTargetMode = 'all';
+      editSelectedUids.clear();
+      syncEditRecipientsUI();
+    };
+  }
+  const memberSearchInp = bodyEl.querySelector('#inp-edit-notif-member-search');
+  if (memberSearchInp) {
+    memberSearchInp.oninput = (e) => {
+      editSearchQ = e.target.value;
+      syncEditRecipientsUI();
+    };
+  }
+  syncEditRecipientsUI();
 
   openModal({
     title: 'Edit Notification',
-    body: `
-      <div class="space-y-3.5 text-xs">
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">Notification Title</label>
-          <input id="inp-edit-notif-title" type="text" class="ios-input text-white w-full" value="${esc(oldTitle)}" required />
-        </div>
-        <div>
-          <label class="block text-neutral-300 font-semibold mb-1">Notification Body</label>
-          <textarea id="inp-edit-notif-body" rows="3" class="ios-input text-white w-full" required>${esc(oldBody)}</textarea>
-        </div>
-        <div class="pt-2 border-t border-white/10">
-          <button type="button" id="btn-modal-del-notif" class="w-full py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-bold text-xs transition">
-            Delete Notification Permanently
-          </button>
-        </div>
-      </div>
-    `,
-    saveLabel: 'Save Notification',
+    body: bodyEl,
+    saveLabel: 'Save Changes',
     onSave: async () => {
-      const newTitle = document.getElementById('inp-edit-notif-title')?.value?.trim();
-      const newBody = document.getElementById('inp-edit-notif-body')?.value?.trim();
+      const newTitle = bodyEl.querySelector('#inp-edit-notif-title')?.value?.trim();
+      const newBody = bodyEl.querySelector('#inp-edit-notif-body')?.value?.trim();
       if (!newTitle || !newBody) {
         toast('Title and body are required', 'warning');
         return false;
       }
 
+      const nowMs = serverNow();
+      const isNowBroadcast = editTargetMode === 'all' || editSelectedUids.size === 0;
+      const newUids = isNowBroadcast ? [] : Array.from(editSelectedUids);
+      const newNames = newUids.map(uId => {
+        const usr = usersMap.get(uId) || allMembers.find(m => m.uid === uId);
+        return usr?.displayName || usr?.name || uId;
+      });
+      const dispatchBaseId = notif.dispatchId || notif.id || `manual_${nowMs}`;
+
       try {
-        const updatePayload = {
-          title: newTitle,
-          body: newBody,
-          message: newBody,
-          updatedAt: serverTimestamp()
-        };
-        if (!targetUid) {
-          await updateDoc(doc(db, 'notifications_broadcast', notif.id), updatePayload);
+        const docIdsByUid = notif.docIdsByUid || {};
+        if (isNowBroadcast) {
+          if (!wasBroadcast) {
+            await Promise.allSettled(initialUids.flatMap(uid => {
+              const dId = docIdsByUid[uid] || notif.id;
+              return [
+                deleteDoc(doc(db, 'users', uid, 'notifications', dId)),
+                deleteDoc(doc(db, 'notifications', dId))
+              ];
+            }));
+          }
+          await setDoc(doc(db, 'notifications_broadcast', dispatchBaseId), {
+            dispatchId: dispatchBaseId,
+            title: newTitle,
+            body: newBody,
+            message: newBody,
+            icon: selectedIcon,
+            type: notif.category || notif.type || 'system',
+            category: notif.category || notif.type || 'system',
+            targetType: 'all',
+            targetUids: ['all'],
+            targetNames: ['All Team Members'],
+            archived: false,
+            isArchived: false,
+            readBy: Array.isArray(notif.readByUids) ? notif.readByUids : [],
+            updatedAt: serverTimestamp(),
+            createdAt: notif.createdAt || serverTimestamp(),
+            createdAtMs: notif.createdAtMs || nowMs
+          }, { merge: true });
+          if (!wasBroadcast) {
+            callGasBackend({
+              action: 'DISPATCH_NOTIFICATION',
+              dispatchId: dispatchBaseId,
+              targetType: 'all',
+              title: newTitle,
+              body: newBody,
+              category: notif.category || 'system',
+              icon: selectedIcon,
+              skipFirestoreWrite: true,
+              adminUid: state.user?.uid || ''
+            }).catch(() => {});
+          }
         } else {
-          await Promise.allSettled([
-            updateDoc(doc(db, 'notifications', notif.id), updatePayload),
-            updateDoc(doc(db, 'users', targetUid, 'notifications', notif.id), updatePayload)
-          ]);
+          if (wasBroadcast) {
+            await deleteDoc(doc(db, 'notifications_broadcast', notif.id)).catch(() => {});
+          }
+          const oldSet = new Set(initialUids);
+          const newSet = new Set(newUids);
+          const removedUids = initialUids.filter(u => !newSet.has(u));
+          const keptUids = initialUids.filter(u => newSet.has(u));
+          const addedUids = newUids.filter(u => !oldSet.has(u));
+
+          // 1. Delete from removed recipients
+          if (removedUids.length > 0) {
+            await Promise.allSettled(removedUids.flatMap(uid => {
+              const dId = docIdsByUid[uid] || notif.id;
+              return [
+                deleteDoc(doc(db, 'users', uid, 'notifications', dId)),
+                deleteDoc(doc(db, 'notifications', dId)),
+                callGasBackend({ action: 'DELETE_NOTIFICATION', notifId: dId, uid, isBroadcast: false })
+              ];
+            }));
+          }
+
+          // 2. Update kept recipients (Title, Body, Icon, targetUids)
+          if (keptUids.length > 0) {
+            await Promise.allSettled(keptUids.flatMap(uid => {
+              const dId = docIdsByUid[uid] || notif.id;
+              const patch = {
+                title: newTitle,
+                body: newBody,
+                message: newBody,
+                icon: selectedIcon,
+                targetType: newUids.length > 1 ? 'custom' : 'individual',
+                targetUids: newUids,
+                targetNames: newNames,
+                updatedAt: serverTimestamp()
+              };
+              return [
+                updateDoc(doc(db, 'users', uid, 'notifications', dId), patch),
+                updateDoc(doc(db, 'notifications', dId), patch)
+              ];
+            }));
+          }
+
+          // 3. Create docs + send Web Push for newly added recipients only
+          if (addedUids.length > 0) {
+            const batch = writeBatch(db);
+            addedUids.forEach(uid => {
+              const docId = `${dispatchBaseId}_${uid}`;
+              const payload = {
+                id: docId,
+                dispatchId: dispatchBaseId,
+                uid,
+                userId: uid,
+                title: newTitle,
+                body: newBody,
+                message: newBody,
+                icon: selectedIcon,
+                type: notif.category || notif.type || 'system',
+                category: notif.category || notif.type || 'system',
+                targetType: newUids.length > 1 ? 'custom' : 'individual',
+                targetUids: newUids,
+                targetNames: newNames,
+                read: false,
+                createdAt: serverTimestamp(),
+                timestamp: serverTimestamp(),
+                createdAtMs: nowMs
+              };
+              batch.set(doc(db, 'users', uid, 'notifications', docId), payload);
+              batch.set(doc(db, 'notifications', docId), payload);
+            });
+            await batch.commit();
+
+            callGasBackend({
+              action: 'DISPATCH_NOTIFICATION',
+              dispatchId: dispatchBaseId,
+              targetType: addedUids.length > 1 ? 'multi' : 'member',
+              targetUid: addedUids[0],
+              targetUids: addedUids,
+              title: newTitle,
+              body: newBody,
+              category: notif.category || 'system',
+              icon: selectedIcon,
+              skipFirestoreWrite: true,
+              adminUid: state.user?.uid || ''
+            }).catch(() => {});
+          }
         }
+
         notif.title = newTitle;
         notif.body = newBody;
         notif.message = newBody;
+        notif.icon = selectedIcon;
+        notif.isBroadcast = isNowBroadcast;
+        notif.targetUids = isNowBroadcast ? ['all'] : newUids;
+        notif.targetNames = isNowBroadcast ? ['All Team Members'] : newNames;
         if (typeof onUpdated === 'function') onUpdated();
-        toast('Notification updated', 'success');
+        toast('Notification & recipients updated!', 'success');
         return true;
       } catch (err) {
         console.error('Error updating notification:', err);
@@ -26839,22 +27915,20 @@ function openAdminEditNotificationModal(notif, targetUid = null, onUpdated = nul
     }
   });
 
-  setTimeout(() => {
-    const delBtn = document.getElementById('btn-modal-del-notif');
-    if (delBtn) {
-      delBtn.onclick = async () => {
-        closeModal();
-        await handleDeleteAdminNotificationItem(notif, targetUid);
-        if (typeof onUpdated === 'function') onUpdated();
-      };
-    }
-  }, 50);
+  const delBtn = bodyEl.querySelector('#btn-modal-del-notif');
+  if (delBtn) {
+    delBtn.onclick = async () => {
+      closeModal();
+      await handleDeleteAdminNotificationItem(notif, targetUid);
+      if (typeof onUpdated === 'function') onUpdated();
+    };
+  }
 }
 
 async function handleDeleteAdminNotificationItem(notif, targetUid = null) {
   if (!notif || !notif.id) return;
   try {
-    if (!targetUid) {
+    if (notif.isBroadcast || (!targetUid && (!Array.isArray(notif.targetUids) || notif.targetUids.includes('all')))) {
       await Promise.allSettled([
         deleteDoc(doc(db, 'notifications_broadcast', notif.id)),
         deleteDoc(doc(db, 'notifications', notif.id))
@@ -26866,7 +27940,14 @@ async function handleDeleteAdminNotificationItem(notif, targetUid = null) {
         isBroadcast: true
       }).catch(() => {});
     } else {
-      await deleteSingleNotificationFromFirestore(notif, targetUid);
+      const uidList = (Array.isArray(notif.targetUids) && notif.targetUids.length > 0)
+        ? notif.targetUids.filter(u => u && u !== 'all')
+        : [targetUid || notif.uid].filter(Boolean);
+      const docIdsByUid = notif.docIdsByUid || {};
+      await Promise.allSettled(uidList.map(u => {
+        const dId = docIdsByUid[u] || notif.id;
+        return deleteSingleNotificationFromFirestore({ ...notif, id: dId, uid: u }, u);
+      }));
     }
     _adminNotifHistory = (_adminNotifHistory || []).filter(x => x.id !== notif.id);
     toast('Notification deleted', 'info');
@@ -28231,6 +29312,8 @@ if ('serviceWorker' in navigator) {
         title,
         message: body,
         icon,
+        type: notif.type || payload.type || '',
+        category: notif.category || payload.category || '',
         onClick: (targetRoute || clickUrl) ? () => handleNotificationDeepLink({
           route: targetRoute || (clickUrl && /^https?:\/\//i.test(clickUrl) ? 'custom_url' : 'notifications'),
           itemId: targetItemId,

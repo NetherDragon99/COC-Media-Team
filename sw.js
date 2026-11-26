@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.2.7';
-const CACHE_NAME = 'coc-media-cache-v3.2.7';
+const CACHE_VERSION = 'v3.2.8';
+const CACHE_NAME = 'coc-media-cache-v3.2.8';
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',

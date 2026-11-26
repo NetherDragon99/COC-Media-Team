@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.7)
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.8)
  * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync,
  * Deduplicated 3-Stage Notifications, Background Maintenance Jobs & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
@@ -70,7 +70,7 @@ function doGet(e) {
   ensureWatchdogTriggersInstalled();
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.2.7",
+    version: "3.2.8",
     system: "CoC Media Unified Task & Attendance Backend Watchdog",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()
@@ -884,6 +884,7 @@ function writeUserNotificationOnce(uid, deterministicId, payload) {
 
   return firestorePatch(`users/${uid}/notifications/${safeId}`, {
     id: safeId,
+    dispatchId: payload.dispatchId || "",
     uid: uid,
     userId: uid,
     title: titleText,
@@ -891,8 +892,10 @@ function writeUserNotificationOnce(uid, deterministicId, payload) {
     body: bodyText,
     type: payload.type || "system",
     category: payload.category || payload.type || "system",
-    icon: payload.icon || "bell",
+    icon: payload.icon || "notification-bell",
     targetType: payload.targetType || "individual",
+    targetUids: Array.isArray(payload.targetUids) ? payload.targetUids : [uid],
+    targetNames: Array.isArray(payload.targetNames) ? payload.targetNames : [],
     targetAction: payload.targetAction || null,
     taskId: payload.taskId || "",
     sessionId: payload.sessionId || "",
@@ -2809,10 +2812,21 @@ function handleDispatchNotification(payload) {
   }
 
   const category = payload.category || "system";
-  const icon = payload.icon || "bell";
+  const icon = payload.icon || "notification-bell";
   const senderUid = payload.senderUid || payload.adminUid || "admin";
   const senderName = payload.senderName || "Admin";
-  const isBroadcast = Boolean(payload.isBroadcast || payload.targetType === "all" || (!payload.targetUid && (!payload.recipients || payload.recipients.length === 0)));
+  const rawList = Array.isArray(payload.targetUids)
+    ? payload.targetUids
+    : (Array.isArray(payload.recipients) ? payload.recipients : []);
+  const explicitUids = rawList.filter(Boolean);
+  if (payload.targetUid) explicitUids.push(payload.targetUid);
+  const uniqueExplicitUids = Array.from(new Set(explicitUids));
+
+  const isBroadcast = Boolean(
+    payload.isBroadcast ||
+    payload.targetType === "all" ||
+    uniqueExplicitUids.length === 0
+  );
   const skipFirestoreWrite = Boolean(payload.skipFirestoreWrite);
   const now = new Date();
   const nowIso = now.toISOString();
@@ -2824,20 +2838,18 @@ function handleDispatchNotification(payload) {
   const targetRoute = String((targetAction && targetAction.route) || payload.targetRoute || "notifications").trim();
   const targetItemId = String((targetAction && targetAction.itemId) || payload.targetItemId || "").trim();
   const clickUrl = String((targetAction && targetAction.url) || payload.clickUrl || (CONFIG.PWA_URL + "#" + targetRoute)).trim();
-  const tag = sanitizeFirestoreDocId(payload.tag || payload.dedupKey || `manual_${nowMs}`);
+  const dispatchId = sanitizeFirestoreDocId(payload.dispatchId || payload.tag || payload.dedupKey || `manual_${nowMs}`);
+  const tag = dispatchId;
 
   const allUsers = fetchApprovedUsers();
-  let targetUids = Array.isArray(payload.recipients) ? payload.recipients.filter(Boolean) : [];
-  if (payload.targetUid) {
-    targetUids.push(payload.targetUid);
-  }
-  if (isBroadcast || targetUids.length === 0) {
-    targetUids = allUsers.map(u => u.id || u.uid).filter(Boolean);
-  }
+  let targetUids = isBroadcast
+    ? allUsers.map(u => u.id || u.uid).filter(Boolean)
+    : uniqueExplicitUids;
 
   if (!skipFirestoreWrite) {
     if (isBroadcast) {
       firestorePost("notifications_broadcast", {
+        dispatchId: dispatchId,
         title: title,
         message: body,
         body: body,
@@ -2846,6 +2858,7 @@ function handleDispatchNotification(payload) {
         icon: icon,
         target: "all",
         targetType: "all",
+        targetUids: ["all"],
         targetAction: targetAction,
         senderUid: senderUid,
         senderName: senderName,
@@ -2857,14 +2870,21 @@ function handleDispatchNotification(payload) {
         createdAtMs: nowMs
       });
     } else {
+      const targetNames = targetUids.map(uId => {
+        const usr = allUsers.find(u => (u.id || u.uid) === uId);
+        return (usr && (usr.displayName || usr.name)) || uId;
+      });
       targetUids.forEach(uid => {
         writeUserNotificationOnce(uid, `${tag}_${uid}`, {
+          dispatchId: dispatchId,
           title: title,
           body: body,
           type: category,
           category: category,
           icon: icon,
-          targetType: "individual",
+          targetType: targetUids.length > 1 ? "custom" : "individual",
+          targetUids: targetUids,
+          targetNames: targetNames,
           targetAction: targetAction,
           createdAt: nowIso,
           createdAtMs: nowMs

@@ -1904,6 +1904,19 @@ textarea:focus-visible {
   z-index: 2700 !important;
 }
 
+#unifiedIconPickerOverlay,
+#subModalOverlay {
+  z-index: 14000 !important;
+}
+
+#shared-confirm-root,
+#modal-custom-confirm,
+#modal-custom-alert,
+#modal-custom-prompt,
+#modal-delete-confirm {
+  z-index: 15000 !important;
+}
+
 .stepper-control,
 .ios-stepper {
   display: inline-flex;
@@ -4375,4 +4388,235 @@ input[type="search"],
 
 .btn-reactivate-pill:active {
   transform: scale(0.97);
+}
+
+/* ============================================================================
+   v3.2.8: APPLE HIG 4-TAB ADMIN HUB & 120FPS PORTAL OVERHAUL
+   ============================================================================ */
+.admin-overlay .glass-card,
+#admin-pager .glass-card {
+  background: #141418 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  contain: layout style;
+}
+
+#admin-pager .pager-page:not(.page-active) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 720px;
+}
+
+#admin-pager .pager-page.page-active {
+  contain: layout style;
+}
+
+.admin-subnav-bar {
+  position: relative;
+  z-index: 95;
+  flex-shrink: 0;
+  padding: 6px 14px 10px;
+  background: rgba(13, 13, 16, 0.86);
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  transition: opacity 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.admin-subnav-bar.hidden {
+  display: none !important;
+}
+
+.admin-subnav-track {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 12px;
+  background: #1C1C22;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.admin-subnav-track::-webkit-scrollbar {
+  display: none;
+}
+
+.admin-subnav-pill {
+  flex: 1 0 auto;
+  min-height: 32px;
+  padding: 6px 11px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #98989F;
+  background: transparent;
+  border: none;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease, color 0.16s ease;
+}
+
+.admin-subnav-pill:active {
+  transform: scale(0.97);
+}
+
+.admin-subnav-pill.active {
+  background: #2C2C35;
+  color: #FFFFFF;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.admin-subnav-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: #FF453A;
+  color: #FFFFFF;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.admin-subnav-badge.hidden {
+  display: none !important;
+}
+
+#admin-dock.admin-dock-4tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: min(calc(100vw - 24px), 440px);
+  padding: 5px;
+}
+
+#admin-dock.admin-dock-4tab .dock-item {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 50px;
+  padding: 4px 6px;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+#admin-dock.admin-dock-4tab .dock-item svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+}
+
+.hig-insight-card {
+  background: #141418;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  contain: layout style;
+}
+
+.hig-attention-banner {
+  background: linear-gradient(135deg, rgba(255, 159, 10, 0.16), rgba(255, 159, 10, 0.06));
+  border: 1px solid rgba(255, 159, 10, 0.35);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease;
+}
+
+.hig-attention-banner:active {
+  transform: scale(0.98);
+}
+
+.hig-module-card {
+  background: #141418;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 13px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: start;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  contain: layout style;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.hig-module-card:hover {
+  background: #1C1C22;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.hig-module-card:active {
+  transform: scale(0.97);
+}
+
+.hig-module-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.hig-module-pill {
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.notif-badge-chip {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #1C1C22;
+  color: #E5E5EA;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.notif-badge-chip:active {
+  transform: scale(0.96);
+}
+
+.notif-badge-chip.is-active {
+  background: rgba(10, 132, 255, 0.22);
+  border-color: #0A84FF;
+  color: #FFFFFF;
 }
