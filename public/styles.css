@@ -926,6 +926,52 @@ body.selection-mode-active .bulk-select-card.selected {
   border-color: rgba(255, 149, 0, 0.4);
 }
 
+.toast-update {
+  border-color: rgba(10, 132, 255, 0.45);
+  border-radius: 18px;
+  padding: 10px 12px 10px 16px;
+  cursor: default;
+  max-width: 400px;
+}
+
+.toast-update-btn {
+  background: var(--ios-blue, #0A84FF);
+  color: #FFFFFF;
+  border: none;
+  border-radius: 9999px;
+  padding: 6px 13px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.16s ease;
+}
+
+.toast-update-btn:active {
+  transform: scale(0.96);
+}
+
+.toast-update-dismiss {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #98989F);
+  border: none;
+  border-radius: 9999px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  touch-action: manipulation;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.16s ease;
+}
+
+.toast-update-dismiss:active {
+  transform: scale(0.94);
+}
+
 @keyframes slideToastDown {
   from {
     opacity: 0;
@@ -1081,7 +1127,7 @@ textarea:focus-visible {
 }
 
 .summary-ring-circle {
-  transition: stroke-dashoffset 0.85s cubic-bezier(0.32, 0.72, 0, 1);
+  transition: stroke-dashoffset 0.85s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.35s ease;
   transform: rotate(-90deg);
   transform-origin: 50% 50%;
   stroke-linecap: round;
@@ -2438,6 +2484,12 @@ input[type="search"],
   background: rgba(10, 132, 255, 0.18) !important;
   color: #0A84FF !important;
   border: 1px solid rgba(10, 132, 255, 0.28) !important;
+}
+
+.drawer-icon-reset {
+  background: rgba(255, 69, 58, 0.16) !important;
+  color: #FF453A !important;
+  border: 1px solid rgba(255, 69, 58, 0.28) !important;
 }
 
 .drawer-icon-waiver {

@@ -2388,5 +2388,76 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.deepStrictEqual(Array.from(n1.targetNames), ['Steven Mario', 'Logy Sameh']);
 }
 
+// ---------------------------------------------------------------------------
+// v3.2.9: Activity Rings "No Attendance" vs Real Attendance % & SW Version Guard
+// ---------------------------------------------------------------------------
+{
+  const swSource = fs.readFileSync('sw.js', 'utf8');
+  assert.ok(swSource.includes('isVersionMismatch'), 'sw.js must guard versioned asset requests from stale cache fallback');
+  assert.ok(!swSource.includes('return caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {\n        const networkPromise'), 'sw.js must not serve stale versioned code via unconditional ignoreSearch cache-first');
+
+  const appSource = fs.readFileSync('app.js', 'utf8');
+  const ringFnMatch = appSource.match(/export function computeActivityRingMetrics\([\s\S]*?\n\}/);
+  assert.ok(ringFnMatch, 'computeActivityRingMetrics must be exported in app.js');
+
+  const ringSandbox = { Math, Number, String, Array, Boolean };
+  vm.createContext(ringSandbox);
+  vm.runInContext(ringFnMatch[0].replace(/^export\s+/, ''), ringSandbox);
+
+  // 1. Brand new / unlogged member with 0 attendance records -> No Attendance, dimmed full ring (offset 0, opacity 0.35)
+  const emptyMetrics = ringSandbox.computeActivityRingMetrics({
+    points: 0,
+    penalties: 0,
+    attendanceLogs: [],
+    hasUser: true
+  });
+  assert.strictEqual(emptyMetrics.hasAttendance, false);
+  assert.strictEqual(emptyMetrics.attendanceLabel, 'No Attendance');
+  assert.strictEqual(emptyMetrics.quotasOffset, 0, 'No Attendance must render as a full ring like 0 pts / 0 penalties');
+  assert.strictEqual(emptyMetrics.quotasOpacity, 0.35, 'No Attendance ring must be dimmed (0.35)');
+
+  // 2. Member with ONLY approved excuses -> still No Attendance (excused excluded from denominator)
+  const excusedOnly = ringSandbox.computeActivityRingMetrics({
+    points: 20,
+    penalties: 0,
+    attendanceLogs: [{ status: 'excused' }],
+    hasUser: true
+  });
+  assert.strictEqual(excusedOnly.hasAttendance, false);
+  assert.strictEqual(excusedOnly.attendanceLabel, 'No Attendance');
+  assert.strictEqual(excusedOnly.quotasOpacity, 0.35);
+
+  // 3. Member attended 1 on_time, 1 late, 1 absent, 1 excused -> 2 present out of 3 = 67%
+  const activeMetrics = ringSandbox.computeActivityRingMetrics({
+    points: 30,
+    penalties: 5,
+    attendanceLogs: [
+      { status: 'on_time' },
+      { status: 'late', penalty: 5 },
+      { status: 'absent', penalty: 10 },
+      { status: 'excused' }
+    ],
+    hasUser: true
+  });
+  assert.strictEqual(activeMetrics.hasAttendance, true);
+  assert.strictEqual(activeMetrics.attendancePct, 67);
+  assert.strictEqual(activeMetrics.attendanceLabel, '67%');
+  assert.strictEqual(activeMetrics.quotasOpacity, 1);
+  assert.ok(activeMetrics.quotasOffset > 0 && activeMetrics.quotasOffset < 188.49);
+
+  // 4. Member with 1 absence and 0 presences -> 0% (bright 0%, near-empty ring, NOT dimmed full No Attendance)
+  const absentOnly = ringSandbox.computeActivityRingMetrics({
+    points: 0,
+    penalties: 10,
+    attendanceLogs: [{ status: 'absent', penalty: 10 }],
+    hasUser: true
+  });
+  assert.strictEqual(absentOnly.hasAttendance, true);
+  assert.strictEqual(absentOnly.attendancePct, 0);
+  assert.strictEqual(absentOnly.attendanceLabel, '0%');
+  assert.strictEqual(absentOnly.quotasOpacity, 1);
+  assert.ok(absentOnly.quotasOffset > 180, '0% attendance from absence must show empty track, not full circle');
+}
+
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
 

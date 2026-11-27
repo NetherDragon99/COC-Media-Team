@@ -468,18 +468,21 @@ try {
     throw new Error('Escape keydown failed to close drawer');
   }
 
-  // Verify Split Refresh & Sync Handlers
+  // Verify Split Refresh & Reset App Data Controls
   if (typeof sandbox.window.handleReloadApp !== 'function') {
     throw new Error('handleReloadApp is not defined');
   }
+  if (typeof sandbox.window.handleResetAppData !== 'function') {
+    throw new Error('handleResetAppData is not defined');
+  }
   if (typeof sandbox.window.handleForceSyncData !== 'function') {
-    throw new Error('handleForceSyncData is not defined');
+    throw new Error('handleForceSyncData compatibility alias is not defined');
   }
   if (typeof sandbox.window.handleManualDataRefresh !== 'function') {
     throw new Error('handleManualDataRefresh alias is not defined');
   }
 
-  console.log('PASS: Side Drawer open/close/gestures & split sync controls verified cleanly');
+  console.log('PASS: Side Drawer open/close/gestures & reset controls verified cleanly');
 } catch (err) {
   console.error('FAIL: Error in What\'s New smoke test:', err);
   process.exit(1);

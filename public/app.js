@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.8';
+export const APP_VERSION = '3.2.9';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -1011,8 +1011,47 @@ export async function submitTaskThroughBackend(task, answers = [], comment = '')
   };
 }
 
+let _isResettingAppData = false;
+
+function parseSemverTuple(verStr) {
+  const clean = String(verStr || '').replace(/^v/i, '').trim();
+  const parts = clean.split('.').map(n => parseInt(n, 10));
+  if (parts.length < 3 || parts.some(n => Number.isNaN(n))) return null;
+  return parts;
+}
+
+function compareSemverStrings(a, b) {
+  const pa = parseSemverTuple(a);
+  const pb = parseSemverTuple(b);
+  if (!pa || !pb) return 0;
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] > pb[i] ? 1 : -1;
+  }
+  return 0;
+}
+
+export async function purgeOlderSwCaches(currentVer = APP_VERSION) {
+  try {
+    if (typeof window === 'undefined' || !('caches' in window)) return;
+    const keys = await caches.keys();
+    await Promise.all(
+      keys.map((key) => {
+        const m = String(key).match(/^coc-media-cache-v(\d+\.\d+\.\d+)$/i);
+        if (!m) return Promise.resolve();
+        // Only purge caches strictly older than currentVer so any newer waiting SW cache stays intact
+        if (compareSemverStrings(m[1], currentVer) < 0) {
+          return caches.delete(key).catch(() => {});
+        }
+        return Promise.resolve();
+      })
+    );
+  } catch (e) {}
+}
+
 export function persistToLocalCache(immediate = false) {
+  if (_isResettingAppData) return;
   const writeCache = () => {
+    if (_isResettingAppData) return;
     try {
       if (typeof localStorage === 'undefined') return;
       const payload = {
@@ -1045,11 +1084,11 @@ export function persistToLocalCache(immediate = false) {
     if (_persistTimer) clearTimeout(_persistTimer);
     _persistTimer = setTimeout(() => {
       if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(writeCache, { timeout: 600 });
+        window.requestIdleCallback(writeCache, { timeout: 1000 });
       } else {
         writeCache();
       }
-    }, 220);
+    }, 1200);
   }
 }
 
@@ -1060,6 +1099,13 @@ export function hydrateFromLocalCache() {
     if (!raw) return false;
     const cached = JSON.parse(raw);
     if (!cached || typeof cached !== 'object') return false;
+
+    // Never hydrate stale local snapshots from a different app version; purge automatically
+    if (cached.version !== APP_VERSION) {
+      try { localStorage.removeItem(OFFLINE_CACHE_KEY); } catch (e) {}
+      purgeOlderSwCaches(APP_VERSION);
+      return false;
+    }
 
     if (cached.settings && typeof cached.settings === 'object') {
       state.settings = { ...state.settings, ...cached.settings };
@@ -1146,6 +1192,7 @@ export function renderHydratedCacheUI() {
   try { updateNotificationBadges(); } catch (e) {}
   try { renderNotifications(); } catch (e) {}
   try { updateProfileUI(); } catch (e) {}
+  try { updateHeroStats(); } catch (e) {}
   try { updateUserTodayAttendanceBadge(); } catch (e) {}
   try { checkAdminRoleUI(); } catch (e) {}
 }
@@ -10442,6 +10489,7 @@ function setupAttendanceListeners() {
     renderAttendanceLogs();
     renderProfileAttendance();
     updateUserTodayAttendanceBadge();
+    updateActivityRings();
     return;
   }
 
@@ -10459,6 +10507,7 @@ function setupAttendanceListeners() {
       }
       persistToLocalCache();
       scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(state.myAttendanceLogs));
+      scheduleUserTabRender('home', 'update_activity_rings', updateActivityRings);
       scheduleUserTabRender('profile', 'render_profile_attendance', renderProfileAttendance);
       scheduleUserTabRender('attendance', 'render_attendance_view', renderAttendanceView);
       scheduleRafRender('att_badge', updateUserTodayAttendanceBadge);
@@ -10479,6 +10528,7 @@ function setupAttendanceListeners() {
           }
           persistToLocalCache();
           scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(state.myAttendanceLogs));
+          scheduleUserTabRender('home', 'update_activity_rings', updateActivityRings);
           scheduleUserTabRender('profile', 'render_profile_attendance', renderProfileAttendance);
           scheduleUserTabRender('attendance', 'render_attendance_view', renderAttendanceView);
           scheduleRafRender('att_badge', updateUserTodayAttendanceBadge);
@@ -10535,6 +10585,7 @@ function setupAttendanceListeners() {
         state.myAttendanceLogs = Array.from(myMap.values());
       }
       scheduleUserTabRender('home', 'render_today_checkins', () => renderTodayCheckIns(state.myAttendanceLogs));
+      scheduleUserTabRender('home', 'update_activity_rings', updateActivityRings);
       scheduleUserTabRender('attendance', 'render_attendance_view', renderAttendanceView);
       if (isAdminSessionActive()) {
         if (adminSessionsFilter === 'recent_logs') {
@@ -15068,25 +15119,10 @@ function updateHeroStats() {
   renderHomeDueTasks();
 }
 
-function updateActivityRings() {
-  const ringPts = document.getElementById('ring-points');
-  const ringQuotas = document.getElementById('ring-quotas');
-  const ringPen = document.getElementById('ring-penalties');
-  const centerPts = document.getElementById('ring-center-pts');
-  const legPts = document.getElementById('ring-legend-points');
-  const legQuotas = document.getElementById('ring-legend-quotas');
-  const legPen = document.getElementById('ring-legend-penalties');
-
-  const P = Math.max(0, Number(state.user?.points || 0));
-  const Pen = Math.max(0, Number(state.user?.penalties || 0));
+export function computeActivityRingMetrics({ points = 0, penalties = 0, attendanceLogs = [], hasUser = false } = {}) {
+  const P = Math.max(0, Number(points || 0));
+  const Pen = Math.max(0, Number(penalties || 0));
   const netPoints = Math.max(0, P - Pen);
-
-  const logs = state.myAttendanceLogs || [];
-  let attendancePct = 100;
-  if (logs.length > 0) {
-    const onTimeCount = logs.filter(l => l.status === 'on_time' || (!l.penalty && l.status !== 'late' && l.status !== 'missed')).length;
-    attendancePct = Math.min(100, Math.max(0, Math.round((onTimeCount / logs.length) * 100)));
-  }
 
   let ptsOffset = 251.32;
   let penOffset = 125.66;
@@ -15094,21 +15130,17 @@ function updateActivityRings() {
   let penOpacity = 1;
 
   if (P === 0 && Pen === 0) {
-
     ptsOffset = 0;
     penOffset = 0;
     ptsOpacity = 0.35;
     penOpacity = 0.35;
   } else if (P > 0 && Pen === 0) {
-
     ptsOffset = 0;
     penOffset = 125.66 * (1 - 0.008);
   } else if (P === 0 && Pen > 0) {
-
     penOffset = 0;
     ptsOffset = 251.32 * (1 - 0.008);
   } else {
-
     const total = P + Pen;
     const ptsRatio = P / total;
     const penRatio = Pen / total;
@@ -15116,26 +15148,94 @@ function updateActivityRings() {
     penOffset = 125.66 * (1 - penRatio);
   }
 
+  // Exclude approved waivers (`excused`) from attendance denominator.
+  // If user has not attended or missed any unexcused session yet, treat identically to 0 pts / 0 penalties:
+  // dimmed full ring (offset = 0, opacity = 0.35) + "No Attendance" label.
+  const evaluatedLogs = (hasUser && Array.isArray(attendanceLogs))
+    ? attendanceLogs.filter((l) => l && String(l.status || '').toLowerCase() !== 'excused')
+    : [];
+
+  let hasAttendance = false;
+  let attendancePct = 0;
+  let attendanceLabel = 'No Attendance';
+  let quotasOffset = 0;
+  let quotasOpacity = 0.35;
+
+  if (evaluatedLogs.length > 0) {
+    hasAttendance = true;
+    const attendedCount = evaluatedLogs.filter((l) => {
+      const st = String(l.status || '').toLowerCase();
+      return st !== 'absent' && st !== 'missed';
+    }).length;
+    attendancePct = Math.min(100, Math.max(0, Math.round((attendedCount / evaluatedLogs.length) * 100)));
+    attendanceLabel = `${attendancePct}%`;
+    quotasOpacity = 1;
+    if (attendancePct === 0) {
+      quotasOffset = 188.49 * (1 - 0.008);
+    } else {
+      quotasOffset = 188.49 * (1 - (attendancePct / 100));
+    }
+  }
+
+  return {
+    P,
+    Pen,
+    netPoints,
+    ptsOffset,
+    penOffset,
+    ptsOpacity,
+    penOpacity,
+    hasAttendance,
+    attendancePct,
+    attendanceLabel,
+    quotasOffset,
+    quotasOpacity
+  };
+}
+
+function updateActivityRings() {
+  const ringPts = document.getElementById('ring-points');
+  const ringQuotas = document.getElementById('ring-quotas');
+  const ringPen = document.getElementById('ring-penalties');
+  const centerPts = document.getElementById('ring-center-pts');
+  const legPts = document.getElementById('ring-legend-points');
+  const legQuotas = document.getElementById('ring-legend-quotas');
+  const dotQuotas = document.getElementById('ring-dot-quotas');
+  const legPen = document.getElementById('ring-legend-penalties');
+
+  const metrics = computeActivityRingMetrics({
+    points: state.user?.points || 0,
+    penalties: state.user?.penalties || 0,
+    attendanceLogs: state.myAttendanceLogs || [],
+    hasUser: Boolean(state.user?.uid)
+  });
+
   if (ringPts) {
-    ringPts.style.strokeDashoffset = ptsOffset;
-    ringPts.style.opacity = ptsOpacity;
+    ringPts.style.strokeDashoffset = metrics.ptsOffset;
+    ringPts.style.opacity = metrics.ptsOpacity;
   }
   if (ringPen) {
-    ringPen.style.strokeDashoffset = penOffset;
-    ringPen.style.opacity = penOpacity;
+    ringPen.style.strokeDashoffset = metrics.penOffset;
+    ringPen.style.opacity = metrics.penOpacity;
   }
-
-  const quotasProgress = attendancePct / 100;
-  const quotasOffset = 188.49 * (1 - quotasProgress);
   if (ringQuotas) {
-    ringQuotas.style.strokeDashoffset = quotasOffset;
-    ringQuotas.style.opacity = 1;
+    ringQuotas.style.strokeDashoffset = metrics.quotasOffset;
+    ringQuotas.style.opacity = metrics.quotasOpacity;
   }
 
-  if (centerPts) centerPts.textContent = netPoints;
-  if (legPts) legPts.textContent = `${P} pts`;
-  if (legQuotas) legQuotas.textContent = `${attendancePct}%`;
-  if (legPen) legPen.textContent = `${Pen} pts`;
+  if (centerPts) centerPts.textContent = metrics.netPoints;
+  if (legPts) legPts.textContent = `${metrics.P} pts`;
+  if (legQuotas) {
+    legQuotas.textContent = metrics.attendanceLabel;
+    legQuotas.style.opacity = metrics.hasAttendance ? '1' : '0.55';
+    legQuotas.className = metrics.hasAttendance
+      ? 'font-bold font-mono text-emerald-400'
+      : 'font-semibold font-mono text-emerald-400 text-[11px]';
+  }
+  if (dotQuotas) {
+    dotQuotas.style.opacity = metrics.hasAttendance ? '1' : '0.45';
+  }
+  if (legPen) legPen.textContent = `${metrics.Pen} pts`;
 }
 
 function renderHomeDueTasks() {
@@ -28878,14 +28978,19 @@ function attachEventHandlers() {
     sideMenuReloadBtn.onclick = () => handleReloadApp();
   }
 
+  const sideMenuResetBtn = document.getElementById('sideMenuResetBtn');
+  if (sideMenuResetBtn) {
+    sideMenuResetBtn.onclick = () => handleResetAppData();
+  }
+
   const sideMenuSyncBtn = document.getElementById('sideMenuSyncBtn');
   if (sideMenuSyncBtn) {
-    sideMenuSyncBtn.onclick = () => handleForceSyncData();
+    sideMenuSyncBtn.onclick = () => handleResetAppData();
   }
 
   const sideMenuRefreshBtn = document.getElementById('sideMenuRefreshBtn');
   if (sideMenuRefreshBtn) {
-    sideMenuRefreshBtn.onclick = () => handleForceSyncData();
+    sideMenuRefreshBtn.onclick = () => handleResetAppData();
   }
 
   const drawerBtnWaiver = document.getElementById('drawer-btn-waiver');
@@ -29235,35 +29340,127 @@ function dismissLoader() {
   }
 }
 
+let _pendingWaitingSw = null;
+let _swUpdateAccepted = false;
+let _updateToastEl = null;
+
+async function activateWaitingSwAndReload(worker) {
+  if (_swUpdateAccepted) return;
+  _swUpdateAccepted = true;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(OFFLINE_CACHE_KEY);
+    }
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys.map((key) => {
+          const m = String(key).match(/^coc-media-cache-v(\d+\.\d+\.\d+)$/i);
+          // Delete old and current version caches while keeping the newly-installed waiting SW cache intact for instant offline use
+          if (!m || compareSemverStrings(m[1], APP_VERSION) <= 0) {
+            return caches.delete(key).catch(() => {});
+          }
+          return Promise.resolve();
+        })
+      );
+    }
+  } catch (e) {}
+
+  try {
+    if (worker && typeof worker.postMessage === 'function') {
+      worker.postMessage('skipWaiting');
+    }
+  } catch (e) {}
+
+  // Fallback reload if controllerchange already completed or took over
+  setTimeout(() => {
+    if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+      window.location.reload();
+    }
+  }, 1200);
+}
+
+function promptSwUpdateToast(waitingWorker = null) {
+  if (!waitingWorker) return;
+  _pendingWaitingSw = waitingWorker;
+  if (_updateToastEl && _updateToastEl.parentNode) return;
+
+  const container = typeof document !== 'undefined' ? document.getElementById('toast-container') : null;
+  if (!container) return;
+
+  const toastEl = document.createElement('div');
+  toastEl.className = 'toast toast-update';
+  toastEl.innerHTML = `
+    <svg class="w-4 h-4 text-[#0A84FF] stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
+      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+      <path d="M3 3v5h5"></path>
+      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+      <path d="M16 16h5v5"></path>
+    </svg>
+    <span class="flex-1 min-w-0 truncate">تحديث جديد متاح للتطبيق</span>
+    <button type="button" class="toast-update-btn">تحديث الآن</button>
+    <button type="button" class="toast-update-dismiss" aria-label="Dismiss update notification">&times;</button>
+  `;
+
+  const updateBtn = toastEl.querySelector('.toast-update-btn');
+  const closeBtn = toastEl.querySelector('.toast-update-dismiss');
+
+  if (updateBtn) {
+    updateBtn.onclick = (e) => {
+      e.stopPropagation();
+      updateBtn.disabled = true;
+      updateBtn.textContent = 'جارٍ التحديث...';
+      activateWaitingSwAndReload(waitingWorker);
+    };
+  }
+  if (closeBtn) {
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismissToast(toastEl);
+      _updateToastEl = null;
+    };
+  }
+
+  _updateToastEl = toastEl;
+  container.appendChild(toastEl);
+}
+
 if ('serviceWorker' in navigator) {
   let appSwRegistration = null;
+  let lastSwCheckAt = Date.now();
 
   const registerAppServiceWorker = async () => {
     try {
+      purgeOlderSwCaches(APP_VERSION);
       appSwRegistration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
 
-      if (appSwRegistration && typeof appSwRegistration.update === 'function') {
-        appSwRegistration.update().catch(() => {});
+      if (appSwRegistration && appSwRegistration.waiting && navigator.serviceWorker.controller) {
+        promptSwUpdateToast(appSwRegistration.waiting);
       }
 
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && appSwRegistration && typeof appSwRegistration.update === 'function') {
-          appSwRegistration.update().catch(() => {});
+          const now = Date.now();
+          if (now - lastSwCheckAt > 30 * 60 * 1000) {
+            lastSwCheckAt = now;
+            appSwRegistration.update().catch(() => {});
+          }
         }
       });
 
       setInterval(() => {
         if (appSwRegistration && typeof appSwRegistration.update === 'function') {
+          lastSwCheckAt = Date.now();
           appSwRegistration.update().catch(() => {});
         }
-      }, 10 * 60 * 1000);
+      }, 30 * 60 * 1000);
 
       appSwRegistration.addEventListener('updatefound', () => {
         const newWorker = appSwRegistration.installing;
         if (newWorker) {
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              newWorker.postMessage('skipWaiting');
+              promptSwUpdateToast(newWorker);
             }
           });
         }
@@ -29324,8 +29521,9 @@ if ('serviceWorker' in navigator) {
   });
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!sessionStorage.getItem('sw_controller_reloaded')) {
-      sessionStorage.setItem('sw_controller_reloaded', 'true');
+    // Only reload when the user explicitly accepted an update (never auto-reload mid-session or on first install)
+    if (_swUpdateAccepted && !sessionStorage.getItem('sw_controller_reloaded')) {
+      try { sessionStorage.setItem('sw_controller_reloaded', 'true'); } catch (e) {}
       window.location.reload();
     }
   });
@@ -29348,72 +29546,116 @@ export async function fetchPublicLeaderboard() {
 }
 
 export function handleReloadApp() {
+  if (_pendingWaitingSw) {
+    activateWaitingSwAndReload(_pendingWaitingSw);
+    return;
+  }
   if (typeof window !== 'undefined' && window.location) {
-    window.location.reload(true);
+    window.location.reload();
   }
 }
 
-export async function handleForceSyncData() {
-  const btn = document.getElementById('sideMenuSyncBtn') || document.getElementById('sideMenuRefreshBtn');
-  if (btn && btn.dataset.syncing === 'true') return;
+export async function handleResetAppData() {
+  const btn = document.getElementById('sideMenuResetBtn') || document.getElementById('sideMenuSyncBtn') || document.getElementById('sideMenuRefreshBtn');
+  if (btn && btn.dataset.resetting === 'true') return;
 
-  const iconWrap = btn?.querySelector('.side-menu-sync-icon, .side-menu-refresh-icon');
-  const labelEl = btn?.querySelector('.sync-btn-label, .refresh-btn-label');
-  const originalLabel = labelEl ? labelEl.textContent : 'Force Sync Data';
+  closeDrawer();
+
+  const confirmed = await confirmSheet({
+    title: 'Reset App Data?',
+    message: 'This will sign out of your account on this device and wipe all local caches, offline storage, and saved preferences as if opening the app for the first time. Your server data remains 100% safe.',
+    confirmLabel: 'Reset Everything',
+    destructive: true
+  });
+  if (!confirmed) return;
 
   if (btn) {
-    btn.dataset.syncing = 'true';
-    if (iconWrap) iconWrap.classList.add('spin-anim');
-    if (labelEl) labelEl.textContent = 'Syncing...';
+    btn.dataset.resetting = 'true';
+    btn.disabled = true;
   }
 
+  _isResettingAppData = true;
+  if (_persistTimer) {
+    clearTimeout(_persistTimer);
+    _persistTimer = null;
+  }
+
+  toast('Resetting local app data & caches...', 'info');
+
   try {
-    initFirestoreListeners();
-    await initServerClock().catch(() => {});
+    try { listeners.clear(); } catch (e) {}
 
-    renderLeaderboard();
-    renderTasks();
-    renderAttendanceView();
-    renderHomeBroadcastBanner();
-    mergeAndRenderNotifications();
-
-    if (state.user?.uid) {
-      updateProfileUI();
-      updateHeroStats();
-      renderProfileSubmissions();
-      renderProfileAttendance();
-      renderProfileTransactions();
+    if (messaging) {
+      await deleteToken(messaging).catch(() => {});
+    }
+    if (auth) {
+      await signOut(auth).catch(() => {});
     }
 
-    if (isCurrentUserAdmin()) {
-      renderAdminTasks();
-      renderAdminSessions();
-      renderAdminBroadcasts();
-      renderAdminWaivers();
-      renderAdminMembers();
-      renderAdminMissedTasks();
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      const cacheKeys = await caches.keys().catch(() => []);
+      await Promise.all(cacheKeys.map(k => caches.delete(k).catch(() => {})));
     }
 
-    persistToLocalCache(true);
-
-    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistration().then(reg => reg?.update()).catch(() => {});
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && typeof navigator.serviceWorker.getRegistrations === 'function') {
+      const regs = await navigator.serviceWorker.getRegistrations().catch(() => []);
+      await Promise.all(regs.map(r => r.unregister().catch(() => {})));
     }
-    toast('All real-time listeners re-synchronized & up to date', 'success');
+
+    try { if (typeof localStorage !== 'undefined') localStorage.clear(); } catch (e) {}
+    try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
+
+    if (typeof indexedDB !== 'undefined') {
+      const dbNames = new Set([
+        'coc_whats_new_drafts',
+        'firebaseLocalStorageDb',
+        'firebase-heartbeat-database',
+        'firebase-installations-database',
+        'firebase-messaging-database',
+        'firestore/[DEFAULT]/coc-media-team/main'
+      ]);
+      if (typeof indexedDB.databases === 'function') {
+        try {
+          const dbs = await indexedDB.databases();
+          if (Array.isArray(dbs)) {
+            dbs.forEach(d => { if (d && d.name) dbNames.add(d.name); });
+          }
+        } catch (e) {}
+      }
+      await Promise.race([
+        Promise.all(
+          Array.from(dbNames).map(name => new Promise((resolve) => {
+            try {
+              const req = indexedDB.deleteDatabase(name);
+              req.onsuccess = () => resolve();
+              req.onerror = () => resolve();
+              req.onblocked = () => resolve();
+            } catch (e) {
+              resolve();
+            }
+          }))
+        ),
+        new Promise(resolve => setTimeout(resolve, 1200))
+      ]);
+    }
   } catch (err) {
-    console.warn('Force sync error:', err);
-    toast('Sync failed: ' + (err.message || 'Network error'), 'error');
-  } finally {
-    if (btn) {
-      btn.dataset.syncing = 'false';
-      if (iconWrap) iconWrap.classList.remove('spin-anim');
-      if (labelEl) labelEl.textContent = originalLabel;
+    console.warn('Reset app data warning:', err);
+  }
+
+  if (typeof window !== 'undefined' && window.location) {
+    const cleanHref = (window.location.origin && window.location.pathname)
+      ? `${window.location.origin}${window.location.pathname}`
+      : './';
+    if (typeof window.location.replace === 'function') {
+      window.location.replace(cleanHref);
+    } else if (typeof window.location.reload === 'function') {
+      window.location.reload();
     }
-    closeDrawer();
   }
 }
 
-export const handleManualDataRefresh = handleForceSyncData;
+export const handleForceSyncData = handleResetAppData;
+export const handleManualDataRefresh = handleResetAppData;
 
 window.addEventListener('DOMContentLoaded', () => {
   initErrorBoundary();
@@ -29482,6 +29724,7 @@ if (typeof window !== 'undefined') {
   window.initSheetDragGestures = initSheetDragGestures;
   window.showNotificationToast = showNotificationToast;
   window.handleReloadApp = handleReloadApp;
+  window.handleResetAppData = handleResetAppData;
   window.handleForceSyncData = handleForceSyncData;
   window.handleManualDataRefresh = handleManualDataRefresh;
   window.fetchPublicLeaderboard = fetchPublicLeaderboard;

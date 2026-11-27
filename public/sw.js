@@ -1,11 +1,12 @@
-const CACHE_VERSION = 'v3.2.8';
-const CACHE_NAME = 'coc-media-cache-v3.2.8';
+const CACHE_VERSION = 'v3.2.9';
+const CACHE_NAME = 'coc-media-cache-v3.2.9';
+const APP_SEMVER = CACHE_VERSION.replace(/^v/i, '');
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
-  './styles.css',
-  './app.js',
-  './manifest.json',
+  `./styles.css?v=${APP_SEMVER}`,
+  `./app.js?v=${APP_SEMVER}`,
+  `./manifest.json?v=${APP_SEMVER}`,
   './image_ad59c0.jpg',
   './pwa-192x192.png',
   './pwa-512x512.png',
@@ -14,9 +15,25 @@ const ASSETS_TO_PRECACHE = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_PRECACHE).catch(() => { });
-    }).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await Promise.all(
+        ASSETS_TO_PRECACHE.map((assetUrl) =>
+          fetch(assetUrl, { cache: 'reload' })
+            .then((res) => {
+              if (res && res.status === 200) {
+                return cache.put(assetUrl, res);
+              }
+            })
+            .catch(() => { })
+        )
+      );
+      // Only activate immediately on a brand-new install (no existing controller).
+      // When updating an already-installed app, stay in `waiting` until the user taps
+      // "Update Now" or reopens the app next session so we never interrupt mid-use.
+      if (!self.registration || !self.registration.active) {
+        await self.skipWaiting();
+      }
+    })
   );
 });
 
@@ -35,8 +52,17 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data === 'skipWaiting') {
+  const msg = event.data;
+  if (msg === 'skipWaiting' || (msg && msg.type === 'SKIP_WAITING')) {
     self.skipWaiting();
+    return;
+  }
+  if (msg === 'PURGE_OLD_CACHES' || (msg && msg.type === 'PURGE_OLD_CACHES')) {
+    event.waitUntil(
+      caches.keys().then((keys) =>
+        Promise.all(keys.map((k) => (k !== CACHE_NAME ? caches.delete(k) : Promise.resolve())))
+      )
+    );
   }
 });
 
@@ -175,18 +201,17 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin === 'https://www.gstatic.com' && url.pathname.includes('/firebasejs/10.8.1/')) {
     event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        return fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return networkResponse;
-        });
-      })
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) return cachedResponse;
+          return fetch(event.request).then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              cache.put(event.request, networkResponse.clone());
+            }
+            return networkResponse;
+          });
+        })
+      )
     );
     return;
   }
@@ -198,17 +223,17 @@ self.addEventListener('fetch', (event) => {
 
   if (isImageOrFont) {
     event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        const fetchPromise = fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return networkResponse;
-        }).catch(() => null);
-
-        return cachedResponse || fetchPromise;
-      })
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) return cachedResponse;
+          return fetch(event.request).then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              cache.put(event.request, networkResponse.clone());
+            }
+            return networkResponse;
+          }).catch(() => caches.match(event.request, { ignoreSearch: true }));
+        })
+      )
     );
     return;
   }
@@ -218,24 +243,23 @@ self.addEventListener('fetch', (event) => {
     url.pathname === '/' ||
     url.pathname === './';
 
-  // STRICT NETWORK-FIRST STRATEGY FOR NAVIGATION TO PREVENT STALE BOOT/LOADING
   if (isNavigation) {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: 'no-cache' })
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', clone));
           }
           return networkResponse;
         })
         .catch(() => {
-          return caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
-            if (cachedResponse) return cachedResponse;
-            return caches.match('./index.html', { ignoreSearch: true }).then((indexFallback) => {
-              return indexFallback || caches.match('./');
-            });
-          });
+          return caches.open(CACHE_NAME).then((cache) =>
+            cache.match('./index.html').then((exactIndex) => {
+              if (exactIndex) return exactIndex;
+              return caches.match('./index.html', { ignoreSearch: true }).then((fallback) => fallback || caches.match('./'));
+            })
+          );
         })
     );
     return;
@@ -244,22 +268,35 @@ self.addEventListener('fetch', (event) => {
   const isSameOriginCode = url.origin === self.location.origin;
 
   if (isSameOriginCode) {
-    event.respondWith(
-      caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
-        const networkPromise = fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              const clone = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-            }
-            return networkResponse;
-          })
-          .catch(() => {
-            if (cachedResponse) return cachedResponse;
-            return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
-          });
+    const requestedVersion = url.searchParams.get('v');
+    const isVersionMismatch = Boolean(requestedVersion && requestedVersion !== APP_SEMVER);
 
-        return cachedResponse || networkPromise;
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => {
+        // Never serve an older cached JS/CSS bundle when HTML requests a newer `?v=` version!
+        if (isVersionMismatch) {
+          return fetch(event.request, { cache: 'reload' }).catch(() =>
+            cache.match(event.request).then((exact) => exact || caches.match(event.request, { ignoreSearch: true }))
+          );
+        }
+
+        // Exact-URL match inside current version's cache: instant boot without reloading or re-downloading!
+        return cache.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) return cachedResponse;
+          return fetch(event.request, { cache: 'no-cache' })
+            .then((networkResponse) => {
+              if (networkResponse && networkResponse.status === 200) {
+                cache.put(event.request, networkResponse.clone());
+              }
+              return networkResponse;
+            })
+            .catch(() =>
+              caches.match(event.request, { ignoreSearch: true }).then((offlineFallback) => {
+                if (offlineFallback) return offlineFallback;
+                return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
+              })
+            );
+        });
       })
     );
     return;

@@ -5,11 +5,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>COC Media Team v3.2.8</title>
+  <title>COC Media Team v3.2.9</title>
   <meta name="description"
     content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
 
-  <link rel="manifest" href="./manifest.json?v=3.2.8" />
+  <link rel="manifest" href="./manifest.json?v=3.2.9" />
   <meta name="theme-color" content="#000000" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -79,7 +79,7 @@
     }
   </script>
 
-  <link rel="stylesheet" href="./styles.css?v=3.2.8" />
+  <link rel="stylesheet" href="./styles.css?v=3.2.9" />
 
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
   <script defer src="https://unpkg.com/lucide@latest"></script>
@@ -125,7 +125,7 @@
     <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
       <span id="loader-app-name">COC Media Team</span>
       <span id="loader-app-version"
-        class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.2.8</span>
+        class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.2.9</span>
     </div>
     <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...
     </div>
@@ -237,7 +237,7 @@
               class="w-8 h-8 rounded-full object-cover border border-white/20 shadow-sm" />
             <span id="header-app-title" class="font-bold text-sm tracking-tight text-white">COC Media</span>
             <span id="header-app-version"
-              class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.2.8</span>
+              class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.2.9</span>
           </div>
 
           <button type="button" id="btn-open-notifications" class="floating-glass-btn relative"
@@ -306,14 +306,14 @@
               <svg class="w-full h-full -rotate-90 transform" viewBox="0 0 100 100">
                 <circle cx="50" cy="50" r="40" class="summary-ring-bg stroke-amber-500/20 fill-none" stroke-width="7" />
                 <circle id="ring-points" cx="50" cy="50" r="40" class="summary-ring-circle stroke-amber-400 fill-none"
-                  stroke-width="7" stroke-dasharray="251.32" stroke-dashoffset="251.32" />
+                  stroke-width="7" stroke-dasharray="251.32" stroke-dashoffset="0" style="opacity: 0.35;" />
                 <circle cx="50" cy="50" r="30" class="summary-ring-bg stroke-emerald-500/20 fill-none"
                   stroke-width="7" />
                 <circle id="ring-quotas" cx="50" cy="50" r="30" class="summary-ring-circle stroke-emerald-400 fill-none"
-                  stroke-width="7" stroke-dasharray="188.49" stroke-dashoffset="188.49" />
+                  stroke-width="7" stroke-dasharray="188.49" stroke-dashoffset="0" style="opacity: 0.35;" />
                 <circle cx="50" cy="50" r="20" class="summary-ring-bg stroke-rose-500/20 fill-none" stroke-width="7" />
                 <circle id="ring-penalties" cx="50" cy="50" r="20" class="summary-ring-circle stroke-rose-400 fill-none"
-                  stroke-width="7" stroke-dasharray="125.66" stroke-dashoffset="125.66" />
+                  stroke-width="7" stroke-dasharray="125.66" stroke-dashoffset="0" style="opacity: 0.35;" />
               </svg>
               <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <span id="ring-center-pts" class="text-xs font-bold font-mono text-white">0</span>
@@ -331,10 +331,10 @@
               </div>
               <div class="flex items-center justify-between text-xs">
                 <div class="flex items-center gap-1.5 min-w-0">
-                  <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 flex-shrink-0"></span>
+                  <span id="ring-dot-quotas" class="w-2.5 h-2.5 rounded-full bg-emerald-400 flex-shrink-0" style="opacity: 0.45;"></span>
                   <span class="text-neutral-300 font-medium truncate">Attendance</span>
                 </div>
-                <span id="ring-legend-quotas" class="font-bold font-mono text-emerald-400">0%</span>
+                <span id="ring-legend-quotas" class="font-semibold font-mono text-emerald-400 text-[11px]" style="opacity: 0.55;">No Attendance</span>
               </div>
               <div class="flex items-center justify-between text-xs">
                 <div class="flex items-center gap-1.5 min-w-0">
@@ -603,7 +603,7 @@
 
         <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
           <div>COC Media Team <span id="profile-footer-version"
-              class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.2.8</span>
+              class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.2.9</span>
           </div>
           <div class="text-[11px] text-neutral-500">Official Production Release</div>
         </div>
@@ -754,20 +754,25 @@
           </svg>
         </button>
 
-        <button id="sideMenuSyncBtn" type="button"
+        <button id="sideMenuResetBtn" type="button"
           class="w-full drawer-row border-b border-white/5 text-left hover:bg-white/[0.03] transition">
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-3 min-w-0">
             <div
-              class="drawer-icon-sync w-8 h-8 rounded-lg flex items-center justify-center shrink-0 side-menu-sync-icon">
+              class="drawer-icon-reset w-8 h-8 rounded-lg flex items-center justify-center shrink-0 side-menu-reset-icon">
               <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
-                <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
-                <path d="M12 12v9"></path>
-                <path d="m8 17 4 4 4-4"></path>
+                <path d="M3 6h18"></path>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
               </svg>
             </div>
-            <span class="text-xs font-semibold text-white sync-btn-label">Force Sync Data</span>
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-[#FF453A] reset-btn-label">Reset App Data</div>
+              <div class="text-[10px] text-neutral-400 truncate">Clear local caches &amp; sign out</div>
+            </div>
           </div>
-          <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none shrink-0" stroke-width="1.75" viewBox="0 0 24 24">
             <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
         </button>
@@ -837,7 +842,7 @@
           </div>
           <div class="flex items-center gap-1.5">
             <span id="drawer-footer-version"
-              class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.2.8</span>
+              class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.2.9</span>
             <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
               <polyline points="9 18 15 12 9 6"></polyline>
             </svg>
@@ -2453,7 +2458,7 @@
     }
   </script>
 
-  <script type="module" src="./app.js?v=3.2.8"></script>
+  <script type="module" src="./app.js?v=3.2.9"></script>
 
   <!-- Dedicated Session Breakdown Modal (v3.1.1) -->
   <div id="modal-session-breakdown" class="modal-backdrop" role="dialog" aria-modal="true" style="display: none;">
