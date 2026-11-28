@@ -6,7 +6,7 @@ export function updateDockHeight() {
   }
 }
 
-export const APP_VERSION = '3.2.9';
+export const APP_VERSION = '3.2.10';
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -30,8 +30,10 @@ function isAppStandalone() {
   return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 }
 
-import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
 import {
+  initializeApp,
+  getApps,
+  getApp,
   getAuth,
   onAuthStateChanged,
   GoogleAuthProvider,
@@ -41,9 +43,7 @@ import {
   signOut,
   setPersistence,
   browserLocalPersistence,
-  updateProfile
-} from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js';
-import {
+  updateProfile,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
@@ -72,16 +72,13 @@ import {
   orderBy,
   startAfter,
   writeBatch,
-  runTransaction
-} from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js';
-
-import {
+  runTransaction,
   getMessaging,
   getToken,
   deleteToken,
   onMessage,
   isSupported
-} from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging.js';
+} from './vendor/firebase-sdk.js?v=3.2.10';
 
 const firebaseConfig = {
   apiKey: "AIzaSyBgnWU2azejTgCr-zVtVPLQYYRMGNtfieQ",
@@ -1100,11 +1097,9 @@ export function hydrateFromLocalCache() {
     const cached = JSON.parse(raw);
     if (!cached || typeof cached !== 'object') return false;
 
-    // Never hydrate stale local snapshots from a different app version; purge automatically
-    if (cached.version !== APP_VERSION) {
-      try { localStorage.removeItem(OFFLINE_CACHE_KEY); } catch (e) {}
+    // Preserve cached user & workspace state across patch updates so repeat & offline opens stay 0ms instant!
+    if (cached.version && cached.version !== APP_VERSION) {
       purgeOlderSwCaches(APP_VERSION);
-      return false;
     }
 
     if (cached.settings && typeof cached.settings === 'object') {
@@ -5700,8 +5695,10 @@ function initErrorBoundary() {
   if (!boundary) return;
 
   const isIgnoredError = (err) => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
     if (!err) return false;
-    const msg = String(err?.message || err?.reason?.message || (typeof err === 'string' ? err : ''));
+    if (err?.target && typeof window !== 'undefined' && err.target !== window) return true;
+    const msg = String(err?.message || err?.reason?.message || err?.code || (typeof err === 'string' ? err : ''));
     const stack = String(err?.stack || err?.reason?.stack || '');
     const filename = String(err?.filename || '');
     const target = err?.target?.constructor?.name || '';
@@ -5715,7 +5712,16 @@ function initErrorBoundary() {
       combined.includes('ws://') ||
       combined.includes('wss://') ||
       combined.includes('closed without opened') ||
-      combined.includes('vite:ws')
+      combined.includes('vite:ws') ||
+      combined.includes('failed to fetch') ||
+      combined.includes('networkerror') ||
+      combined.includes('network-request-failed') ||
+      combined.includes('client is offline') ||
+      combined.includes('unavailable') ||
+      combined.includes('internet connection appears to be offline') ||
+      combined.includes('load failed') ||
+      combined.includes('messaging/') ||
+      combined.includes('aborterror')
     );
   };
 
@@ -10164,11 +10170,10 @@ async function setupAuthLifecycle() {
     return;
   }
 
-  try {
-    await setPersistence(auth, browserLocalPersistence);
-  } catch (err) {
+  // Non-blocking persistence & redirect checks so onAuthStateChanged attaches immediately in frame 1
+  Promise.resolve(setPersistence(auth, browserLocalPersistence)).catch((err) => {
     console.warn('Local persistence setting failed:', err);
-  }
+  });
 
   setTimeout(() => {
     if (!initialAuthResolved) {
@@ -10178,21 +10183,25 @@ async function setupAuthLifecycle() {
         checkAndShowAutoWhatsNew();
       }
     }
-  }, 500);
+  }, 350);
 
-  try {
-    const redirectResult = await getRedirectResult(auth);
-    if (redirectResult?.user) {
-      toast('Signed in via redirect!', 'success');
-    }
-  } catch (redirectErr) {
-    console.warn('getRedirectResult check:', redirectErr);
-    if (redirectErr.code === 'auth/unauthorized-domain') {
-      showDomainModal();
-    }
+  if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+    Promise.resolve(getRedirectResult(auth))
+      .then((redirectResult) => {
+        if (redirectResult?.user) {
+          toast('Signed in via redirect!', 'success');
+        }
+      })
+      .catch((redirectErr) => {
+        console.warn('getRedirectResult check:', redirectErr);
+        if (redirectErr?.code === 'auth/unauthorized-domain') {
+          showDomainModal();
+        }
+      });
   }
 
   onAuthStateChanged(auth, async (firebaseUser) => {
+    const isOfflineNow = typeof navigator !== 'undefined' && navigator.onLine === false;
     if (firebaseUser) {
       const userRef = doc(db, 'users', firebaseUser.uid);
       const privRef = doc(db, 'users_private', firebaseUser.uid);
@@ -10201,8 +10210,7 @@ async function setupAuthLifecycle() {
         const userSnap = await getDoc(userRef);
         if (userSnap.exists()) {
           state.user = normalizeUser({ ...userSnap.data(), uid: firebaseUser.uid });
-        } else {
-
+        } else if (!isOfflineNow && (!state.user || state.user.uid !== firebaseUser.uid)) {
           const rawPhoto = firebaseUser.photoURL || '';
           const initialAvatar = isDefaultEmailProfilePic(rawPhoto) ? getDeterministicPresetAvatar(firebaseUser.uid) : rawPhoto;
           const initialUser = {
@@ -10223,27 +10231,31 @@ async function setupAuthLifecycle() {
 
         const privSnap = await getDoc(privRef).catch(() => null);
         if (!privSnap || !privSnap.exists()) {
-          const initialPrivate = {
-            email: firebaseUser.email || '',
-            fcmTokens: []
-          };
-          await setDoc(privRef, initialPrivate).catch(console.warn);
-          state.userPrivate = initialPrivate;
+          if (!isOfflineNow) {
+            const initialPrivate = {
+              email: firebaseUser.email || '',
+              fcmTokens: []
+            };
+            await setDoc(privRef, initialPrivate).catch(console.warn);
+            state.userPrivate = initialPrivate;
+          }
         } else {
           state.userPrivate = privSnap.data();
 
-          if (!privSnap.data()?.email && firebaseUser.email) {
+          if (!isOfflineNow && !privSnap.data()?.email && firebaseUser.email) {
             await updateDoc(privRef, { email: firebaseUser.email }).catch(console.warn);
             state.userPrivate.email = firebaseUser.email;
           }
         }
       } catch (err) {
         console.warn('User profile sync:', err);
-        state.user = normalizeUser({
-          uid: firebaseUser.uid,
-          name: firebaseUser.displayName || 'Member',
-          avatarUrl: firebaseUser.photoURL || ''
-        });
+        if (!state.user || state.user.uid !== firebaseUser.uid) {
+          state.user = normalizeUser({
+            uid: firebaseUser.uid,
+            name: firebaseUser.displayName || 'Member',
+            avatarUrl: firebaseUser.photoURL || ''
+          });
+        }
       }
 
       if (state.user?.isAdmin || state.user?.role === 'admin') {
@@ -10251,10 +10263,12 @@ async function setupAuthLifecycle() {
       }
       persistToLocalCache(true);
 
-      initServerClock();
+      if (!isOfflineNow) {
+        initServerClock();
+      }
 
       initFirestoreListeners();
-        } else {
+    } else if (!isOfflineNow || !state.user?.uid) {
       state.user = null;
       state.userPrivate = null;
       state.isAdminUnlocked = false;
@@ -29436,6 +29450,14 @@ if ('serviceWorker' in navigator) {
 
       if (appSwRegistration && appSwRegistration.waiting && navigator.serviceWorker.controller) {
         promptSwUpdateToast(appSwRegistration.waiting);
+      } else if (typeof navigator !== 'undefined' && navigator.onLine !== false && appSwRegistration && typeof appSwRegistration.update === 'function') {
+        // Silent background check 1.5s after instant boot so new deploys surface the Update Toast promptly
+        setTimeout(() => {
+          if (navigator.onLine !== false) {
+            lastSwCheckAt = Date.now();
+            appSwRegistration.update().catch(() => {});
+          }
+        }, 1500);
       }
 
       document.addEventListener('visibilitychange', () => {

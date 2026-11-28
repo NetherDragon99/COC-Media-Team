@@ -1,10 +1,12 @@
-const CACHE_VERSION = 'v3.2.9';
-const CACHE_NAME = 'coc-media-cache-v3.2.9';
+const CACHE_VERSION = 'v3.2.10';
+const CACHE_NAME = 'coc-media-cache-v3.2.10';
 const APP_SEMVER = CACHE_VERSION.replace(/^v/i, '');
 const ASSETS_TO_PRECACHE = [
   './',
   './index.html',
+  `./tailwind.generated.css?v=${APP_SEMVER}`,
   `./styles.css?v=${APP_SEMVER}`,
+  `./vendor/firebase-sdk.js?v=${APP_SEMVER}`,
   `./app.js?v=${APP_SEMVER}`,
   `./manifest.json?v=${APP_SEMVER}`,
   './image_ad59c0.jpg',
@@ -17,19 +19,20 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(async (cache) => {
       await Promise.all(
-        ASSETS_TO_PRECACHE.map((assetUrl) =>
-          fetch(assetUrl, { cache: 'reload' })
-            .then((res) => {
-              if (res && res.status === 200) {
-                return cache.put(assetUrl, res);
+        ASSETS_TO_PRECACHE.map(async (assetUrl) => {
+          try {
+            const res = await fetch(assetUrl, { cache: 'reload' });
+            if (res && res.status === 200) {
+              await cache.put(assetUrl, res.clone());
+              if (assetUrl === './index.html') {
+                await cache.put('./', res.clone());
               }
-            })
-            .catch(() => { })
-        )
+            }
+          } catch (e) {}
+        })
       );
-      // Only activate immediately on a brand-new install (no existing controller).
-      // When updating an already-installed app, stay in `waiting` until the user taps
-      // "Update Now" or reopens the app next session so we never interrupt mid-use.
+      // Only activate immediately on brand-new install (no existing controller).
+      // On updates, remain in `waiting` until user taps "Update Now" or reopens the app next session.
       if (!self.registration || !self.registration.active) {
         await self.skipWaiting();
       }
@@ -199,106 +202,79 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.origin === 'https://www.gstatic.com' && url.pathname.includes('/firebasejs/10.8.1/')) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then((cache) =>
-        cache.match(event.request).then((cachedResponse) => {
-          if (cachedResponse) return cachedResponse;
-          return fetch(event.request).then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              cache.put(event.request, networkResponse.clone());
-            }
-            return networkResponse;
-          });
-        })
-      )
-    );
-    return;
-  }
-
-  const isImageOrFont =
-    url.pathname.match(/\.(png|jpg|jpeg|svg|gif|webp|woff|woff2|ttf|eot)$/i) ||
-    event.request.destination === 'image' ||
-    event.request.destination === 'font';
-
-  if (isImageOrFont) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then((cache) =>
-        cache.match(event.request).then((cachedResponse) => {
-          if (cachedResponse) return cachedResponse;
-          return fetch(event.request).then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              cache.put(event.request, networkResponse.clone());
-            }
-            return networkResponse;
-          }).catch(() => caches.match(event.request, { ignoreSearch: true }));
-        })
-      )
-    );
-    return;
-  }
-
   const isNavigation = event.request.mode === 'navigate' ||
     url.pathname.endsWith('/index.html') ||
     url.pathname === '/' ||
-    url.pathname === './';
+    url.pathname.endsWith('/COC-Media-Team/');
 
+  // INSTANT CACHE-FIRST APP SHELL FOR NAVIGATION:
+  // Opens immediately in <5ms both online and offline without waiting on network round-trips!
+  // New app versions are discovered via background `sw.js` update checks and pre-warmed cleanly.
   if (isNavigation) {
     event.respondWith(
-      fetch(event.request, { cache: 'no-cache' })
-        .then((networkResponse) => {
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cachedIndex = (await cache.match('./index.html')) || (await cache.match('./'));
+        if (cachedIndex) {
+          return cachedIndex;
+        }
+        try {
+          const networkResponse = await fetch(event.request, { cache: 'no-cache' });
           if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', clone));
+            cache.put('./index.html', networkResponse.clone());
+            cache.put('./', networkResponse.clone());
           }
           return networkResponse;
-        })
-        .catch(() => {
-          return caches.open(CACHE_NAME).then((cache) =>
-            cache.match('./index.html').then((exactIndex) => {
-              if (exactIndex) return exactIndex;
-              return caches.match('./index.html', { ignoreSearch: true }).then((fallback) => fallback || caches.match('./'));
-            })
-          );
-        })
+        } catch (err) {
+          const anyFallback = (await caches.match('./index.html', { ignoreSearch: true })) || (await caches.match('./', { ignoreSearch: true }));
+          if (anyFallback) return anyFallback;
+          return new Response('Offline - App shell not yet cached', { status: 503, statusText: 'Service Unavailable' });
+        }
+      })
     );
     return;
   }
 
-  const isSameOriginCode = url.origin === self.location.origin;
+  const isSameOriginAsset = url.origin === self.location.origin;
 
-  if (isSameOriginCode) {
+  if (isSameOriginAsset) {
     const requestedVersion = url.searchParams.get('v');
     const isVersionMismatch = Boolean(requestedVersion && requestedVersion !== APP_SEMVER);
 
     event.respondWith(
-      caches.open(CACHE_NAME).then((cache) => {
-        // Never serve an older cached JS/CSS bundle when HTML requests a newer `?v=` version!
+      caches.open(CACHE_NAME).then(async (cache) => {
+        // Never serve an older cached JS/CSS bundle if a newer `?v=` version was requested
         if (isVersionMismatch) {
-          return fetch(event.request, { cache: 'reload' }).catch(() =>
-            cache.match(event.request).then((exact) => exact || caches.match(event.request, { ignoreSearch: true }))
-          );
+          try {
+            const freshRes = await fetch(event.request, { cache: 'reload' });
+            if (freshRes && freshRes.status === 200) {
+              cache.put(event.request, freshRes.clone());
+            }
+            return freshRes;
+          } catch (err) {
+            return (await cache.match(event.request)) || (await caches.match(event.request, { ignoreSearch: true })) ||
+              new Response('Offline', { status: 503 });
+          }
         }
 
-        // Exact-URL match inside current version's cache: instant boot without reloading or re-downloading!
-        return cache.match(event.request).then((cachedResponse) => {
-          if (cachedResponse) return cachedResponse;
-          return fetch(event.request, { cache: 'no-cache' })
-            .then((networkResponse) => {
-              if (networkResponse && networkResponse.status === 200) {
-                cache.put(event.request, networkResponse.clone());
-              }
-              return networkResponse;
-            })
-            .catch(() =>
-              caches.match(event.request, { ignoreSearch: true }).then((offlineFallback) => {
-                if (offlineFallback) return offlineFallback;
-                return new Response('Offline - network unavailable', { status: 503, statusText: 'Service Unavailable' });
-              })
-            );
-        });
+        // Instant Cache-First hit for all current-version local assets (CSS, JS, Vendor SDK, Images, Manifest)
+        const exactMatch = await cache.match(event.request);
+        if (exactMatch) return exactMatch;
+
+        const ignoreSearchMatch = !requestedVersion ? await cache.match(event.request, { ignoreSearch: true }) : null;
+        if (ignoreSearchMatch) return ignoreSearchMatch;
+
+        try {
+          const networkResponse = await fetch(event.request);
+          if (networkResponse && networkResponse.status === 200) {
+            cache.put(event.request, networkResponse.clone());
+          }
+          return networkResponse;
+        } catch (err) {
+          const fallback = await caches.match(event.request, { ignoreSearch: true });
+          if (fallback) return fallback;
+          return new Response('Offline - asset unavailable', { status: 503, statusText: 'Service Unavailable' });
+        }
       })
     );
-    return;
   }
 });

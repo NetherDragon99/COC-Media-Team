@@ -1,5 +1,5 @@
 /**
- * CoC Media Team - Dedicated Serverless Backend (v3.2.9)
+ * CoC Media Team - Dedicated Serverless Backend (v3.2.10)
  * Unified Task & Attendance Watchdog, Server-Time Tier & Grace Engine, Canonical Ledger Sync,
  * Deduplicated 3-Stage Notifications, Background Maintenance Jobs & FCM v1 Web Push
  * Deployed on Google Apps Script via @google/clasp
@@ -70,7 +70,7 @@ function doGet(e) {
   ensureWatchdogTriggersInstalled();
   return ContentService.createTextOutput(JSON.stringify({
     status: "online",
-    version: "3.2.9",
+    version: "3.2.10",
     system: "CoC Media Unified Task & Attendance Backend Watchdog",
     timezone: CONFIG.TIMEZONE,
     timestamp: new Date().toISOString()

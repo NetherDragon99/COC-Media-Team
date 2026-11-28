@@ -5,11 +5,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>COC Media Team v3.2.9</title>
+  <title>COC Media Team v3.2.10</title>
   <meta name="description"
     content="Production-grade team task management, quota tracking, smart attendance & penalty engine, and competitive gamification platform." />
 
-  <link rel="manifest" href="./manifest.json?v=3.2.9" />
+  <link rel="manifest" href="./manifest.json?v=3.2.10" />
   <meta name="theme-color" content="#000000" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -21,6 +21,14 @@
 
   <script>
     window.__cocReloadApp = async function () {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        var eb = document.getElementById('global-error-boundary');
+        if (eb) {
+          eb.classList.add('hidden');
+          eb.style.display = 'none';
+        }
+        return;
+      }
       try {
         if ('serviceWorker' in navigator) {
           var regs = await navigator.serviceWorker.getRegistrations();
@@ -38,12 +46,23 @@
     };
     (function () {
       function shouldIgnore(e) {
-        var msg = (e && (e.message || (e.error && e.error.message))) || '';
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+        var msg = (e && (e.message || (e.error && e.error.message) || (e.reason && e.reason.message))) || '';
         var src = (e && e.filename) || '';
         var stack = (e && (e.stack || (e.reason && e.reason.stack))) || '';
         var target = (e && e.target && e.target.constructor && e.target.constructor.name) || '';
         var combined = (msg + ' ' + src + ' ' + stack + ' ' + target).toLowerCase();
-        return combined.indexOf('resizeobserver') !== -1 || combined.indexOf('websocket') !== -1 || combined.indexOf('@vite/client') !== -1 || combined.indexOf('closed without opened') !== -1;
+        return (
+          combined.indexOf('resizeobserver') !== -1 ||
+          combined.indexOf('websocket') !== -1 ||
+          combined.indexOf('@vite/client') !== -1 ||
+          combined.indexOf('closed without opened') !== -1 ||
+          combined.indexOf('failed to fetch') !== -1 ||
+          combined.indexOf('network-request-failed') !== -1 ||
+          combined.indexOf('networkerror') !== -1 ||
+          combined.indexOf('client is offline') !== -1 ||
+          combined.indexOf('unavailable') !== -1
+        );
       }
       window.addEventListener('error', function (event) {
         if (shouldIgnore(event) || shouldIgnore(event.error)) {
@@ -61,41 +80,22 @@
     })();
   </script>
 
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            appleBlue: '#0A84FF',
-            appleGreen: '#30D158',
-            appleRed: '#FF453A',
-            appleOrange: '#FF9F0A',
-            applePurple: '#BF5AF2'
-          }
-        }
-      }
-    }
-  </script>
-
-  <link rel="stylesheet" href="./styles.css?v=3.2.9" />
-
-  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
-  <script defer src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="./tailwind.generated.css?v=3.2.10" />
+  <link rel="stylesheet" href="./styles.css?v=3.2.10" />
 </head>
 
 <body class="selection:bg-[#0A84FF]/30 selection:text-white">
 
-  <div id="offline-banner" class="offline-banner hidden">
-    <svg class="w-4 h-4 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
+  <div id="offline-banner" class="offline-banner hidden" role="status" aria-live="polite">
+    <span class="offline-pill-dot" aria-hidden="true"></span>
+    <svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" stroke-width="2" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round"
         d="M1 1l22 22M16.72 11.06A10.94 10.94 0 0119 12.55M5 12.55a10.94 10.94 0 015.17-2.39M10.71 5.05A16 16 0 0122.58 9M1.42 9a15.91 15.91 0 014.7-2.88m3.42-.87A16.1 16.1 0 0112 5c.81 0 1.6.06 2.37.18M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
     </svg>
-    <span>You are currently offline. Changes will sync when reconnected.</span>
+    <span>Offline Mode &bull; Syncs automatically when online</span>
   </div>
 
-  <div id="global-error-boundary" class="error-boundary hidden">
+  <div id="global-error-boundary" class="error-boundary hidden" style="display: none;">
     <div
       class="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 mb-4">
       <svg class="w-8 h-8 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
@@ -115,22 +115,35 @@
 
   <div id="app-loader"
     style="position: fixed; inset: 0; background-color: #000000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.35s ease, visibility 0.35s ease;">
-    <div class="relative flex items-center justify-center mb-6">
+    <div class="relative flex items-center justify-center mb-6" style="width: 80px; height: 80px;">
       <div
         class="absolute -inset-4 bg-gradient-to-tr from-[#0A84FF]/30 to-[#FF9F0A]/30 rounded-full blur-xl animate-pulse">
       </div>
-      <img src="./image_ad59c0.jpg" alt="COC Media Team Logo"
+      <img src="./image_ad59c0.jpg" alt="COC Media Team Logo" width="80" height="80"
+        style="width: 80px; height: 80px; max-width: 80px; max-height: 80px; border-radius: 9999px; object-fit: cover;"
         class="relative w-20 h-20 rounded-full object-cover border-2 border-white/20 shadow-2xl" />
     </div>
     <div class="text-xl font-bold tracking-tight text-white mb-2 flex items-center gap-2">
       <span id="loader-app-name">COC Media Team</span>
       <span id="loader-app-version"
-        class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.2.9</span>
+        class="text-xs px-2 py-0.5 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] border border-[#0A84FF]/30 font-mono version-badge">v3.2.10</span>
     </div>
     <div class="text-xs text-neutral-400 mb-6 font-medium tracking-wide" id="loader-status-text">Loading workspace...
     </div>
     <div class="w-7 h-7 rounded-full border-2 border-white/10 border-t-[#0A84FF] animate-spin"></div>
   </div>
+  <script>
+    // 0ms Instant Boot: Hide cold-start loader immediately before first paint whenever cached app data exists
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('coc_offline_cache_v1')) {
+        var _instantLoader = document.getElementById('app-loader');
+        if (_instantLoader) {
+          _instantLoader.style.opacity = '0';
+          _instantLoader.style.display = 'none';
+        }
+      }
+    } catch (e) {}
+  </script>
 
   <div id="mode-switch-loader" class="mode-switch-loader hidden" style="display: none;" aria-live="polite"
     aria-busy="true">
@@ -153,7 +166,10 @@
       </div>
       <button type="button" id="btn-close-announcement" class="text-neutral-400 hover:text-white p-1"
         aria-label="Dismiss">
-        <i data-lucide="x" class="w-4 h-4"></i>
+        <svg class="w-4 h-4 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
       </button>
     </div>
 
@@ -237,7 +253,7 @@
               class="w-8 h-8 rounded-full object-cover border border-white/20 shadow-sm" />
             <span id="header-app-title" class="font-bold text-sm tracking-tight text-white">COC Media</span>
             <span id="header-app-version"
-              class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.2.9</span>
+              class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300 font-mono version-badge">v3.2.10</span>
           </div>
 
           <button type="button" id="btn-open-notifications" class="floating-glass-btn relative"
@@ -603,7 +619,7 @@
 
         <div class="pt-2 pb-6 text-center space-y-1 text-xs text-neutral-400">
           <div>COC Media Team <span id="profile-footer-version"
-              class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.2.9</span>
+              class="font-mono text-neutral-300 version-badge cursor-pointer hover:text-white transition">v3.2.10</span>
           </div>
           <div class="text-[11px] text-neutral-500">Official Production Release</div>
         </div>
@@ -665,7 +681,7 @@
   <aside id="side-drawer" role="dialog" aria-modal="true" aria-label="Settings Menu">
     <div class="p-4 border-b border-white/10 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <img src="./image_ad59c0.jpg" alt="Logo" class="w-6 h-6 rounded-full object-cover" />
+        <img src="./image_ad59c0.jpg" alt="Logo" width="24" height="24" style="width: 24px; height: 24px; max-width: 24px; max-height: 24px;" class="w-6 h-6 rounded-full object-cover" />
         <span class="ios-headline text-white">Settings</span>
       </div>
       <button type="button" id="btn-close-drawer"
@@ -842,7 +858,7 @@
           </div>
           <div class="flex items-center gap-1.5">
             <span id="drawer-footer-version"
-              class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.2.9</span>
+              class="text-xs font-mono px-2 py-0.5 rounded-full bg-white/10 text-neutral-300 version-badge">v3.2.10</span>
             <svg class="w-4 h-4 text-neutral-500 stroke-current fill-none" stroke-width="1.75" viewBox="0 0 24 24">
               <polyline points="9 18 15 12 9 6"></polyline>
             </svg>
@@ -2348,7 +2364,11 @@
       <div class="modal-body text-center space-y-3">
         <div id="custom-alert-icon-box"
           class="w-12 h-12 rounded-full bg-[#0A84FF]/20 text-[#0A84FF] flex items-center justify-center mx-auto">
-          <i id="custom-alert-icon" data-lucide="info" class="w-6 h-6"></i>
+          <svg id="custom-alert-icon" class="w-6 h-6 stroke-current fill-none" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
         </div>
         <h3 id="custom-alert-title" class="ios-headline text-white">Notice</h3>
         <p id="custom-alert-message" class="ios-footnote text-neutral-300"></p>
@@ -2428,9 +2448,16 @@
 
 
   <script>
-    // Error-screen "Reload App": drop every service worker registration and cache, then ALWAYS reload.
-    // (The messaging worker re-registers on the next load.)
+    // Error-screen "Reload App": never wipe local caches while offline!
     window.__cocReloadApp = async function () {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        const eb = document.getElementById('global-error-boundary');
+        if (eb) {
+          eb.classList.add('hidden');
+          eb.style.display = 'none';
+        }
+        return;
+      }
       try {
         if ('serviceWorker' in navigator) {
           const regs = await navigator.serviceWorker.getRegistrations();
@@ -2446,19 +2473,9 @@
       try { sessionStorage.clear(); } catch (e) { }
       window.location.href = window.location.origin + window.location.pathname + '?_bust=' + Date.now();
     };
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        try {
-          navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
-            .catch((err) => console.warn('ServiceWorker registration ignored (non-blocking):', err));
-        } catch (e) {
-          console.warn('ServiceWorker registration error handled:', e);
-        }
-      });
-    }
   </script>
 
-  <script type="module" src="./app.js?v=3.2.9"></script>
+  <script type="module" src="./app.js?v=3.2.10"></script>
 
   <!-- Dedicated Session Breakdown Modal (v3.1.1) -->
   <div id="modal-session-breakdown" class="modal-backdrop" role="dialog" aria-modal="true" style="display: none;">

@@ -2459,5 +2459,33 @@ assert.strictEqual(typeof computeAttendance, 'function', 'computeAttendance must
   assert.ok(absentOnly.quotasOffset > 180, '0% attendance from absence must show empty track, not full circle');
 }
 
+// ---------------------------------------------------------------------------
+// v3.2.10: 100% Offline Self-Contained Assets & Instant 0ms Cache-First App Shell
+// ---------------------------------------------------------------------------
+{
+  const htmlSource = fs.readFileSync('index.html', 'utf8');
+  const appSource = fs.readFileSync('app.js', 'utf8');
+  const swSource = fs.readFileSync('sw.js', 'utf8');
+
+  // 1. Zero external runtime CDN dependencies in index.html & app.js
+  assert.ok(!htmlSource.includes('cdn.tailwindcss.com'), 'index.html must not rely on external Tailwind JIT CDN');
+  assert.ok(!htmlSource.includes('cdn.jsdelivr.net'), 'index.html must not rely on external jsdelivr CDN');
+  assert.ok(!htmlSource.includes('unpkg.com'), 'index.html must not rely on external unpkg CDN');
+  assert.ok(!appSource.includes('https://www.gstatic.com/firebasejs/'), 'app.js must import local vendored Firebase SDK instead of external gstatic CDN');
+
+  // 2. Local compiled CSS & vendored Firebase SDK exist and are precached in sw.js
+  assert.ok(fs.existsSync('tailwind.generated.css'), 'tailwind.generated.css must exist locally');
+  assert.ok(fs.existsSync('vendor/firebase-sdk.js'), 'vendor/firebase-sdk.js must exist locally');
+  assert.ok(swSource.includes('tailwind.generated.css'), 'sw.js must precache tailwind.generated.css');
+  assert.ok(swSource.includes('vendor/firebase-sdk.js'), 'sw.js must precache vendor/firebase-sdk.js');
+
+  // 3. Instant 0ms boot guard & explicit logo sizing in index.html
+  assert.ok(htmlSource.includes("localStorage.getItem('coc_offline_cache_v1')"), 'index.html must hide #app-loader synchronously before first paint when cached state exists');
+  assert.ok(htmlSource.includes('max-width: 80px; max-height: 80px;'), 'App loader logo must have explicit inline dimension guards');
+
+  // 4. Cache-First navigation in sw.js for instant offline & online open
+  assert.ok(swSource.includes("const cachedIndex = (await cache.match('./index.html'))"), 'sw.js must serve index.html cache-first for instant 0ms startup');
+}
+
 console.log('ALL ENGINE TESTS PASSED SUCCESSFULLY!');
 

@@ -238,18 +238,14 @@ vm.createContext(sandbox);
 // 3. Prepare app.js source for evaluation in sandbox
 let appCode = fs.readFileSync('app.js', 'utf8');
 
-// Replace CDN imports with sandbox stubs
-appCode = appCode.replace(/import\s*\{[^}]*\}\s*from\s*'https:\/\/www\.gstatic\.com\/firebasejs\/10\.8\.1\/firebase-app\.js';/, `
-const initializeApp = _fb_initializeApp, getApps = _fb_getApps, getApp = _fb_getApp;
-`);
-appCode = appCode.replace(/import\s*\{[^}]*\}\s*from\s*'https:\/\/www\.gstatic\.com\/firebasejs\/10\.8\.1\/firebase-auth\.js';/, `
-const getAuth = _fb_getAuth, onAuthStateChanged = _fb_onAuthStateChanged, GoogleAuthProvider = _fb_GoogleAuthProvider,
+// Replace local or CDN Firebase imports with sandbox stubs
+appCode = appCode.replace(/import\s*\{[\s\S]*?\}\s*from\s*'\.\/vendor\/firebase-sdk\.js[^']*';/, `
+const initializeApp = _fb_initializeApp, getApps = _fb_getApps, getApp = _fb_getApp,
+getAuth = _fb_getAuth, onAuthStateChanged = _fb_onAuthStateChanged, GoogleAuthProvider = _fb_GoogleAuthProvider,
 signInWithPopup = _fb_signInWithPopup, signInWithRedirect = _fb_signInWithRedirect, getRedirectResult = _fb_getRedirectResult,
 signOut = _fb_signOut, setPersistence = _fb_setPersistence, browserLocalPersistence = _fb_browserLocalPersistence,
-updateProfile = _fb_updateProfile;
-`);
-appCode = appCode.replace(/import\s*\{[^}]*\}\s*from\s*'https:\/\/www\.gstatic\.com\/firebasejs\/10\.8\.1\/firebase-firestore\.js';/, `
-const initializeFirestore = _fb_initializeFirestore, persistentLocalCache = _fb_persistentLocalCache,
+updateProfile = _fb_updateProfile,
+initializeFirestore = _fb_initializeFirestore, persistentLocalCache = _fb_persistentLocalCache,
 persistentMultipleTabManager = _fb_persistentMultipleTabManager, getFirestore = _fb_getFirestore,
 collection = _fb_collection, doc = _fb_doc, setDoc = _fb_setDoc, getDoc = _fb_getDoc, getDocs = _fb_getDocs,
 Timestamp = _fb_Timestamp, addDoc = _fb_addDoc, updateDoc = _fb_updateDoc, deleteDoc = _fb_deleteDoc,
@@ -257,10 +253,8 @@ onSnapshot = _fb_onSnapshot, serverTimestamp = _fb_serverTimestamp, increment = 
 getDocFromServer = _fb_getDocFromServer, getAggregateFromServer = _fb_getAggregateFromServer,
 getCountFromServer = _fb_getCountFromServer, arrayUnion = _fb_arrayUnion, arrayRemove = _fb_arrayRemove,
 sum = _fb_sum, query = _fb_query, limit = _fb_limit, where = _fb_where, orderBy = _fb_orderBy,
-startAfter = _fb_startAfter, writeBatch = _fb_writeBatch;
-`);
-appCode = appCode.replace(/import\s*\{[^}]*\}\s*from\s*'https:\/\/www\.gstatic\.com\/firebasejs\/10\.8\.1\/firebase-messaging\.js';/, `
-const getMessaging = _fb_getMessaging, getToken = _fb_getToken, deleteToken = _fb_deleteToken,
+startAfter = _fb_startAfter, writeBatch = _fb_writeBatch, runTransaction = _fb_writeBatch,
+getMessaging = _fb_getMessaging, getToken = _fb_getToken, deleteToken = _fb_deleteToken,
 onMessage = _fb_onMessage, isSupported = _fb_isSupported;
 `);
 
